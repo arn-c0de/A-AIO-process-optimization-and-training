@@ -525,7 +525,7 @@ class WeightsTab(BaseTab):
         try:
             return str(p.resolve().relative_to(self.sim_root.resolve()))
         except Exception:
-        return str(p)
+            return str(p)
 
     def _available_groups(self) -> List[str]:
         """Return the list of groups to show in the UI."""
