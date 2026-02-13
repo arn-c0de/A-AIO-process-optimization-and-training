@@ -1896,11 +1896,41 @@ class PipelineControlTab(BaseTab):
         except Exception:
             pass
 
+        # Mirror rename in outputs/models
+        self._rename_models_for_dataset(old_name, new_name)
+
         self._append_log(f"[rename dataset] {rp} -> {dst}\n")
         try:
             self.parent.event_generate("<<DatasetChanged>>", when="tail")
         except Exception:
             pass
+
+    def _rename_models_for_dataset(self, old_name: str, new_name: str) -> None:
+        models_root = self.sim_root / "outputs" / "models"
+        for suffix in ["", "_last"]:
+            old = models_root / f"{old_name}{suffix}.pt"
+            new = models_root / f"{new_name}{suffix}.pt"
+            if old.exists():
+                try:
+                    old.rename(new)
+                except Exception as e:
+                    print(f"Failed to rename model {old} -> {new}: {e}")
+            old_meta = models_root / f"{old_name}{suffix}.pt.meta.json"
+            new_meta = models_root / f"{new_name}{suffix}.pt.meta.json"
+            if old_meta.exists():
+                try:
+                    old_meta.rename(new_meta)
+                except Exception as e:
+                    print(f"Failed to rename meta {old_meta} -> {new_meta}: {e}")
+
+        versions_root = models_root / "versions"
+        old_dir = versions_root / old_name
+        new_dir = versions_root / new_name
+        if old_dir.exists():
+            try:
+                old_dir.rename(new_dir)
+            except Exception as e:
+                print(f"Failed to rename versioned models {old_dir} -> {new_dir}: {e}")
 
     def _validate_selected(self) -> None:
         """Validate selected dataset."""
