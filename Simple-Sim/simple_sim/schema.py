@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Type, TypeVar
+from simple_sim.config import VALID_CLASSES
 
 T = TypeVar('T')
 
@@ -55,7 +56,7 @@ class MetaRow:
         required_defect = {'type', 'shift_x', 'shift_y', 'rotation_deg', 'tilt_deg'}
         if set(self.defect.keys()) != required_defect:
             raise ValueError(f"defect must have exactly {required_defect}")
-        if self.defect['type'] not in ['OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE']:
+        if self.defect['type'] not in VALID_CLASSES:
             raise ValueError(f"Invalid defect type: {self.defect['type']}")
 
         # Validate augment params
@@ -77,7 +78,7 @@ class LabelRow:
             raise ValueError(f"Unsupported schema version: {self.schema_version}")
         if not self.id:
             raise ValueError("id cannot be empty")
-        if self.class_name not in ['OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE']:
+        if self.class_name not in VALID_CLASSES:
             raise ValueError(f"Invalid class: {self.class_name}")
 
 
