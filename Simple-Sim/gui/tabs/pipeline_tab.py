@@ -24,6 +24,7 @@ from gui.state import UiState
 from gui.utils.tooltip import ToolTip
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.utils.settings_store import SettingsStore
+from simple_sim.profile_hash import hash_profile
 import yaml
 
 # Add parent directory to path for imports
@@ -1234,6 +1235,72 @@ class PipelineControlTab(BaseTab):
 
         self._start_dataset_size_calc(ds)
 
+    def _ensure_dataset_skeleton(self, profile_id: str, config_path: Path, out_dir: Path) -> bool:
+        """Create dataset folder/manifest so it appears in the UI before generation."""
+        if not config_path.exists():
+            return False
+
+        out_dir = out_dir.resolve()
+        manifest_path = out_dir / "dataset_manifest.json"
+        if manifest_path.exists():
+            return False
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "images").mkdir(exist_ok=True)
+        (out_dir / "splits").mkdir(exist_ok=True)
+
+        for split in ["train", "val", "test"]:
+            (out_dir / "splits" / f"{split}.txt").write_text("", encoding="utf-8")
+
+        meta_path = out_dir / "meta.jsonl"
+        labels_path = out_dir / "labels.jsonl"
+        meta_path.write_text("", encoding="utf-8")
+        labels_path.write_text("", encoding="utf-8")
+
+        # Copy config into dataset directory for future reference
+        try:
+            shutil.copy2(config_path, out_dir / "config.yaml")
+        except Exception:
+            pass
+
+        # Prepare manifest data
+        try:
+            cfg_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            cfg_data = {}
+        run_block = cfg_data.get("run") or {}
+        run_id = str(run_block.get("run_id") or out_dir.name)
+        classes = cfg_data.get("classes", {})
+
+        profiles_dir = self.sim_root / "configs" / "profiles"
+        profile_path = profiles_dir / f"{profile_id}.yaml"
+        profile_hash = hash_profile(profile_path) if profile_path.exists() else ""
+
+        manifest = {
+            "manifest_version": 1,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "run_id": run_id,
+            "component_profile": {
+                "profile_id": profile_id,
+                "profile_hash": profile_hash,
+                "profile_path": str(profile_path) if profile_path.exists() else "",
+            },
+            "generator": {
+                "version": "1.0.1",
+                "git_commit": None,
+                "script": "gui.profile_placeholder",
+            },
+            "dataset_stats": {
+                "total_samples": 0,
+                "splits": {"train": 0, "val": 0, "test": 0},
+                "classes": {str(k): 0 for k in classes.keys()},
+            },
+            "extend_history": [],
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        self._append_log(f"[profile] created placeholder dataset manifest for {out_dir.name}\n")
+        return True
+
     def _set_dataset_samples_from_manifest(
         self,
         ds: Path,
@@ -1543,6 +1610,7 @@ class PipelineControlTab(BaseTab):
         self.var_profile.set(self._last_profile_id or "chip_0603_resistor@1")
 
     def _prepare_dataset_for_profile(self, profile_id: str, cfg_info: Optional[Dict[str, Any]]) -> None:
+        cfg_path: Optional[Path] = None
         if cfg_info:
             cfg_path = cfg_info["path"]
             self.var_config.set(str(cfg_path))
@@ -1569,6 +1637,16 @@ class PipelineControlTab(BaseTab):
                 "Pick or create a config that sets `run.component_profile` to "
                 f"'{profile_id}', then run the pipeline to create the dataset.",
             )
+
+        config_candidate = cfg_path if cfg_path else Path(self.var_config.get())
+        out_dir = Path(self.var_out.get())
+        try:
+            created = self._ensure_dataset_skeleton(profile_id, config_candidate, out_dir)
+            if created:
+                self._refresh_datasets()
+                self._select_dataset(out_dir)
+        except Exception as exc:
+            print(f"Failed to create dataset placeholder: {exc}")
 
     def _safe_messagebox_info(self, title: str, message: str) -> None:
         root = self.frame.winfo_toplevel()
