@@ -310,4 +310,10 @@ Run end-to-end pipeline test:
 
 ## License
 
-MIT License - See LICENSE file for details.
+This project is **proprietary**. No permission is granted to use, copy, modify,
+or distribute this software without prior written permission.
+
+See [`../LICENSE`](../LICENSE).
+
+Third-party dependencies remain under their own licenses; see
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
