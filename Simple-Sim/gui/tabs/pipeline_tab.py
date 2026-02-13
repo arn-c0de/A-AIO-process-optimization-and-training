@@ -65,6 +65,7 @@ class PipelineControlTab(BaseTab):
         self.var_gpu: tk.StringVar
         self.var_ram: tk.StringVar
         self.var_ds_size: tk.StringVar
+        self.var_ds_samples: tk.StringVar
         self.pb_cpu: ttk.Progressbar
         self.pb_gpu: ttk.Progressbar
         self.pb_ram: ttk.Progressbar
@@ -111,6 +112,7 @@ class PipelineControlTab(BaseTab):
         self._profile_paths: list[Path] = []
         self.var_dataset_profile: tk.StringVar
         self.var_model_profile: tk.StringVar
+        self._dataset_milestones: dict[str, int] = {}
 
     def build_ui(self) -> None:
         """Build the pipeline control UI."""
@@ -129,6 +131,7 @@ class PipelineControlTab(BaseTab):
         self.var_gpu = tk.StringVar(value="GPU: -")
         self.var_ram = tk.StringVar(value="RAM: -")
         self.var_ds_size = tk.StringVar(value="DS: -")
+        self.var_ds_samples = tk.StringVar(value="Samples: -")
 
         ttk.Label(stats, textvariable=self.var_cpu).grid(row=0, column=0, sticky="w", padx=(0, 6))
         self.pb_cpu = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
@@ -143,6 +146,8 @@ class PipelineControlTab(BaseTab):
         self.pb_ram.grid(row=2, column=1, sticky="ew", pady=(2, 0))
 
         ttk.Label(stats, textvariable=self.var_ds_size).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.lbl_ds_samples = ttk.Label(stats, textvariable=self.var_ds_samples)
+        self.lbl_ds_samples.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         self.btn_start = ttk.Button(top, text="▶ Start Pipeline", command=self.start_pipeline, width=15)
         self.btn_start.pack(side="left")
@@ -1177,6 +1182,65 @@ class PipelineControlTab(BaseTab):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _set_dataset_samples_from_manifest(
+        self,
+        ds: Path,
+        total: Optional[int],
+        train: Optional[int],
+        val: Optional[int],
+        test: Optional[int],
+    ) -> None:
+        if total is None:
+            self._set_dataset_samples_info("Samples: manifest missing", "")
+            return
+        parts = [f"Samples: {total}"]
+        if train is not None and val is not None and test is not None:
+            parts.append(f"(t{train}/v{val}/s{test})")
+        desc = " ".join(parts)
+        color = self._sample_color_from_total(total)
+        self._set_dataset_samples_info(desc, color)
+        self._check_milestone(ds, total)
+
+    def _set_dataset_samples_info(self, text: str, color: str) -> None:
+        self.var_ds_samples.set(text)
+        if color:
+            self.lbl_ds_samples.configure(foreground=color)
+        else:
+            self.lbl_ds_samples.configure(foreground="black")
+
+    def _sample_color_from_total(self, total: int) -> str:
+        if total >= 10000:
+            return "green"
+        if total >= 5000:
+            return "blue"
+        if total >= 1000:
+            return "orange"
+        return "black"
+
+    def _check_milestone(self, ds: Path, total: int) -> None:
+        name = ds.name
+        current = self._dataset_milestones.get(name, 0)
+        for threshold in self._milestone_thresholds:
+            if total >= threshold and threshold > current:
+                self._dataset_milestones[name] = threshold
+                self._log_dataset_milestone(ds, threshold, total)
+                break
+
+    def _log_dataset_milestone(self, ds: Path, threshold: int, total: int) -> None:
+        event = {
+            "ts": time.time(),
+            "event": "dataset_milestone",
+            "dataset": ds.name,
+            "threshold": threshold,
+            "samples": total,
+        }
+        try:
+            self.event_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.event_log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(event) + "\n")
+        except Exception as e:
+            print(f"Failed to log milestone: {e}")
+
     def _append_log(self, s: str) -> None:
         """Append text to log widget."""
         self.txt.configure(state="normal")
@@ -1575,6 +1639,7 @@ class PipelineControlTab(BaseTab):
         ds = self._selected_dataset_dir()
         if not ds:
             self.var_dataset_profile.set("Profile: -")
+            self.var_ds_samples.set("Samples: -")
             return
         prev_ds = self.state.dataset_dir
         self.state.dataset_dir = ds
@@ -1609,12 +1674,21 @@ class PipelineControlTab(BaseTab):
                     manifest = json.load(f)
                 profile_id = manifest.get('component_profile', {}).get('profile_id', 'unknown')
                 profile_hash = manifest.get('component_profile', {}).get('profile_hash', '')
+                stats = manifest.get("dataset_stats", {})
+                total_samples = stats.get("total_samples")
+                splits = stats.get("splits", {})
+                train = splits.get("train")
+                val = splits.get("val")
+                test = splits.get("test")
                 hash_short = profile_hash.split(':')[1][:12] if ':' in profile_hash else profile_hash[:12]
                 self.var_dataset_profile.set(f"Profile: {profile_id} ({hash_short}...)")
+                self._set_dataset_samples_from_manifest(ds, total_samples, train, val, test)
             else:
                 self.var_dataset_profile.set("Profile: ⚠ No manifest (legacy dataset)")
+                self._set_dataset_samples_info("Samples: legacy dataset", "black")
         except Exception as e:
             self.var_dataset_profile.set(f"Profile: ⚠ Error loading manifest")
+            self._set_dataset_samples_info("Samples: error", "")
             print(f"Failed to load dataset manifest: {e}")
 
         # Check profile compatibility

@@ -43,6 +43,7 @@ class WeightsTab(BaseTab):
         self.var_dataset: tk.StringVar
         self.var_active_model: tk.StringVar
         self.var_selected_model: tk.StringVar
+        self.var_dataset_samples: tk.StringVar
 
         self.var_split: tk.StringVar
         self.var_device: tk.StringVar
@@ -70,6 +71,8 @@ class WeightsTab(BaseTab):
         ttk.Label(top, text="Dataset:").pack(side="left")
         self.var_dataset = tk.StringVar(value="")
         ttk.Entry(top, textvariable=self.var_dataset, width=60, state="readonly").pack(side="left", padx=(5, 10))
+        self.var_dataset_samples = tk.StringVar(value="Samples: -")
+        ttk.Label(top, textvariable=self.var_dataset_samples).pack(side="left", padx=(0, 10))
 
         ttk.Label(top, text="Active model:").pack(side="left")
         self.var_active_model = tk.StringVar(value="")
@@ -281,6 +284,31 @@ class WeightsTab(BaseTab):
 
         active = self.sim_root / "outputs" / "models" / f"{self.state.dataset_dir.name}.pt"
         self.var_active_model.set(str(active))
+        self.var_dataset_samples.set(self._describe_dataset_samples(self.state.dataset_dir))
+
+    def _describe_dataset_samples(self, ds: Optional[Path]) -> str:
+        if ds is None:
+            return "Samples: -"
+        manifest_path = ds / "dataset_manifest.json"
+        if not manifest_path.exists():
+            return "Samples: legacy dataset"
+        try:
+            with open(manifest_path, 'r') as f:
+                manifest = json.load(f)
+            stats = manifest.get("dataset_stats", {})
+            total = stats.get("total_samples")
+            splits = stats.get("splits", {})
+            train = splits.get("train")
+            val = splits.get("val")
+            test = splits.get("test")
+            if total is None:
+                return "Samples: metadata missing"
+            desc = f"Samples: {total}"
+            if train is not None and val is not None and test is not None:
+                desc += f" (t{train}/v{val}/s{test})"
+            return desc
+        except Exception:
+            return "Samples: error"
 
     def _store(self) -> Optional[SettingsStore]:
         return self.state.settings_store
