@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start the Simple-Sim live monitor GUI.
+# Start the Simple-Sim Professional Monitor GUI (Multi-tab).
 #
 # Online:
 #   cd Simple-Sim
