@@ -23,6 +23,7 @@ from torchvision import models, transforms
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
+from simple_sim.manifest import read_dataset_manifest
 
 
 def load_checkpoint_model(model_path: Path, device: torch.device):
@@ -109,6 +110,32 @@ def main():
 
     device = torch.device(args.device)
     model, class_names, checkpoint = load_checkpoint_model(model_path, device)
+
+    # GUARD: Validate profile compatibility if using dataset
+    if data_dir:
+        manifest_path = data_dir / 'dataset_manifest.json'
+        if manifest_path.exists():
+            manifest = read_dataset_manifest(manifest_path)
+            dataset_profile_id = manifest['component_profile']['profile_id']
+            dataset_profile_hash = manifest['component_profile']['profile_hash']
+
+            ckpt_profile = checkpoint.get('component_profile')
+            if ckpt_profile:
+                ckpt_profile_id = ckpt_profile.get('profile_id')
+                ckpt_profile_hash = ckpt_profile.get('profile_hash')
+
+                # HARD FAIL: Profile ID mismatch
+                if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
+                    raise ValueError(
+                        f"Component profile mismatch:\n"
+                        f"  Model trained on: {ckpt_profile_id}\n"
+                        f"  Dataset profile:  {dataset_profile_id}\n"
+                        f"Cannot predict on different component type."
+                    )
+
+                # WARNING: Profile hash mismatch
+                if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
+                    print(f"WARNING: Profile hash mismatch")
 
     img_bgr = load_image_bgr(image_path)
     x = preprocess(img_bgr).unsqueeze(0).to(device)

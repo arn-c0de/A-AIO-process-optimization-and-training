@@ -105,6 +105,13 @@ class PipelineControlTab(BaseTab):
         self.var_name: tk.StringVar
         self.var_name_ts: tk.BooleanVar
 
+        # Profile management
+        self.var_profile: tk.StringVar
+        self.profile_combo: ttk.Combobox
+        self._profile_paths: list[Path] = []
+        self.var_dataset_profile: tk.StringVar
+        self.var_model_profile: tk.StringVar
+
     def build_ui(self) -> None:
         """Build the pipeline control UI."""
         # Note: Don't pack self.frame - it's managed by the notebook
@@ -190,7 +197,17 @@ class PipelineControlTab(BaseTab):
         self.var_config = tk.StringVar(value="configs/run_0001.yaml")
         ttk.Entry(top2, textvariable=self.var_config, width=30).pack(side="left")
 
-        ttk.Label(top2, text="Out:").pack(side="left", padx=(10, 6))
+        ttk.Label(top2, text="Profile:").pack(side="left", padx=(10, 6))
+        self.var_profile = tk.StringVar(value="chip_0603_resistor@1")
+        self.profile_combo = ttk.Combobox(top2, textvariable=self.var_profile, state="readonly", width=20)
+        self.profile_combo.pack(side="left")
+        ToolTip(self.profile_combo, text_func=lambda: self.var_profile.get())
+        ttk.Button(top2, text="↻", width=3, command=self._refresh_profiles).pack(side="left", padx=(6, 0))
+        ttk.Button(top2, text="ⓘ", width=3, command=self._show_profile_info).pack(side="left", padx=(3, 0))
+
+        ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
+
+        ttk.Label(top2, text="Out:").pack(side="left", padx=(0, 6))
         self.var_out = tk.StringVar(value="outputs/sim_data/runs/run_0001")
         ttk.Entry(top2, textvariable=self.var_out, width=35).pack(side="left")
 
@@ -285,6 +302,18 @@ class PipelineControlTab(BaseTab):
         )
         ttk.Button(dsbtns, text="Continue Train", command=self._continue_train_selected).pack(side="left")
 
+        # Dataset profile info
+        dsprofile = ttk.Frame(left)
+        dsprofile.pack(fill="x", pady=(6, 0))
+        self.var_dataset_profile = tk.StringVar(value="Profile: -")
+        ttk.Label(dsprofile, textvariable=self.var_dataset_profile, font=("TkDefaultFont", 9)).pack(side="left")
+        ttk.Button(dsprofile, text="Profile Info", command=self._show_dataset_profile_info).pack(side="left", padx=(10, 0))
+
+        # Profile compatibility warning
+        self.var_profile_compat = tk.StringVar(value="")
+        self.lbl_profile_compat = ttk.Label(dsprofile, textvariable=self.var_profile_compat, font=("TkDefaultFont", 9, "bold"), foreground="orange")
+        self.lbl_profile_compat.pack(side="left", padx=(10, 0))
+
         ttk.Label(left, text="Latest Images (4x3 grid)").pack(anchor="w", pady=(10, 0))
 
         img_grid = ttk.Frame(left)
@@ -320,8 +349,13 @@ class PipelineControlTab(BaseTab):
         # Initialize datasets and start UI ticker
         self._refresh_datasets()
         self._refresh_models()
+        self._refresh_profiles()
         self._load_persisted_settings()
         self._wire_settings_autosave()
+
+        # Add trace to model selection to check compatibility
+        self.var_model.trace("w", lambda *args: self._check_profile_compatibility())
+
         self._tick_ui()
 
     def _store(self) -> Optional[SettingsStore]:
@@ -1281,6 +1315,222 @@ class PipelineControlTab(BaseTab):
         if values:
             self.var_model.set(values[0])
 
+    def _refresh_profiles(self) -> None:
+        """Refresh profile dropdown list."""
+        profiles_dir = self.sim_root / "configs" / "profiles"
+        profiles_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find all profile YAML files
+        profile_files = sorted(profiles_dir.glob("*.yaml"))
+        self._profile_paths = profile_files
+
+        # Extract profile IDs (filename without .yaml)
+        values: list[str] = []
+        for p in profile_files:
+            profile_id = p.stem
+            values.append(profile_id)
+
+        try:
+            self.profile_combo["values"] = values
+        except Exception:
+            return
+
+        # Set default if not already set
+        cur = self.var_profile.get().strip()
+        if not cur or cur not in values:
+            if "chip_0603_resistor@1" in values:
+                self.var_profile.set("chip_0603_resistor@1")
+            elif values:
+                self.var_profile.set(values[0])
+
+    def _show_profile_info(self) -> None:
+        """Show detailed information about the selected profile."""
+        import yaml
+
+        profile_id = self.var_profile.get()
+        if not profile_id:
+            messagebox.showinfo("Profile Info", "No profile selected")
+            return
+
+        profiles_dir = self.sim_root / "configs" / "profiles"
+        profile_path = profiles_dir / f"{profile_id}.yaml"
+
+        if not profile_path.exists():
+            messagebox.showerror("Error", f"Profile file not found:\n{profile_path}")
+            return
+
+        try:
+            with open(profile_path, 'r') as f:
+                profile_data = yaml.safe_load(f)
+
+            # Create info dialog
+            dialog = tk.Toplevel(self.frame)
+            dialog.title(f"Profile Info: {profile_id}")
+            dialog.geometry("600x500")
+
+            # Create text widget with scrollbar
+            text_frame = ttk.Frame(dialog)
+            text_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+            scrollbar = ttk.Scrollbar(text_frame)
+            scrollbar.pack(side="right", fill="y")
+
+            text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10))
+            text.pack(side="left", fill="both", expand=True)
+            scrollbar.config(command=text.yview)
+
+            # Format and display profile data
+            info_text = f"Profile ID: {profile_id}\n"
+            info_text += f"Path: {profile_path}\n"
+            info_text += "\n" + "="*60 + "\n\n"
+            info_text += yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
+
+            text.insert("1.0", info_text)
+            text.config(state="disabled")
+
+            # Close button
+            ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load profile:\n{str(e)}")
+
+    def _check_profile_compatibility(self) -> None:
+        """Check if dataset and model profiles are compatible."""
+        try:
+            ds = self._selected_dataset_dir()
+            if not ds:
+                self.var_profile_compat.set("")
+                return
+
+            # Load dataset profile
+            manifest_path = ds / "dataset_manifest.json"
+            if not manifest_path.exists():
+                self.var_profile_compat.set("")
+                return
+
+            with open(manifest_path, 'r') as f:
+                manifest = json.load(f)
+            ds_profile_id = manifest.get('component_profile', {}).get('profile_id')
+            ds_profile_hash = manifest.get('component_profile', {}).get('profile_hash')
+
+            if not ds_profile_id:
+                self.var_profile_compat.set("")
+                return
+
+            # Load model profile if a model is selected
+            model_path_str = self.var_model.get().strip()
+            if not model_path_str:
+                self.var_profile_compat.set("")
+                return
+
+            model_path = self._resolve_model_path(model_path_str)
+            if not model_path or not model_path.exists():
+                self.var_profile_compat.set("")
+                return
+
+            import torch
+            checkpoint = torch.load(model_path, map_location='cpu')
+            model_profile = checkpoint.get('component_profile')
+
+            if not model_profile:
+                self.var_profile_compat.set("⚠ Model has no profile (legacy)")
+                self.lbl_profile_compat.configure(foreground="orange")
+                return
+
+            model_profile_id = model_profile.get('profile_id')
+            model_profile_hash = model_profile.get('profile_hash')
+
+            # Check compatibility
+            if model_profile_id != ds_profile_id:
+                self.var_profile_compat.set(f"✗ INCOMPATIBLE: Model={model_profile_id}, Dataset={ds_profile_id}")
+                self.lbl_profile_compat.configure(foreground="red")
+            elif model_profile_hash != ds_profile_hash:
+                self.var_profile_compat.set(f"⚠ Profile hash mismatch (same ID, different version)")
+                self.lbl_profile_compat.configure(foreground="orange")
+            else:
+                self.var_profile_compat.set(f"✓ Compatible: {ds_profile_id}")
+                self.lbl_profile_compat.configure(foreground="green")
+
+        except Exception as e:
+            self.var_profile_compat.set("")
+            print(f"Profile compatibility check failed: {e}")
+
+    def _show_dataset_profile_info(self) -> None:
+        """Show detailed profile information for the selected dataset."""
+        import yaml
+
+        ds = self._selected_dataset_dir()
+        if not ds:
+            messagebox.showinfo("Dataset Profile", "No dataset selected")
+            return
+
+        manifest_path = ds / "dataset_manifest.json"
+        if not manifest_path.exists():
+            messagebox.showerror(
+                "No Manifest",
+                f"Dataset has no manifest (legacy dataset).\n\n"
+                f"Use the backfill tool to add a manifest:\n"
+                f"  .venv/bin/python tools/backfill_manifest.py --data {ds}"
+            )
+            return
+
+        try:
+            with open(manifest_path, 'r') as f:
+                manifest = json.load(f)
+
+            profile_id = manifest.get('component_profile', {}).get('profile_id', 'unknown')
+            profile_hash = manifest.get('component_profile', {}).get('profile_hash', '')
+            profile_path_str = manifest.get('component_profile', {}).get('profile_path', '')
+
+            # Try to load the actual profile
+            profiles_dir = self.sim_root / "configs" / "profiles"
+            profile_path = profiles_dir / f"{profile_id}.yaml"
+
+            # Create info dialog
+            dialog = tk.Toplevel(self.frame)
+            dialog.title(f"Dataset Profile: {ds.name}")
+            dialog.geometry("650x550")
+
+            # Create text widget with scrollbar
+            text_frame = ttk.Frame(dialog)
+            text_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+            scrollbar = ttk.Scrollbar(text_frame)
+            scrollbar.pack(side="right", fill="y")
+
+            text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10))
+            text.pack(side="left", fill="both", expand=True)
+            scrollbar.config(command=text.yview)
+
+            # Format and display info
+            info_text = f"Dataset: {ds.name}\n"
+            info_text += f"Profile ID: {profile_id}\n"
+            info_text += f"Profile Hash: {profile_hash}\n"
+            info_text += f"Profile Path: {profile_path_str}\n"
+            info_text += "\n" + "="*60 + "\n"
+            info_text += "MANIFEST METADATA\n"
+            info_text += "="*60 + "\n\n"
+            info_text += json.dumps(manifest, indent=2)
+
+            if profile_path.exists():
+                info_text += "\n\n" + "="*60 + "\n"
+                info_text += "PROFILE DETAILS\n"
+                info_text += "="*60 + "\n\n"
+                with open(profile_path, 'r') as f:
+                    profile_data = yaml.safe_load(f)
+                info_text += yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
+            else:
+                info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
+
+            text.insert("1.0", info_text)
+            text.config(state="disabled")
+
+            # Close button
+            ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load dataset profile info:\n{str(e)}")
+
     def _slugify_name(self, s: str) -> str:
         s = (s or "").strip().lower()
         s = re.sub(r"[^a-z0-9]+", "_", s)
@@ -1324,6 +1574,7 @@ class PipelineControlTab(BaseTab):
         """Handle dataset selection change."""
         ds = self._selected_dataset_dir()
         if not ds:
+            self.var_dataset_profile.set("Profile: -")
             return
         prev_ds = self.state.dataset_dir
         self.state.dataset_dir = ds
@@ -1349,6 +1600,25 @@ class PipelineControlTab(BaseTab):
                 self._label_dict = {row.id: row.class_name for row in label_rows}
         except Exception as e:
             print(f"Failed to load metadata/labels: {e}")
+
+        # Load dataset profile from manifest
+        try:
+            manifest_path = ds / "dataset_manifest.json"
+            if manifest_path.exists():
+                with open(manifest_path, 'r') as f:
+                    manifest = json.load(f)
+                profile_id = manifest.get('component_profile', {}).get('profile_id', 'unknown')
+                profile_hash = manifest.get('component_profile', {}).get('profile_hash', '')
+                hash_short = profile_hash.split(':')[1][:12] if ':' in profile_hash else profile_hash[:12]
+                self.var_dataset_profile.set(f"Profile: {profile_id} ({hash_short}...)")
+            else:
+                self.var_dataset_profile.set("Profile: ⚠ No manifest (legacy dataset)")
+        except Exception as e:
+            self.var_dataset_profile.set(f"Profile: ⚠ Error loading manifest")
+            print(f"Failed to load dataset manifest: {e}")
+
+        # Check profile compatibility
+        self._check_profile_compatibility()
 
         img_dir = ds / "images"
         if img_dir.exists():

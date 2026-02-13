@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.telemetry import emit
+from simple_sim.manifest import read_dataset_manifest
 
 
 def evaluate(model, loader, device, class_names, critical_classes=None):
@@ -109,6 +110,20 @@ def main():
     print(f"  Model: {model_path}")
     print(f"  Device: {device}")
 
+    # GUARD: Load dataset manifest
+    manifest_path = data_dir / 'dataset_manifest.json'
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"Dataset manifest not found: {manifest_path}\n"
+            f"This dataset was created before profile support.\n"
+            f"Regenerate or use backfill tool:\n"
+            f"  .venv/bin/python tools/backfill_manifest.py --data {data_dir}"
+        )
+
+    manifest = read_dataset_manifest(manifest_path)
+    dataset_profile_id = manifest['component_profile']['profile_id']
+    dataset_profile_hash = manifest['component_profile']['profile_hash']
+
     # Load checkpoint
     print("\nLoading model checkpoint...")
     checkpoint = torch.load(model_path, map_location=device)
@@ -119,6 +134,32 @@ def main():
     print(f"  Trained epoch: {checkpoint['epoch']}")
     print(f"  Val accuracy: {checkpoint['val_accuracy']:.4f}")
     print(f"  Val F1: {checkpoint['val_f1']:.4f}")
+
+    # GUARD: Validate component profile match
+    ckpt_profile = checkpoint.get('component_profile')
+    if ckpt_profile:
+        ckpt_profile_id = ckpt_profile.get('profile_id')
+        ckpt_profile_hash = ckpt_profile.get('profile_hash')
+
+        # HARD FAIL: Profile ID mismatch
+        if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
+            raise ValueError(
+                f"Component profile mismatch:\n"
+                f"  Model trained on: {ckpt_profile_id}\n"
+                f"  Dataset profile:  {dataset_profile_id}\n"
+                f"Cannot evaluate model on different component type."
+            )
+
+        # WARNING: Profile hash mismatch
+        if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
+            print(f"WARNING: Profile hash mismatch (different tolerance/geometry)")
+            print(f"  Model hash:   {ckpt_profile_hash[:72]}...")
+            print(f"  Dataset hash: {dataset_profile_hash[:72]}...")
+
+        print(f"  Profile: {ckpt_profile_id}")
+    else:
+        print(f"  WARNING: Model lacks profile metadata (legacy checkpoint)")
+
     emit("eval_start", dataset_dir=str(data_dir), model_path=str(model_path), device=str(device))
 
     # Create model

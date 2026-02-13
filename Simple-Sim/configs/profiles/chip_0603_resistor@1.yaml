@@ -1,0 +1,41 @@
+# Component Profile Schema v1
+# Standard 0603 SMD chip resistor (1.6x0.8mm) on chip_2pad footprint
+profile:
+  profile_id: "chip_0603_resistor@1"
+  schema_version: 1
+  description: "Standard 0603 SMD resistor (1.6x0.8mm) on chip_2pad footprint"
+  created_at: "2026-02-13T10:00:00Z"
+
+component:
+  type: "chip_resistor"
+  footprint: "chip_2pad"              # Future: links to renderer plugin
+  package: "0603"
+  nominal_dims_mm:
+    length: 1.6
+    width: 0.8
+    height: 0.45
+
+# Geometry sampling ranges (in pixels at default mm_per_px)
+geometry_ranges:
+  pad_width: [25.0, 35.0]
+  pad_height: [30.0, 40.0]
+  pad_spacing: [50.0, 65.0]
+  component_length: [55.0, 65.0]
+  component_width: [25.0, 35.0]
+
+# Defect tolerances for classification
+tolerances:
+  ok_shift_px: 3.0
+  ok_rotation_deg: 5.0
+  tombstone_tilt_deg: 75.0
+
+# Defect set available for this component
+defect_set:
+  - "OK"
+  - "MISSING"
+  - "MISALIGNED"
+  - "TOMBSTONE"
+
+# Component-specific render parameters
+render:
+  component_color_bgr: [20, 20, 20]

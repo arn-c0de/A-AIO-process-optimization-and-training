@@ -26,6 +26,8 @@ from simple_sim.generator_2d import (
 from simple_sim.dataset_store import write_dataset
 from simple_sim.splits import generate_splits, assert_no_overlap, write_splits, check_class_coverage
 from simple_sim.telemetry import emit
+from simple_sim.profile_hash import load_profile, hash_profile
+from simple_sim.manifest import write_dataset_manifest, read_dataset_manifest
 
 
 def _append_jsonl(path: Path, rows) -> None:
@@ -80,11 +82,37 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
 
     run_id = config['run']['run_id']
     run_seed = config['run']['seed']
+    schema_version = config['run']['schema_version']
     roi_width = config['roi']['width_px']
     roi_height = config['roi']['height_px']
     classes = config['classes']
-    footprint = '0603'  # Fixed for MVP
-    tolerances = config['tolerances'][footprint]
+
+    # Load component profile
+    profile_id = config['run'].get('component_profile', 'chip_0603_resistor@1')
+    profiles_dir = config_path.parent / "profiles"
+    profile = load_profile(profile_id, profiles_dir)
+    profile_path = profiles_dir / f"{profile_id}.yaml"
+    profile_hash_str = hash_profile(profile_path)
+
+    print(f"Component Profile: {profile_id}")
+    print(f"Profile Hash: {profile_hash_str[:72]}...")
+
+    # Extract component-specific parameters from profile
+    footprint = profile['component']['footprint']
+    geometry_ranges = profile.get('geometry_ranges')
+    tolerances = profile.get('tolerances')
+
+    # Backward compatibility: v1 configs can override from config
+    if schema_version == 1:
+        if 'tolerances' in config:
+            tolerances = config['tolerances'].get(profile['component']['package'], tolerances)
+        if 'geometry_ranges' in config:
+            geometry_ranges = config['geometry_ranges']
+
+    # Merge component_color from profile into render config if not present
+    if 'component_color' not in config['render'] and 'render' in profile:
+        config['render']['component_color'] = profile['render']['component_color_bgr']
+
     domain_name = 'domain_A'  # Single domain for MVP
     domain_config = config['domains'][domain_name]
 
@@ -97,8 +125,45 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
         meta_path = output_dir / "meta.jsonl"
         labels_path = output_dir / "labels.jsonl"
         cfg_path = output_dir / "config.yaml"
+        manifest_path = output_dir / "dataset_manifest.json"
+
         if not (meta_path.exists() and labels_path.exists() and cfg_path.exists()):
             raise ValueError(f"--extend requires an existing valid dataset dir with meta.jsonl/labels.jsonl/config.yaml: {output_dir}")
+
+        # GUARD: Validate dataset manifest exists
+        if not manifest_path.exists():
+            raise ValueError(
+                f"--extend requires dataset with manifest: {manifest_path}\n"
+                f"Legacy datasets must be regenerated or use backfill tool:\n"
+                f"  .venv/bin/python tools/backfill_manifest.py --data {output_dir}"
+            )
+
+        # GUARD: Load and validate component profile match
+        manifest = read_dataset_manifest(manifest_path)
+        existing_profile_id = manifest['component_profile']['profile_id']
+        existing_profile_hash = manifest['component_profile']['profile_hash']
+
+        # HARD FAIL: Profile ID mismatch
+        if existing_profile_id != profile_id:
+            raise ValueError(
+                f"Profile ID mismatch for --extend:\n"
+                f"  Dataset profile: {existing_profile_id}\n"
+                f"  Config profile:  {profile_id}\n"
+                f"Cannot extend dataset with different component type."
+            )
+
+        # HARD FAIL: Profile hash mismatch
+        if existing_profile_hash != profile_hash_str:
+            raise ValueError(
+                f"Profile hash mismatch for --extend:\n"
+                f"  Dataset hash: {existing_profile_hash[:72]}...\n"
+                f"  Config hash:  {profile_hash_str[:72]}...\n"
+                f"Profile '{profile_id}' has changed.\n"
+                f"Create a new profile version (e.g., @2) or regenerate dataset."
+            )
+
+        print("✓ Profile validation passed for extend mode")
+
         from simple_sim.schema import read_jsonl, validate_jsonl_pair
         from simple_sim.splits import read_split
 
@@ -153,7 +218,7 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
             rng = np.random.default_rng(seed)
 
             # Sample geometry
-            nominal = sample_nominal_geometry(config['roi'], rng, geometry_ranges=config.get('geometry_ranges'))
+            nominal = sample_nominal_geometry(config['roi'], rng, geometry_ranges=geometry_ranges)
 
             # Sample defect parameters based on target class
             defect_params = sample_defect_params(class_name, rng, tolerances=tolerances)
@@ -314,6 +379,37 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
 
     # Write split files
     write_splits(output_dir, updated_splits)
+
+    # Merge splits for manifest (include existing samples in extend mode)
+    if extend and existing_meta_rows:
+        all_meta_rows = existing_meta_rows + meta_rows
+        all_label_rows = existing_label_rows + label_rows
+        final_splits = updated_splits  # Already merged above
+    else:
+        all_meta_rows = meta_rows
+        all_label_rows = label_rows
+        final_splits = updated_splits
+
+    # Write dataset manifest
+    # Store profile path relative to Simple-Sim root
+    project_root = Path(__file__).parent.parent
+    try:
+        relative_profile_path = str(profile_path.relative_to(project_root))
+    except ValueError:
+        # If profile_path is not under project_root, use absolute path
+        relative_profile_path = str(profile_path.absolute())
+
+    write_dataset_manifest(
+        output_dir=output_dir,
+        run_id=run_id,
+        profile_id=profile_id,
+        profile_hash=profile_hash_str,
+        profile_path=relative_profile_path,
+        meta_rows=meta_rows,  # Only new samples for extend history
+        label_rows=label_rows,
+        splits=final_splits,
+        extend=extend
+    )
 
     # Print summary
     print("\n" + "="*60)
