@@ -4,7 +4,9 @@
 Professional GUI with:
 - Tab 1: Pipeline Control - Enhanced pipeline monitoring
 - Tab 2: Analysis - Interactive image browser with defect overlays
-- Tab 3: Validation - Advanced dataset testing with automated flagging
+- Tab 3: Predictions - Batch predict/evaluate (predict.sh)
+- Tab 4: Weights - Model versioning/backup/export + comparisons
+- Tab 5: Validation - Advanced dataset testing with automated flagging
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ except Exception as e:
     )
 
 from gui.state import UiState
-from gui.tabs import PipelineControlTab, AnalysisTab, ValidationTab, BaseTab
+from gui.tabs import PipelineControlTab, AnalysisTab, PredictionsTab, WeightsTab, ValidationTab, BaseTab
 
 
 class MonitorAppTabbed:
@@ -63,7 +65,7 @@ class MonitorAppTabbed:
 
     def _build_ui(self) -> None:
         """Build the main UI with notebook tabs."""
-        self.root.title("Simple-Sim Professional Monitor")
+        self.root.title("A-AIO-Simple-Sim-v1.0")
         self.root.geometry("1400x900")
 
         # Main container
@@ -76,6 +78,8 @@ class MonitorAppTabbed:
 
         # Bind tab selection event for lazy loading
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        # Custom app event for dataset selection changes (emitted by PipelineControlTab).
+        self.notebook.bind("<<DatasetChanged>>", lambda _e: self._notify_dataset_changed())
 
         # Create tab frames (but don't build UI yet - lazy loading)
         self.tabs["pipeline"] = PipelineControlTab(
@@ -91,6 +95,20 @@ class MonitorAppTabbed:
             self.state
         )
         self.notebook.add(self.tabs["analysis"].frame, text="Analysis")
+
+        self.tabs["predictions"] = PredictionsTab(
+            self.notebook,
+            self.sim_root,
+            self.state
+        )
+        self.notebook.add(self.tabs["predictions"].frame, text="Predictions")
+
+        self.tabs["weights"] = WeightsTab(
+            self.notebook,
+            self.sim_root,
+            self.state
+        )
+        self.notebook.add(self.tabs["weights"].frame, text="Weights")
 
         self.tabs["validation"] = ValidationTab(
             self.notebook,
@@ -116,7 +134,7 @@ class MonitorAppTabbed:
         selected_idx = self.notebook.index(self.notebook.select())
 
         # Map index to tab name
-        tab_names = ["pipeline", "analysis", "validation"]
+        tab_names = ["pipeline", "analysis", "predictions", "weights", "validation"]
         if selected_idx < len(tab_names):
             tab_name = tab_names[selected_idx]
             self.current_tab = tab_name

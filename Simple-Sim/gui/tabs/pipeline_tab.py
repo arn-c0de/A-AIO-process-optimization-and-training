@@ -12,6 +12,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 from typing import Any, Dict, Optional
+import shutil
+from datetime import datetime
 
 from PIL import Image, ImageTk
 
@@ -49,6 +51,28 @@ class PipelineControlTab(BaseTab):
         self._label_dict: dict[str, str] = {}  # Map sample_id to class label
         self._image_to_sample: dict[str, str] = {}  # Map image_path to sample_id
 
+        # Stats bar state
+        self.var_cpu: tk.StringVar
+        self.var_gpu: tk.StringVar
+        self.var_ram: tk.StringVar
+        self.var_ds_size: tk.StringVar
+        self.pb_cpu: ttk.Progressbar
+        self.pb_gpu: ttk.Progressbar
+        self.pb_ram: ttk.Progressbar
+        self._cpu_prev_total: Optional[int] = None
+        self._cpu_prev_idle: Optional[int] = None
+        self._last_stats_ts: float = 0.0
+        self._last_gpu_ts: float = 0.0
+        self._last_ds_size_ts: float = 0.0
+        self._prev_proc_running: bool = False
+        self._dataset_size_job_id: int = 0
+
+        # Model snapshot/versioning controls
+        self.var_autosnap: tk.BooleanVar
+        self.var_snap_keep: tk.StringVar
+        self.var_snap_every: tk.StringVar
+        self._last_snap_sig: Optional[tuple[int, int]] = None  # (mtime_ns, size)
+
         # UI components (will be created in build_ui)
         self.btn_start: ttk.Button
         self.btn_stop: ttk.Button
@@ -73,6 +97,30 @@ class PipelineControlTab(BaseTab):
         # Top controls - Row 1: Start/Stop and Pipeline Configuration
         top = ttk.Frame(self.frame)
         top.pack(fill="x", pady=(0, 5))
+
+        # Top-right: compact statistics bar (CPU/GPU/RAM + dataset size)
+        stats = ttk.Frame(top)
+        stats.pack(side="right", padx=(10, 0))
+        stats.columnconfigure(1, weight=1)
+
+        self.var_cpu = tk.StringVar(value="CPU: -")
+        self.var_gpu = tk.StringVar(value="GPU: -")
+        self.var_ram = tk.StringVar(value="RAM: -")
+        self.var_ds_size = tk.StringVar(value="DS: -")
+
+        ttk.Label(stats, textvariable=self.var_cpu).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.pb_cpu = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
+        self.pb_cpu.grid(row=0, column=1, sticky="ew")
+
+        ttk.Label(stats, textvariable=self.var_gpu).grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(2, 0))
+        self.pb_gpu = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
+        self.pb_gpu.grid(row=1, column=1, sticky="ew", pady=(2, 0))
+
+        ttk.Label(stats, textvariable=self.var_ram).grid(row=2, column=0, sticky="w", padx=(0, 6), pady=(2, 0))
+        self.pb_ram = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
+        self.pb_ram.grid(row=2, column=1, sticky="ew", pady=(2, 0))
+
+        ttk.Label(stats, textvariable=self.var_ds_size).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         self.btn_start = ttk.Button(top, text="▶ Start Pipeline", command=self.start_pipeline, width=15)
         self.btn_start.pack(side="left")
@@ -134,6 +182,19 @@ class PipelineControlTab(BaseTab):
         ttk.Label(top2, text="Model:").pack(side="left", padx=(10, 6))
         self.var_model = tk.StringVar(value="outputs/models/run_0001.pt")
         ttk.Entry(top2, textvariable=self.var_model, width=30).pack(side="left")
+
+        ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
+
+        self.var_autosnap = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top2, text="Auto-snapshot model", variable=self.var_autosnap).pack(side="left")
+        ttk.Label(top2, text="Every:").pack(side="left", padx=(10, 6))
+        self.var_snap_every = tk.StringVar(value="5")
+        ttk.Combobox(top2, textvariable=self.var_snap_every, values=["1", "5", "10", "30", "50"], state="readonly", width=5).pack(
+            side="left"
+        )
+        ttk.Label(top2, text="Keep:").pack(side="left", padx=(10, 6))
+        self.var_snap_keep = tk.StringVar(value="30")
+        ttk.Entry(top2, textvariable=self.var_snap_keep, width=5).pack(side="left")
 
         # Status line
         status = ttk.Frame(self.frame)
@@ -232,8 +293,14 @@ class PipelineControlTab(BaseTab):
             if not selected_ds:
                 messagebox.showerror("Error", "No dataset selected to extend.\n\nSelect a dataset or use 'Create New' mode.")
                 return
+            if not messagebox.askyesno(
+                "Overwrite dataset?",
+                "Extend Existing currently overwrites the selected dataset folder.\n\n"
+                f"Overwrite:\n{selected_ds}\n\nContinue?"
+            ):
+                return
             out_dir = str(selected_ds)
-            self._append_log(f"\n=== Extending existing dataset: {out_dir} ===\n")
+            self._append_log(f"\n=== Overwriting selected dataset: {out_dir} ===\n")
         else:
             # Create new dataset
             out_dir = self.var_out.get().strip()
@@ -256,9 +323,13 @@ class PipelineControlTab(BaseTab):
         self._append_log(f"Run mode: {run_mode}" + (f" ({run_count}x)" if run_count > 0 else " (continuous)") + "\n\n")
 
         # Start pipeline runner in background thread
-        threading.Thread(target=self._run_pipeline_loop, args=(out_dir, run_count), daemon=True).start()
+        threading.Thread(
+            target=self._run_pipeline_loop,
+            args=(out_dir, run_count, dataset_mode),
+            daemon=True
+        ).start()
 
-    def _run_pipeline_loop(self, out_dir: str, run_count: int) -> None:
+    def _run_pipeline_loop(self, out_dir: str, run_count: int, dataset_mode: str) -> None:
         """Run pipeline in a loop (runs in background thread).
 
         Args:
@@ -294,6 +365,47 @@ class PipelineControlTab(BaseTab):
 
             if not success and run_count > 1:
                 self._append_log(f"\n⚠ Run {self.current_run_iteration} failed, but continuing...\n")
+
+            # Snapshot the produced model checkpoint for later comparisons (versioning).
+            try:
+                mp = Path(self.var_model.get().strip())
+                if mp.exists():
+                    self._write_model_meta(
+                        mp,
+                        run_i=self.current_run_iteration,
+                        dataset_dir=self.state.dataset_dir,
+                        dataset_mode=dataset_mode,
+                        out_dir=self._resolve_out_dir(out_dir),
+                    )
+                snap_every = self._snap_every_n()
+                if self.var_autosnap.get() and mp.exists() and self.current_run_iteration % snap_every == 0:
+                    snap = self._snapshot_model_checkpoint(mp, run_i=self.current_run_iteration)
+                    if snap:
+                        self._append_log(f"[model snapshot] {snap}\n")
+            except Exception:
+                pass
+
+            # After each run, refresh dataset list and re-compute selected dataset size.
+            def after_run_ui_update() -> None:
+                self._refresh_datasets()
+                if dataset_mode != "extend":
+                    out_path = self._resolve_out_dir(out_dir)
+                    # Auto-select the output folder if it lives in the runs directory.
+                    runs_base = (self.sim_root / "outputs" / "sim_data" / "runs").resolve()
+                    try:
+                        out_path.resolve().relative_to(runs_base)
+                    except Exception:
+                        return
+                    self.var_dataset.set(out_path.name)
+                    self._on_dataset_selected()
+                else:
+                    if self.state.dataset_dir:
+                        self._start_dataset_size_calc(self.state.dataset_dir)
+
+            try:
+                self.frame.after(0, after_run_ui_update)
+            except Exception:
+                pass
 
             # Small delay between runs
             if run_count != 1 and not self.stop_evt.is_set():
@@ -602,7 +714,271 @@ class PipelineControlTab(BaseTab):
             self.btn_start.configure(state="normal")
             self.btn_stop.configure(state="disabled")
 
+        self._maybe_update_stats()
         self.frame.after(120, self._tick_ui)
+
+    def _snapshot_model_checkpoint(self, model_path: Path, *, run_i: int) -> Optional[Path]:
+        """Copy a checkpoint to outputs/models/versions/<stem>/ with timestamp for versioning."""
+        try:
+            model_path = Path(model_path)
+            if not model_path.exists():
+                return None
+
+            try:
+                st = model_path.stat()
+                sig = (int(st.st_mtime_ns), int(st.st_size))
+                # Avoid duplicating the same file repeatedly (e.g. if a run failed before training wrote new weights).
+                if self._last_snap_sig == sig:
+                    return None
+                self._last_snap_sig = sig
+            except Exception:
+                pass
+
+            dst_root = self.sim_root / "outputs" / "models" / "versions" / model_path.stem
+            dst_root.mkdir(parents=True, exist_ok=True)
+            tag = time.strftime("%Y%m%d_%H%M%S")
+            base = dst_root / f"{model_path.stem}_{tag}_run{int(run_i):03d}.pt"
+            dst = base
+            if dst.exists():
+                for i in range(1, 1000):
+                    cand = dst_root / f"{model_path.stem}_{tag}_run{int(run_i):03d}_{i:03d}.pt"
+                    if not cand.exists():
+                        dst = cand
+                        break
+            shutil.copy2(model_path, dst)
+            self._write_snapshot_meta(dst, src=model_path, run_i=run_i)
+            self._prune_model_snapshots(dst_root)
+            return dst
+        except Exception:
+            return None
+
+    def _write_model_meta(
+        self,
+        model_path: Path,
+        *,
+        run_i: int,
+        dataset_dir: Optional[Path],
+        dataset_mode: str,
+        out_dir: Path,
+    ) -> None:
+        """Write lightweight metadata next to the active model so the GUI can show 'how many runs' it represents."""
+        meta = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "run_iteration": int(run_i),
+            "dataset_mode": str(dataset_mode),
+            "dataset_dir": str(dataset_dir) if dataset_dir else None,
+            "out_dir": str(out_dir),
+            "model_path": str(model_path),
+        }
+        meta_path = Path(str(model_path) + ".meta.json")
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+
+    def _write_snapshot_meta(self, snapshot_path: Path, *, src: Path, run_i: int) -> None:
+        meta = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "run_iteration": int(run_i),
+            "snapshot_path": str(snapshot_path),
+            "source_model_path": str(src),
+        }
+        meta_path = Path(str(snapshot_path) + ".meta.json")
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+
+    def _snap_every_n(self) -> int:
+        """Return the snapshot frequency (every N runs)."""
+        try:
+            s = self.var_snap_every.get().strip()
+            n = int(s) if s else 1
+        except Exception:
+            n = 5
+        return max(1, n)
+
+    def _prune_model_snapshots(self, dst_root: Path) -> None:
+        """Keep only the newest N snapshots for the model."""
+        try:
+            keep_s = self.var_snap_keep.get().strip()
+            keep = int(keep_s) if keep_s else 0
+        except Exception:
+            keep = 30
+        keep = max(0, keep)
+        if keep == 0:
+            return
+
+        try:
+            snaps = [p for p in dst_root.glob("*.pt") if p.is_file()]
+            snaps.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0, reverse=True)
+            for p in snaps[keep:]:
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _maybe_update_stats(self) -> None:
+        """Update CPU/GPU/RAM stats at a lower frequency than the UI tick."""
+        now = time.time()
+        if now - self._last_stats_ts < 1.0:
+            return
+        self._last_stats_ts = now
+
+        cpu_pct = self._read_cpu_percent()
+        if cpu_pct is not None:
+            self.var_cpu.set(f"CPU: {cpu_pct:3.0f}%")
+            self.pb_cpu["value"] = max(0.0, min(100.0, cpu_pct))
+
+        ram = self._read_ram_percent()
+        if ram is None:
+            self.var_ram.set("RAM: n/a")
+            self.pb_ram["value"] = 0
+        else:
+            ram_pct, used_b, total_b = ram
+            self.var_ram.set(f"RAM: {ram_pct:3.0f}% ({self._fmt_bytes(used_b)}/{self._fmt_bytes(total_b)})")
+            self.pb_ram["value"] = max(0.0, min(100.0, ram_pct))
+
+        # GPU is optional; update less frequently to avoid UI hiccups.
+        if now - self._last_gpu_ts >= 2.0:
+            self._last_gpu_ts = now
+            gpu_pct = self._read_gpu_percent()
+            if gpu_pct is not None:
+                self.var_gpu.set(f"GPU: {gpu_pct:3.0f}%")
+                self.pb_gpu["value"] = max(0.0, min(100.0, gpu_pct))
+
+        # Dataset size: refresh periodically while running, and once when the proc ends.
+        proc_running = self.proc is not None
+        if self._prev_proc_running and not proc_running:
+            # Just ended.
+            if self.state.dataset_dir:
+                self._start_dataset_size_calc(self.state.dataset_dir)
+            self._last_ds_size_ts = now
+        self._prev_proc_running = proc_running
+
+        if proc_running and (now - self._last_ds_size_ts) >= 5.0:
+            if self.state.dataset_dir:
+                self._start_dataset_size_calc(self.state.dataset_dir)
+            self._last_ds_size_ts = now
+
+    def _resolve_out_dir(self, out_dir: str) -> Path:
+        p = Path(out_dir)
+        if p.is_absolute():
+            return p
+        return (self.sim_root / p).resolve()
+
+    def _read_cpu_percent(self) -> Optional[float]:
+        """Linux /proc-based CPU utilization percentage."""
+        try:
+            with open("/proc/stat", "r", encoding="utf-8") as f:
+                line = f.readline().strip()
+            parts = line.split()
+            if not parts or parts[0] != "cpu" or len(parts) < 5:
+                return None
+            nums = [int(x) for x in parts[1:]]
+            total = sum(nums)
+            idle = nums[3] + (nums[4] if len(nums) > 4 else 0)  # idle + iowait
+
+            if self._cpu_prev_total is None or self._cpu_prev_idle is None:
+                self._cpu_prev_total = total
+                self._cpu_prev_idle = idle
+                return None
+
+            dt = total - self._cpu_prev_total
+            di = idle - self._cpu_prev_idle
+            self._cpu_prev_total = total
+            self._cpu_prev_idle = idle
+            if dt <= 0:
+                return None
+            return 100.0 * (1.0 - (di / dt))
+        except Exception:
+            return None
+
+    def _read_ram_percent(self) -> Optional[tuple[float, int, int]]:
+        """Linux /proc-based RAM usage: percent, used bytes, total bytes."""
+        try:
+            total_kb = None
+            avail_kb = None
+            with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        total_kb = int(line.split()[1])
+                    elif line.startswith("MemAvailable:"):
+                        avail_kb = int(line.split()[1])
+                    if total_kb is not None and avail_kb is not None:
+                        break
+            if total_kb is None or avail_kb is None or total_kb <= 0:
+                return None
+            used_kb = total_kb - avail_kb
+            pct = 100.0 * (used_kb / total_kb)
+            return pct, used_kb * 1024, total_kb * 1024
+        except Exception:
+            return None
+
+    def _read_gpu_percent(self) -> Optional[float]:
+        """Try to read NVIDIA GPU utilization via nvidia-smi, return None if unavailable."""
+        try:
+            proc = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=0.5,
+                check=False,
+            )
+            out = (proc.stdout or "").strip()
+            if not out:
+                return None
+            # In multi-GPU setups, pick the first line.
+            first = out.splitlines()[0].strip()
+            return float(first)
+        except Exception:
+            return None
+
+    def _fmt_bytes(self, n: int) -> str:
+        if n < 0:
+            return "0 B"
+        units = ["B", "KB", "MB", "GB", "TB"]
+        v = float(n)
+        u = 0
+        while v >= 1024.0 and u < len(units) - 1:
+            v /= 1024.0
+            u += 1
+        if u == 0:
+            return f"{int(v)} {units[u]}"
+        return f"{v:.1f} {units[u]}"
+
+    def _compute_dir_size_bytes(self, root: Path) -> int:
+        total = 0
+        try:
+            for dirpath, dirnames, filenames in os.walk(root):
+                for fn in filenames:
+                    try:
+                        fp = os.path.join(dirpath, fn)
+                        st = os.stat(fp, follow_symlinks=False)
+                        total += int(st.st_size)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return total
+
+    def _start_dataset_size_calc(self, ds: Path) -> None:
+        """Compute dataset folder size in background and update the stats bar."""
+        self._dataset_size_job_id += 1
+        job_id = self._dataset_size_job_id
+        self.var_ds_size.set("DS: calculating...")
+
+        def worker() -> None:
+            size_b = self._compute_dir_size_bytes(ds)
+
+            def apply() -> None:
+                if job_id != self._dataset_size_job_id:
+                    return
+                self.var_ds_size.set(f"DS: {self._fmt_bytes(size_b)} ({ds.name})")
+
+            try:
+                self.frame.after(0, apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _append_log(self, s: str) -> None:
         """Append text to log widget."""
@@ -647,6 +1023,7 @@ class PipelineControlTab(BaseTab):
         self._recent_imgs.clear()
         self._label_dict.clear()
         self._image_to_sample.clear()
+        self._start_dataset_size_calc(ds)
 
         # Load metadata and labels
         try:
@@ -669,8 +1046,11 @@ class PipelineControlTab(BaseTab):
                 self._recent_imgs.append(str(p))
             self._refresh_thumbnails()
 
-        # Notify other tabs of dataset change
-        self.on_dataset_changed()
+        # Notify other tabs of dataset change (handled by MonitorAppTabbed).
+        try:
+            self.parent.event_generate("<<DatasetChanged>>", when="tail")
+        except Exception:
+            pass
 
     def _delete_dataset(self) -> None:
         """Delete selected dataset."""
