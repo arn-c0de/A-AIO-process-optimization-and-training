@@ -134,23 +134,34 @@ class PipelineControlTab(BaseTab):
         self.var_ds_size = tk.StringVar(value="DS: -")
         self.var_ds_samples = tk.StringVar(value="Samples: -")
 
-        ttk.Label(stats, textvariable=self.var_cpu).grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self.pb_cpu = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
-        self.pb_cpu.grid(row=0, column=1, sticky="ew")
+        perf_frame = ttk.Frame(stats)
+        perf_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+        perf_frame.columnconfigure(0, weight=1)
+        perf_frame.columnconfigure(1, weight=1)
+        perf_frame.columnconfigure(2, weight=1)
 
-        ttk.Label(stats, textvariable=self.var_gpu).grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(2, 0))
-        self.pb_gpu = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
-        self.pb_gpu.grid(row=1, column=1, sticky="ew", pady=(2, 0))
+        ttk.Label(perf_frame, textvariable=self.var_cpu, width=12).grid(row=0, column=0, sticky="w")
+        self.pb_cpu = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=100)
+        self.pb_cpu.grid(row=1, column=0, sticky="ew")
 
-        ttk.Label(stats, textvariable=self.var_ram).grid(row=2, column=0, sticky="w", padx=(0, 6), pady=(2, 0))
-        self.pb_ram = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
-        self.pb_ram.grid(row=2, column=1, sticky="ew", pady=(2, 0))
+        ttk.Label(perf_frame, textvariable=self.var_gpu, width=12).grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self.pb_gpu = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=100)
+        self.pb_gpu.grid(row=1, column=1, sticky="ew", padx=(6, 0))
 
-        ttk.Label(stats, textvariable=self.var_ds_size).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        self.lbl_ds_samples = ttk.Label(stats, textvariable=self.var_ds_samples)
-        self.lbl_ds_samples.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        ttk.Button(stats, text="↻", width=3, command=self._refresh_dataset_stats).grid(
-            row=5, column=1, sticky="e", pady=(2, 0)
+        ttk.Label(perf_frame, textvariable=self.var_ram, width=12).grid(row=0, column=2, sticky="w", padx=(6, 0))
+        self.pb_ram = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=100)
+        self.pb_ram.grid(row=1, column=2, sticky="ew", padx=(6, 0))
+
+        ds_frame = ttk.Frame(stats)
+        ds_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        ds_frame.columnconfigure(0, weight=1)
+        ds_frame.columnconfigure(1, weight=0)
+
+        ttk.Label(ds_frame, textvariable=self.var_ds_size).grid(row=0, column=0, sticky="w")
+        self.lbl_ds_samples = ttk.Label(ds_frame, textvariable=self.var_ds_samples)
+        self.lbl_ds_samples.grid(row=1, column=0, sticky="w", pady=(1, 0))
+        ttk.Button(ds_frame, text="↻", width=3, command=self._refresh_dataset_stats).grid(
+            row=0, column=1, sticky="e", padx=(6, 0)
         )
 
         self.btn_start = ttk.Button(top, text="▶ Start Pipeline", command=self.start_pipeline, width=15)
