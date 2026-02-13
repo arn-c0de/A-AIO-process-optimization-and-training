@@ -54,6 +54,32 @@ cd Simple-Sim
 Notes:
 - This uses `tkinter`. On Ubuntu/Debian you may need: `sudo apt-get install python3-tk`
 
+## Single Image Prediction
+
+```bash
+cd Simple-Sim
+.venv/bin/python scripts/predict.py --model outputs/models/run_0001.pt --image outputs/sim_data/runs/run_0001/images/000000.png
+```
+
+## Batch Prediction / Scoring (Like Eval, With History)
+
+```bash
+cd Simple-Sim
+./predict.sh --model outputs/models/run_0001.pt --data outputs/sim_data/runs/run_0001 --split test --save-preds
+```
+
+History table options:
+```bash
+./predict.sh --model outputs/models/run_0001.pt --data outputs/sim_data/runs/run_0001 --split test \
+  --history-scope model --history-metric macro_f1 --history-limit 10
+
+./predict.sh --model outputs/models/run_0001.pt --data outputs/sim_data/runs/run_0001 --split test \
+  --history-scope dataset --history-metric accuracy --history-split any --history-limit 20
+
+./predict.sh --model outputs/models/run_0001.pt --data outputs/sim_data/runs/run_0001 --split test \
+  --history-scope all --history-metric critical_fn_rate --history-critical-class MISALIGNED --history-limit 10
+```
+
 ### 2. Generate Dataset
 
 Generate 400 samples (100 per class) with reference configuration:
