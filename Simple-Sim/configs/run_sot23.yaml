@@ -13,7 +13,7 @@ classes:
   OK: 200
   MISSING: 200
   MISALIGNED: 200
-  TOMB: 200
+  TOMBSTONE: 200
 
 domains:
   domain_A:

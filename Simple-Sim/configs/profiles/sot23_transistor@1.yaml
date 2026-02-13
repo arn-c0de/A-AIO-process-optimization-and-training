@@ -29,7 +29,7 @@ defect_set:
   - OK
   - MISSING
   - MISALIGNED
-  - TOMB
+  - TOMBSTONE
 
 render:
   component_color_bgr: [18, 18, 18]
