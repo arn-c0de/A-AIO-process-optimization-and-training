@@ -17,10 +17,13 @@ from datetime import datetime
 import re
 
 from PIL import Image, ImageTk
+import cv2
 
 from .base_tab import BaseTab
 from gui.state import UiState
 from gui.utils.tooltip import ToolTip
+from gui.components.overlay_renderer import draw_defect_overlay
+from gui.utils.settings_store import SettingsStore
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -54,6 +57,8 @@ class PipelineControlTab(BaseTab):
         self._dataset_by_label: dict[str, Path] = {}
         self._label_dict: dict[str, str] = {}  # Map sample_id to class label
         self._image_to_sample: dict[str, str] = {}  # Map image_path to sample_id
+        self._meta_by_sample: dict[str, MetaRow] = {}
+        self._meta_by_image_rel: dict[str, MetaRow] = {}
 
         # Stats bar state
         self.var_cpu: tk.StringVar
@@ -294,7 +299,8 @@ class PipelineControlTab(BaseTab):
                 img_grid.grid_rowconfigure(r, weight=1)
                 img_grid.grid_columnconfigure(c, weight=1)
 
-                lbl = ttk.Label(frm, text="(no image)", anchor="center")
+                # Use compound so text (filename/class tag) is visible with the thumbnail.
+                lbl = ttk.Label(frm, text="(no image)", anchor="center", compound="top")
                 lbl.pack(fill="both", expand=True)
                 self.img_labels.append(lbl)
 
@@ -314,7 +320,88 @@ class PipelineControlTab(BaseTab):
         # Initialize datasets and start UI ticker
         self._refresh_datasets()
         self._refresh_models()
+        self._load_persisted_settings()
+        self._wire_settings_autosave()
         self._tick_ui()
+
+    def _store(self) -> Optional[SettingsStore]:
+        return self.state.settings_store
+
+    def _load_persisted_settings(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+
+        def set_if(var, key: str) -> None:
+            v = st.get(key)
+            if v is None:
+                return
+            try:
+                var.set(v)
+            except Exception:
+                pass
+
+        set_if(self.var_run_mode, "pipeline.run_mode")
+        set_if(self.var_run_count, "pipeline.run_count")
+        set_if(self.var_dataset_mode, "pipeline.dataset_mode")
+        set_if(self.var_config, "pipeline.config")
+        set_if(self.var_out, "pipeline.out")
+        set_if(self.var_model, "pipeline.model")
+        set_if(self.var_autosnap, "pipeline.autosnap")
+        set_if(self.var_snap_every, "pipeline.snap_every")
+        set_if(self.var_snap_keep, "pipeline.snap_keep")
+        set_if(self.var_continue_epochs, "pipeline.continue_epochs")
+        set_if(self.var_continue_out_mode, "pipeline.continue_out_mode")
+        set_if(self.var_name, "pipeline.name")
+        set_if(self.var_name_ts, "pipeline.name_ts")
+        set_if(self.var_dataset, "pipeline.dataset_selection")
+
+        # Ensure dropdowns reflect loaded values.
+        try:
+            self._refresh_datasets()
+            self._on_dataset_selected()
+        except Exception:
+            pass
+        try:
+            self._refresh_models()
+        except Exception:
+            pass
+
+    def _wire_settings_autosave(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+
+        def bind(var, key: str) -> None:
+            def cb(*_a) -> None:
+                try:
+                    st.set(key, var.get())
+                    st.schedule_save(self.frame)
+                except Exception:
+                    pass
+
+            try:
+                var.trace_add("write", cb)
+            except Exception:
+                try:
+                    var.trace("w", cb)
+                except Exception:
+                    pass
+
+        bind(self.var_run_mode, "pipeline.run_mode")
+        bind(self.var_run_count, "pipeline.run_count")
+        bind(self.var_dataset_mode, "pipeline.dataset_mode")
+        bind(self.var_config, "pipeline.config")
+        bind(self.var_out, "pipeline.out")
+        bind(self.var_model, "pipeline.model")
+        bind(self.var_autosnap, "pipeline.autosnap")
+        bind(self.var_snap_every, "pipeline.snap_every")
+        bind(self.var_snap_keep, "pipeline.snap_keep")
+        bind(self.var_continue_epochs, "pipeline.continue_epochs")
+        bind(self.var_continue_out_mode, "pipeline.continue_out_mode")
+        bind(self.var_name, "pipeline.name")
+        bind(self.var_name_ts, "pipeline.name_ts")
+        bind(self.var_dataset, "pipeline.dataset_selection")
 
     def start_pipeline(self) -> None:
         """Start the pipeline process with configured run mode."""
@@ -710,18 +797,19 @@ class PipelineControlTab(BaseTab):
         self._thumb_refs.clear()
         for i, lbl in enumerate(self.img_labels):
             if i >= len(self._recent_imgs):
-                lbl.configure(image="", text="(no image)")
+                lbl.configure(image="", text="(no image)", compound="top")
                 continue
 
             path = Path(self._recent_imgs[-1 - i])
             try:
-                img = Image.open(path).convert("RGB")
-                img.thumbnail((280, 180))
-                tkimg = ImageTk.PhotoImage(img)
-                self._thumb_refs.append(tkimg)
+                img_bgr = cv2.imread(str(path))
+                if img_bgr is None:
+                    raise ValueError("Failed to read image")
 
                 # Get class label for this image
                 class_label = ""
+                class_name = ""
+                meta_row: Optional[MetaRow] = None
                 if self.state.dataset_dir:
                     # Get relative path from dataset root
                     try:
@@ -732,17 +820,34 @@ class PipelineControlTab(BaseTab):
                         sample_id = self._image_to_sample.get(rel_path_str)
                         if sample_id:
                             # Get class label from sample_id
-                            class_name = self._label_dict.get(sample_id, "")
+                            class_name = self._label_dict.get(sample_id, "") or ""
                             if class_name:
-                                class_label = f" [{class_name}]"
+                                class_label = class_name
+                            meta_row = self._meta_by_sample.get(sample_id)
+                        if meta_row is None:
+                            meta_row = self._meta_by_image_rel.get(rel_path_str)
                     except ValueError:
                         pass  # Path is not relative to dataset_dir
 
-                display_text = f"{path.name}{class_label}"
-                lbl.configure(image=tkimg, text=display_text)
+                # Render defect overlay on the thumbnail itself.
+                if meta_row is not None:
+                    try:
+                        img_bgr = draw_defect_overlay(img_bgr, meta_row.defect, meta_row.nominal)
+                    except Exception:
+                        pass
+
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                img_pil = Image.fromarray(img_rgb)
+                img_pil.thumbnail((280, 180))
+                tkimg = ImageTk.PhotoImage(img_pil)
+                self._thumb_refs.append(tkimg)
+
+                # Two-line caption keeps the class tag readable.
+                display_text = path.name if not class_label else f"{path.name}\n[{class_label}]"
+                lbl.configure(image=tkimg, text=display_text, compound="top")
                 lbl.image = tkimg
             except Exception:
-                lbl.configure(image="", text=f"(failed) {path.name}")
+                lbl.configure(image="", text=f"(failed) {path.name}", compound="top")
 
     def _tick_ui(self) -> None:
         """UI update ticker."""
@@ -1225,6 +1330,8 @@ class PipelineControlTab(BaseTab):
         self._recent_imgs.clear()
         self._label_dict.clear()
         self._image_to_sample.clear()
+        self._meta_by_sample.clear()
+        self._meta_by_image_rel.clear()
         self._start_dataset_size_calc(ds)
 
         # Load metadata and labels
@@ -1233,6 +1340,8 @@ class PipelineControlTab(BaseTab):
             if meta_path.exists():
                 meta_rows = read_jsonl(meta_path, MetaRow)
                 self._image_to_sample = {row.image_path: row.id for row in meta_rows}
+                self._meta_by_sample = {row.id: row for row in meta_rows}
+                self._meta_by_image_rel = {row.image_path: row for row in meta_rows}
 
             labels_path = ds / "labels.jsonl"
             if labels_path.exists():

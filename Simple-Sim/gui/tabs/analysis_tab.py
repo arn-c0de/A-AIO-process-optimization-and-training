@@ -20,6 +20,7 @@ from gui.components.image_cache import ImageCache
 from gui.components.overlay_renderer import draw_defect_overlay, draw_prediction_overlay
 from gui.utils.model_inference import load_model, ModelWrapper
 from gui.utils.tooltip import ToolTip
+from gui.utils.settings_store import SettingsStore
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -181,6 +182,8 @@ class AnalysisTab(BaseTab):
         # Load initial dataset
         self._refresh_datasets()
         self.on_dataset_changed()
+        self._load_persisted_settings()
+        self._wire_settings_autosave()
 
     def on_dataset_changed(self) -> None:
         """Handle dataset change from other tabs."""
@@ -200,6 +203,67 @@ class AnalysisTab(BaseTab):
 
         self._load_dataset()
         self._try_load_model()
+
+    def _store(self) -> Optional[SettingsStore]:
+        return self.state.settings_store
+
+    def _load_persisted_settings(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+        v = st.get("analysis.dataset_selection")
+        if isinstance(v, str) and v:
+            try:
+                self.var_dataset.set(v)
+                self._on_dataset_selected()
+            except Exception:
+                pass
+        for key, var in [
+            ("analysis.search", self.var_search),
+            ("analysis.class", self.var_filter),
+            ("analysis.run", self.var_run),
+            ("analysis.domain", self.var_domain),
+            ("analysis.split", self.var_split),
+        ]:
+            vv = st.get(key)
+            if vv is None:
+                continue
+            try:
+                var.set(vv)
+            except Exception:
+                pass
+        try:
+            self._filter_images(display_first=False)
+        except Exception:
+            pass
+
+    def _wire_settings_autosave(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+
+        def bind(var, key: str) -> None:
+            def cb(*_a) -> None:
+                try:
+                    st.set(key, var.get())
+                    st.schedule_save(self.frame)
+                except Exception:
+                    pass
+
+            try:
+                var.trace_add("write", cb)
+            except Exception:
+                try:
+                    var.trace("w", cb)
+                except Exception:
+                    pass
+
+        bind(self.var_dataset, "analysis.dataset_selection")
+        bind(self.var_search, "analysis.search")
+        bind(self.var_filter, "analysis.class")
+        bind(self.var_run, "analysis.run")
+        bind(self.var_domain, "analysis.domain")
+        bind(self.var_split, "analysis.split")
 
     def _sim_data_roots(self) -> tuple[Path, Path]:
         sim_data = self.sim_root / "outputs" / "sim_data"

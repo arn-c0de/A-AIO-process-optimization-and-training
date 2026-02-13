@@ -21,6 +21,7 @@ from gui.state import UiState
 from gui.components.chart_widgets import create_confusion_matrix_widget
 from gui.components.overlay_renderer import draw_prediction_overlay
 from gui.utils.tooltip import ToolTip
+from gui.utils.settings_store import SettingsStore
 
 
 class PredictionsTab(BaseTab):
@@ -203,6 +204,8 @@ class PredictionsTab(BaseTab):
         self.on_dataset_changed()
         self._refresh_datasets()
         self._refresh_models()
+        self._load_persisted_settings()
+        self._wire_settings_autosave()
         self._tick_ui()
 
     def on_dataset_changed(self) -> None:
@@ -214,6 +217,71 @@ class PredictionsTab(BaseTab):
         try:
             self._refresh_datasets()
             self._refresh_models()
+        except Exception:
+            pass
+
+    def _store(self) -> Optional[SettingsStore]:
+        return self.state.settings_store
+
+    def _load_persisted_settings(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+        for key, var in [
+            ("pred.dataset_selection", self.var_dataset),
+            ("pred.model_selection", self.var_model),
+            ("pred.split", self.var_split),
+            ("pred.device", self.var_device),
+            ("pred.max_samples", self.var_max_samples),
+        ]:
+            v = st.get(key)
+            if v is None:
+                continue
+            try:
+                var.set(v)
+            except Exception:
+                pass
+        try:
+            self.chk_save_preds.set(bool(st.get("pred.save_preds", True)))
+        except Exception:
+            pass
+
+    def _wire_settings_autosave(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+
+        def bind(var, key: str) -> None:
+            def cb(*_a) -> None:
+                try:
+                    st.set(key, var.get())
+                    st.schedule_save(self.frame)
+                except Exception:
+                    pass
+
+            try:
+                var.trace_add("write", cb)
+            except Exception:
+                try:
+                    var.trace("w", cb)
+                except Exception:
+                    pass
+
+        bind(self.var_dataset, "pred.dataset_selection")
+        bind(self.var_model, "pred.model_selection")
+        bind(self.var_split, "pred.split")
+        bind(self.var_device, "pred.device")
+        bind(self.var_max_samples, "pred.max_samples")
+
+        def on_chk() -> None:
+            try:
+                st.set("pred.save_preds", bool(self.chk_save_preds.get()))
+                st.schedule_save(self.frame)
+            except Exception:
+                pass
+
+        try:
+            self.chk_save_preds.trace_add("write", lambda *_a: on_chk())
         except Exception:
             pass
 

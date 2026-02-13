@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 
+from gui.utils.settings_store import SettingsStore
+
 
 @dataclass
 class UiState:
@@ -21,3 +23,7 @@ class UiState:
     current_model_path: Optional[Path] = None
     analysis_results: Optional[Dict[str, Any]] = None
     flags: Dict[str, List[str]] = field(default_factory=dict)  # id -> list of flags
+
+    # Settings persistence
+    settings: Dict[str, Any] = field(default_factory=dict)
+    settings_store: Optional[SettingsStore] = None

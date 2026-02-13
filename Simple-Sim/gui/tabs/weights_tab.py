@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .base_tab import BaseTab
 from gui.state import UiState
+from gui.utils.settings_store import SettingsStore
 
 
 class WeightsTab(BaseTab):
@@ -268,6 +269,8 @@ class WeightsTab(BaseTab):
         self._load_favorites()
         self._refresh_models()
         self._refresh_reports()
+        self._load_persisted_settings()
+        self._wire_settings_autosave()
         self._tick_ui()
 
     def on_dataset_changed(self) -> None:
@@ -277,6 +280,67 @@ class WeightsTab(BaseTab):
 
         active = self.sim_root / "outputs" / "models" / f"{self.state.dataset_dir.name}.pt"
         self.var_active_model.set(str(active))
+
+    def _store(self) -> Optional[SettingsStore]:
+        return self.state.settings_store
+
+    def _load_persisted_settings(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+        for key, var in [
+            ("weights.split", self.var_split),
+            ("weights.device", self.var_device),
+            ("weights.max_samples", self.var_max_samples),
+            ("weights.save_preds", self.chk_save_preds),
+            ("weights.report_scope", self.var_report_scope),
+            ("weights.report_split", self.var_report_split),
+            ("weights.report_sort", self.var_report_sort),
+            ("weights.compare_a", self.var_cmp_a),
+            ("weights.compare_b", self.var_cmp_b),
+        ]:
+            v = st.get(key)
+            if v is None:
+                continue
+            try:
+                var.set(v)
+            except Exception:
+                pass
+        try:
+            self._refresh_reports()
+        except Exception:
+            pass
+
+    def _wire_settings_autosave(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+
+        def bind(var, key: str) -> None:
+            def cb(*_a) -> None:
+                try:
+                    st.set(key, var.get())
+                    st.schedule_save(self.frame)
+                except Exception:
+                    pass
+
+            try:
+                var.trace_add("write", cb)
+            except Exception:
+                try:
+                    var.trace("w", cb)
+                except Exception:
+                    pass
+
+        bind(self.var_split, "weights.split")
+        bind(self.var_device, "weights.device")
+        bind(self.var_max_samples, "weights.max_samples")
+        bind(self.chk_save_preds, "weights.save_preds")
+        bind(self.var_report_scope, "weights.report_scope")
+        bind(self.var_report_split, "weights.report_split")
+        bind(self.var_report_sort, "weights.report_sort")
+        bind(self.var_cmp_a, "weights.compare_a")
+        bind(self.var_cmp_b, "weights.compare_b")
 
     def _append_log(self, s: str) -> None:
         self.txt.configure(state="normal")

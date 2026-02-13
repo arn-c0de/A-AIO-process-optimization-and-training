@@ -39,6 +39,7 @@ except Exception as e:
 
 from gui.state import UiState
 from gui.tabs import PipelineControlTab, AnalysisTab, PredictionsTab, WeightsTab, ValidationTab, BaseTab
+from gui.utils.settings_store import SettingsStore
 
 
 class MonitorAppTabbed:
@@ -66,7 +67,21 @@ class MonitorAppTabbed:
     def _build_ui(self) -> None:
         """Build the main UI with notebook tabs."""
         self.root.title("A-AIO-Simple-Sim-v1.0")
-        self.root.geometry("1400x900")
+        # Settings persistence
+        settings_path = self.sim_root / "outputs" / "gui" / "settings.json"
+        store = SettingsStore(settings_path)
+        store.load()
+        self.state.settings_store = store
+        self.state.settings = dict(store.data)
+
+        geom = store.get("app.geometry")
+        if isinstance(geom, str) and geom:
+            try:
+                self.root.geometry(geom)
+            except Exception:
+                self.root.geometry("1400x900")
+        else:
+            self.root.geometry("1400x900")
 
         # Main container
         outer = ttk.Frame(self.root, padding=10)
@@ -80,6 +95,22 @@ class MonitorAppTabbed:
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         # Custom app event for dataset selection changes (emitted by PipelineControlTab).
         self.notebook.bind("<<DatasetChanged>>", lambda _e: self._notify_dataset_changed())
+
+        def on_close() -> None:
+            try:
+                if self.state.settings_store is not None:
+                    try:
+                        self.state.settings_store.set("app.geometry", self.root.winfo_geometry())
+                    except Exception:
+                        pass
+                    self.state.settings_store.save()
+            finally:
+                try:
+                    self.root.destroy()
+                except Exception:
+                    pass
+
+        self.root.protocol("WM_DELETE_WINDOW", on_close)
 
         # Create tab frames (but don't build UI yet - lazy loading)
         self.tabs["pipeline"] = PipelineControlTab(
