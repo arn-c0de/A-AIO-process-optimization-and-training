@@ -1622,6 +1622,8 @@ class PipelineControlTab(BaseTab):
             suggested_out = self.sim_root / "outputs" / "sim_data" / "runs" / suggested_run
             self.var_out.set(str(suggested_out))
             self.var_name.set(suggested_run)
+            suggested_model = self.sim_root / "outputs" / "models" / f"{suggested_run}.pt"
+            self.var_model.set(str(suggested_model))
         self._append_log(f"[profile] prepared dataset for profile {profile_id}\n")
         if cfg_info:
             self._safe_messagebox_info(
