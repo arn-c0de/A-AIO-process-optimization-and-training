@@ -76,6 +76,7 @@ class PipelineControlTab(BaseTab):
         self._last_ds_size_ts: float = 0.0
         self._prev_proc_running: bool = False
         self._dataset_size_job_id: int = 0
+        self._milestone_thresholds = [1000, 5000, 10000]
 
         # Model snapshot/versioning controls
         self.var_autosnap: tk.BooleanVar
@@ -1867,15 +1868,15 @@ class PipelineControlTab(BaseTab):
         # Set the combobox selection to the new label.
         try:
             label = self._display_for_dataset(dst, runs=runs, versions=versions)
-            # Resolve any disambiguation " (n)" by scanning mapping.
             for k, v in self._dataset_by_label.items():
-                if v == dst:
+                if v == dst or k == label:
                     self.var_dataset.set(k)
                     break
-                if k == label:
-                    self.var_dataset.set(k)
         except Exception:
             pass
+
+        # Refresh the UI for the new selection immediately
+        self._on_dataset_selected()
 
         # If Model: was the old dataset-default path, update it to the new default.
         try:
