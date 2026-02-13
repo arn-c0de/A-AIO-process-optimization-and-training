@@ -4,6 +4,8 @@ Complete M0 MVP implementation for generating synthetic PCB defect datasets, tra
 
 ![Simple-Sim Pipeline Dashboard](images/pipeline-dashboard-simple-sim-v1.0.png)
 ![Simple-Sim Prediction Dashboard](images/simlesim-prediction-tab.png)
+![Simple-Sim A/B Testing Dashboard](images/simple-sim-a-b-testing.png)
+
 
 ## Overview
 
