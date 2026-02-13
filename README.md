@@ -1,7 +1,6 @@
 # A-AIO-process-optimization-and-training
 
 This is a **testing / prototyping repository** for experimenting with AOI/AI concepts and implementing them as clean, reproducible building blocks.
-The goal is to mature these components into a future, end-to-end production system (the production system is **not** intended to be open-source).
 
 ## Projects
 
