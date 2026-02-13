@@ -5,8 +5,8 @@ run:
   component_profile: "qfn32_ic@1"
 
 roi:
-  width_px: 512
-  height_px: 512
+  width_px: 768
+  height_px: 768
   mm_per_px: 0.01
 
 classes:
