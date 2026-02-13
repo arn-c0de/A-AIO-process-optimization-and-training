@@ -1235,6 +1235,33 @@ class PipelineControlTab(BaseTab):
 
         self._start_dataset_size_calc(ds)
 
+    def _apply_dataset_settings(self, ds: Path) -> None:
+        """Update config/profile/out/model fields when selecting a dataset."""
+        if not ds:
+            return
+        config_path = ds / "config.yaml"
+        if config_path.exists():
+            self.var_config.set(str(config_path))
+
+        profile_id = self._dataset_profile_id(ds)
+        if profile_id:
+            self._set_profile_value(profile_id)
+
+        self.var_name.set(ds.name)
+        self.var_out.set(str(ds.resolve()))
+        model_path = self.sim_root / "outputs" / "models" / f"{ds.name}.pt"
+        try:
+            self.var_model.set(str(model_path.resolve()))
+        except Exception:
+            self.var_model.set(str(model_path))
+        self.var_dataset_mode.set("extend")
+
+    def _set_profile_value(self, profile_id: str) -> None:
+        """Set the profile combobox without triggering prompts."""
+        self._suspend_profile_event = True
+        self.var_profile.set(profile_id)
+        self._last_profile_id = profile_id
+
     def _ensure_dataset_skeleton(self, profile_id: str, config_path: Path, out_dir: Path) -> bool:
         """Create dataset folder/manifest so it appears in the UI before generation."""
         if not config_path.exists():
@@ -1980,6 +2007,7 @@ class PipelineControlTab(BaseTab):
 
         # Check profile compatibility
         self._check_profile_compatibility()
+        self._apply_dataset_settings(ds)
 
         img_dir = ds / "images"
         if img_dir.exists():
