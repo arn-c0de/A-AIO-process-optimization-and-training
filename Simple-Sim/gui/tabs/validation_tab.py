@@ -7,6 +7,7 @@ from tkinter import ttk, messagebox
 from pathlib import Path
 from typing import Optional
 import threading
+import os
 
 from .base_tab import BaseTab
 from gui.state import UiState
@@ -29,6 +30,10 @@ class ValidationTab(BaseTab):
 
         # UI components
         self.var_dataset: tk.StringVar
+        self.dataset_combo: ttk.Combobox
+        self._dataset_dirs: list[Path] = []
+        self._dataset_labels: list[str] = []
+        self._dataset_by_label: dict[str, Path] = {}
         self.check_vars: dict[str, tk.BooleanVar] = {}
         self.results_text: tk.Text
         self.flag_tree: ttk.Treeview
@@ -43,8 +48,10 @@ class ValidationTab(BaseTab):
 
         ttk.Label(top, text="Dataset:").pack(side="left")
         self.var_dataset = tk.StringVar()
-        dataset_entry = ttk.Entry(top, textvariable=self.var_dataset, width=50, state="readonly")
-        dataset_entry.pack(side="left", padx=(5, 15))
+        self.dataset_combo = ttk.Combobox(top, textvariable=self.var_dataset, state="readonly", width=55)
+        self.dataset_combo.pack(side="left", padx=(5, 8))
+        self.dataset_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_dataset_selected())
+        ttk.Button(top, text="Refresh", command=self._refresh_datasets).pack(side="left", padx=(0, 12))
 
         ttk.Button(top, text="Run Validation Suite", command=self._run_validation).pack(side="left", padx=15)
 
@@ -128,14 +135,111 @@ class ValidationTab(BaseTab):
         ttk.Button(flag_btns, text="Clear All Flags", command=self._clear_all_flags).pack(side="left", padx=2)
 
         # Load initial dataset
+        self._refresh_datasets()
         self.on_dataset_changed()
 
     def on_dataset_changed(self) -> None:
         """Handle dataset change from other tabs."""
+        # Sync dropdown to shared state.
+        self._sync_combo_to_state()
+
         if self.state.dataset_dir:
-            self.var_dataset.set(str(self.state.dataset_dir))
             self.flag_manager = FlagManager(self.state.dataset_dir)
             self._refresh_flag_tree()
+
+    def _refresh_datasets(self) -> None:
+        """Refresh dataset dropdown list."""
+        sim_data = self.sim_root / "outputs" / "sim_data"
+        runs = sim_data / "runs"
+        versions = sim_data / "versions"
+        runs.mkdir(parents=True, exist_ok=True)
+        versions.mkdir(parents=True, exist_ok=True)
+
+        cand: list[Path] = []
+        cand.extend([p for p in runs.iterdir() if p.is_dir()])
+        for p in versions.glob("*/*"):
+            if p.is_dir():
+                cand.append(p)
+
+        def is_version(p: Path) -> bool:
+            try:
+                return str(p.resolve()).startswith(str(versions.resolve()) + os.sep)
+            except Exception:
+                return False
+
+        # Sort runs by name, snapshots by mtime desc.
+        def sort_key(p: Path) -> tuple:
+            if is_version(p):
+                try:
+                    mt = p.stat().st_mtime
+                except Exception:
+                    mt = 0.0
+                return (1, -mt, p.name)
+            return (0, p.name)
+
+        cand.sort(key=sort_key)
+
+        self._dataset_dirs = cand
+        self._dataset_labels = []
+        self._dataset_by_label = {}
+
+        seen: dict[str, int] = {}
+        for p in cand:
+            base_label = self._display_for_dataset(p, runs=runs, versions=versions)
+            n = seen.get(base_label, 0) + 1
+            seen[base_label] = n
+            label = base_label if n == 1 else f"{base_label} ({n})"
+            self._dataset_labels.append(label)
+            self._dataset_by_label[label] = p
+
+        self.dataset_combo["values"] = self._dataset_labels
+        self._sync_combo_to_state()
+
+    def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
+        """Compact label for datasets in dropdown."""
+        try:
+            rp = p.resolve()
+            if str(rp).startswith(str(runs.resolve()) + os.sep):
+                return rp.name
+            if str(rp).startswith(str(versions.resolve()) + os.sep):
+                return f"{rp.parent.name}:{rp.name}"
+        except Exception:
+            pass
+        return p.name
+
+    def _sync_combo_to_state(self) -> None:
+        """Set combo to match current state.dataset_dir if possible."""
+        if not getattr(self, "dataset_combo", None):
+            return
+
+        # If state points to one of our candidates, select its label.
+        if self.state.dataset_dir:
+            for label, p in self._dataset_by_label.items():
+                if p == self.state.dataset_dir:
+                    self.var_dataset.set(label)
+                    return
+
+        # If nothing selected yet, pick first available.
+        cur = (self.var_dataset.get() or "").strip()
+        if cur:
+            return
+        if self._dataset_labels:
+            self.var_dataset.set(self._dataset_labels[0])
+
+    def _on_dataset_selected(self) -> None:
+        """Update shared dataset selection from this tab."""
+        label = (self.var_dataset.get() or "").strip()
+        if not label:
+            return
+        ds = self._dataset_by_label.get(label)
+        if not ds:
+            return
+        self.state.dataset_dir = ds
+        try:
+            # Notify app (MonitorAppTabbed binds this event on the notebook).
+            self.parent.event_generate("<<DatasetChanged>>", when="tail")
+        except Exception:
+            pass
 
     def _run_validation(self) -> None:
         """Run validation suite in background thread."""
@@ -297,8 +401,38 @@ class ValidationTab(BaseTab):
         output_path = self.state.dataset_dir / f"validation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
         try:
+            # Make results JSON-serializable (NumPy scalars/arrays, tuples, Paths, etc.).
+            try:
+                import numpy as _np  # type: ignore
+            except Exception:  # pragma: no cover
+                _np = None
+
+            def _jsonify(obj):
+                # Primitive types
+                if obj is None or isinstance(obj, (str, int, float, bool)):
+                    return obj
+                # Path-like
+                if isinstance(obj, Path):
+                    return str(obj)
+                # NumPy scalar / array
+                if _np is not None:
+                    try:
+                        if isinstance(obj, _np.generic):
+                            return obj.item()
+                        if isinstance(obj, _np.ndarray):
+                            return obj.tolist()
+                    except Exception:
+                        pass
+                # Containers
+                if isinstance(obj, dict):
+                    return {str(k): _jsonify(v) for k, v in obj.items()}
+                if isinstance(obj, (list, tuple, set)):
+                    return [_jsonify(v) for v in obj]
+                # Fallback: stringify
+                return str(obj)
+
             with open(output_path, 'w') as f:
-                json.dump(self.validation_results, f, indent=2)
+                json.dump(_jsonify(self.validation_results), f, indent=2)
 
             messagebox.showinfo("Success", f"Report exported to:\n{output_path}")
         except Exception as e:

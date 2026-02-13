@@ -80,6 +80,7 @@ class WeightsTab(BaseTab):
         ttk.Button(top, text="Import...", command=self._import_model).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Export selected...", command=self._export_selected).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Activate selected", command=self._activate_selected).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Profile Info", command=self._show_model_profile_info).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Delete selected", command=self._delete_selected).pack(side="left", padx=(8, 0))
 
         status = ttk.Frame(self.frame)
@@ -441,7 +442,25 @@ class WeightsTab(BaseTab):
         p = self._model_by_iid.get(sel[0])
         if not p:
             return
-        self.var_selected_model.set(f"selected: {self._rel(p)}")
+
+        # Load profile info from checkpoint
+        profile_info = ""
+        try:
+            import torch
+            checkpoint = torch.load(p, map_location='cpu')
+            profile_data = checkpoint.get('component_profile')
+            if profile_data:
+                profile_id = profile_data.get('profile_id', 'unknown')
+                profile_hash = profile_data.get('profile_hash', '')
+                hash_short = profile_hash.split(':')[1][:12] if ':' in profile_hash else profile_hash[:12]
+                profile_info = f" | Profile: {profile_id} ({hash_short}...)"
+            else:
+                profile_info = " | Profile: ⚠ No profile (legacy)"
+        except Exception as e:
+            profile_info = f" | Profile: ⚠ Error loading"
+
+        self.var_selected_model.set(f"selected: {self._rel(p)}{profile_info}")
+
         # Keep the report table in sync with the current selection.
         try:
             if self.var_report_scope.get() == "selected_model":
@@ -765,6 +784,92 @@ class WeightsTab(BaseTab):
 
         self._append_log(f"[delete] deleted {deleted} file(s)\n")
         self._refresh_models()
+
+    def _show_model_profile_info(self) -> None:
+        """Show detailed profile information for the selected model."""
+        import yaml
+
+        p = self._selected_model_path()
+        if not p:
+            messagebox.showinfo("Model Profile", "No model selected")
+            return
+
+        try:
+            import torch
+            checkpoint = torch.load(p, map_location='cpu')
+
+            profile_data = checkpoint.get('component_profile')
+            if not profile_data:
+                messagebox.showinfo(
+                    "No Profile",
+                    "This model checkpoint has no component profile metadata.\n\n"
+                    "It was likely trained before the profile system was implemented."
+                )
+                return
+
+            profile_id = profile_data.get('profile_id', 'unknown')
+            profile_hash = profile_data.get('profile_hash', '')
+            dataset_path = checkpoint.get('trained_on_dataset', 'unknown')
+            manifest_hash = checkpoint.get('dataset_manifest_hash', '')
+
+            # Try to load the actual profile
+            profiles_dir = self.sim_root / "configs" / "profiles"
+            profile_path = profiles_dir / f"{profile_id}.yaml"
+
+            # Create info dialog
+            dialog = tk.Toplevel(self.frame)
+            dialog.title(f"Model Profile: {p.name}")
+            dialog.geometry("650x550")
+
+            # Create text widget with scrollbar
+            text_frame = ttk.Frame(dialog)
+            text_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+            scrollbar = ttk.Scrollbar(text_frame)
+            scrollbar.pack(side="right", fill="y")
+
+            text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10))
+            text.pack(side="left", fill="both", expand=True)
+            scrollbar.config(command=text.yview)
+
+            # Format and display info
+            info_text = f"Model: {p.name}\n"
+            info_text += f"Path: {p}\n\n"
+            info_text += "="*60 + "\n"
+            info_text += "COMPONENT PROFILE\n"
+            info_text += "="*60 + "\n"
+            info_text += f"Profile ID: {profile_id}\n"
+            info_text += f"Profile Hash: {profile_hash}\n"
+            info_text += f"Trained on dataset: {dataset_path}\n"
+            info_text += f"Dataset manifest hash: {manifest_hash}\n"
+
+            if profile_path.exists():
+                info_text += "\n" + "="*60 + "\n"
+                info_text += "PROFILE DETAILS\n"
+                info_text += "="*60 + "\n\n"
+                with open(profile_path, 'r') as f:
+                    profile_yaml = yaml.safe_load(f)
+                info_text += yaml.dump(profile_yaml, default_flow_style=False, sort_keys=False)
+            else:
+                info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
+
+            # Also show some checkpoint metadata
+            info_text += "\n" + "="*60 + "\n"
+            info_text += "CHECKPOINT METADATA\n"
+            info_text += "="*60 + "\n"
+            info_text += f"Epoch: {checkpoint.get('epoch', 'unknown')}\n"
+            info_text += f"Val F1: {checkpoint.get('val_f1', 'unknown')}\n"
+            info_text += f"Val Accuracy: {checkpoint.get('val_accuracy', 'unknown')}\n"
+            info_text += f"Classes: {checkpoint.get('class_names', 'unknown')}\n"
+
+            text.insert("1.0", info_text)
+            text.config(state="disabled")
+
+            # Close button
+            ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load model profile info:\n{str(e)}")
 
     def _rename_selected(self) -> None:
         paths = self._selected_model_paths()

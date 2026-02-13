@@ -4,32 +4,19 @@
 run:
   run_id: "run_0001"
   seed: 42
-  schema_version: 1
+  schema_version: 2
+  component_profile: "chip_0603_resistor@1"
 
 roi:
   width_px: 256
   height_px: 256
   mm_per_px: 0.01  # 0.01 mm per pixel
 
-geometry_ranges:
-  # Nominal geometry sampling ranges (in pixels). Defaults match the original hardcoded values.
-  pad_width: [25.0, 35.0]
-  pad_height: [30.0, 40.0]
-  pad_spacing: [50.0, 65.0]
-  component_length: [55.0, 65.0]
-  component_width: [25.0, 35.0]
-
 classes:
   OK: 100
   MISSING: 100
   MISALIGNED: 100
   TOMBSTONE: 100
-
-tolerances:
-  "0603":
-    ok_shift_px: 3.0          # shifts > 3px → MISALIGNED
-    ok_rotation_deg: 5.0      # rotation > 5deg → MISALIGNED
-    tombstone_tilt_deg: 75.0  # tilt >= 75deg → TOMBSTONE
 
 domains:
   domain_A:  # Single domain for MVP
@@ -49,7 +36,6 @@ render:
   backend: 'opencv_2d'
   substrate_color: [40, 90, 40]   # BGR: green solder mask
   copper_color: [60, 120, 180]    # BGR: copper pads
-  component_color: [20, 20, 20]   # BGR: dark component
   solder_mask_alpha: 0.3
 
 augment:

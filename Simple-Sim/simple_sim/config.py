@@ -36,13 +36,10 @@ def validate_config(cfg: Dict[str, Any]) -> None:
     Raises:
         ValueError: If validation fails
     """
-    # Check required top-level sections
-    required_sections = ['run', 'roi', 'classes', 'tolerances', 'domains', 'splits', 'render', 'augment', 'train', 'eval']
-    for section in required_sections:
-        if section not in cfg:
-            raise ValueError(f"Missing required section: {section}")
+    # Validate run section first to determine schema version
+    if 'run' not in cfg:
+        raise ValueError("Missing required section: run")
 
-    # Validate run section
     run = cfg['run']
     if 'run_id' not in run:
         raise ValueError("Missing run.run_id")
@@ -52,8 +49,25 @@ def validate_config(cfg: Dict[str, Any]) -> None:
         raise ValueError("run.seed must be a non-negative integer")
     if 'schema_version' not in run:
         raise ValueError("Missing run.schema_version")
-    if run['schema_version'] != 1:
-        raise ValueError(f"Unsupported schema version: {run['schema_version']}")
+
+    schema_version = run['schema_version']
+    if schema_version not in [1, 2]:
+        raise ValueError(f"Unsupported schema version: {schema_version}")
+
+    # Schema version-specific validation
+    if schema_version == 1:
+        # v1: tolerances and geometry_ranges required, component_profile optional
+        required_sections = ['run', 'roi', 'classes', 'tolerances', 'domains', 'splits', 'render', 'augment', 'train', 'eval']
+    elif schema_version == 2:
+        # v2: component_profile required, tolerances and geometry_ranges optional (come from profile)
+        required_sections = ['run', 'roi', 'classes', 'domains', 'splits', 'render', 'augment', 'train', 'eval']
+        if 'component_profile' not in run:
+            raise ValueError("schema_version=2 requires run.component_profile")
+
+    # Check required top-level sections
+    for section in required_sections:
+        if section not in cfg:
+            raise ValueError(f"Missing required section: {section}")
 
     # Validate ROI section
     roi = cfg['roi']
@@ -75,8 +89,11 @@ def validate_config(cfg: Dict[str, Any]) -> None:
         if not isinstance(count, int) or count <= 0:
             raise ValueError(f"classes.{class_name} must be a positive integer")
 
-    # Validate tolerances
-    validate_tolerances(cfg)
+    # Validate tolerances (required for v1, optional for v2)
+    if 'tolerances' in cfg:
+        validate_tolerances(cfg)
+    elif schema_version == 1:
+        raise ValueError("schema_version=1 requires tolerances section")
 
     # Validate optional geometry ranges for nominal sampling
     if 'geometry_ranges' in cfg:
@@ -112,18 +129,31 @@ def validate_config(cfg: Dict[str, Any]) -> None:
 
     # Validate render section
     render = cfg['render']
-    required_render = ['backend', 'substrate_color', 'copper_color', 'component_color', 'solder_mask_alpha']
+    # component_color is optional for schema v2 (comes from profile)
+    if schema_version == 1:
+        required_render = ['backend', 'substrate_color', 'copper_color', 'component_color', 'solder_mask_alpha']
+    else:
+        required_render = ['backend', 'substrate_color', 'copper_color', 'solder_mask_alpha']
+
     for field in required_render:
         if field not in render:
             raise ValueError(f"Missing render.{field}")
     if render['backend'] != 'opencv_2d':
         raise ValueError(f"Unsupported render backend: {render['backend']}")
-    for color_field in ['substrate_color', 'copper_color', 'component_color']:
-        color = render[color_field]
-        if not isinstance(color, list) or len(color) != 3:
-            raise ValueError(f"render.{color_field} must be a list of 3 integers (BGR)")
-        if not all(isinstance(c, int) and 0 <= c <= 255 for c in color):
-            raise ValueError(f"render.{color_field} values must be in [0, 255]")
+
+    # Validate color fields (component_color optional for v2)
+    color_fields = ['substrate_color', 'copper_color']
+    if schema_version == 1 or 'component_color' in render:
+        color_fields.append('component_color')
+
+    for color_field in color_fields:
+        if color_field in render:
+            color = render[color_field]
+            if not isinstance(color, list) or len(color) != 3:
+                raise ValueError(f"render.{color_field} must be a list of 3 integers (BGR)")
+            if not all(isinstance(c, int) and 0 <= c <= 255 for c in color):
+                raise ValueError(f"render.{color_field} values must be in [0, 255]")
+
     if not isinstance(render['solder_mask_alpha'], (int, float)) or not 0 <= render['solder_mask_alpha'] <= 1:
         raise ValueError("render.solder_mask_alpha must be in [0, 1]")
 

@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.telemetry import emit
+from simple_sim.manifest import read_dataset_manifest, hash_file
 
 
 def train_epoch(model, loader, criterion, optimizer, device):
@@ -192,6 +193,22 @@ def main():
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
+    # GUARD: Load and validate dataset manifest
+    manifest_path = data_dir / 'dataset_manifest.json'
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"Dataset manifest not found: {manifest_path}\n"
+            f"This dataset was created before profile support.\n"
+            f"Regenerate or use backfill tool:\n"
+            f"  .venv/bin/python tools/backfill_manifest.py --data {data_dir}"
+        )
+
+    manifest = read_dataset_manifest(manifest_path)
+    dataset_profile_id = manifest['component_profile']['profile_id']
+    dataset_profile_hash = manifest['component_profile']['profile_hash']
+
+    print(f"Dataset Profile: {dataset_profile_id}")
+
     # Extract training parameters
     train_config = config['train']
     epochs = train_config['epochs']
@@ -270,10 +287,36 @@ def main():
             raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
         print("\nLoading resume checkpoint...")
         checkpoint = torch.load(resume_path, map_location=device)
+
+        # Existing guard: class names
         ckpt_classes = checkpoint.get('class_names')
         if ckpt_classes and list(ckpt_classes) != list(class_names):
             raise ValueError(f"Resume checkpoint classes do not match dataset config.\n"
                              f"  checkpoint: {ckpt_classes}\n  dataset:    {class_names}")
+
+        # NEW GUARD: component profile validation
+        ckpt_profile = checkpoint.get('component_profile')
+        if ckpt_profile:
+            ckpt_profile_id = ckpt_profile.get('profile_id')
+            ckpt_profile_hash = ckpt_profile.get('profile_hash')
+
+            # HARD FAIL: Profile ID mismatch
+            if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
+                raise ValueError(
+                    f"Component profile mismatch for --resume:\n"
+                    f"  Checkpoint profile: {ckpt_profile_id}\n"
+                    f"  Dataset profile:    {dataset_profile_id}\n"
+                    f"Cannot resume training with different component type."
+                )
+
+            # WARNING: Profile hash mismatch
+            if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
+                print(f"WARNING: Profile hash mismatch (different tolerance/geometry)")
+                print(f"  Checkpoint hash: {ckpt_profile_hash[:72]}...")
+                print(f"  Dataset hash:    {dataset_profile_hash[:72]}...")
+        else:
+            print(f"WARNING: Checkpoint lacks profile metadata (legacy checkpoint)")
+
         model.load_state_dict(checkpoint['model_state_dict'])
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -355,6 +398,14 @@ def main():
             'val_accuracy': val_acc,
             'class_names': class_names,
             'config': config,
+
+            # NEW: Profile metadata for validation
+            'component_profile': {
+                'profile_id': dataset_profile_id,
+                'profile_hash': dataset_profile_hash,
+            },
+            'dataset_manifest_hash': hash_file(manifest_path),
+            'trained_on_dataset': str(data_dir),
         }
 
         # Always save "last" so resume runs are observable.
