@@ -21,6 +21,7 @@ from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.telemetry import emit
 from simple_sim.manifest import read_dataset_manifest, hash_file
+from simple_sim.model_bundle import bundle_checkpoint_path, upsert_bundle_meta
 
 
 def train_epoch(model, loader, criterion, optimizer, device):
@@ -184,8 +185,8 @@ def main():
     args = parser.parse_args()
 
     data_dir = Path(args.data)
-    output_path = Path(args.out)
-    resume_path = Path(args.resume) if args.resume else None
+    output_path_arg = Path(args.out)
+    resume_path_arg = Path(args.resume) if args.resume else None
     device = torch.device(args.device)
 
     # Load config from dataset
@@ -208,6 +209,29 @@ def main():
     dataset_profile_hash = manifest['component_profile']['profile_hash']
 
     print(f"Dataset Profile: {dataset_profile_id}")
+
+    # "Multi-model" bundle support:
+    # If --out is a directory (or ends with `.bundle`), write per-profile checkpoints into that dir.
+    bundle_dir = None
+    if output_path_arg.exists() and output_path_arg.is_dir():
+        bundle_dir = output_path_arg
+    elif str(output_path_arg).endswith(".bundle"):
+        bundle_dir = output_path_arg
+
+    if bundle_dir is not None:
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        output_path = bundle_checkpoint_path(bundle_dir, dataset_profile_id, kind="best")
+        if resume_path_arg is not None and resume_path_arg.exists() and resume_path_arg.is_dir():
+            resume_path = bundle_checkpoint_path(resume_path_arg, dataset_profile_id, kind="best")
+        else:
+            resume_path = resume_path_arg
+        print(f"Multi-model bundle: {bundle_dir}")
+        print(f"  Out checkpoint:   {output_path}")
+        if resume_path:
+            print(f"  Resume checkpoint:{resume_path}")
+    else:
+        output_path = output_path_arg
+        resume_path = resume_path_arg
 
     # Extract training parameters
     train_config = config['train']
@@ -422,6 +446,14 @@ def main():
                 best_epoch = int(epoch + 1)
                 print(f"  ✓ New best model (F1: {best_val_f1:.4f})")
                 torch.save(ckpt, output_path)
+
+        # Bundle bookkeeping: keep a lightweight index of which profiles exist.
+        if bundle_dir is not None:
+            try:
+                if output_path.exists():
+                    upsert_bundle_meta(bundle_dir, dataset_profile_id, output_path)
+            except Exception:
+                pass
 
     print("\n" + "="*60)
     print("TRAINING COMPLETE")

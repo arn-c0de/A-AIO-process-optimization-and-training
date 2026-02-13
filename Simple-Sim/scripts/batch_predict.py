@@ -38,6 +38,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
+from simple_sim.manifest import read_dataset_manifest
+from simple_sim.model_bundle import bundle_checkpoint_path
 
 
 @dataclass
@@ -234,6 +236,22 @@ def main() -> None:
     model_path = Path(args.model)
     data_dir = Path(args.data)
     device = torch.device(args.device)
+
+    # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
+    if model_path.exists() and model_path.is_dir():
+        manifest_path = data_dir / "dataset_manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
+        manifest = read_dataset_manifest(manifest_path)
+        dataset_profile_id = manifest["component_profile"]["profile_id"]
+        resolved = bundle_checkpoint_path(model_path, dataset_profile_id, kind="best")
+        if not resolved.exists():
+            raise FileNotFoundError(
+                f"Multi-model bundle has no checkpoint for profile '{dataset_profile_id}':\n"
+                f"  bundle: {model_path}\n"
+                f"  expected: {resolved}"
+            )
+        model_path = resolved
 
     model, class_names, checkpoint = load_checkpoint_model(model_path, device)
     cfg = checkpoint.get("config", {}) or {}

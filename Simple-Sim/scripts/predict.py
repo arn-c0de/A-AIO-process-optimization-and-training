@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from simple_sim.manifest import read_dataset_manifest
+from simple_sim.model_bundle import bundle_checkpoint_path
 
 
 def load_checkpoint_model(model_path: Path, device: torch.device):
@@ -109,6 +110,28 @@ def main():
         raise FileNotFoundError(f"Image not found: {image_path}")
 
     device = torch.device(args.device)
+    # Multi-model bundle support: if --model is a directory, require --data to resolve profile.
+    if model_path.exists() and model_path.is_dir():
+        if not data_dir:
+            raise SystemExit(
+                "When --model points to a multi-model bundle directory, pass --data so the profile can be resolved.\n"
+                "Example:\n"
+                "  scripts/predict.py --model outputs/models/my_multi.bundle --data outputs/sim_data/runs/run_0001 --id <sample_id>"
+            )
+        manifest_path = data_dir / 'dataset_manifest.json'
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
+        manifest = read_dataset_manifest(manifest_path)
+        dataset_profile_id = manifest['component_profile']['profile_id']
+        resolved = bundle_checkpoint_path(model_path, dataset_profile_id, kind="best")
+        if not resolved.exists():
+            raise FileNotFoundError(
+                f"Multi-model bundle has no checkpoint for profile '{dataset_profile_id}':\n"
+                f"  bundle: {model_path}\n"
+                f"  expected: {resolved}"
+            )
+        model_path = resolved
+
     model, class_names, checkpoint = load_checkpoint_model(model_path, device)
 
     # GUARD: Validate profile compatibility if using dataset

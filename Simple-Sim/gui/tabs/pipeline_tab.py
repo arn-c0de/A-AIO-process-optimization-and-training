@@ -30,6 +30,7 @@ import yaml
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
+from simple_sim.model_bundle import bundle_checkpoint_path
 
 
 class PipelineControlTab(BaseTab):
@@ -115,6 +116,7 @@ class PipelineControlTab(BaseTab):
         self.var_continue_out_mode: tk.StringVar
         self.var_name: tk.StringVar
         self.var_name_ts: tk.BooleanVar
+        self.var_model_bundle: tk.BooleanVar
 
         # Profile management
         self.var_profile: tk.StringVar
@@ -270,6 +272,8 @@ class PipelineControlTab(BaseTab):
         ttk.Entry(top3, textvariable=self.var_name, width=36).pack(side="left")
         self.var_name_ts = tk.BooleanVar(value=True)
         ttk.Checkbutton(top3, text="Timestamp", variable=self.var_name_ts).pack(side="left", padx=(10, 0))
+        self.var_model_bundle = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top3, text="Multi-Model (.bundle)", variable=self.var_model_bundle).pack(side="left", padx=(10, 0))
         ttk.Button(top3, text="Apply to Out+Model", command=self._apply_name_to_out_and_model).pack(side="left", padx=(10, 0))
 
         # Status line
@@ -580,7 +584,7 @@ class PipelineControlTab(BaseTab):
                         out_dir=self._resolve_out_dir(out_dir),
                     )
                 snap_every = self._snap_every_n()
-                if self.var_autosnap.get() and mp.exists() and self.current_run_iteration % snap_every == 0:
+                if self.var_autosnap.get() and mp.exists() and mp.is_file() and self.current_run_iteration % snap_every == 0:
                     snap = self._snapshot_model_checkpoint(mp, run_i=self.current_run_iteration)
                     if snap:
                         self._append_log(f"[model snapshot] {snap}\n")
@@ -1279,6 +1283,12 @@ class PipelineControlTab(BaseTab):
             return None
 
     def _load_model_profile(self, model_path: Path) -> tuple[Optional[str], Optional[str]]:
+        # Multi-model bundles are directories; treat them as compatible with any dataset profile.
+        try:
+            if model_path.is_dir():
+                return "multi", None
+        except Exception:
+            pass
         try:
             import torch
             checkpoint = torch.load(model_path, map_location='cpu')
@@ -1290,26 +1300,45 @@ class PipelineControlTab(BaseTab):
         return None, None
 
     def _update_model_dropdown_for_dataset(self) -> None:
-        """Show only models matching the selected dataset profile."""
+        """Show only models matching the selected dataset profile (plus multi-model bundles)."""
         ds = self.state.dataset_dir
         values = list(self._all_model_combo_values)
         if ds:
             profile_id = self._dataset_profile_id(ds)
             profile_hash = self._dataset_profile_hash(ds)
-            filtered: list[str] = []
-            if profile_id and profile_hash:
+            # If the dataset has no profile metadata, do not filter (legacy).
+            if profile_id:
+                exact: list[str] = []
+                id_only: list[str] = []
+                multi: list[str] = []
+
                 for p in self._model_paths:
                     rel_path = str(p.resolve())
                     pid, phash = self._model_profile_cache.get(rel_path, (None, None))
-                    if pid == profile_id and phash == profile_hash:
+
+                    # Multi-model bundle (directory) or explicitly tagged profile_id.
+                    if pid == "multi" or (isinstance(pid, str) and pid.lower().startswith("multi")):
                         try:
-                            filtered.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+                            multi.append(str(p.resolve().relative_to(self.sim_root.resolve())))
                         except Exception:
-                            filtered.append(str(p))
-            if filtered:
-                values = filtered
-            else:
-                values = []
+                            multi.append(str(p))
+                        continue
+
+                    if pid != profile_id:
+                        continue
+
+                    # Prefer exact hash matches, but allow same ID with hash mismatch.
+                    try:
+                        disp = str(p.resolve().relative_to(self.sim_root.resolve()))
+                    except Exception:
+                        disp = str(p)
+                    if profile_hash and phash and phash == profile_hash:
+                        exact.append(disp)
+                    else:
+                        id_only.append(disp)
+
+                # Order: exact matches, same-ID matches, then multi bundles.
+                values = exact + id_only + multi
         try:
             self.model_combo["values"] = values
         except Exception:
@@ -1539,13 +1568,15 @@ class PipelineControlTab(BaseTab):
 
         cand: list[Path] = []
         cand.extend(sorted(root.glob("*.pt")))
+        cand.extend([p for p in sorted(root.glob("*.bundle")) if p.is_dir()])
+        cand.extend([p for p in sorted((root / "bundles").glob("*")) if p.is_dir()])
         cand.extend(sorted((root / "imports").glob("*.pt")))
         cand.extend(sorted((root / "versions").glob("**/*.pt")))
 
         uniq: dict[str, Path] = {}
         for p in cand:
             try:
-                if p.is_file():
+                if p.is_file() or p.is_dir():
                     uniq[str(p.resolve())] = p
             except Exception:
                 continue
@@ -1872,6 +1903,14 @@ class PipelineControlTab(BaseTab):
             if not model_path or not model_path.exists():
                 self.var_profile_compat.set("")
                 return
+            # Multi-model bundle (directory): resolve per-profile checkpoint.
+            if model_path.is_dir():
+                cand = bundle_checkpoint_path(model_path, ds_profile_id, kind="best")
+                if not cand.exists():
+                    self.var_profile_compat.set(f"⚠ Multi-model: no weights for {ds_profile_id}")
+                    self.lbl_profile_compat.configure(foreground="orange")
+                    return
+                model_path = cand
 
             import torch
             checkpoint = torch.load(model_path, map_location='cpu')
@@ -1886,7 +1925,10 @@ class PipelineControlTab(BaseTab):
             model_profile_hash = model_profile.get('profile_hash')
 
             # Check compatibility
-            if model_profile_id != ds_profile_id:
+            if isinstance(model_profile_id, str) and model_profile_id.lower().startswith("multi"):
+                self.var_profile_compat.set("✓ Compatible (multi-model)")
+                self.lbl_profile_compat.configure(foreground="green")
+            elif model_profile_id != ds_profile_id:
                 self.var_profile_compat.set(f"✗ INCOMPATIBLE: Model={model_profile_id}, Dataset={ds_profile_id}")
                 self.lbl_profile_compat.configure(foreground="red")
             elif model_profile_hash != ds_profile_hash:
@@ -1992,7 +2034,10 @@ class PipelineControlTab(BaseTab):
             name = base
 
         out_rel = f"outputs/sim_data/runs/{name}"
-        model_rel = f"outputs/models/{name}.pt"
+        if hasattr(self, "var_model_bundle") and self.var_model_bundle.get():
+            model_rel = f"outputs/models/{name}.bundle"
+        else:
+            model_rel = f"outputs/models/{name}.pt"
 
         self.var_out.set(out_rel)
         self.var_model.set(model_rel)
