@@ -24,6 +24,7 @@ from gui.state import UiState
 from gui.utils.tooltip import ToolTip
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.utils.settings_store import SettingsStore
+import yaml
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -59,6 +60,11 @@ class PipelineControlTab(BaseTab):
         self._image_to_sample: dict[str, str] = {}  # Map image_path to sample_id
         self._meta_by_sample: dict[str, MetaRow] = {}
         self._meta_by_image_rel: dict[str, MetaRow] = {}
+
+        # Profile handling helpers
+        self._last_profile_id: str = "chip_0603_resistor@1"
+        self._profile_config_cache: Dict[str, Dict[str, Any]] = {}
+        self._suspend_profile_event: bool = False
 
         # Stats bar state
         self.var_cpu: tk.StringVar
@@ -222,6 +228,7 @@ class PipelineControlTab(BaseTab):
         self.profile_combo = ttk.Combobox(top2, textvariable=self.var_profile, state="readonly", width=20)
         self.profile_combo.pack(side="left")
         ToolTip(self.profile_combo, text_func=lambda: self.var_profile.get())
+        self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
         ttk.Button(top2, text="↻", width=3, command=self._refresh_profiles).pack(side="left", padx=(6, 0))
         ttk.Button(top2, text="ⓘ", width=3, command=self._show_profile_info).pack(side="left", padx=(3, 0))
 
@@ -1451,6 +1458,139 @@ class PipelineControlTab(BaseTab):
                 self.var_profile.set("chip_0603_resistor@1")
             elif values:
                 self.var_profile.set(values[0])
+        self._on_profile_selected()
+
+    def _on_profile_selected(self, _event: Optional[object] = None) -> None:
+        if self._suspend_profile_event:
+            self._suspend_profile_event = False
+            return
+
+        profile_id = self.var_profile.get().strip()
+        if not profile_id:
+            return
+
+        ds = self._selected_dataset_dir()
+        current_profile = self._dataset_profile_id(ds)
+        if current_profile == profile_id:
+            self._last_profile_id = profile_id
+            return
+
+        candidate = self._find_dataset_for_profile(profile_id)
+        if candidate:
+            if messagebox.askyesno(
+                "Switch dataset",
+                f"A dataset for profile '{profile_id}' already exists:\n{candidate}\n\n"
+                "Switch to it so profiles stay separated?",
+            ):
+                self._select_dataset(candidate)
+                self._last_profile_id = profile_id
+                return
+            self._revert_profile_selection()
+            return
+
+        cfg_info = self._config_for_profile(profile_id)
+        if messagebox.askyesno(
+            "Create dataset",
+            f"No dataset currently matches profile '{profile_id}'.\n"
+            "Would you like to prepare a new out path for this profile?",
+        ):
+            self._prepare_dataset_for_profile(profile_id, cfg_info)
+            self._last_profile_id = profile_id
+            return
+
+        self._revert_profile_selection()
+
+    def _dataset_profile_id(self, ds: Optional[Path]) -> Optional[str]:
+        if not ds:
+            return None
+        manifest_path = ds / "dataset_manifest.json"
+        if not manifest_path.exists():
+            return None
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            return manifest.get("component_profile", {}).get("profile_id")
+        except Exception:
+            return None
+
+    def _find_dataset_for_profile(self, profile_id: str) -> Optional[Path]:
+        runs_root = self.sim_root / "outputs" / "sim_data" / "runs"
+        if not runs_root.exists():
+            return None
+        for ds in sorted(runs_root.iterdir()):
+            if not ds.is_dir():
+                continue
+            if self._dataset_profile_id(ds) == profile_id:
+                return ds
+        return None
+
+    def _select_dataset(self, ds: Path) -> None:
+        self._refresh_datasets()
+        runs = self.sim_root / "outputs" / "sim_data" / "runs"
+        versions = self.sim_root / "outputs" / "sim_data" / "versions"
+        label = self._display_for_dataset(ds, runs=runs, versions=versions)
+        for key, value in self._dataset_by_label.items():
+            if value == ds or key == label:
+                self.var_dataset.set(key)
+                self._on_dataset_selected()
+                return
+        self.state.dataset_dir = ds
+        self.var_dataset.set(label)
+        self._on_dataset_selected()
+
+    def _revert_profile_selection(self) -> None:
+        self._suspend_profile_event = True
+        self.var_profile.set(self._last_profile_id or "chip_0603_resistor@1")
+
+    def _prepare_dataset_for_profile(self, profile_id: str, cfg_info: Optional[Dict[str, Any]]) -> None:
+        if cfg_info:
+            cfg_path = cfg_info["path"]
+            self.var_config.set(str(cfg_path))
+            suggested_run = cfg_info.get("run_id")
+        else:
+            suggested_run = self._slugify_name(profile_id)
+        self.var_dataset_mode.set("new")
+        if suggested_run:
+            suggested_out = self.sim_root / "outputs" / "sim_data" / "runs" / suggested_run
+            self.var_out.set(str(suggested_out))
+            self.var_name.set(suggested_run)
+        self._append_log(f"[profile] prepared dataset for profile {profile_id}\n")
+        if cfg_info:
+            messagebox.showinfo(
+                "Ready",
+                f"Config '{cfg_path.name}' assigned.\n"
+                f"Out directory: {self.var_out.get()}\n"
+                "Run the pipeline to generate the matching dataset for this profile.",
+            )
+        else:
+            messagebox.showinfo(
+                "Ready",
+                "No config automatically detected for this profile.\n"
+                "Pick or create a config that sets `run.component_profile` to "
+                f"'{profile_id}', then run the pipeline to create the dataset.",
+            )
+
+    def _config_for_profile(self, profile_id: str) -> Optional[Dict[str, Any]]:
+        if profile_id in self._profile_config_cache:
+            return self._profile_config_cache[profile_id]
+
+        configs_root = self.sim_root / "configs"
+        best_entry = None
+        for cfg in sorted(configs_root.glob("*.yaml")):
+            try:
+                data = yaml.safe_load(cfg)
+            except Exception:
+                continue
+            run_block = data.get("run") or {}
+            if run_block.get("component_profile") == profile_id:
+                best_entry = {
+                    "path": cfg,
+                    "run_id": str(run_block.get("run_id") or cfg.stem),
+                }
+                break
+
+        self._profile_config_cache[profile_id] = best_entry
+        return best_entry
 
     def _show_profile_info(self) -> None:
         """Show detailed information about the selected profile."""
