@@ -4,6 +4,8 @@ import yaml
 from pathlib import Path
 from typing import Any, Dict
 
+VALID_CLASSES = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT'}
+
 
 def load_config(path: Path) -> Dict[str, Any]:
     """Load YAML configuration file.
@@ -82,7 +84,7 @@ def validate_config(cfg: Dict[str, Any]) -> None:
     classes = cfg['classes']
     if not classes:
         raise ValueError("classes cannot be empty")
-    valid_classes = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT'}
+    valid_classes = VALID_CLASSES
     for class_name, count in classes.items():
         if class_name not in valid_classes:
             raise ValueError(f"Invalid class name: {class_name}")
@@ -204,7 +206,7 @@ def validate_config(cfg: Dict[str, Any]) -> None:
         if not isinstance(cc, list) or not cc:
             raise ValueError("eval.critical_classes must be a non-empty list if provided")
         # Ensure they're valid class names.
-        valid_classes = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE'}
+        valid_classes = VALID_CLASSES
         for c in cc:
             if not isinstance(c, str):
                 raise ValueError("eval.critical_classes entries must be strings")
