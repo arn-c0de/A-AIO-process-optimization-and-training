@@ -1,0 +1,35 @@
+profile:
+  profile_id: sot23_transistor@1
+  schema_version: 1
+  description: "SOT-23 transistor (3 leads, ~3.0×1.25 mm) on a three-pad footprint"
+  created_at: "2026-02-14T10:00:00Z"
+
+component:
+  type: sot_transistor
+  footprint: sot23
+  package: SOT-23
+  nominal_dims_mm:
+    length: 3.0
+    width: 1.25
+    height: 1.0
+
+geometry_ranges:
+  pad_width: [60.0, 80.0]
+  pad_height: [90.0, 110.0]
+  pad_spacing: [130.0, 160.0]
+  component_length: [80.0, 90.0]
+  component_width: [35.0, 45.0]
+
+tolerances:
+  ok_shift_px: 4.0
+  ok_rotation_deg: 6.0
+  tombstone_tilt_deg: 75.0
+
+defect_set:
+  - OK
+  - MISSING
+  - MISALIGNED
+  - TOMBSTONE
+
+render:
+  component_color_bgr: [18, 18, 18]
