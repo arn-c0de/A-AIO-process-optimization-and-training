@@ -21,6 +21,7 @@ from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.telemetry import emit
 from simple_sim.manifest import read_dataset_manifest
+from simple_sim.model_bundle import bundle_checkpoint_path
 
 
 def evaluate(model, loader, device, class_names, critical_classes=None):
@@ -123,6 +124,18 @@ def main():
     manifest = read_dataset_manifest(manifest_path)
     dataset_profile_id = manifest['component_profile']['profile_id']
     dataset_profile_hash = manifest['component_profile']['profile_hash']
+
+    # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
+    if model_path.exists() and model_path.is_dir():
+        resolved = bundle_checkpoint_path(model_path, dataset_profile_id, kind="best")
+        if not resolved.exists():
+            raise FileNotFoundError(
+                f"Multi-model bundle has no checkpoint for profile '{dataset_profile_id}':\n"
+                f"  bundle: {model_path}\n"
+                f"  expected: {resolved}\n"
+                f"Train this profile into the bundle first."
+            )
+        model_path = resolved
 
     # Load checkpoint
     print("\nLoading model checkpoint...")

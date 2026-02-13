@@ -24,10 +24,13 @@ from gui.state import UiState
 from gui.utils.tooltip import ToolTip
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.utils.settings_store import SettingsStore
+from simple_sim.profile_hash import hash_profile
+import yaml
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
+from simple_sim.model_bundle import bundle_checkpoint_path
 
 
 class PipelineControlTab(BaseTab):
@@ -59,6 +62,11 @@ class PipelineControlTab(BaseTab):
         self._image_to_sample: dict[str, str] = {}  # Map image_path to sample_id
         self._meta_by_sample: dict[str, MetaRow] = {}
         self._meta_by_image_rel: dict[str, MetaRow] = {}
+
+        # Profile handling helpers
+        self._last_profile_id: str = "chip_0603_resistor@1"
+        self._profile_config_cache: Dict[str, Dict[str, Any]] = {}
+        self._suspend_profile_event: bool = False
 
         # Stats bar state
         self.var_cpu: tk.StringVar
@@ -100,12 +108,15 @@ class PipelineControlTab(BaseTab):
         self.dataset_combo: ttk.Combobox
         self.model_combo: ttk.Combobox
         self._model_paths: list[Path] = []
+        self._all_model_combo_values: list[str] = []
+        self._model_profile_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
         self.img_labels: list[ttk.Label]
         self.txt: tk.Text
         self.var_continue_epochs: tk.StringVar
         self.var_continue_out_mode: tk.StringVar
         self.var_name: tk.StringVar
         self.var_name_ts: tk.BooleanVar
+        self.var_model_bundle: tk.BooleanVar
 
         # Profile management
         self.var_profile: tk.StringVar
@@ -134,21 +145,35 @@ class PipelineControlTab(BaseTab):
         self.var_ds_size = tk.StringVar(value="DS: -")
         self.var_ds_samples = tk.StringVar(value="Samples: -")
 
-        ttk.Label(stats, textvariable=self.var_cpu).grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self.pb_cpu = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
-        self.pb_cpu.grid(row=0, column=1, sticky="ew")
+        perf_frame = ttk.Frame(stats)
+        perf_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+        perf_frame.columnconfigure(0, weight=1)
+        perf_frame.columnconfigure(1, weight=1)
+        perf_frame.columnconfigure(2, weight=1)
 
-        ttk.Label(stats, textvariable=self.var_gpu).grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(2, 0))
-        self.pb_gpu = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
-        self.pb_gpu.grid(row=1, column=1, sticky="ew", pady=(2, 0))
+        ttk.Label(perf_frame, textvariable=self.var_cpu, width=12).grid(row=0, column=0, sticky="w")
+        self.pb_cpu = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=100)
+        self.pb_cpu.grid(row=1, column=0, sticky="ew")
 
-        ttk.Label(stats, textvariable=self.var_ram).grid(row=2, column=0, sticky="w", padx=(0, 6), pady=(2, 0))
-        self.pb_ram = ttk.Progressbar(stats, orient="horizontal", mode="determinate", length=120, maximum=100)
-        self.pb_ram.grid(row=2, column=1, sticky="ew", pady=(2, 0))
+        ttk.Label(perf_frame, textvariable=self.var_gpu, width=12).grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self.pb_gpu = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=100)
+        self.pb_gpu.grid(row=1, column=1, sticky="ew", padx=(6, 0))
 
-        ttk.Label(stats, textvariable=self.var_ds_size).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
-        self.lbl_ds_samples = ttk.Label(stats, textvariable=self.var_ds_samples)
-        self.lbl_ds_samples.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        ttk.Label(perf_frame, textvariable=self.var_ram, width=12).grid(row=0, column=2, sticky="w", padx=(6, 0))
+        self.pb_ram = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=100)
+        self.pb_ram.grid(row=1, column=2, sticky="ew", padx=(6, 0))
+
+        ds_frame = ttk.Frame(stats)
+        ds_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        ds_frame.columnconfigure(0, weight=1)
+        ds_frame.columnconfigure(1, weight=0)
+
+        ttk.Label(ds_frame, textvariable=self.var_ds_size).grid(row=0, column=0, sticky="w")
+        self.lbl_ds_samples = ttk.Label(ds_frame, textvariable=self.var_ds_samples)
+        self.lbl_ds_samples.grid(row=1, column=0, sticky="w", pady=(1, 0))
+        ttk.Button(ds_frame, text="↻", width=3, command=self._refresh_dataset_stats).grid(
+            row=0, column=1, sticky="e", padx=(6, 0)
+        )
 
         self.btn_start = ttk.Button(top, text="▶ Start Pipeline", command=self.start_pipeline, width=15)
         self.btn_start.pack(side="left")
@@ -208,6 +233,7 @@ class PipelineControlTab(BaseTab):
         self.profile_combo = ttk.Combobox(top2, textvariable=self.var_profile, state="readonly", width=20)
         self.profile_combo.pack(side="left")
         ToolTip(self.profile_combo, text_func=lambda: self.var_profile.get())
+        self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
         ttk.Button(top2, text="↻", width=3, command=self._refresh_profiles).pack(side="left", padx=(6, 0))
         ttk.Button(top2, text="ⓘ", width=3, command=self._show_profile_info).pack(side="left", padx=(3, 0))
 
@@ -246,6 +272,8 @@ class PipelineControlTab(BaseTab):
         ttk.Entry(top3, textvariable=self.var_name, width=36).pack(side="left")
         self.var_name_ts = tk.BooleanVar(value=True)
         ttk.Checkbutton(top3, text="Timestamp", variable=self.var_name_ts).pack(side="left", padx=(10, 0))
+        self.var_model_bundle = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top3, text="Multi-Model (.bundle)", variable=self.var_model_bundle).pack(side="left", padx=(10, 0))
         ttk.Button(top3, text="Apply to Out+Model", command=self._apply_name_to_out_and_model).pack(side="left", padx=(10, 0))
 
         # Status line
@@ -556,7 +584,7 @@ class PipelineControlTab(BaseTab):
                         out_dir=self._resolve_out_dir(out_dir),
                     )
                 snap_every = self._snap_every_n()
-                if self.var_autosnap.get() and mp.exists() and self.current_run_iteration % snap_every == 0:
+                if self.var_autosnap.get() and mp.exists() and mp.is_file() and self.current_run_iteration % snap_every == 0:
                     snap = self._snapshot_model_checkpoint(mp, run_i=self.current_run_iteration)
                     if snap:
                         self._append_log(f"[model snapshot] {snap}\n")
@@ -1183,6 +1211,211 @@ class PipelineControlTab(BaseTab):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _refresh_dataset_stats(self) -> None:
+        """Re-read manifest stats and re-trigger dataset size calculation."""
+        ds = self.state.dataset_dir
+        if not ds:
+            self.var_ds_samples.set("Samples: -")
+            self.var_ds_size.set("DS: -")
+            return
+
+        manifest_path = ds / "dataset_manifest.json"
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                stats = manifest.get("dataset_stats", {})
+                splits = stats.get("splits", {})
+                self._set_dataset_samples_from_manifest(
+                    ds,
+                    stats.get("total_samples"),
+                    splits.get("train"),
+                    splits.get("val"),
+                    splits.get("test"),
+                )
+            except Exception as exc:
+                print(f"Failed to refresh dataset stats: {exc}")
+                self._set_dataset_samples_info("Samples: manifest error", "")
+        else:
+            self._set_dataset_samples_info("Samples: manifest missing", "")
+
+        self._start_dataset_size_calc(ds)
+
+    def _apply_dataset_settings(self, ds: Path) -> None:
+        """Update config/profile/out/model fields when selecting a dataset."""
+        if not ds:
+            return
+        config_path = ds / "config.yaml"
+        if config_path.exists():
+            self.var_config.set(str(config_path))
+
+        profile_id = self._dataset_profile_id(ds)
+        if profile_id:
+            self._set_profile_value(profile_id)
+
+        self.var_name.set(ds.name)
+        self.var_out.set(str(ds.resolve()))
+        model_path = self.sim_root / "outputs" / "models" / f"{ds.name}.pt"
+        try:
+            self.var_model.set(str(model_path.resolve()))
+        except Exception:
+            self.var_model.set(str(model_path))
+        self.var_dataset_mode.set("extend")
+        self._update_model_dropdown_for_dataset()
+
+    def _set_profile_value(self, profile_id: str) -> None:
+        """Set the profile combobox without triggering prompts."""
+        self._suspend_profile_event = True
+        self.var_profile.set(profile_id)
+        self._last_profile_id = profile_id
+
+    def _dataset_profile_hash(self, ds: Optional[Path]) -> Optional[str]:
+        if not ds:
+            return None
+        manifest_path = ds / "dataset_manifest.json"
+        if not manifest_path.exists():
+            return None
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            return manifest.get("component_profile", {}).get("profile_hash")
+        except Exception:
+            return None
+
+    def _load_model_profile(self, model_path: Path) -> tuple[Optional[str], Optional[str]]:
+        # Multi-model bundles are directories; treat them as compatible with any dataset profile.
+        try:
+            if model_path.is_dir():
+                return "multi", None
+        except Exception:
+            pass
+        try:
+            import torch
+            checkpoint = torch.load(model_path, map_location='cpu')
+            comp = checkpoint.get("component_profile")
+            if isinstance(comp, dict):
+                return comp.get("profile_id"), comp.get("profile_hash")
+        except Exception:
+            pass
+        return None, None
+
+    def _update_model_dropdown_for_dataset(self) -> None:
+        """Show only models matching the selected dataset profile (plus multi-model bundles)."""
+        ds = self.state.dataset_dir
+        values = list(self._all_model_combo_values)
+        if ds:
+            profile_id = self._dataset_profile_id(ds)
+            profile_hash = self._dataset_profile_hash(ds)
+            # If the dataset has no profile metadata, do not filter (legacy).
+            if profile_id:
+                exact: list[str] = []
+                id_only: list[str] = []
+                multi: list[str] = []
+
+                for p in self._model_paths:
+                    rel_path = str(p.resolve())
+                    pid, phash = self._model_profile_cache.get(rel_path, (None, None))
+
+                    # Multi-model bundle (directory) or explicitly tagged profile_id.
+                    if pid == "multi" or (isinstance(pid, str) and pid.lower().startswith("multi")):
+                        try:
+                            multi.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+                        except Exception:
+                            multi.append(str(p))
+                        continue
+
+                    if pid != profile_id:
+                        continue
+
+                    # Prefer exact hash matches, but allow same ID with hash mismatch.
+                    try:
+                        disp = str(p.resolve().relative_to(self.sim_root.resolve()))
+                    except Exception:
+                        disp = str(p)
+                    if profile_hash and phash and phash == profile_hash:
+                        exact.append(disp)
+                    else:
+                        id_only.append(disp)
+
+                # Order: exact matches, same-ID matches, then multi bundles.
+                values = exact + id_only + multi
+        try:
+            self.model_combo["values"] = values
+        except Exception:
+            return
+        if values:
+            current = self.var_model.get().strip()
+            if current not in values:
+                self.var_model.set(values[0])
+        else:
+            self.var_model.set("")
+
+    def _ensure_dataset_skeleton(self, profile_id: str, config_path: Path, out_dir: Path) -> bool:
+        """Create dataset folder/manifest so it appears in the UI before generation."""
+        if not config_path.exists():
+            return False
+
+        out_dir = out_dir.resolve()
+        manifest_path = out_dir / "dataset_manifest.json"
+        if manifest_path.exists():
+            return False
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "images").mkdir(exist_ok=True)
+        (out_dir / "splits").mkdir(exist_ok=True)
+
+        for split in ["train", "val", "test"]:
+            (out_dir / "splits" / f"{split}.txt").write_text("", encoding="utf-8")
+
+        meta_path = out_dir / "meta.jsonl"
+        labels_path = out_dir / "labels.jsonl"
+        meta_path.write_text("", encoding="utf-8")
+        labels_path.write_text("", encoding="utf-8")
+
+        # Copy config into dataset directory for future reference
+        try:
+            shutil.copy2(config_path, out_dir / "config.yaml")
+        except Exception:
+            pass
+
+        # Prepare manifest data
+        try:
+            cfg_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            cfg_data = {}
+        run_block = cfg_data.get("run") or {}
+        run_id = str(run_block.get("run_id") or out_dir.name)
+        classes = cfg_data.get("classes", {})
+
+        profiles_dir = self.sim_root / "configs" / "profiles"
+        profile_path = profiles_dir / f"{profile_id}.yaml"
+        profile_hash = hash_profile(profile_path) if profile_path.exists() else ""
+
+        manifest = {
+            "manifest_version": 1,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "run_id": run_id,
+            "component_profile": {
+                "profile_id": profile_id,
+                "profile_hash": profile_hash,
+                "profile_path": str(profile_path) if profile_path.exists() else "",
+            },
+            "generator": {
+                "version": "1.0.1",
+                "git_commit": None,
+                "script": "gui.profile_placeholder",
+            },
+            "dataset_stats": {
+                "total_samples": 0,
+                "splits": {"train": 0, "val": 0, "test": 0},
+                "classes": {str(k): 0 for k in classes.keys()},
+            },
+            "extend_history": [],
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        self._append_log(f"[profile] created placeholder dataset manifest for {out_dir.name}\n")
+        return True
+
     def _set_dataset_samples_from_manifest(
         self,
         ds: Path,
@@ -1335,19 +1568,26 @@ class PipelineControlTab(BaseTab):
 
         cand: list[Path] = []
         cand.extend(sorted(root.glob("*.pt")))
+        cand.extend([p for p in sorted(root.glob("*.bundle")) if p.is_dir()])
+        cand.extend([p for p in sorted((root / "bundles").glob("*")) if p.is_dir()])
         cand.extend(sorted((root / "imports").glob("*.pt")))
         cand.extend(sorted((root / "versions").glob("**/*.pt")))
 
         uniq: dict[str, Path] = {}
         for p in cand:
             try:
-                if p.is_file():
+                if p.is_file() or p.is_dir():
                     uniq[str(p.resolve())] = p
             except Exception:
                 continue
         paths = list(uniq.values())
         paths.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0, reverse=True)
         self._model_paths = paths
+
+        self._model_profile_cache.clear()
+        for p in self._model_paths:
+            rel = str(p.resolve())
+            self._model_profile_cache[rel] = self._load_model_profile(p)
 
         values: list[str] = []
         for p in paths:
@@ -1380,6 +1620,9 @@ class PipelineControlTab(BaseTab):
         if values:
             self.var_model.set(values[0])
 
+        self._all_model_combo_values = values
+        self._update_model_dropdown_for_dataset()
+
     def _refresh_profiles(self) -> None:
         """Refresh profile dropdown list."""
         profiles_dir = self.sim_root / "configs" / "profiles"
@@ -1407,6 +1650,174 @@ class PipelineControlTab(BaseTab):
                 self.var_profile.set("chip_0603_resistor@1")
             elif values:
                 self.var_profile.set(values[0])
+        self._on_profile_selected()
+
+    def _on_profile_selected(self, _event: Optional[object] = None) -> None:
+        if self._suspend_profile_event:
+            self._suspend_profile_event = False
+            return
+
+        profile_id = self.var_profile.get().strip()
+        if not profile_id:
+            return
+
+        ds = self._selected_dataset_dir()
+        current_profile = self._dataset_profile_id(ds)
+        if current_profile == profile_id:
+            self._last_profile_id = profile_id
+            return
+
+        candidate = self._find_dataset_for_profile(profile_id)
+        if candidate:
+            if messagebox.askyesno(
+                "Switch dataset",
+                f"A dataset for profile '{profile_id}' already exists:\n{candidate}\n\n"
+                "Switch to it so profiles stay separated?",
+            ):
+                self._select_dataset(candidate)
+                self._last_profile_id = profile_id
+                return
+            self._revert_profile_selection()
+            return
+
+        cfg_info = self._config_for_profile(profile_id)
+        if messagebox.askyesno(
+            "Create dataset",
+            f"No dataset currently matches profile '{profile_id}'.\n"
+            "Would you like to prepare a new out path for this profile?",
+        ):
+            self._prepare_dataset_for_profile(profile_id, cfg_info)
+            self._last_profile_id = profile_id
+            return
+
+        self._revert_profile_selection()
+
+    def _dataset_profile_id(self, ds: Optional[Path]) -> Optional[str]:
+        if not ds:
+            return None
+        manifest_path = ds / "dataset_manifest.json"
+        if not manifest_path.exists():
+            return None
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            return manifest.get("component_profile", {}).get("profile_id")
+        except Exception:
+            return None
+
+    def _find_dataset_for_profile(self, profile_id: str) -> Optional[Path]:
+        runs_root = self.sim_root / "outputs" / "sim_data" / "runs"
+        if not runs_root.exists():
+            return None
+        for ds in sorted(runs_root.iterdir()):
+            if not ds.is_dir():
+                continue
+            if self._dataset_profile_id(ds) == profile_id:
+                return ds
+        return None
+
+    def _select_dataset(self, ds: Path) -> None:
+        self._refresh_datasets()
+        runs = self.sim_root / "outputs" / "sim_data" / "runs"
+        versions = self.sim_root / "outputs" / "sim_data" / "versions"
+        label = self._display_for_dataset(ds, runs=runs, versions=versions)
+        for key, value in self._dataset_by_label.items():
+            if value == ds or key == label:
+                self.var_dataset.set(key)
+                self._on_dataset_selected()
+                return
+        self.state.dataset_dir = ds
+        self.var_dataset.set(label)
+        self._on_dataset_selected()
+
+    def _revert_profile_selection(self) -> None:
+        self._suspend_profile_event = True
+        self.var_profile.set(self._last_profile_id or "chip_0603_resistor@1")
+
+    def _prepare_dataset_for_profile(self, profile_id: str, cfg_info: Optional[Dict[str, Any]]) -> None:
+        cfg_path: Optional[Path] = None
+        if cfg_info:
+            cfg_path = cfg_info["path"]
+            self.var_config.set(str(cfg_path))
+            suggested_run = cfg_info.get("run_id")
+        else:
+            suggested_run = self._slugify_name(profile_id)
+        self.var_dataset_mode.set("new")
+        if suggested_run:
+            suggested_out = self.sim_root / "outputs" / "sim_data" / "runs" / suggested_run
+            self.var_out.set(str(suggested_out))
+            self.var_name.set(suggested_run)
+            suggested_model = self.sim_root / "outputs" / "models" / f"{suggested_run}.pt"
+            self.var_model.set(str(suggested_model))
+        self._append_log(f"[profile] prepared dataset for profile {profile_id}\n")
+        if cfg_info:
+            self._safe_messagebox_info(
+                "Ready",
+                f"Config '{cfg_path.name}' assigned.\n"
+                f"Out directory: {self.var_out.get()}\n"
+                "Run the pipeline to generate the matching dataset for this profile.",
+            )
+        else:
+            self._safe_messagebox_info(
+                "Ready",
+                "No config automatically detected for this profile.\n"
+                "Pick or create a config that sets `run.component_profile` to "
+                f"'{profile_id}', then run the pipeline to create the dataset.",
+            )
+
+        config_candidate = cfg_path if cfg_path else Path(self.var_config.get())
+        out_dir = Path(self.var_out.get())
+        try:
+            created = self._ensure_dataset_skeleton(profile_id, config_candidate, out_dir)
+            if created:
+                self._refresh_datasets()
+                self._select_dataset(out_dir)
+        except Exception as exc:
+            print(f"Failed to create dataset placeholder: {exc}")
+
+    def _safe_messagebox_info(self, title: str, message: str) -> None:
+        root = self.frame.winfo_toplevel()
+        try:
+            if not root.winfo_exists():
+                return
+        except Exception:
+            return
+        messagebox.showinfo(title, message)
+
+    def _config_for_profile(self, profile_id: str) -> Optional[Dict[str, Any]]:
+        if profile_id in self._profile_config_cache:
+            return self._profile_config_cache[profile_id]
+
+        configs_root = self.sim_root / "configs"
+        best_entry = None
+        for cfg in sorted(configs_root.glob("*.yaml")):
+            try:
+                data = yaml.safe_load(cfg)
+            except Exception:
+                continue
+            run_block = data.get("run") or {}
+            if run_block.get("component_profile") == profile_id:
+                best_entry = {
+                    "path": cfg,
+                    "run_id": str(run_block.get("run_id") or cfg.stem),
+                }
+                break
+
+        if best_entry is None:
+            # Fallback: scan text for a matching component_profile line
+            needle = f"component_profile: {profile_id}"
+            needle_quoted = f'component_profile: "{profile_id}"'
+            for cfg in sorted(configs_root.glob("*.yaml")):
+                try:
+                    text = cfg.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                if needle in text or needle_quoted in text:
+                    best_entry = {"path": cfg, "run_id": cfg.stem}
+                    break
+
+        self._profile_config_cache[profile_id] = best_entry
+        return best_entry
 
     def _show_profile_info(self) -> None:
         """Show detailed information about the selected profile."""
@@ -1492,6 +1903,14 @@ class PipelineControlTab(BaseTab):
             if not model_path or not model_path.exists():
                 self.var_profile_compat.set("")
                 return
+            # Multi-model bundle (directory): resolve per-profile checkpoint.
+            if model_path.is_dir():
+                cand = bundle_checkpoint_path(model_path, ds_profile_id, kind="best")
+                if not cand.exists():
+                    self.var_profile_compat.set(f"⚠ Multi-model: no weights for {ds_profile_id}")
+                    self.lbl_profile_compat.configure(foreground="orange")
+                    return
+                model_path = cand
 
             import torch
             checkpoint = torch.load(model_path, map_location='cpu')
@@ -1506,7 +1925,10 @@ class PipelineControlTab(BaseTab):
             model_profile_hash = model_profile.get('profile_hash')
 
             # Check compatibility
-            if model_profile_id != ds_profile_id:
+            if isinstance(model_profile_id, str) and model_profile_id.lower().startswith("multi"):
+                self.var_profile_compat.set("✓ Compatible (multi-model)")
+                self.lbl_profile_compat.configure(foreground="green")
+            elif model_profile_id != ds_profile_id:
                 self.var_profile_compat.set(f"✗ INCOMPATIBLE: Model={model_profile_id}, Dataset={ds_profile_id}")
                 self.lbl_profile_compat.configure(foreground="red")
             elif model_profile_hash != ds_profile_hash:
@@ -1612,7 +2034,10 @@ class PipelineControlTab(BaseTab):
             name = base
 
         out_rel = f"outputs/sim_data/runs/{name}"
-        model_rel = f"outputs/models/{name}.pt"
+        if hasattr(self, "var_model_bundle") and self.var_model_bundle.get():
+            model_rel = f"outputs/models/{name}.bundle"
+        else:
+            model_rel = f"outputs/models/{name}.pt"
 
         self.var_out.set(out_rel)
         self.var_model.set(model_rel)
@@ -1694,6 +2119,7 @@ class PipelineControlTab(BaseTab):
 
         # Check profile compatibility
         self._check_profile_compatibility()
+        self._apply_dataset_settings(ds)
 
         img_dir = ds / "images"
         if img_dir.exists():

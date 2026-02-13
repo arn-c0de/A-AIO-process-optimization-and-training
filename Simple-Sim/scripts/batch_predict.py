@@ -38,6 +38,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
+from simple_sim.manifest import read_dataset_manifest
+from simple_sim.model_bundle import bundle_checkpoint_path
 
 
 @dataclass
@@ -47,6 +49,7 @@ class RunInfo:
     total_samples: int
     split_sizes: Dict[str, int]
     class_distribution: Dict[str, int]
+    class_list: List[str]
 
 
 def load_checkpoint_model(model_path: Path, device: torch.device) -> Tuple[torch.nn.Module, List[str], Dict[str, Any]]:
@@ -87,6 +90,7 @@ def dataset_info(data_dir: Path) -> RunInfo:
         total_samples=len(meta_rows),
         split_sizes=split_sizes,
         class_distribution=class_dist,
+        class_list=list(class_dist.keys()),
     )
 
 
@@ -233,6 +237,22 @@ def main() -> None:
     data_dir = Path(args.data)
     device = torch.device(args.device)
 
+    # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
+    if model_path.exists() and model_path.is_dir():
+        manifest_path = data_dir / "dataset_manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
+        manifest = read_dataset_manifest(manifest_path)
+        dataset_profile_id = manifest["component_profile"]["profile_id"]
+        resolved = bundle_checkpoint_path(model_path, dataset_profile_id, kind="best")
+        if not resolved.exists():
+            raise FileNotFoundError(
+                f"Multi-model bundle has no checkpoint for profile '{dataset_profile_id}':\n"
+                f"  bundle: {model_path}\n"
+                f"  expected: {resolved}"
+            )
+        model_path = resolved
+
     model, class_names, checkpoint = load_checkpoint_model(model_path, device)
     cfg = checkpoint.get("config", {}) or {}
     eval_cfg = (cfg.get("eval") or {}) if isinstance(cfg, dict) else {}
@@ -243,6 +263,13 @@ def main() -> None:
 
     info = dataset_info(data_dir)
     info.split = args.split
+
+    dataset_classes = info.class_list
+    if set(dataset_classes) != set(class_names):
+        raise ValueError(
+            f"Model classes {class_names} do not match dataset classes {dataset_classes}. "
+            "Train a checkpoint on this dataset before running batch_predict."
+        )
 
     ds = build_dataset(data_dir, args.split, class_names, return_id=True)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)

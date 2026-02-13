@@ -88,8 +88,10 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
     classes = config['classes']
 
     # Load component profile
+    # Use project root to find profiles, not config file location
+    project_root = Path(__file__).parent.parent
     profile_id = config['run'].get('component_profile', 'chip_0603_resistor@1')
-    profiles_dir = config_path.parent / "profiles"
+    profiles_dir = project_root / "configs" / "profiles"
     profile = load_profile(profile_id, profiles_dir)
     profile_path = profiles_dir / f"{profile_id}.yaml"
     profile_hash_str = hash_profile(profile_path)
@@ -392,7 +394,6 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
 
     # Write dataset manifest
     # Store profile path relative to Simple-Sim root
-    project_root = Path(__file__).parent.parent
     try:
         relative_profile_path = str(profile_path.relative_to(project_root))
     except ValueError:

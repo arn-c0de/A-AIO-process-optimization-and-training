@@ -23,6 +23,11 @@ def classify_defect(nominal: Dict[str, float], defect_params: Dict[str, Any], to
     rotation_deg = abs(defect_params['rotation_deg'])
     tilt_deg = abs(defect_params['tilt_deg'])
 
+    if defect_type == "SOLDER_BRIDGE":
+        return "SOLDER_BRIDGE"
+    if defect_type == "CORNER_LIFT":
+        return "CORNER_LIFT"
+
     # MISSING: component not present
     if defect_type == 'MISSING':
         return 'MISSING'
@@ -133,6 +138,16 @@ def sample_defect_params(
         shift_y = rng.uniform(-5.0, 5.0)
         rotation_deg = rng.uniform(-10.0, 10.0)
 
+    elif defect_type == 'SOLDER_BRIDGE':
+        shift_x = rng.uniform(-1.0, 1.0)
+        shift_y = rng.uniform(-1.0, 1.0)
+        rotation_deg = rng.uniform(-5.0, 5.0)
+        tilt_deg = rng.uniform(0.0, 2.0)
+    elif defect_type == 'CORNER_LIFT':
+        shift_x = rng.uniform(-2.0, 2.0)
+        shift_y = rng.uniform(-2.0, 2.0)
+        rotation_deg = rng.uniform(-3.0, 3.0)
+        tilt_deg = rng.uniform(40.0, 65.0)
     else:
         raise ValueError(f"Unknown defect type: {defect_type}")
 
