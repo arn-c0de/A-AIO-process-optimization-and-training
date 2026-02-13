@@ -9,11 +9,12 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 from pathlib import Path
 from typing import Any, Dict, Optional
 import shutil
 from datetime import datetime
+import re
 
 from PIL import Image, ImageTk
 
@@ -96,6 +97,8 @@ class PipelineControlTab(BaseTab):
         self.txt: tk.Text
         self.var_continue_epochs: tk.StringVar
         self.var_continue_out_mode: tk.StringVar
+        self.var_name: tk.StringVar
+        self.var_name_ts: tk.BooleanVar
 
     def build_ui(self) -> None:
         """Build the pipeline control UI."""
@@ -206,6 +209,17 @@ class PipelineControlTab(BaseTab):
         self.var_snap_keep = tk.StringVar(value="30")
         ttk.Entry(top2, textvariable=self.var_snap_keep, width=5).pack(side="left")
 
+        # Top controls - Row 3: Naming helpers (professional naming for datasets/models)
+        top3 = ttk.Frame(self.frame)
+        top3.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(top3, text="Name:").pack(side="left", padx=(0, 6))
+        self.var_name = tk.StringVar(value="pcb_0603_resistor_v1")
+        ttk.Entry(top3, textvariable=self.var_name, width=36).pack(side="left")
+        self.var_name_ts = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top3, text="Timestamp", variable=self.var_name_ts).pack(side="left", padx=(10, 0))
+        ttk.Button(top3, text="Apply to Out+Model", command=self._apply_name_to_out_and_model).pack(side="left", padx=(10, 0))
+
         # Status line
         status = ttk.Frame(self.frame)
         status.pack(fill="x", pady=(10, 0))
@@ -246,6 +260,7 @@ class PipelineControlTab(BaseTab):
 
         ttk.Button(dsbar, text="Refresh", command=self._refresh_datasets).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Snapshot", command=self._snapshot_dataset_selected).pack(side="left", padx=(8, 0))
+        ttk.Button(dsbar, text="Rename", command=self._rename_dataset_selected).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Delete", command=self._delete_dataset).pack(side="left", padx=(8, 0))
 
         dsbtns = ttk.Frame(left)
@@ -1161,6 +1176,32 @@ class PipelineControlTab(BaseTab):
         if values:
             self.var_model.set(values[0])
 
+    def _slugify_name(self, s: str) -> str:
+        s = (s or "").strip().lower()
+        s = re.sub(r"[^a-z0-9]+", "_", s)
+        s = re.sub(r"_+", "_", s).strip("_")
+        return s or "unnamed"
+
+    def _apply_name_to_out_and_model(self) -> None:
+        """Set Out/Model fields to a clean, sortable naming scheme."""
+        base = self._slugify_name(self.var_name.get())
+        if self.var_name_ts.get():
+            tag = time.strftime("%Y%m%d_%H%M%S")
+            name = f"{base}_{tag}"
+        else:
+            name = base
+
+        out_rel = f"outputs/sim_data/runs/{name}"
+        model_rel = f"outputs/models/{name}.pt"
+
+        self.var_out.set(out_rel)
+        self.var_model.set(model_rel)
+        try:
+            self._refresh_models()
+        except Exception:
+            pass
+        self._append_log(f"[naming] out={out_rel} model={model_rel}\n")
+
     def _selected_dataset_dir(self) -> Optional[Path]:
         """Get currently selected dataset directory."""
         label = self.var_dataset.get().strip()
@@ -1179,6 +1220,7 @@ class PipelineControlTab(BaseTab):
         ds = self._selected_dataset_dir()
         if not ds:
             return
+        prev_ds = self.state.dataset_dir
         self.state.dataset_dir = ds
         self._recent_imgs.clear()
         self._label_dict.clear()
@@ -1214,6 +1256,14 @@ class PipelineControlTab(BaseTab):
 
         # Update model dropdown default for this dataset, if available.
         try:
+            # If the user currently points at the dataset-default model for the previous dataset,
+            # keep it tracking the selected dataset.
+            if prev_ds is not None:
+                cur_model = self.var_model.get().strip()
+                prev_default = str((self.sim_root / "outputs" / "models" / f"{prev_ds.name}.pt").resolve())
+                cur_resolved = str(self._resolve_model_path(cur_model))
+                if cur_resolved == prev_default:
+                    self.var_model.set(str(self.sim_root / "outputs" / "models" / f"{ds.name}.pt"))
             self._refresh_models()
         except Exception:
             pass
@@ -1298,6 +1348,105 @@ class PipelineControlTab(BaseTab):
                     pass
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _rename_dataset_selected(self) -> None:
+        """Rename a dataset folder under outputs/sim_data/runs or outputs/sim_data/versions."""
+        ds = self._selected_dataset_dir()
+        if not ds:
+            return
+        if self.proc is not None:
+            messagebox.showwarning("Busy", "Stop the running process before renaming datasets.")
+            return
+
+        sim_data = (self.sim_root / "outputs" / "sim_data").resolve()
+        runs = (sim_data / "runs").resolve()
+        versions = (sim_data / "versions").resolve()
+
+        try:
+            rp = ds.resolve()
+        except Exception:
+            rp = ds
+
+        if str(rp).startswith(str(runs) + os.sep):
+            kind = "run"
+            old_name = rp.name
+            parent = rp.parent
+        elif str(rp).startswith(str(versions) + os.sep):
+            kind = "snapshot"
+            old_name = rp.name
+            parent = rp.parent
+        else:
+            messagebox.showerror("Error", f"Can only rename datasets under:\n{runs}\n{versions}\n\nSelected:\n{ds}")
+            return
+
+        new_name = simpledialog.askstring(
+            "Rename dataset",
+            f"New folder name for this {kind} dataset:",
+            initialvalue=old_name,
+            parent=self.frame.winfo_toplevel(),
+        )
+        if not new_name:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            return
+        if "/" in new_name or "\\" in new_name:
+            messagebox.showerror("Error", "Name must not contain path separators.")
+            return
+
+        dst = parent / new_name
+        if dst.exists():
+            messagebox.showerror("Error", f"Target already exists:\n{dst}")
+            return
+
+        if not messagebox.askyesno("Rename dataset", f"Rename?\n\nFrom:\n{rp}\n\nTo:\n{dst}"):
+            return
+
+        try:
+            rp.rename(dst)
+        except Exception as e:
+            messagebox.showerror("Error", f"Rename failed:\n{e}")
+            return
+
+        # Update state + dropdown.
+        self.state.dataset_dir = dst
+        self._refresh_datasets()
+        # Set the combobox selection to the new label.
+        try:
+            label = self._display_for_dataset(dst, runs=runs, versions=versions)
+            # Resolve any disambiguation " (n)" by scanning mapping.
+            for k, v in self._dataset_by_label.items():
+                if v == dst:
+                    self.var_dataset.set(k)
+                    break
+                if k == label:
+                    self.var_dataset.set(k)
+        except Exception:
+            pass
+
+        # If Model: was the old dataset-default path, update it to the new default.
+        try:
+            cur_model = self.var_model.get().strip()
+            cur_resolved = str(self._resolve_model_path(cur_model))
+            old_default = str((self.sim_root / "outputs" / "models" / f"{old_name}.pt").resolve())
+            if cur_resolved == old_default:
+                self.var_model.set(str(self.sim_root / "outputs" / "models" / f"{new_name}.pt"))
+            cur_out = self.var_out.get().strip()
+            try:
+                cur_out_res = str(self._resolve_out_dir(cur_out))
+                old_out = str((self.sim_root / "outputs" / "sim_data" / "runs" / old_name).resolve())
+                if cur_out_res == old_out:
+                    self.var_out.set(str(self.sim_root / "outputs" / "sim_data" / "runs" / new_name))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        self._append_log(f"[rename dataset] {rp} -> {dst}\n")
+        try:
+            self.parent.event_generate("<<DatasetChanged>>", when="tail")
+        except Exception:
+            pass
 
     def _validate_selected(self) -> None:
         """Validate selected dataset."""
