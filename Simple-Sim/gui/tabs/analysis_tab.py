@@ -53,6 +53,7 @@ class AnalysisTab(BaseTab):
         self.info_text: tk.Text
         self.combo_run: ttk.Combobox
         self.combo_domain: ttk.Combobox
+        self._preview_max_px: int = 420
 
     def build_ui(self) -> None:
         """Build the analysis UI."""
@@ -82,7 +83,7 @@ class AnalysisTab(BaseTab):
 
         ttk.Label(left, text="Images").pack(anchor="w")
 
-        # List-local search + filters
+        # List-local search + filters (compact)
         filters = ttk.Frame(left)
         filters.pack(fill="x", pady=(5, 0))
         filters.columnconfigure(1, weight=1)
@@ -94,41 +95,39 @@ class AnalysisTab(BaseTab):
         ttk.Button(filters, text="Clear", command=lambda: self._set_search("")).grid(row=0, column=2, sticky="e")
         ent_search.bind("<KeyRelease>", lambda e: self._schedule_filter_images())
 
-        self.var_filter = tk.StringVar(value="All")
-        ttk.Label(filters, text="Class:").grid(row=1, column=0, sticky="w", pady=(5, 0))
-        combo_class = ttk.Combobox(
-            filters,
-            textvariable=self.var_filter,
-            values=["All", "OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
-            state="readonly",
-            width=18,
-        )
-        combo_class.grid(row=1, column=1, columnspan=2, sticky="ew", padx=(5, 0), pady=(5, 0))
-        combo_class.bind("<<ComboboxSelected>>", lambda e: self._filter_images(display_first=True))
+        # Second row: filters in one line to reduce vertical height
+        row2 = ttk.Frame(filters)
+        row2.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(3, 0))
 
         self.var_run = tk.StringVar(value="All")
-        ttk.Label(filters, text="Run:").grid(row=2, column=0, sticky="w", pady=(5, 0))
-        self.combo_run = ttk.Combobox(filters, textvariable=self.var_run, values=["All"], state="readonly", width=18)
-        self.combo_run.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(5, 0), pady=(5, 0))
+        ttk.Label(row2, text="Run").pack(side="left")
+        self.combo_run = ttk.Combobox(row2, textvariable=self.var_run, values=["All"], state="readonly", width=12)
+        self.combo_run.pack(side="left", padx=(4, 10))
         self.combo_run.bind("<<ComboboxSelected>>", lambda e: self._filter_images(display_first=True))
 
         self.var_domain = tk.StringVar(value="All")
-        ttk.Label(filters, text="Domain:").grid(row=3, column=0, sticky="w", pady=(5, 0))
-        self.combo_domain = ttk.Combobox(filters, textvariable=self.var_domain, values=["All"], state="readonly", width=18)
-        self.combo_domain.grid(row=3, column=1, columnspan=2, sticky="ew", padx=(5, 0), pady=(5, 0))
+        ttk.Label(row2, text="Domain").pack(side="left")
+        self.combo_domain = ttk.Combobox(row2, textvariable=self.var_domain, values=["All"], state="readonly", width=12)
+        self.combo_domain.pack(side="left", padx=(4, 10))
         self.combo_domain.bind("<<ComboboxSelected>>", lambda e: self._filter_images(display_first=True))
 
         self.var_split = tk.StringVar(value="All")
-        ttk.Label(filters, text="Split:").grid(row=4, column=0, sticky="w", pady=(5, 0))
-        combo_split = ttk.Combobox(
-            filters,
-            textvariable=self.var_split,
-            values=["All", "train", "val", "test"],
-            state="readonly",
-            width=18,
-        )
-        combo_split.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(5, 0), pady=(5, 0))
+        ttk.Label(row2, text="Split").pack(side="left")
+        combo_split = ttk.Combobox(row2, textvariable=self.var_split, values=["All", "train", "val", "test"], state="readonly", width=8)
+        combo_split.pack(side="left", padx=(4, 10))
         combo_split.bind("<<ComboboxSelected>>", lambda e: self._filter_images(display_first=True))
+
+        self.var_filter = tk.StringVar(value="All")
+        ttk.Label(row2, text="Class").pack(side="left")
+        combo_class = ttk.Combobox(
+            row2,
+            textvariable=self.var_filter,
+            values=["All", "OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
+            state="readonly",
+            width=12,
+        )
+        combo_class.pack(side="left", padx=(4, 0))
+        combo_class.bind("<<ComboboxSelected>>", lambda e: self._filter_images(display_first=True))
 
         # Tree with scrollbar
         tree_frame = ttk.Frame(left)
@@ -156,18 +155,19 @@ class AnalysisTab(BaseTab):
 
         # Canvas for image display
         canvas_frame = ttk.Frame(right, relief="sunken", borderwidth=2)
-        canvas_frame.pack(fill="both", expand=True, pady=(5, 10))
+        # Keep the preview a bit smaller so the metadata/log area stays readable.
+        canvas_frame.pack(fill="x", expand=False, pady=(5, 10))
 
-        self.canvas = tk.Canvas(canvas_frame, bg="gray20", width=512, height=512)
-        self.canvas.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(canvas_frame, bg="gray20", width=self._preview_max_px, height=self._preview_max_px)
+        self.canvas.pack(fill="x", expand=False)
 
         # Metadata panel
         ttk.Label(right, text="Metadata:").pack(anchor="w")
 
         info_frame = ttk.Frame(right, relief="sunken", borderwidth=1)
-        info_frame.pack(fill="both", expand=False, pady=(5, 0))
+        info_frame.pack(fill="both", expand=True, pady=(5, 0))
 
-        self.info_text = tk.Text(info_frame, height=8, wrap="word")
+        self.info_text = tk.Text(info_frame, height=12, wrap="word")
         self.info_text.pack(fill="both", expand=True)
         self.info_text.configure(state="disabled")
 
@@ -393,13 +393,15 @@ class AnalysisTab(BaseTab):
             # Convert to PhotoImage and display
             img_rgb = cv2.cvtColor(img_overlay, cv2.COLOR_BGR2RGB)
             img_pil = Image.fromarray(img_rgb)
-            img_pil.thumbnail((512, 512))
+            img_pil.thumbnail((self._preview_max_px, self._preview_max_px))
 
             self.photo = ImageTk.PhotoImage(img_pil)
 
             # Update canvas
             self.canvas.delete("all")
-            self.canvas.create_image(256, 256, image=self.photo, anchor="center")
+            cx = max(1, int(self.canvas.winfo_width() / 2))
+            cy = max(1, int(self.canvas.winfo_height() / 2))
+            self.canvas.create_image(cx, cy, image=self.photo, anchor="center")
 
             # Update metadata panel
             self._update_metadata_panel(meta_row, sample_id)

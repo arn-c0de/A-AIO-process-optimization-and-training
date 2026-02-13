@@ -38,6 +38,11 @@ cd Simple-Sim
 - **Flagging System**: Mark problematic samples
 - **Export Reports**: JSON validation reports
 
+### Tab 4: Predictions
+- **Batch Prediction**: Run `predict.sh` (batch_predict) on a split (train/val/test/all)
+- **Metrics + Confusion Matrix**: Accuracy, macro-F1, critical FN rates, CM chart
+- **Per-sample Browser**: Inspect correct/wrong predictions with image overlay
+
 ## Architecture
 
 ```
@@ -49,6 +54,7 @@ gui/
 │   ├── pipeline_tab.py      # Pipeline control
 │   ├── analysis_tab.py      # Image analysis
 │   └── validation_tab.py    # Quality validation
+│   └── predictions_tab.py   # Batch predictions / scoring
 ├── components/
 │   ├── image_cache.py       # LRU cache for performance
 │   ├── overlay_renderer.py  # Defect visualization
