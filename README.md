@@ -12,9 +12,9 @@ The goal is to mature these components into a future, end-to-end production syst
 ## License
 
 This repository is **proprietary**. No permission is granted to use, copy, modify, or distribute this software without prior written permission.
-See `LICENSE`.
+See [`LICENSE`](LICENSE).
 
-Third-party dependencies (Python packages, etc.) remain under their own licenses; see `Simple-Sim/THIRD_PARTY_LICENSES.md`.
+Third-party dependencies (Python packages, etc.) remain under their own licenses; see [`Simple-Sim/THIRD_PARTY_LICENSES.md`](Simple-Sim/THIRD_PARTY_LICENSES.md).
 
 ## What You May / May Not Do
 
@@ -31,6 +31,8 @@ Not allowed (without prior written permission):
 - Copy, modify, merge, re-publish, distribute, or sublicense the code.
 - Use it for commercial purposes or production deployments.
 
-Note: On GitHub, others may be able to technically fork/clone public repositories. This does **not** grant permission to use the software beyond what is required to view it on GitHub; all other use remains strictly prohibited by `LICENSE`.
+Note: On GitHub, others may be able to technically fork/clone public repositories. This does **not** grant permission to use the software beyond what is required to view it on GitHub; all other use remains strictly prohibited by [`LICENSE`](LICENSE).
 
 Permission requests: arn-c0de@protonmail.com
+
+See also: [`CONTRIBUTING.md`](CONTRIBUTING.md)
