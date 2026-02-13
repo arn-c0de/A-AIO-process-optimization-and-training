@@ -44,6 +44,21 @@ cd Simple-Sim
 ./tools/build_wheelhouse.sh wheelhouse
 ```
 
+## Licensing / Third-Party Dependencies
+
+- This repository is **proprietary** (see `../LICENSE`).
+- Python dependencies in `requirements.txt` are **third-party software** under their own licenses (see `THIRD_PARTY_LICENSES.md`).
+- `wheelhouse/` is intentionally **not** committed to git (it is ignored) so users build/download their own wheels as needed.
+
+## Production Data Notes (For Later)
+
+If/when you train on real production AOI images:
+
+- Treat PCB images, layouts, and BOM-related visuals as **confidential** by default.
+- Keep datasets and trained weights in controlled storage (access control, audit, backups).
+- Define retention and deletion rules (especially for failed builds/experiments).
+- If any images/metadata could include people, screens, or workspace context, check privacy/legal requirements before broader distribution.
+
 ## Live GUI Monitor (Optional)
 
 If you want a live view of progress + the latest images during generation/training/eval:

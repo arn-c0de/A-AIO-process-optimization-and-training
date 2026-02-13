@@ -1,0 +1,11 @@
+TEMPLATE NOTICE (Mozilla Public License 2.0)
+
+This file is intentionally a placeholder.
+
+If you distribute Simple-Sim together with third-party components that are
+licensed under MPL-2.0 (for example tqdm, depending on the exact package and
+version), you must bundle the official MPL 2.0 text and comply with any source
+availability / file-level requirements that apply to the shipped components.
+
+Do not rely on this placeholder for compliance.
+

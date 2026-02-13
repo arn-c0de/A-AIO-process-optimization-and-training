@@ -1,0 +1,11 @@
+TEMPLATE NOTICE (Apache License 2.0)
+
+This file is intentionally a placeholder.
+
+If you distribute Simple-Sim together with third-party components that are
+licensed under Apache-2.0 (for example OpenCV), you must bundle the official
+Apache License 2.0 text and any required NOTICE files for the exact versions
+you ship.
+
+Do not rely on this placeholder for compliance.
+
