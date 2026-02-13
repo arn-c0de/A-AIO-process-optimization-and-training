@@ -36,6 +36,11 @@ class WeightsTab(BaseTab):
         self._model_by_iid: Dict[str, Path] = {}
         self._favorites: Dict[str, Dict[str, Any]] = {}  # rel_path -> metadata
 
+        self._group_assignments: Dict[str, str] = {}
+        self._custom_groups: List[str] = []
+        self._group_iids: Dict[str, str] = {}
+        self._drag_src_iid: Optional[str] = None
+
         self._reports: List[Dict[str, Any]] = []
         self._report_by_iid: Dict[str, Dict[str, Any]] = {}
 
@@ -105,17 +110,27 @@ class WeightsTab(BaseTab):
         tree_frame = ttk.Frame(left)
         tree_frame.pack(fill="both", expand=True)
 
-        self.tree = ttk.Treeview(tree_frame, columns=("Fav", "Runs", "Size", "MTime", "Path"), show="headings")
+        self.tree = ttk.Treeview(
+            tree_frame,
+            columns=("Fav", "Runs", "Size", "MTime", "Path", "Group"),
+            show="tree headings",
+            selectmode="extended",
+        )
+        self.tree.heading("#0", text="Model")
+        self.tree.column("#0", width=200, anchor="w")
         self.tree.heading("Fav", text="Fav")
         self.tree.heading("Runs", text="Runs")
         self.tree.heading("Size", text="Size")
         self.tree.heading("MTime", text="Modified")
         self.tree.heading("Path", text="Path")
+        self.tree.heading("Group", text="Group")
         self.tree.column("Fav", width=50, anchor="center")
         self.tree.column("Runs", width=60, anchor="e")
         self.tree.column("Size", width=80, anchor="e")
         self.tree.column("MTime", width=140, anchor="w")
-        self.tree.column("Path", width=520, anchor="w")
+        self.tree.column("Path", width=400, anchor="w")
+        self.tree.column("Group", width=120, anchor="w")
+        self.tree.tag_configure("group_header", font=("TkDefaultFont", 10, "bold"))
 
         scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -125,6 +140,8 @@ class WeightsTab(BaseTab):
         # Right-click context menu for quick actions (delete/export/activate).
         self.tree.bind("<Button-3>", self._on_models_right_click)
         self.tree.bind("<Button-2>", self._on_models_right_click)  # macOS
+        self.tree.bind("<ButtonPress-1>", self._on_tree_mouse_down, add="+")
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_mouse_up, add="+")
 
         self._models_menu = tk.Menu(self.frame, tearoff=0)
         self._models_menu.add_command(label="Run selected", command=self._run_selected)
@@ -138,7 +155,12 @@ class WeightsTab(BaseTab):
         self._models_menu.add_command(label="Set as Compare B", command=self._set_selected_as_compare_b)
         self._models_menu.add_separator()
         self._models_menu.add_command(label="Rename selected...", command=self._rename_selected)
+        self._models_menu.add_command(label="Duplicate selected...", command=self._duplicate_selected)
         self._models_menu.add_command(label="Delete selected", command=self._delete_selected)
+        self._models_menu.add_separator()
+        self._groups_menu = tk.Menu(self._models_menu, tearoff=0)
+        self._models_menu.add_cascade(label="Move to group...", menu=self._groups_menu)
+        self._models_menu.add_command(label="New group...", command=self._prompt_new_group)
         self._models_menu.add_separator()
         self._models_menu.add_command(label="Refresh list", command=self._refresh_models)
 
@@ -339,6 +361,25 @@ class WeightsTab(BaseTab):
             self._refresh_reports()
         except Exception:
             pass
+        # Load custom group data
+        custom_raw = st.get("weights.custom_groups")
+        if isinstance(custom_raw, str):
+            try:
+                parsed = json.loads(custom_raw)
+                if isinstance(parsed, list):
+                    self._custom_groups = [str(k) for k in parsed if isinstance(k, str) and k]
+            except Exception:
+                pass
+        assignments_raw = st.get("weights.group_assignments")
+        if isinstance(assignments_raw, str):
+            try:
+                parsed = json.loads(assignments_raw)
+                if isinstance(parsed, dict):
+                    self._group_assignments = {
+                        str(k): str(v) for k, v in parsed.items() if k and v
+                    }
+            except Exception:
+                pass
 
     def _wire_settings_autosave(self) -> None:
         st = self._store()
@@ -417,19 +458,50 @@ class WeightsTab(BaseTab):
 
         self.tree.delete(*self.tree.get_children())
         self._model_by_iid.clear()
+        self._group_iids.clear()
 
-        display_values: List[str] = []
-        for i, p in enumerate(self._models):
-            st = p.stat()
-            size_s = self._fmt_bytes(int(st.st_size))
-            mt = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-            rel = self._rel(p)
-            runs_s = self._runs_for_model(p)
-            fav_s = "YES" if self._is_favorited(p) else ""
-            iid = f"m{i}"
-            self.tree.insert("", "end", iid=iid, values=(fav_s, runs_s, size_s, mt, rel))
-            self._model_by_iid[iid] = p
-            display_values.append(rel)
+        display_values: List[str] = [self._rel(p) for p in self._models]
+
+        group_names = self._available_groups()
+        group_members: Dict[str, List[Path]] = {gn: [] for gn in group_names}
+        for p in self._models:
+            group = self._group_for_path(p)
+            if group not in group_members:
+                group_members[group] = []
+            group_members[group].append(p)
+
+        item_counter = 0
+        for group in group_names:
+            group_iid = f"group::{group}"
+            count = len(group_members.get(group, []))
+            label = f"{group} ({count})" if count else group
+            self.tree.insert(
+                "",
+                "end",
+                iid=group_iid,
+                text=label,
+                values=("", "", "", "", "", f"{count} models"),
+                tags=("group_header",),
+            )
+            self._group_iids[group] = group_iid
+            for p in group_members.get(group, []):
+                st = p.stat()
+                size_s = self._fmt_bytes(int(st.st_size))
+                mt = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                rel = self._rel(p)
+                runs_s = self._runs_for_model(p)
+                fav_s = "★" if self._is_favorited(p) else ""
+                iid = f"model::{item_counter}"
+                item_counter += 1
+                self.tree.insert(
+                    group_iid,
+                    "end",
+                    iid=iid,
+                    text=p.name,
+                    values=(fav_s, runs_s, size_s, mt, rel, group),
+                    tags=("model_entry",),
+                )
+                self._model_by_iid[iid] = p
 
         # Populate compare selectors
         self.combo_a.configure(values=display_values)
@@ -446,11 +518,192 @@ class WeightsTab(BaseTab):
         except Exception:
             pass
 
+        # Keep group menu entries in sync with the available groups.
+        self._refresh_groups_menu()
+
     def _rel(self, p: Path) -> str:
         try:
             return str(p.resolve().relative_to(self.sim_root.resolve()))
         except Exception:
-            return str(p)
+        return str(p)
+
+    def _available_groups(self) -> List[str]:
+        """Return the list of groups to show in the UI."""
+        names: List[str] = ["Favorites", "Snapshots", "Imports"]
+        for custom in self._custom_groups:
+            if custom and custom not in names:
+                names.append(custom)
+        for val in sorted(set(self._group_assignments.values())):
+            if val and val not in names:
+                names.append(val)
+        if "Uncategorized" not in names:
+            names.append("Uncategorized")
+        return names
+
+    def _group_for_path(self, p: Path) -> str:
+        rel = self._rel(p)
+        if rel in self._group_assignments:
+            candidate = self._group_assignments[rel]
+            if candidate in self._available_groups():
+                return candidate
+        if self._is_favorited(p):
+            return "Favorites"
+        rp = p.resolve()
+        root = self._model_root().resolve()
+        versions = (root / "versions").resolve()
+        imports = (root / "imports").resolve()
+        try:
+            rp_str = str(rp)
+        except Exception:
+            rp_str = ""
+        if versions and rp_str.startswith(str(versions) + os.sep):
+            return "Snapshots"
+        if imports and rp_str.startswith(str(imports) + os.sep):
+            return "Imports"
+        return "Uncategorized"
+
+    def _is_group_header(self, iid: str) -> bool:
+        return bool(iid and iid.startswith("group::"))
+
+    def _group_from_iid(self, iid: str) -> Optional[str]:
+        if not iid or "::" not in iid:
+            return None
+        return iid.split("::", 1)[1]
+
+    def _refresh_groups_menu(self) -> None:
+        if not self._groups_menu:
+            return
+        self._groups_menu.delete(0, "end")
+        for group in self._available_groups():
+            self._groups_menu.add_command(
+                label=group,
+                command=lambda g=group: self._assign_selected_to_group(self._selected_model_paths(), g),
+            )
+
+    def _assign_selected_to_group(self, paths: List[Path], group: Optional[str]) -> None:
+        if not paths or not group:
+            return
+        fav_changed = False
+        for p in paths:
+            rel = self._rel(p)
+            if group == "Favorites":
+                if rel not in self._favorites:
+                    self._favorites[rel] = {
+                        "path": rel,
+                        "added": datetime.now().isoformat(timespec="seconds"),
+                    }
+                    fav_changed = True
+            else:
+                if rel in self._favorites:
+                    self._favorites.pop(rel, None)
+                    fav_changed = True
+            self._group_assignments[rel] = group
+        if fav_changed:
+            self._save_favorites()
+        self._save_group_state()
+        self._append_log(f"[group] assigned {len(paths)} model(s) -> {group}\n")
+        self._refresh_models()
+
+    def _save_group_state(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+        try:
+            st.set("weights.group_assignments", json.dumps(self._group_assignments, ensure_ascii=True))
+            st.set("weights.custom_groups", json.dumps(self._custom_groups, ensure_ascii=True))
+            st.schedule_save(self.frame)
+        except Exception:
+            pass
+
+    def _prompt_new_group(self) -> None:
+        name = simpledialog.askstring(
+            "New group",
+            "Group name:",
+            parent=self.frame.winfo_toplevel(),
+        )
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if "::" in name:
+            messagebox.showerror("Error", "Group name must not contain '::'.")
+            return
+        if name in self._available_groups():
+            messagebox.showinfo("Info", f"Group already exists: {name}")
+            return
+        self._custom_groups.append(name)
+        self._save_group_state()
+        self._refresh_models()
+
+    def _duplicate_selected(self) -> None:
+        paths = self._selected_model_paths()
+        if not paths:
+            messagebox.showinfo("Info", "Select a checkpoint first.")
+            return
+        if len(paths) != 1:
+            messagebox.showinfo("Info", "Select exactly one checkpoint to duplicate.")
+            return
+        src = paths[0]
+        new_name = simpledialog.askstring(
+            "Duplicate checkpoint",
+            "New checkpoint name (without extension):",
+            initialvalue=src.stem,
+            parent=self.frame.winfo_toplevel(),
+        )
+        if not new_name:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            return
+        if "/" in new_name or "\\" in new_name:
+            messagebox.showerror("Error", "Name must not contain path separators.")
+            return
+        dst = src.with_name(new_name + src.suffix)
+        if dst.exists():
+            messagebox.showerror("Error", f"Target already exists:\n{dst}")
+            return
+        try:
+            shutil.copy2(src, dst)
+            meta_src = Path(str(src) + ".meta.json")
+            meta_dst = Path(str(dst) + ".meta.json")
+            if meta_src.exists():
+                shutil.copy2(meta_src, meta_dst)
+        except Exception as e:
+            messagebox.showerror("Error", f"Duplicate failed:\n{e}")
+            return
+        rel_src = self._rel(src)
+        rel_dst = self._rel(dst)
+        if rel_src in self._group_assignments:
+            self._group_assignments[rel_dst] = self._group_assignments[rel_src]
+            self._save_group_state()
+        if self._is_favorited(src):
+            self._favorites[rel_dst] = {
+                "path": rel_dst,
+                "added": datetime.now().isoformat(timespec="seconds"),
+            }
+            self._save_favorites()
+        self._append_log(f"[duplicate] {self._rel(src)} -> {self._rel(dst)}\n")
+        self._refresh_models()
+
+    def _on_tree_mouse_down(self, event: tk.Event) -> None:
+        iid = self.tree.identify_row(event.y)
+        if iid and not self._is_group_header(iid):
+            self._drag_src_iid = iid
+        else:
+            self._drag_src_iid = None
+
+    def _on_tree_mouse_up(self, event: tk.Event) -> None:
+        if not self._drag_src_iid:
+            return
+        target = self.tree.identify_row(event.y)
+        if not target or not self._is_group_header(target):
+            self._drag_src_iid = None
+            return
+        group = self._group_from_iid(target)
+        if group:
+            self._assign_selected_to_group(self._selected_model_paths(), group)
+        self._drag_src_iid = None
 
     def _fmt_bytes(self, n: int) -> str:
         units = ["B", "KB", "MB", "GB", "TB"]
@@ -512,6 +765,7 @@ class WeightsTab(BaseTab):
 
     def _on_models_right_click(self, event: tk.Event) -> None:
         """Show context menu for model list."""
+        self._refresh_groups_menu()
         if not self._models_menu:
             return
         try:
@@ -615,33 +869,21 @@ class WeightsTab(BaseTab):
         return rp in self._favorites
 
     def _add_selected_to_favorites(self) -> None:
-        p = self._selected_model_path()
-        if not p:
+        paths = self._selected_model_paths()
+        if not paths:
             return
-        rp = self._rel(p)
-        if rp in self._favorites:
-            return
-        self._favorites[rp] = {
-            "path": rp,
-            "added": datetime.now().isoformat(timespec="seconds"),
-        }
-        self._save_favorites()
-        self._append_log(f"[favorite] added {rp}\n")
-        self._refresh_models()
+        self._assign_selected_to_group(paths, "Favorites")
 
     def _remove_selected_from_favorites(self) -> None:
-        p = self._selected_model_path()
-        if not p:
+        paths = [p for p in self._selected_model_paths() if self._is_favorited(p)]
+        if not paths:
             return
-        rp = self._rel(p)
-        if rp not in self._favorites:
+        names = "\n".join(self._rel(p) for p in paths[:8])
+        if len(paths) > 8:
+            names += f"\n... (+{len(paths) - 8} more)"
+        if not messagebox.askyesno("Remove favorite", f"Remove from favorites?\n\n{names}"):
             return
-        if not messagebox.askyesno("Remove favorite", f"Remove from favorites?\n\n{rp}"):
-            return
-        self._favorites.pop(rp, None)
-        self._save_favorites()
-        self._append_log(f"[favorite] removed {rp}\n")
-        self._refresh_models()
+        self._assign_selected_to_group(paths, "Uncategorized")
 
     def _active_model_path(self) -> Optional[Path]:
         s = self.var_active_model.get().strip()
@@ -964,6 +1206,9 @@ class WeightsTab(BaseTab):
                 self._save_favorites()
             except Exception:
                 pass
+        if old_rel in self._group_assignments:
+            self._group_assignments[self._rel(dst)] = self._group_assignments.pop(old_rel)
+            self._save_group_state()
 
         self._append_log(f"[rename] {old_rel} -> {self._rel(dst)}\n")
         self._refresh_models()
