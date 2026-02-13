@@ -47,6 +47,7 @@ class RunInfo:
     total_samples: int
     split_sizes: Dict[str, int]
     class_distribution: Dict[str, int]
+    class_list: List[str]
 
 
 def load_checkpoint_model(model_path: Path, device: torch.device) -> Tuple[torch.nn.Module, List[str], Dict[str, Any]]:
@@ -87,6 +88,7 @@ def dataset_info(data_dir: Path) -> RunInfo:
         total_samples=len(meta_rows),
         split_sizes=split_sizes,
         class_distribution=class_dist,
+        class_list=list(class_dist.keys()),
     )
 
 
@@ -243,6 +245,13 @@ def main() -> None:
 
     info = dataset_info(data_dir)
     info.split = args.split
+
+    dataset_classes = info.class_list
+    if set(dataset_classes) != set(class_names):
+        raise ValueError(
+            f"Model classes {class_names} do not match dataset classes {dataset_classes}. "
+            "Train a checkpoint on this dataset before running batch_predict."
+        )
 
     ds = build_dataset(data_dir, args.split, class_names, return_id=True)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
