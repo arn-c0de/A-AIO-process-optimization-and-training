@@ -22,6 +22,7 @@ echo ""
 CONFIG="${CONFIG:-configs/run_0001.yaml}"
 DATA_DIR="${DATA_DIR:-outputs/sim_data/runs/run_0001}"
 MODEL_PATH="${MODEL_PATH:-outputs/models/run_0001.pt}"
+DATASET_MODE="${DATASET_MODE:-new}"
 
 # Virtualenv bootstrap (non-interactive).
 #
@@ -64,7 +65,8 @@ echo ""
 
 "${PYTHON}" scripts/generate.py \
     --config "$CONFIG" \
-    --out "$DATA_DIR"
+    --out "$DATA_DIR" \
+    $([[ "${DATASET_MODE}" == "extend" ]] && echo "--extend")
 
 echo ""
 echo "Dataset generation complete"

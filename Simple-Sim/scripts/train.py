@@ -172,6 +172,11 @@ def main():
     parser = argparse.ArgumentParser(description='Train ResNet18 classifier')
     parser.add_argument('--data', type=str, required=True, help='Path to dataset directory')
     parser.add_argument('--out', type=str, required=True, help='Output path for trained model')
+    parser.add_argument('--resume', type=str, default=None, help='Optional: checkpoint to resume from (.pt)')
+    parser.add_argument('--extra-epochs', type=int, default=None,
+                       help='Optional: train N additional epochs beyond the resumed epoch (default: use dataset config epochs)')
+    parser.add_argument('--out-mode', choices=['best', 'last'], default='best',
+                       help="Whether --out points to the best checkpoint ('best') or the latest epoch ('last'). Default: best")
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                        help='Device (cuda/cpu)')
 
@@ -179,6 +184,7 @@ def main():
 
     data_dir = Path(args.data)
     output_path = Path(args.out)
+    resume_path = Path(args.resume) if args.resume else None
     device = torch.device(args.device)
 
     # Load config from dataset
@@ -208,6 +214,9 @@ def main():
     print(f"  Pretrained: {pretrained}")
     print(f"  Num workers: {num_workers}")
     print(f"  Device: {device}")
+    if resume_path:
+        print(f"  Resume: {resume_path}")
+        print(f"  Out mode: {args.out_mode}")
 
     # Create datasets
     print("\nLoading datasets...")
@@ -251,18 +260,58 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
+    start_epoch = 0
+    best_val_f1 = 0.0
+    best_epoch = 0
+
+    # Optional resume
+    if resume_path:
+        if not resume_path.exists():
+            raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+        print("\nLoading resume checkpoint...")
+        checkpoint = torch.load(resume_path, map_location=device)
+        ckpt_classes = checkpoint.get('class_names')
+        if ckpt_classes and list(ckpt_classes) != list(class_names):
+            raise ValueError(f"Resume checkpoint classes do not match dataset config.\n"
+                             f"  checkpoint: {ckpt_classes}\n  dataset:    {class_names}")
+        model.load_state_dict(checkpoint['model_state_dict'])
+        try:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        except Exception:
+            # Optimizer state may be missing or incompatible; continue with fresh optimizer state.
+            pass
+        start_epoch = int(checkpoint.get('epoch', 0))
+        best_val_f1 = float(checkpoint.get('val_f1', checkpoint.get('val_f1', 0.0)) or 0.0)
+        best_epoch = int(checkpoint.get('epoch', 0))
+        print(f"  Resumed from epoch: {start_epoch}")
+        print(f"  Resumed best val F1: {best_val_f1:.4f}")
+
+    # Determine how many total epochs to run.
+    if args.extra_epochs is not None:
+        if args.extra_epochs < 0:
+            raise ValueError("--extra-epochs must be >= 0")
+        total_epochs = start_epoch + int(args.extra_epochs)
+    else:
+        total_epochs = int(epochs)
+    if total_epochs < start_epoch:
+        total_epochs = start_epoch
+
+    # Where to save a "last checkpoint" so resume runs always write something.
+    last_path = output_path.with_name(output_path.stem + "_last.pt")
+
     # Training loop
     print("\n" + "="*60)
     print("TRAINING")
     print("="*60)
-    emit("train_start", dataset_dir=str(data_dir), out_model=str(output_path), epochs=int(epochs), batch_size=int(batch_size))
+    emit("train_start", dataset_dir=str(data_dir), out_model=str(output_path), epochs=int(total_epochs), batch_size=int(batch_size))
 
-    best_val_f1 = 0.0
-    best_epoch = 0
+    if total_epochs == start_epoch:
+        print(f"\nNothing to do: start_epoch={start_epoch} total_epochs={total_epochs}")
+        return
 
-    for epoch in range(epochs):
-        print(f"\nEpoch {epoch + 1}/{epochs}")
-        emit("epoch_start", epoch=int(epoch + 1), epochs=int(epochs))
+    for epoch in range(start_epoch, total_epochs):
+        print(f"\nEpoch {epoch + 1}/{total_epochs}")
+        emit("epoch_start", epoch=int(epoch + 1), epochs=int(total_epochs))
 
         # Train
         t_epoch = time.perf_counter()
@@ -286,7 +335,7 @@ def main():
         emit(
             "epoch_end",
             epoch=int(epoch + 1),
-            epochs=int(epochs),
+            epochs=int(total_epochs),
             train_loss=float(train_loss),
             val_loss=float(val_loss),
             val_accuracy=float(val_acc),
@@ -296,30 +345,39 @@ def main():
             epoch_s=float(epoch_s),
         )
 
-        # Save best model
-        if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
-            best_epoch = epoch + 1
+        # Save checkpoint(s)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        ckpt = {
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'val_f1': val_f1,
+            'val_accuracy': val_acc,
+            'class_names': class_names,
+            'config': config,
+        }
 
-            print(f"  ✓ New best model (F1: {best_val_f1:.4f})")
+        # Always save "last" so resume runs are observable.
+        torch.save(ckpt, last_path)
 
-            # Save checkpoint
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save({
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_f1': val_f1,
-                'val_accuracy': val_acc,
-                'class_names': class_names,
-                'config': config
-            }, output_path)
+        if args.out_mode == "last":
+            torch.save(ckpt, output_path)
+            best_val_f1 = float(val_f1)
+            best_epoch = int(epoch + 1)
+        else:
+            # Save best model
+            if val_f1 > best_val_f1:
+                best_val_f1 = float(val_f1)
+                best_epoch = int(epoch + 1)
+                print(f"  ✓ New best model (F1: {best_val_f1:.4f})")
+                torch.save(ckpt, output_path)
 
     print("\n" + "="*60)
     print("TRAINING COMPLETE")
     print("="*60)
     print(f"Best model: Epoch {best_epoch}, Val F1: {best_val_f1:.4f}")
     print(f"Model saved to: {output_path}")
+    print(f"Last checkpoint: {last_path}")
     print("="*60)
 
 

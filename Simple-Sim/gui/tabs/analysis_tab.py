@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 import threading
 import json
+import os
 
 import cv2
 import numpy as np
@@ -18,6 +19,7 @@ from gui.state import UiState
 from gui.components.image_cache import ImageCache
 from gui.components.overlay_renderer import draw_defect_overlay, draw_prediction_overlay
 from gui.utils.model_inference import load_model, ModelWrapper
+from gui.utils.tooltip import ToolTip
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -42,6 +44,8 @@ class AnalysisTab(BaseTab):
 
         # UI components
         self.var_dataset: tk.StringVar
+        self.dataset_combo: ttk.Combobox
+        self._dataset_by_display: dict[str, Path] = {}
         self.var_filter: tk.StringVar  # class
         self.var_search: tk.StringVar
         self.var_run: tk.StringVar
@@ -64,9 +68,12 @@ class AnalysisTab(BaseTab):
         top.pack(fill="x", pady=(0, 10))
 
         ttk.Label(top, text="Dataset:").pack(side="left")
-        self.var_dataset = tk.StringVar()
-        dataset_entry = ttk.Entry(top, textvariable=self.var_dataset, width=50, state="readonly")
-        dataset_entry.pack(side="left", padx=(5, 15))
+        self.var_dataset = tk.StringVar(value="")
+        self.dataset_combo = ttk.Combobox(top, textvariable=self.var_dataset, state="readonly", width=32)
+        self.dataset_combo.pack(side="left", padx=(5, 6))
+        self.dataset_combo.bind("<<ComboboxSelected>>", self._on_dataset_selected)
+        ToolTip(self.dataset_combo, text_func=lambda: self.var_dataset.get())
+        ttk.Button(top, text="↻", width=3, command=self._refresh_datasets).pack(side="left", padx=(0, 15))
 
         ttk.Button(top, text="←", command=self._prev_image, width=3).pack(side="left", padx=2)
         ttk.Button(top, text="→", command=self._next_image, width=3).pack(side="left", padx=2)
@@ -172,14 +179,121 @@ class AnalysisTab(BaseTab):
         self.info_text.configure(state="disabled")
 
         # Load initial dataset
+        self._refresh_datasets()
         self.on_dataset_changed()
 
     def on_dataset_changed(self) -> None:
         """Handle dataset change from other tabs."""
+        if not self.state.dataset_dir:
+            return
+
+        # Show a human-friendly dataset name (not full path).
+        display = self._display_for_dataset(self.state.dataset_dir)
+        # Prefer keeping current selection if it matches mapping.
+        if display in self._dataset_by_display:
+            self.var_dataset.set(display)
+        else:
+            # Refresh list and try again.
+            self._refresh_datasets()
+            display = self._display_for_dataset(self.state.dataset_dir)
+            self.var_dataset.set(display)
+
+        self._load_dataset()
+        self._try_load_model()
+
+    def _sim_data_roots(self) -> tuple[Path, Path]:
+        sim_data = self.sim_root / "outputs" / "sim_data"
+        return sim_data / "runs", sim_data / "versions"
+
+    def _display_for_dataset(self, p: Path) -> str:
+        """Compact label for datasets in the dropdown."""
+        try:
+            runs, versions = self._sim_data_roots()
+            rp = p.resolve()
+            if str(rp).startswith(str(runs.resolve()) + os.sep):
+                return rp.name
+            if str(rp).startswith(str(versions.resolve()) + os.sep):
+                # versions/<group>/<snapshot_dir>
+                return f"{rp.parent.name}:{rp.name}"
+        except Exception:
+            pass
+        return p.name
+
+    def _refresh_datasets(self) -> None:
+        """Populate dataset dropdown from runs/ and versions/ snapshots."""
+        runs, versions = self._sim_data_roots()
+        runs.mkdir(parents=True, exist_ok=True)
+        versions.mkdir(parents=True, exist_ok=True)
+
+        cand: list[Path] = []
+        cand.extend([p for p in runs.iterdir() if p.is_dir()])
+        for p in versions.glob("*/*"):
+            if p.is_dir():
+                cand.append(p)
+
+        # Sort runs by name, snapshots by mtime desc
+        def sort_key(p: Path) -> tuple:
+            try:
+                rp = p.resolve()
+                is_ver = str(rp).startswith(str(versions.resolve()) + os.sep)
+                mt = p.stat().st_mtime
+            except Exception:
+                is_ver = False
+                mt = 0.0
+            if is_ver:
+                return (1, -mt, p.name)
+            return (0, p.name, -mt)
+
+        cand.sort(key=sort_key)
+
+        self._dataset_by_display = {}
+        displays: list[str] = []
+        seen: dict[str, int] = {}
+        for p in cand:
+            base = self._display_for_dataset(p)
+            n = seen.get(base, 0) + 1
+            seen[base] = n
+            disp = base if n == 1 else f"{base} ({n})"
+            self._dataset_by_display[disp] = p
+            displays.append(disp)
+
+        try:
+            self.dataset_combo["values"] = displays
+        except Exception:
+            return
+
+        # Keep selection if possible; otherwise choose state.dataset_dir or latest run.
+        cur = self.var_dataset.get().strip()
+        if cur and cur in self._dataset_by_display:
+            return
         if self.state.dataset_dir:
-            self.var_dataset.set(str(self.state.dataset_dir))
-            self._load_dataset()
-            self._try_load_model()
+            want = self._display_for_dataset(self.state.dataset_dir)
+            # Might have been disambiguated.
+            for d, pp in self._dataset_by_display.items():
+                if pp == self.state.dataset_dir:
+                    self.var_dataset.set(d)
+                    return
+                if d == want:
+                    self.var_dataset.set(d)
+                    return
+        if displays:
+            self.var_dataset.set(displays[0])
+
+    def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
+        disp = self.var_dataset.get().strip()
+        if not disp:
+            return
+        ds = self._dataset_by_display.get(disp)
+        if not ds:
+            return
+        self.state.dataset_dir = ds
+        # Notify other tabs / keep global state coherent.
+        try:
+            self.parent.event_generate("<<DatasetChanged>>", when="tail")
+        except Exception:
+            pass
+        self._load_dataset()
+        self._try_load_model()
 
     def _load_dataset(self) -> None:
         """Load dataset metadata."""

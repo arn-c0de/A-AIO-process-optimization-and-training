@@ -19,6 +19,7 @@ from PIL import Image, ImageTk
 
 from .base_tab import BaseTab
 from gui.state import UiState
+from gui.utils.tooltip import ToolTip
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -48,6 +49,8 @@ class PipelineControlTab(BaseTab):
         self._thumb_refs = []  # keep PhotoImage references
         self._recent_imgs: list[str] = []
         self._dataset_dirs: list[Path] = []
+        self._dataset_labels: list[str] = []
+        self._dataset_by_label: dict[str, Path] = {}
         self._label_dict: dict[str, str] = {}  # Map sample_id to class label
         self._image_to_sample: dict[str, str] = {}  # Map image_path to sample_id
 
@@ -87,8 +90,12 @@ class PipelineControlTab(BaseTab):
         self.var_last: tk.StringVar
         self.var_dataset: tk.StringVar
         self.dataset_combo: ttk.Combobox
+        self.model_combo: ttk.Combobox
+        self._model_paths: list[Path] = []
         self.img_labels: list[ttk.Label]
         self.txt: tk.Text
+        self.var_continue_epochs: tk.StringVar
+        self.var_continue_out_mode: tk.StringVar
 
     def build_ui(self) -> None:
         """Build the pipeline control UI."""
@@ -181,7 +188,10 @@ class PipelineControlTab(BaseTab):
 
         ttk.Label(top2, text="Model:").pack(side="left", padx=(10, 6))
         self.var_model = tk.StringVar(value="outputs/models/run_0001.pt")
-        ttk.Entry(top2, textvariable=self.var_model, width=30).pack(side="left")
+        self.model_combo = ttk.Combobox(top2, textvariable=self.var_model, state="readonly", width=42)
+        self.model_combo.pack(side="left")
+        ToolTip(self.model_combo, text_func=lambda: self.var_model.get())
+        ttk.Button(top2, text="↻", width=3, command=self._refresh_models).pack(side="left", padx=(6, 0))
 
         ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
 
@@ -232,8 +242,10 @@ class PipelineControlTab(BaseTab):
         self.dataset_combo = ttk.Combobox(dsbar, textvariable=self.var_dataset, state="readonly", width=38)
         self.dataset_combo.pack(side="left", fill="x", expand=True)
         self.dataset_combo.bind("<<ComboboxSelected>>", self._on_dataset_selected)
+        ToolTip(self.dataset_combo, text_func=lambda: self.var_dataset.get())
 
         ttk.Button(dsbar, text="Refresh", command=self._refresh_datasets).pack(side="left", padx=(8, 0))
+        ttk.Button(dsbar, text="Snapshot", command=self._snapshot_dataset_selected).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Delete", command=self._delete_dataset).pack(side="left", padx=(8, 0))
 
         dsbtns = ttk.Frame(left)
@@ -241,6 +253,17 @@ class PipelineControlTab(BaseTab):
         ttk.Button(dsbtns, text="Validate", command=self._validate_selected).pack(side="left")
         ttk.Button(dsbtns, text="Train", command=self._train_selected).pack(side="left", padx=(8, 0))
         ttk.Button(dsbtns, text="Eval", command=self._eval_selected).pack(side="left", padx=(8, 0))
+
+        ttk.Separator(dsbtns, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Label(dsbtns, text="+epochs:").pack(side="left")
+        self.var_continue_epochs = tk.StringVar(value="10")
+        ttk.Entry(dsbtns, textvariable=self.var_continue_epochs, width=5).pack(side="left", padx=(6, 10))
+        ttk.Label(dsbtns, text="out:").pack(side="left")
+        self.var_continue_out_mode = tk.StringVar(value="last")
+        ttk.Combobox(dsbtns, textvariable=self.var_continue_out_mode, values=["last", "best"], state="readonly", width=6).pack(
+            side="left", padx=(6, 10)
+        )
+        ttk.Button(dsbtns, text="Continue Train", command=self._continue_train_selected).pack(side="left")
 
         ttk.Label(left, text="Latest Images (4x3 grid)").pack(anchor="w", pady=(10, 0))
 
@@ -275,6 +298,7 @@ class PipelineControlTab(BaseTab):
 
         # Initialize datasets and start UI ticker
         self._refresh_datasets()
+        self._refresh_models()
         self._tick_ui()
 
     def start_pipeline(self) -> None:
@@ -293,14 +317,26 @@ class PipelineControlTab(BaseTab):
             if not selected_ds:
                 messagebox.showerror("Error", "No dataset selected to extend.\n\nSelect a dataset or use 'Create New' mode.")
                 return
+            # Prevent overwriting immutable dataset snapshots.
+            try:
+                versions_root = (self.sim_root / "outputs" / "sim_data" / "versions").resolve()
+                if str(selected_ds.resolve()).startswith(str(versions_root) + os.sep):
+                    messagebox.showerror(
+                        "Error",
+                        "Cannot extend/overwrite a dataset snapshot under outputs/sim_data/versions.\n\n"
+                        "Select a dataset under outputs/sim_data/runs instead."
+                    )
+                    return
+            except Exception:
+                pass
             if not messagebox.askyesno(
-                "Overwrite dataset?",
-                "Extend Existing currently overwrites the selected dataset folder.\n\n"
-                f"Overwrite:\n{selected_ds}\n\nContinue?"
+                "Extend dataset?",
+                "Extend Existing will APPEND new samples into the selected dataset folder.\n\n"
+                f"Dataset:\n{selected_ds}\n\nContinue?"
             ):
                 return
             out_dir = str(selected_ds)
-            self._append_log(f"\n=== Overwriting selected dataset: {out_dir} ===\n")
+            self._append_log(f"\n=== Extending selected dataset: {out_dir} ===\n")
         else:
             # Create new dataset
             out_dir = self.var_out.get().strip()
@@ -368,7 +404,7 @@ class PipelineControlTab(BaseTab):
 
             # Snapshot the produced model checkpoint for later comparisons (versioning).
             try:
-                mp = Path(self.var_model.get().strip())
+                mp = self._resolve_model_path(self.var_model.get().strip())
                 if mp.exists():
                     self._write_model_meta(
                         mp,
@@ -442,6 +478,7 @@ class PipelineControlTab(BaseTab):
         env["CONFIG"] = cfg
         env["DATA_DIR"] = out_dir
         env["MODEL_PATH"] = model_path
+        env["DATASET_MODE"] = str(self.var_dataset_mode.get()).strip()
 
         cmd = ["bash", "-lc", "./run_pipeline.sh"]
 
@@ -863,6 +900,12 @@ class PipelineControlTab(BaseTab):
             return p
         return (self.sim_root / p).resolve()
 
+    def _resolve_model_path(self, model_path: str) -> Path:
+        p = Path(model_path)
+        if p.is_absolute():
+            return p
+        return (self.sim_root / p).resolve()
+
     def _read_cpu_percent(self) -> Optional[float]:
         """Linux /proc-based CPU utilization percentage."""
         try:
@@ -989,28 +1032,145 @@ class PipelineControlTab(BaseTab):
 
     def _refresh_datasets(self) -> None:
         """Refresh dataset dropdown list."""
-        base = self.sim_root / "outputs" / "sim_data" / "runs"
-        base.mkdir(parents=True, exist_ok=True)
-        ds = [p for p in base.iterdir() if p.is_dir()]
-        ds.sort(key=lambda p: p.name)
-        self._dataset_dirs = ds
-        names = [p.name for p in ds]
-        self.dataset_combo["values"] = names
+        sim_data = self.sim_root / "outputs" / "sim_data"
+        runs = sim_data / "runs"
+        versions = sim_data / "versions"
+        runs.mkdir(parents=True, exist_ok=True)
+        versions.mkdir(parents=True, exist_ok=True)
 
-        # Auto-select current, if any
-        if self.var_dataset.get() in names:
+        cand: list[Path] = []
+        cand.extend([p for p in runs.iterdir() if p.is_dir()])
+        for p in versions.glob("*/*"):
+            if p.is_dir():
+                cand.append(p)
+
+        def is_version(p: Path) -> bool:
+            try:
+                return str(p.resolve()).startswith(str(versions.resolve()) + os.sep)
+            except Exception:
+                return False
+
+        # Sort runs by name, snapshots by mtime desc.
+        def sort_key(p: Path) -> tuple:
+            if is_version(p):
+                try:
+                    mt = p.stat().st_mtime
+                except Exception:
+                    mt = 0.0
+                return (1, -mt, p.name)
+            return (0, p.name)
+
+        cand.sort(key=sort_key)
+
+        self._dataset_dirs = cand
+        self._dataset_labels = []
+        self._dataset_by_label = {}
+
+        seen: dict[str, int] = {}
+        for p in cand:
+            base_label = self._display_for_dataset(p, runs=runs, versions=versions)
+            n = seen.get(base_label, 0) + 1
+            seen[base_label] = n
+            label = base_label if n == 1 else f"{base_label} ({n})"
+            self._dataset_labels.append(label)
+            self._dataset_by_label[label] = p
+
+        self.dataset_combo["values"] = self._dataset_labels
+
+        # Keep current selection if it still maps.
+        cur = self.var_dataset.get().strip()
+        if cur and cur in self._dataset_by_label:
             return
-        if names:
-            self.var_dataset.set(names[-1])
+
+        # Prefer state.dataset_dir.
+        if self.state.dataset_dir:
+            want = self._display_for_dataset(self.state.dataset_dir, runs=runs, versions=versions)
+            for label, p in self._dataset_by_label.items():
+                if p == self.state.dataset_dir:
+                    self.var_dataset.set(label)
+                    return
+                if label == want:
+                    self.var_dataset.set(label)
+                    return
+
+        if self._dataset_labels:
+            self.var_dataset.set(self._dataset_labels[0])
             self._on_dataset_selected()
+
+    def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
+        """Compact label for datasets in dropdown."""
+        try:
+            rp = p.resolve()
+            if str(rp).startswith(str(runs.resolve()) + os.sep):
+                return rp.name
+            if str(rp).startswith(str(versions.resolve()) + os.sep):
+                return f"{rp.parent.name}:{rp.name}"
+        except Exception:
+            pass
+        return p.name
+
+    def _refresh_models(self) -> None:
+        """Refresh model dropdown list (includes snapshots)."""
+        root = self.sim_root / "outputs" / "models"
+        root.mkdir(parents=True, exist_ok=True)
+
+        cand: list[Path] = []
+        cand.extend(sorted(root.glob("*.pt")))
+        cand.extend(sorted((root / "imports").glob("*.pt")))
+        cand.extend(sorted((root / "versions").glob("**/*.pt")))
+
+        uniq: dict[str, Path] = {}
+        for p in cand:
+            try:
+                if p.is_file():
+                    uniq[str(p.resolve())] = p
+            except Exception:
+                continue
+        paths = list(uniq.values())
+        paths.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0, reverse=True)
+        self._model_paths = paths
+
+        values: list[str] = []
+        for p in paths:
+            try:
+                values.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+            except Exception:
+                values.append(str(p))
+
+        try:
+            self.model_combo["values"] = values
+        except Exception:
+            return
+
+        cur = self.var_model.get().strip()
+        if cur and cur in values:
+            return
+
+        # Prefer dataset-specific active model if available.
+        if self.state.dataset_dir:
+            dm = self.sim_root / "outputs" / "models" / f"{self.state.dataset_dir.name}.pt"
+            if dm.exists():
+                try:
+                    rel = str(dm.resolve().relative_to(self.sim_root.resolve()))
+                except Exception:
+                    rel = str(dm)
+                if rel in values:
+                    self.var_model.set(rel)
+                    return
+
+        if values:
+            self.var_model.set(values[0])
 
     def _selected_dataset_dir(self) -> Optional[Path]:
         """Get currently selected dataset directory."""
-        name = self.var_dataset.get().strip()
-        if not name:
+        label = self.var_dataset.get().strip()
+        if not label:
             return None
+        if label in self._dataset_by_label:
+            return self._dataset_by_label[label]
+        # Back-compat: if the combobox was ever set to a bare name.
         for p in self._dataset_dirs:
-            if p.name == name:
+            if p.name == label:
                 return p
         return None
 
@@ -1052,6 +1212,12 @@ class PipelineControlTab(BaseTab):
         except Exception:
             pass
 
+        # Update model dropdown default for this dataset, if available.
+        try:
+            self._refresh_models()
+        except Exception:
+            pass
+
     def _delete_dataset(self) -> None:
         """Delete selected dataset."""
         ds = self._selected_dataset_dir()
@@ -1070,6 +1236,69 @@ class PipelineControlTab(BaseTab):
             messagebox.showerror("Delete failed", str(e))
         self._refresh_datasets()
 
+    def _snapshot_dataset_selected(self) -> None:
+        """Create a dataset snapshot under outputs/sim_data/versions/ for later training/testing.
+
+        Uses hardlinks when possible (fast + space efficient), falls back to copy.
+        """
+        ds = self._selected_dataset_dir()
+        if not ds:
+            return
+        if self.proc is not None:
+            messagebox.showwarning("Busy", "Stop the running process before snapshotting datasets.")
+            return
+
+        sim_data = self.sim_root / "outputs" / "sim_data"
+        versions_root = sim_data / "versions"
+        versions_root.mkdir(parents=True, exist_ok=True)
+
+        group = ds.name
+        tag = time.strftime("%Y%m%d_%H%M%S")
+        dst = versions_root / group / f"{group}_{tag}"
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            messagebox.showerror("Error", f"Snapshot destination already exists:\n{dst}")
+            return
+
+        if not messagebox.askyesno("Snapshot dataset", f"Create snapshot?\n\nFrom:\n{ds}\n\nTo:\n{dst}"):
+            return
+
+        self._append_log(f"\n[snapshot dataset] {ds} -> {dst}\n")
+
+        def link_or_copy_file(src: Path, dstp: Path) -> None:
+            dstp.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(src, dstp)
+            except Exception:
+                shutil.copy2(src, dstp)
+
+        def worker() -> None:
+            try:
+                for dirpath, dirnames, filenames in os.walk(ds):
+                    rel = Path(dirpath).relative_to(ds)
+                    for fn in filenames:
+                        s = Path(dirpath) / fn
+                        d = dst / rel / fn
+                        try:
+                            link_or_copy_file(s, d)
+                        except Exception:
+                            pass
+                self.log_q.put(f"[snapshot dataset] done: {dst}\n")
+            except Exception as e:
+                self.log_q.put(f"[snapshot dataset] failed: {e}\n")
+                try:
+                    shutil.rmtree(dst)
+                except Exception:
+                    pass
+            finally:
+                try:
+                    self.frame.after(0, self._refresh_datasets)
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _validate_selected(self) -> None:
         """Validate selected dataset."""
         ds = self._selected_dataset_dir()
@@ -1082,7 +1311,12 @@ class PipelineControlTab(BaseTab):
         ds = self._selected_dataset_dir()
         if not ds:
             return
-        model_out = self.sim_root / "outputs" / "models" / f"{ds.name}.pt"
+        # Respect the Model: field when present; fall back to outputs/models/<dataset>.pt
+        model_s = self.var_model.get().strip() if hasattr(self, "var_model") else ""
+        if model_s:
+            model_out = self._resolve_model_path(model_s)
+        else:
+            model_out = (self.sim_root / "outputs" / "models" / f"{ds.name}.pt").resolve()
         self._run_simple_cmd(["./.venv/bin/python", "scripts/train.py", "--data", str(ds), "--out", str(model_out)])
 
     def _eval_selected(self) -> None:
@@ -1090,8 +1324,57 @@ class PipelineControlTab(BaseTab):
         ds = self._selected_dataset_dir()
         if not ds:
             return
-        model_in = self.sim_root / "outputs" / "models" / f"{ds.name}.pt"
+        model_s = self.var_model.get().strip() if hasattr(self, "var_model") else ""
+        if model_s:
+            model_in = self._resolve_model_path(model_s)
+        else:
+            model_in = (self.sim_root / "outputs" / "models" / f"{ds.name}.pt").resolve()
         if not model_in.exists():
             messagebox.showerror("Missing model", f"Model not found:\n{model_in}\n\nRun Train first.")
             return
         self._run_simple_cmd(["./.venv/bin/python", "scripts/eval.py", "--data", str(ds), "--model", str(model_in)])
+
+    def _continue_train_selected(self) -> None:
+        """Continue training (resume) on a fixed dataset using an existing checkpoint."""
+        ds = self._selected_dataset_dir()
+        if not ds:
+            return
+
+        model_s = self.var_model.get().strip() if hasattr(self, "var_model") else ""
+        if model_s:
+            model_path = self._resolve_model_path(model_s)
+        else:
+            model_path = (self.sim_root / "outputs" / "models" / f"{ds.name}.pt").resolve()
+
+        if not model_path.exists():
+            messagebox.showerror("Missing model", f"Model not found to resume from:\n{model_path}\n\nRun Train first.")
+            return
+
+        extra_s = self.var_continue_epochs.get().strip() if hasattr(self, "var_continue_epochs") else "10"
+        try:
+            extra = int(extra_s)
+        except Exception:
+            messagebox.showerror("Error", "Extra epochs must be an integer.")
+            return
+        if extra < 1:
+            messagebox.showerror("Error", "Extra epochs must be >= 1.")
+            return
+
+        out_mode = (self.var_continue_out_mode.get().strip() if hasattr(self, "var_continue_out_mode") else "last") or "last"
+        if out_mode not in ("last", "best"):
+            out_mode = "last"
+
+        self._append_log(
+            f"\n=== Continue training: +{extra} epochs (out={out_mode}) ===\n"
+            f"data:  {ds}\n"
+            f"model: {model_path}\n\n"
+        )
+        self._run_simple_cmd([
+            "./.venv/bin/python",
+            "scripts/train.py",
+            "--data", str(ds),
+            "--out", str(model_path),
+            "--resume", str(model_path),
+            "--extra-epochs", str(extra),
+            "--out-mode", out_mode,
+        ])

@@ -14,6 +14,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog
+from tkinter import simpledialog
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base_tab import BaseTab
@@ -131,6 +132,7 @@ class WeightsTab(BaseTab):
         self._models_menu.add_command(label="Set as Compare A", command=self._set_selected_as_compare_a)
         self._models_menu.add_command(label="Set as Compare B", command=self._set_selected_as_compare_b)
         self._models_menu.add_separator()
+        self._models_menu.add_command(label="Rename selected...", command=self._rename_selected)
         self._models_menu.add_command(label="Delete selected", command=self._delete_selected)
         self._models_menu.add_separator()
         self._models_menu.add_command(label="Refresh list", command=self._refresh_models)
@@ -423,6 +425,8 @@ class WeightsTab(BaseTab):
             self._models_menu.entryconfigure("Export selected...", state=("normal" if bool(paths) else "disabled"))
             self._models_menu.entryconfigure("Set as Compare A", state=("normal" if bool(paths) else "disabled"))
             self._models_menu.entryconfigure("Set as Compare B", state=("normal" if bool(paths) else "disabled"))
+            can_rename = any(self._is_deletable_checkpoint(p) for p in paths)
+            self._models_menu.entryconfigure("Rename selected...", state=("normal" if can_rename else "disabled"))
             # Favorites actions depend on whether the first selected path is already favorited.
             if paths:
                 is_fav = self._is_favorited(paths[0])
@@ -696,6 +700,75 @@ class WeightsTab(BaseTab):
                 self._append_log(f"[delete] failed: {p} ({e})\n")
 
         self._append_log(f"[delete] deleted {deleted} file(s)\n")
+        self._refresh_models()
+
+    def _rename_selected(self) -> None:
+        paths = self._selected_model_paths()
+        if not paths:
+            messagebox.showinfo("Info", "Select a snapshot to rename.")
+            return
+        if len(paths) != 1:
+            messagebox.showinfo("Info", "Select exactly one checkpoint to rename.")
+            return
+
+        src = paths[0]
+        if not self._is_deletable_checkpoint(src):
+            messagebox.showwarning("Not allowed", "Only snapshots/imports can be renamed from here.")
+            return
+
+        old_rel = self._rel(src)
+        old_name = src.stem
+        new_stem = simpledialog.askstring(
+            "Rename checkpoint",
+            "New name (no path, no extension):",
+            initialvalue=old_name,
+            parent=self.frame.winfo_toplevel(),
+        )
+        if not new_stem:
+            return
+        new_stem = new_stem.strip()
+        if not new_stem:
+            return
+        # Basic safety: disallow path separators.
+        if "/" in new_stem or "\\" in new_stem:
+            messagebox.showerror("Error", "Name must not contain path separators.")
+            return
+
+        dst = src.with_name(new_stem + src.suffix)
+        if dst.exists():
+            messagebox.showerror("Error", f"Target already exists:\n{dst}")
+            return
+
+        # If favorited, we update the favorites entry to the new path.
+        was_fav = old_rel in self._favorites
+        fav_entry = self._favorites.get(old_rel) if was_fav else None
+
+        try:
+            src.rename(dst)
+            # Rename adjacent meta file if present.
+            src_meta = Path(str(src) + ".meta.json")
+            dst_meta = Path(str(dst) + ".meta.json")
+            if src_meta.exists() and not dst_meta.exists():
+                try:
+                    src_meta.rename(dst_meta)
+                except Exception:
+                    pass
+        except Exception as e:
+            messagebox.showerror("Error", f"Rename failed:\n{e}")
+            return
+
+        if was_fav and fav_entry is not None:
+            try:
+                self._favorites.pop(old_rel, None)
+                fav_entry = dict(fav_entry)
+                fav_entry["path"] = self._rel(dst)
+                fav_entry["renamed"] = datetime.now().isoformat(timespec="seconds")
+                self._favorites[fav_entry["path"]] = fav_entry
+                self._save_favorites()
+            except Exception:
+                pass
+
+        self._append_log(f"[rename] {old_rel} -> {self._rel(dst)}\n")
         self._refresh_models()
 
     def _stop(self) -> None:
