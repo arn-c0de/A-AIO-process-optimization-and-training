@@ -268,6 +268,17 @@ checkpoint = {
 - Batch processing mode
 - Safe (skips existing manifests)
 
+**Example Backfill Result:**
+```
+Dataset: pcb_0603_resistor_v1_seed42_n400
+Status: ✅ Backfilled successfully
+Profile: chip_0603_resistor@1
+Hash: sha256:aeb59b2820aeaf5b11cefb688d168198497683a58...
+Samples: 400 (100 per class: OK, MISSING, MISALIGNED, TOMBSTONE)
+```
+
+This legacy dataset now has full profile support and can be used for training continuation.
+
 ---
 
 ### 6. Config Schema v2
