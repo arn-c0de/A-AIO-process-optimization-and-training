@@ -1,11 +1,11 @@
 # A-AIO-process-optimization-and-training
 
-![Simple-Sim Pipeline Dashboard](Simple-Sim/images/pipeline-dashboard-simple-sim-v1.0.png)
-
 This is a **testing / prototyping repository** for experimenting with AOI/AI concepts and implementing them as clean, reproducible building blocks.
 The goal is to mature these components into a future, end-to-end production system (the production system is **not** intended to be open-source).
 
 ## Projects
+
+![Simple-Sim Pipeline Dashboard](Simple-Sim/images/pipeline-dashboard-simple-sim-v1.0.png)
 
 - [`Simple-Sim`](Simple-Sim/README.md): synthetic dataset generation + training + evaluation
 
