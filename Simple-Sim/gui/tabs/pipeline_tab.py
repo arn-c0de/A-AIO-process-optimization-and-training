@@ -107,6 +107,8 @@ class PipelineControlTab(BaseTab):
         self.dataset_combo: ttk.Combobox
         self.model_combo: ttk.Combobox
         self._model_paths: list[Path] = []
+        self._all_model_combo_values: list[str] = []
+        self._model_profile_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
         self.img_labels: list[ttk.Label]
         self.txt: tk.Text
         self.var_continue_epochs: tk.StringVar
@@ -1255,12 +1257,69 @@ class PipelineControlTab(BaseTab):
         except Exception:
             self.var_model.set(str(model_path))
         self.var_dataset_mode.set("extend")
+        self._update_model_dropdown_for_dataset()
 
     def _set_profile_value(self, profile_id: str) -> None:
         """Set the profile combobox without triggering prompts."""
         self._suspend_profile_event = True
         self.var_profile.set(profile_id)
         self._last_profile_id = profile_id
+
+    def _dataset_profile_hash(self, ds: Optional[Path]) -> Optional[str]:
+        if not ds:
+            return None
+        manifest_path = ds / "dataset_manifest.json"
+        if not manifest_path.exists():
+            return None
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            return manifest.get("component_profile", {}).get("profile_hash")
+        except Exception:
+            return None
+
+    def _load_model_profile(self, model_path: Path) -> tuple[Optional[str], Optional[str]]:
+        try:
+            import torch
+            checkpoint = torch.load(model_path, map_location='cpu')
+            comp = checkpoint.get("component_profile")
+            if isinstance(comp, dict):
+                return comp.get("profile_id"), comp.get("profile_hash")
+        except Exception:
+            pass
+        return None, None
+
+    def _update_model_dropdown_for_dataset(self) -> None:
+        """Show only models matching the selected dataset profile."""
+        ds = self.state.dataset_dir
+        values = list(self._all_model_combo_values)
+        if ds:
+            profile_id = self._dataset_profile_id(ds)
+            profile_hash = self._dataset_profile_hash(ds)
+            filtered: list[str] = []
+            if profile_id and profile_hash:
+                for p in self._model_paths:
+                    rel_path = str(p.resolve())
+                    pid, phash = self._model_profile_cache.get(rel_path, (None, None))
+                    if pid == profile_id and phash == profile_hash:
+                        try:
+                            filtered.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+                        except Exception:
+                            filtered.append(str(p))
+            if filtered:
+                values = filtered
+            else:
+                values = []
+        try:
+            self.model_combo["values"] = values
+        except Exception:
+            return
+        if values:
+            current = self.var_model.get().strip()
+            if current not in values:
+                self.var_model.set(values[0])
+        else:
+            self.var_model.set("")
 
     def _ensure_dataset_skeleton(self, profile_id: str, config_path: Path, out_dir: Path) -> bool:
         """Create dataset folder/manifest so it appears in the UI before generation."""
@@ -1494,6 +1553,11 @@ class PipelineControlTab(BaseTab):
         paths.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0, reverse=True)
         self._model_paths = paths
 
+        self._model_profile_cache.clear()
+        for p in self._model_paths:
+            rel = str(p.resolve())
+            self._model_profile_cache[rel] = self._load_model_profile(p)
+
         values: list[str] = []
         for p in paths:
             try:
@@ -1524,6 +1588,9 @@ class PipelineControlTab(BaseTab):
 
         if values:
             self.var_model.set(values[0])
+
+        self._all_model_combo_values = values
+        self._update_model_dropdown_for_dataset()
 
     def _refresh_profiles(self) -> None:
         """Refresh profile dropdown list."""
