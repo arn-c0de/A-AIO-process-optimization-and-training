@@ -14,11 +14,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
+import os
 
 from .base_tab import BaseTab
 from gui.state import UiState
 from gui.components.chart_widgets import create_confusion_matrix_widget
 from gui.components.overlay_renderer import draw_prediction_overlay
+from gui.utils.tooltip import ToolTip
 
 
 class PredictionsTab(BaseTab):
@@ -74,6 +76,7 @@ class PredictionsTab(BaseTab):
         self.combo_dataset = ttk.Combobox(top, textvariable=self.var_dataset, state="readonly")
         self.combo_dataset.grid(row=0, column=1, sticky="ew", padx=(6, 6))
         self.combo_dataset.bind("<<ComboboxSelected>>", self._on_dataset_selected)
+        ToolTip(self.combo_dataset, text_func=lambda: self.var_dataset.get())
         ttk.Button(top, text="↻", width=3, command=self._refresh_datasets).grid(row=0, column=2, sticky="w", padx=(0, 12))
 
         ttk.Label(top, text="Model:").grid(row=0, column=2, sticky="w")
@@ -371,35 +374,83 @@ class PredictionsTab(BaseTab):
         threading.Thread(target=worker, daemon=True).start()
 
     def _datasets_base(self) -> Path:
-        return self.sim_root / "outputs" / "sim_data" / "runs"
+        return self.sim_root / "outputs" / "sim_data"
 
     def _refresh_datasets(self) -> None:
-        base = self._datasets_base()
-        base.mkdir(parents=True, exist_ok=True)
-        ds = [p for p in base.iterdir() if p.is_dir()]
-        ds.sort(key=lambda p: p.name)
-        self._dataset_dirs = ds
-        names = [p.name for p in ds]
+        sim_data = self._datasets_base()
+        runs = sim_data / "runs"
+        versions = sim_data / "versions"
+        runs.mkdir(parents=True, exist_ok=True)
+        versions.mkdir(parents=True, exist_ok=True)
+
+        cand: List[Path] = []
+        cand.extend([p for p in runs.iterdir() if p.is_dir()])
+        cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
+
+        def is_version(p: Path) -> bool:
+            try:
+                return str(p.resolve()).startswith(str(versions.resolve()) + os.sep)
+            except Exception:
+                return False
+
+        def sort_key(p: Path) -> tuple:
+            if is_version(p):
+                try:
+                    mt = p.stat().st_mtime
+                except Exception:
+                    mt = 0.0
+                return (1, -mt, p.name)
+            return (0, p.name)
+
+        cand.sort(key=sort_key)
+        self._dataset_dirs = cand
+
+        def display(p: Path) -> str:
+            try:
+                rp = p.resolve()
+                if str(rp).startswith(str(runs.resolve()) + os.sep):
+                    return rp.name
+                if str(rp).startswith(str(versions.resolve()) + os.sep):
+                    return f"{rp.parent.name}:{rp.name}"
+            except Exception:
+                pass
+            return p.name
+
+        names = [display(p) for p in cand]
         self.combo_dataset["values"] = names
 
-        # Auto-select current state dataset if present, else last.
-        cur = self.state.dataset_dir.name if self.state.dataset_dir else ""
-        if cur and cur in names:
-            self.var_dataset.set(cur)
-            return
+        # Keep current selection if still valid.
         if self.var_dataset.get() in names:
             return
+
+        # Prefer current state.dataset_dir
+        if self.state.dataset_dir:
+            want = display(self.state.dataset_dir)
+            if want in names:
+                self.var_dataset.set(want)
+                return
+
         if names:
-            self.var_dataset.set(names[-1])
+            self.var_dataset.set(names[0])
             self._on_dataset_selected()
 
     def _selected_dataset_dir(self) -> Optional[Path]:
-        name = self.var_dataset.get().strip()
-        if not name:
+        disp = self.var_dataset.get().strip()
+        if not disp:
             return None
         for p in self._dataset_dirs:
-            if p.name == name:
+            if p.name == disp:
                 return p
+            # versions display: group:snap
+            try:
+                sim_data = self._datasets_base()
+                versions = (sim_data / "versions").resolve()
+                rp = p.resolve()
+                if str(rp).startswith(str(versions) + os.sep):
+                    if disp == f"{rp.parent.name}:{rp.name}":
+                        return p
+            except Exception:
+                pass
         return None
 
     def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
