@@ -1,0 +1,64 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+.env
+.env.*
+
+# Packaging / builds
+build/
+dist/
+*.egg-info/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Large artifacts (should not go to GitHub)
+# Project-specific
+Simple-Sim/outputs/
+Simple-Sim/wheelhouse/
+Simple-Sim/.venv-wheelhouse/
+
+# Common ML/data dirs (repo-root only; keeps source folders elsewhere trackable)
+/outputs/
+/output/
+/logs/
+/log/
+/runs/
+/run/
+/artifacts/
+/checkpoints/
+/data/
+/dataset/
+/datasets/
+
+# Model weights / binary artifacts
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.h5
+*.tflite
+
+# Data blobs / archives
+*.npy
+*.npz
+*.parquet
+*.feather
+*.csv.gz
+*.zip
+*.tar
+*.tar.gz
