@@ -149,6 +149,9 @@ class PipelineControlTab(BaseTab):
         ttk.Label(stats, textvariable=self.var_ds_size).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
         self.lbl_ds_samples = ttk.Label(stats, textvariable=self.var_ds_samples)
         self.lbl_ds_samples.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        ttk.Button(stats, text="↻", width=3, command=self._refresh_dataset_stats).grid(
+            row=5, column=1, sticky="e", pady=(2, 0)
+        )
 
         self.btn_start = ttk.Button(top, text="▶ Start Pipeline", command=self.start_pipeline, width=15)
         self.btn_start.pack(side="left")
@@ -1182,6 +1185,36 @@ class PipelineControlTab(BaseTab):
                 pass
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _refresh_dataset_stats(self) -> None:
+        """Re-read manifest stats and re-trigger dataset size calculation."""
+        ds = self.state.dataset_dir
+        if not ds:
+            self.var_ds_samples.set("Samples: -")
+            self.var_ds_size.set("DS: -")
+            return
+
+        manifest_path = ds / "dataset_manifest.json"
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                stats = manifest.get("dataset_stats", {})
+                splits = stats.get("splits", {})
+                self._set_dataset_samples_from_manifest(
+                    ds,
+                    stats.get("total_samples"),
+                    splits.get("train"),
+                    splits.get("val"),
+                    splits.get("test"),
+                )
+            except Exception as exc:
+                print(f"Failed to refresh dataset stats: {exc}")
+                self._set_dataset_samples_info("Samples: manifest error", "")
+        else:
+            self._set_dataset_samples_info("Samples: manifest missing", "")
+
+        self._start_dataset_size_calc(ds)
 
     def _set_dataset_samples_from_manifest(
         self,
