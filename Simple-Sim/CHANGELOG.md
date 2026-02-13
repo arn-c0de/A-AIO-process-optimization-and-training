@@ -2,6 +2,12 @@
 
 All notable changes to **Simple-Sim** will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- New `sot23_transistor@1` component profile for a 3-pad SOT-23 transistor (configs/profiles/sot23_transistor@1.yaml).
+- Workflow config `configs/run_sot23.yaml` targeting the new profile (800 samples, ResNet-18 training) to seed datasets/trainings for SOT-23 inspections.
+
 ## [1.0.1] - 2026-02-13
 
 ### Added
@@ -18,4 +24,3 @@ All notable changes to **Simple-Sim** will be documented in this file.
 
 ### Notes
 - Full implementation report: `PROFILE_SYSTEM_IMPLEMENTATION.md`.
-
