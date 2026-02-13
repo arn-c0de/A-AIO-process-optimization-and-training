@@ -1598,6 +1598,19 @@ class PipelineControlTab(BaseTab):
                 }
                 break
 
+        if best_entry is None:
+            # Fallback: scan text for a matching component_profile line
+            needle = f"component_profile: {profile_id}"
+            needle_quoted = f'component_profile: "{profile_id}"'
+            for cfg in sorted(configs_root.glob("*.yaml")):
+                try:
+                    text = cfg.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                if needle in text or needle_quoted in text:
+                    best_entry = {"path": cfg, "run_id": cfg.stem}
+                    break
+
         self._profile_config_cache[profile_id] = best_entry
         return best_entry
 
