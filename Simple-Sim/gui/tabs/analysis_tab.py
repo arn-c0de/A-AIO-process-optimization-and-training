@@ -10,6 +10,8 @@ import threading
 import json
 import os
 
+import torch
+
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
@@ -25,6 +27,7 @@ from gui.utils.settings_store import SettingsStore
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
+from simple_sim.manifest import hash_file
 
 
 class AnalysisTab(BaseTab):
@@ -654,21 +657,96 @@ class AnalysisTab(BaseTab):
 
     def _try_load_model(self) -> None:
         """Try to load trained model for dataset."""
-        if not self.state.dataset_dir:
+        self.model = None
+        ds = self.state.dataset_dir
+        if not ds:
+            self.state.current_model_path = None
             return
 
-        model_path = self.sim_root / "outputs" / "models" / f"{self.state.dataset_dir.name}.pt"
-
-        if model_path.exists():
+        manifest_path = ds / "dataset_manifest.json"
+        manifest_hash = None
+        if manifest_path.exists():
             try:
-                self.model = load_model(model_path)
-                print(f"Loaded model: {model_path}")
+                manifest_hash = hash_file(manifest_path)
             except Exception as e:
-                print(f"Failed to load model: {e}")
-                self.model = None
-        else:
-            self.model = None
+                print(f"Failed to hash dataset manifest: {e}")
 
+        explicit = self.state.current_model_path
+        if explicit and explicit.exists():
+            if manifest_hash is None or self._checkpoint_matches_manifest(explicit, manifest_hash):
+                if self._load_model_from_path(explicit):
+                    return
+
+        dataset_model = self.sim_root / "outputs" / "models" / f"{ds.name}.pt"
+        if dataset_model.exists() and self._load_model_from_path(dataset_model):
+            return
+
+        if manifest_hash:
+            match = self._find_model_by_manifest_hash(manifest_hash)
+            if match and self._load_model_from_path(match):
+                return
+
+        self.state.current_model_path = None
+
+    def _load_model_from_path(self, path: Path) -> bool:
+        """Load the model from disk, handling errors."""
+        try:
+            self.model = load_model(path)
+            self.state.current_model_path = path
+            print(f"Loaded model: {path}")
+            return True
+        except Exception as e:
+            print(f"Failed to load model {path}: {e}")
+            self.model = None
+            return False
+
+    def _find_model_by_manifest_hash(self, manifest_hash: str) -> Optional[Path]:
+        """Search for a checkpoint whose manifest hash matches the dataset."""
+        models_root = self.sim_root / "outputs" / "models"
+        candidates = []
+        for glob_pattern in [
+            models_root.glob("*.pt"),
+            (models_root / "imports").glob("*.pt"),
+            (models_root / "versions").glob("**/*.pt"),
+        ]:
+            for p in glob_pattern:
+                if p.is_file():
+                    candidates.append(p)
+
+        seen: dict[str, Path] = {}
+        for p in candidates:
+            try:
+                rp = str(p.resolve())
+            except Exception:
+                rp = str(p)
+            if rp not in seen:
+                seen[rp] = p
+
+        ordered = sorted(
+            seen.values(),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+            reverse=True,
+        )
+
+        for path in ordered:
+            ckpt_hash = self._checkpoint_manifest_hash(path)
+            if ckpt_hash == manifest_hash:
+                return path
+
+        return None
+
+    def _checkpoint_matches_manifest(self, path: Path, manifest_hash: str) -> bool:
+        """Return True if checkpoint manifest hash equals target."""
+        ckpt_hash = self._checkpoint_manifest_hash(path)
+        return ckpt_hash == manifest_hash if ckpt_hash else False
+
+    def _checkpoint_manifest_hash(self, path: Path) -> Optional[str]:
+        try:
+            checkpoint = torch.load(path, map_location="cpu")
+        except Exception as exc:
+            print(f"Failed to read checkpoint metadata {path}: {exc}")
+            return None
+        return checkpoint.get("dataset_manifest_hash")
     def _analyze_dataset(self) -> None:
         """Run batch analysis on entire dataset."""
         if not self.state.dataset_dir or not self.model:
