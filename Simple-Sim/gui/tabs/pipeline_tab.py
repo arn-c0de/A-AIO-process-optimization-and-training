@@ -1556,19 +1556,28 @@ class PipelineControlTab(BaseTab):
             self.var_name.set(suggested_run)
         self._append_log(f"[profile] prepared dataset for profile {profile_id}\n")
         if cfg_info:
-            messagebox.showinfo(
+            self._safe_messagebox_info(
                 "Ready",
                 f"Config '{cfg_path.name}' assigned.\n"
                 f"Out directory: {self.var_out.get()}\n"
                 "Run the pipeline to generate the matching dataset for this profile.",
             )
         else:
-            messagebox.showinfo(
+            self._safe_messagebox_info(
                 "Ready",
                 "No config automatically detected for this profile.\n"
                 "Pick or create a config that sets `run.component_profile` to "
                 f"'{profile_id}', then run the pipeline to create the dataset.",
             )
+
+    def _safe_messagebox_info(self, title: str, message: str) -> None:
+        root = self.frame.winfo_toplevel()
+        try:
+            if not root.winfo_exists():
+                return
+        except Exception:
+            return
+        messagebox.showinfo(title, message)
 
     def _config_for_profile(self, profile_id: str) -> Optional[Dict[str, Any]]:
         if profile_id in self._profile_config_cache:
