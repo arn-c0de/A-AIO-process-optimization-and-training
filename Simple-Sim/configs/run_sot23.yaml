@@ -1,0 +1,57 @@
+run:
+  run_id: "run_sot23_v1"
+  seed: 2026
+  schema_version: 2
+  component_profile: "sot23_transistor@1"
+
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.012
+
+classes:
+  OK: 200
+  MISSING: 200
+  MISALIGNED: 200
+  TOMB: 200
+
+domains:
+  domain_A:
+    lighting_brightness: [0.9, 1.2]
+    blur_sigma: [0.0, 1.2]
+    noise_stddev: [0.0, 12.0]
+
+splits:
+  train_domains: ['domain_A']
+  val_domains: ['domain_A']
+  test_domains: ['domain_A']
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+
+render:
+  backend: 'opencv_2d'
+  substrate_color: [30, 70, 30]
+  copper_color: [70, 110, 170]
+  solder_mask_alpha: 0.35
+
+augment:
+  rotation_deg_range: [-5, 5]
+  brightness_factor_range: [0.8, 1.2]
+  contrast_factor_range: [0.85, 1.15]
+
+train:
+  model: 'resnet18'
+  pretrained: true
+  epochs: 12
+  batch_size: 32
+  num_workers: 0
+  lr: 0.0008
+  optimizer: 'adam'
+  weight_decay: 0.0001
+
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics: ['accuracy', 'precision', 'recall', 'f1', 'confusion_matrix']
+  critical_classes: ['MISSING', 'MISALIGNED', 'TOMB']
