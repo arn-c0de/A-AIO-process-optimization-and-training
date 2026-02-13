@@ -82,7 +82,7 @@ def validate_config(cfg: Dict[str, Any]) -> None:
     classes = cfg['classes']
     if not classes:
         raise ValueError("classes cannot be empty")
-    valid_classes = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE'}
+    valid_classes = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT'}
     for class_name, count in classes.items():
         if class_name not in valid_classes:
             raise ValueError(f"Invalid class name: {class_name}")

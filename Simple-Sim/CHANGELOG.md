@@ -7,6 +7,7 @@ All notable changes to **Simple-Sim** will be documented in this file.
 ### Added
 - New `sot23_transistor@1` component profile for a 3-pad SOT-23 transistor (configs/profiles/sot23_transistor@1.yaml).
 - Workflow config `configs/run_sot23.yaml` targeting the new profile (800 samples, ResNet-18 training) to seed datasets/trainings for SOT-23 inspections.
+- New `qfn32_ic@1` profile for a 32-pin QFN (configs/profiles/qfn32_ic@1.yaml) plus `configs/run_qfn32.yaml` to generate larger ROI datasets with solder-bridge/corner-lift defects.
 
 ## [1.0.1] - 2026-02-13
 

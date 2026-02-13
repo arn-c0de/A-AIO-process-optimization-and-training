@@ -1,0 +1,36 @@
+profile:
+  profile_id: qfn32_ic@1
+  schema_version: 1
+  description: "QFN-32 IC (flat body, 32 land pads around perimeter)"
+  created_at: "2026-02-14T12:00:00Z"
+
+component:
+  type: qfn_ic
+  footprint: qfn_32
+  package: QFN-32
+  nominal_dims_mm:
+    length: 5.0
+    width: 5.0
+    height: 0.85
+
+geometry_ranges:
+  pad_width: [45.0, 55.0]
+  pad_height: [110.0, 130.0]
+  pad_spacing: [300.0, 340.0]
+  component_length: [485.0, 515.0]
+  component_width: [485.0, 515.0]
+
+tolerances:
+  ok_shift_px: 5.0
+  ok_rotation_deg: 3.0
+  tombstone_tilt_deg: 70.0
+
+defect_set:
+  - OK
+  - MISSING
+  - MISALIGNED
+  - SOLDER_BRIDGE
+  - CORNER_LIFT
+
+render:
+  component_color_bgr: [6, 6, 6]
