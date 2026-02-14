@@ -1598,11 +1598,11 @@ class WeightsTab(BaseTab):
         if not deletable:
             return
 
-        msg = "Delete selected checkpoint file(s)?\n\n"
+        msg = "Delete selected checkpoint(s)/bundle(s)?\n\n"
         msg += "\n".join(self._rel(p) for p in deletable[:8])
         if len(deletable) > 8:
             msg += f"\n... (+{len(deletable) - 8} more)"
-        msg += "\n\nThis will also delete any adjacent *.meta.json file."
+        msg += "\n\nThis will also delete any adjacent *.meta.json file (for .pt checkpoints)."
 
         if not messagebox.askyesno("Delete checkpoints", msg):
             return
@@ -1610,18 +1610,25 @@ class WeightsTab(BaseTab):
         deleted = 0
         for p in deletable:
             try:
-                meta = Path(str(p) + ".meta.json")
-                if meta.exists():
-                    try:
-                        meta.unlink()
-                    except Exception:
-                        pass
-                p.unlink()
+                # Delete meta sidecar for checkpoint files.
+                if p.is_file() or p.is_symlink():
+                    meta = Path(str(p) + ".meta.json")
+                    if meta.exists():
+                        try:
+                            meta.unlink()
+                        except Exception:
+                            pass
+
+                # Bundles are directories (e.g. *.bundle/). Handle both files and directories.
+                if p.is_dir() and not p.is_symlink():
+                    shutil.rmtree(p)
+                else:
+                    p.unlink()
                 deleted += 1
             except Exception as e:
                 self._append_log(f"[delete] failed: {p} ({e})\n")
 
-        self._append_log(f"[delete] deleted {deleted} file(s)\n")
+        self._append_log(f"[delete] deleted {deleted} item(s)\n")
         self._refresh_models()
 
     def _show_model_profile_info(self) -> None:
