@@ -1,0 +1,51 @@
+# 2D comparison test
+
+run:
+  run_id: "test_2d_comparison"
+  seed: 42
+  schema_version: 2
+  component_profile: "chip_0603_resistor@1"
+
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.01
+
+classes:
+  OK: 1
+  TOMBSTONE: 1
+
+domains:
+  domain_A:
+    lighting_brightness: [1.0, 1.0]
+    blur_sigma: [0.0, 0.0]
+    noise_stddev: [0.0, 0.0]
+
+splits:
+  train_domains: ['domain_A']
+  val_domains: ['domain_A']
+  test_domains: ['domain_A']
+  train_frac: 0.5
+  val_frac: 0.25
+  test_frac: 0.25
+
+render:
+  backend: 'opencv_2d'
+  pcb_color_bgr: [30, 100, 30]
+  pad_color_bgr: [50, 180, 230]
+  component_color_bgr: [20, 20, 20]
+
+augment:
+  rotation_deg_range: [0, 0]
+  brightness_factor_range: [1.0, 1.0]
+  contrast_factor_range: [1.0, 1.0]
+
+train:
+  model: 'resnet18'
+  pretrained: true
+  epochs: 1
+  batch_size: 4
+
+eval:
+  batch_size: 4
+  metrics: ['accuracy']
