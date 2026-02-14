@@ -42,7 +42,8 @@ component:
 geometry_ranges:
   pad_width: [60.0, 80.0]
   pad_height: [90.0, 110.0]
-  pad_spacing: [130.0, 160.0]
+  pad_spacing: [130.0, 160.0]       # horizontal (X) distance between pad sides
+  pad_spacing_y: [80.0, 110.0]      # vertical (Y) distance between Pin1 and Pin2
   component_length: [80.0, 90.0]
   component_width: [35.0, 45.0]
 

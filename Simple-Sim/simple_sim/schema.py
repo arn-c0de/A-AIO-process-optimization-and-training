@@ -47,10 +47,11 @@ class MetaRow:
         if not self.footprint:
             raise ValueError("footprint cannot be empty")
 
-        # Validate nominal geometry
+        # Validate nominal geometry (must contain at least these keys; extras like pad_spacing_y are allowed)
         required_nominal = {'pad_width', 'pad_height', 'pad_spacing', 'component_length', 'component_width'}
-        if set(self.nominal.keys()) != required_nominal:
-            raise ValueError(f"nominal must have exactly {required_nominal}")
+        missing = required_nominal - set(self.nominal.keys())
+        if missing:
+            raise ValueError(f"nominal is missing required keys: {missing}")
 
         # Validate defect params
         required_defect = {'type', 'shift_x', 'shift_y', 'rotation_deg', 'tilt_deg'}

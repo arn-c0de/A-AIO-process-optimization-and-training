@@ -2,7 +2,7 @@
 
 import cv2
 import numpy as np
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 
 def sample_nominal_geometry(
@@ -42,13 +42,20 @@ def sample_nominal_geometry(
     component_length = rng.uniform(*_range('component_length'))
     component_width = rng.uniform(*_range('component_width'))
 
-    return {
+    result = {
         'pad_width': float(pad_width),
         'pad_height': float(pad_height),
         'pad_spacing': float(pad_spacing),
         'component_length': float(component_length),
         'component_width': float(component_width)
     }
+
+    # Optional: sample pad_spacing_y for multi-pad footprints (e.g. SOT-23)
+    if 'pad_spacing_y' in gr:
+        lo, hi = float(gr['pad_spacing_y'][0]), float(gr['pad_spacing_y'][1])
+        result['pad_spacing_y'] = float(rng.uniform(lo, hi))
+
+    return result
 
 
 def sample_augment_params(augment_config: Dict[str, Any], domain_config: Dict[str, Any], rng: np.random.Generator) -> Dict[str, float]:
@@ -101,68 +108,98 @@ def draw_substrate(img: np.ndarray, config: Dict[str, Any]) -> None:
     img[:] = substrate_color
 
 
-def draw_pads(img: np.ndarray, nominal: Dict[str, float], color: Tuple[int, int, int]) -> None:
-    """Draw two copper pads.
+def _compute_pad_positions(
+    footprint: str,
+    nominal: Dict[str, float],
+    img_shape: Tuple[int, int]
+) -> List[Dict[str, int]]:
+    """Compute pad rectangles based on footprint type.
+
+    Args:
+        footprint: Footprint identifier ('chip_2pad', 'sot23', etc.)
+        nominal: Nominal geometry parameters
+        img_shape: (height, width) of the image
+
+    Returns:
+        List of dicts with keys 'x', 'y', 'w', 'h' for each pad rectangle
+    """
+    h, w = img_shape
+    center_x, center_y = w // 2, h // 2
+
+    pad_width = int(nominal['pad_width'])
+    pad_height = int(nominal['pad_height'])
+    pad_spacing = int(nominal['pad_spacing'])
+
+    if footprint == 'sot23':
+        pad_spacing_y = int(nominal['pad_spacing_y'])
+        # Pads 1+2 on the left side get 80% height
+        small_h = int(pad_height * 0.8)
+
+        # Pad 1 (left-top)
+        p1_x = center_x - pad_spacing // 2 - pad_width // 2
+        p1_y = center_y - pad_spacing_y // 2 - small_h // 2
+
+        # Pad 2 (left-bottom)
+        p2_x = center_x - pad_spacing // 2 - pad_width // 2
+        p2_y = center_y + pad_spacing_y // 2 - small_h // 2
+
+        # Pad 3 (right-center, full size)
+        p3_x = center_x + pad_spacing // 2 - pad_width // 2
+        p3_y = center_y - pad_height // 2
+
+        return [
+            {'x': p1_x, 'y': p1_y, 'w': pad_width, 'h': small_h},
+            {'x': p2_x, 'y': p2_y, 'w': pad_width, 'h': small_h},
+            {'x': p3_x, 'y': p3_y, 'w': pad_width, 'h': pad_height},
+        ]
+    else:
+        # Default: chip_2pad — two symmetric pads (left/right)
+        left_x = center_x - pad_spacing // 2 - pad_width // 2
+        left_y = center_y - pad_height // 2
+
+        right_x = center_x + pad_spacing // 2 - pad_width // 2
+        right_y = center_y - pad_height // 2
+
+        return [
+            {'x': left_x, 'y': left_y, 'w': pad_width, 'h': pad_height},
+            {'x': right_x, 'y': right_y, 'w': pad_width, 'h': pad_height},
+        ]
+
+
+def draw_pads(img: np.ndarray, nominal: Dict[str, float], color: Tuple[int, int, int],
+              footprint: str = 'chip_2pad') -> None:
+    """Draw copper pads.
 
     Args:
         img: Image array to modify (in-place)
         nominal: Nominal geometry parameters
         color: BGR color tuple
+        footprint: Footprint identifier for pad layout
     """
-    h, w = img.shape[:2]
-    center_x, center_y = w // 2, h // 2
-
-    pad_width = int(nominal['pad_width'])
-    pad_height = int(nominal['pad_height'])
-    pad_spacing = int(nominal['pad_spacing'])
-
-    # Left pad
-    left_x = center_x - pad_spacing // 2 - pad_width // 2
-    left_y = center_y - pad_height // 2
-    cv2.rectangle(img,
-                  (left_x, left_y),
-                  (left_x + pad_width, left_y + pad_height),
-                  color, -1)
-
-    # Right pad
-    right_x = center_x + pad_spacing // 2 - pad_width // 2
-    right_y = center_y - pad_height // 2
-    cv2.rectangle(img,
-                  (right_x, right_y),
-                  (right_x + pad_width, right_y + pad_height),
-                  color, -1)
+    pads = _compute_pad_positions(footprint, nominal, img.shape[:2])
+    for pad in pads:
+        cv2.rectangle(img,
+                      (pad['x'], pad['y']),
+                      (pad['x'] + pad['w'], pad['y'] + pad['h']),
+                      color, -1)
 
 
-def draw_solder(img: np.ndarray, nominal: Dict[str, float]) -> None:
+def draw_solder(img: np.ndarray, nominal: Dict[str, float],
+                footprint: str = 'chip_2pad') -> None:
     """Draw solder paste highlights on pads.
 
     Args:
         img: Image array to modify (in-place)
         nominal: Nominal geometry parameters
+        footprint: Footprint identifier for pad layout
     """
-    h, w = img.shape[:2]
-    center_x, center_y = w // 2, h // 2
-
-    pad_width = int(nominal['pad_width'])
-    pad_height = int(nominal['pad_height'])
-    pad_spacing = int(nominal['pad_spacing'])
-
-    # Create solder highlight (white, blurred)
     solder_color = (200, 200, 200)  # Light gray/white
-
-    # Left pad solder
-    left_x = center_x - pad_spacing // 2 - pad_width // 2
-    left_y = center_y - pad_height // 2
-    solder_region = img[left_y:left_y + pad_height, left_x:left_x + pad_width].copy()
-    cv2.addWeighted(solder_region, 0.7, np.full_like(solder_region, solder_color), 0.3, 0, solder_region)
-    img[left_y:left_y + pad_height, left_x:left_x + pad_width] = solder_region
-
-    # Right pad solder
-    right_x = center_x + pad_spacing // 2 - pad_width // 2
-    right_y = center_y - pad_height // 2
-    solder_region = img[right_y:right_y + pad_height, right_x:right_x + pad_width].copy()
-    cv2.addWeighted(solder_region, 0.7, np.full_like(solder_region, solder_color), 0.3, 0, solder_region)
-    img[right_y:right_y + pad_height, right_x:right_x + pad_width] = solder_region
+    pads = _compute_pad_positions(footprint, nominal, img.shape[:2])
+    for pad in pads:
+        x, y, pw, ph = pad['x'], pad['y'], pad['w'], pad['h']
+        solder_region = img[y:y + ph, x:x + pw].copy()
+        cv2.addWeighted(solder_region, 0.7, np.full_like(solder_region, solder_color), 0.3, 0, solder_region)
+        img[y:y + ph, x:x + pw] = solder_region
 
 
 def draw_component(
@@ -312,7 +349,8 @@ def render_roi(
     roi_size: Tuple[int, int],
     config: Dict[str, Any],
     tolerances: Optional[Dict[str, Any]],
-    rng: np.random.Generator
+    rng: np.random.Generator,
+    footprint: str = 'chip_2pad'
 ) -> np.ndarray:
     """Render complete ROI with defects and augmentation.
 
@@ -324,6 +362,7 @@ def render_roi(
         config: Render configuration
         tolerances: Optional tolerance thresholds from config (used for tombstone rendering threshold)
         rng: NumPy random generator
+        footprint: Footprint identifier for pad layout
 
     Returns:
         Rendered image (BGR, uint8)
@@ -336,10 +375,10 @@ def render_roi(
 
     # Draw copper pads
     copper_color = tuple(config['copper_color'])
-    draw_pads(img, nominal, copper_color)
+    draw_pads(img, nominal, copper_color, footprint=footprint)
 
     # Draw solder paste
-    draw_solder(img, nominal)
+    draw_solder(img, nominal, footprint=footprint)
 
     # Draw component with defects
     component_color = tuple(config['component_color'])

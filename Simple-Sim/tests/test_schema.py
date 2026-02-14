@@ -68,6 +68,45 @@ def test_meta_row_invalid_split():
         )
 
 
+def test_meta_row_valid_with_pad_spacing_y():
+    """Test valid MetaRow with extra pad_spacing_y in nominal (SOT-23)."""
+    row = MetaRow(
+        schema_version=1,
+        id="run_0001/domain_A/train/000001",
+        run_id="run_0001",
+        domain="domain_A",
+        split="train",
+        seed=12345,
+        image_path="images/000001.png",
+        render_backend="opencv_2d",
+        footprint="sot23",
+        nominal={
+            'pad_width': 70.0,
+            'pad_height': 100.0,
+            'pad_spacing': 145.0,
+            'pad_spacing_y': 95.0,
+            'component_length': 85.0,
+            'component_width': 40.0
+        },
+        defect={
+            'type': 'OK',
+            'shift_x': 0.0,
+            'shift_y': 0.0,
+            'rotation_deg': 0.0,
+            'tilt_deg': 0.0
+        },
+        augment={
+            'blur_sigma': 0.5,
+            'noise_stddev': 3.0,
+            'brightness_factor': 1.05,
+            'contrast_factor': 1.0,
+            'rotation_deg': -1.5
+        }
+    )
+    assert row.footprint == "sot23"
+    assert 'pad_spacing_y' in row.nominal
+
+
 def test_label_row_valid():
     """Test valid LabelRow creation."""
     row = LabelRow(
