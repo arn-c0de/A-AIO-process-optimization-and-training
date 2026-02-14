@@ -44,6 +44,11 @@ class WeightsTab(BaseTab):
         self._reports: List[Dict[str, Any]] = []
         self._report_by_iid: Dict[str, Dict[str, Any]] = {}
 
+        # Compare dataset selection (multi)
+        self._cmp_dataset_dirs: List[Path] = []
+        self._cmp_dataset_labels: List[str] = []
+        self._cmp_dataset_by_label: Dict[str, Path] = {}
+
         # UI components
         self.var_dataset: tk.StringVar
         self.var_active_model: tk.StringVar
@@ -60,6 +65,8 @@ class WeightsTab(BaseTab):
         self.var_report_scope: tk.StringVar
         self.var_report_split: tk.StringVar
         self.var_report_sort: tk.StringVar
+
+        self.list_cmp_datasets: tk.Listbox
 
         self.tree: ttk.Treeview
         self.tree_reports: ttk.Treeview
@@ -213,7 +220,32 @@ class WeightsTab(BaseTab):
         self.combo_b = ttk.Combobox(cmpbox, textvariable=self.var_cmp_b, values=[], state="readonly")
         self.combo_b.grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
-        ttk.Button(cmpbox, text="Run A then B", command=self._run_compare).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Button(cmpbox, text="Run A then B", command=self._run_compare).grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(8, 0)
+        )
+
+        # Dataset selection for compare (multi-select)
+        ttk.Label(cmpbox, text="Datasets").grid(row=2, column=0, sticky="nw", pady=(10, 0))
+        ds_frame = ttk.Frame(cmpbox)
+        ds_frame.grid(row=2, column=1, columnspan=3, sticky="ew", pady=(10, 0))
+        ds_frame.columnconfigure(0, weight=1)
+
+        self.list_cmp_datasets = tk.Listbox(
+            ds_frame,
+            height=4,
+            selectmode="extended",
+            exportselection=False,
+        )
+        ds_scroll = ttk.Scrollbar(ds_frame, orient="vertical", command=self.list_cmp_datasets.yview)
+        self.list_cmp_datasets.configure(yscrollcommand=ds_scroll.set)
+        self.list_cmp_datasets.grid(row=0, column=0, sticky="ew")
+        ds_scroll.grid(row=0, column=1, sticky="ns")
+
+        ds_btns = ttk.Frame(ds_frame)
+        ds_btns.grid(row=0, column=2, sticky="ns", padx=(10, 0))
+        ttk.Button(ds_btns, text="Refresh", command=self._refresh_cmp_datasets).pack(fill="x")
+        ttk.Button(ds_btns, text="Use current", command=self._select_current_dataset_for_compare).pack(fill="x", pady=(6, 0))
+        ttk.Button(ds_btns, text="Select all", command=self._select_all_datasets_for_compare).pack(fill="x", pady=(6, 0))
 
         repbox = ttk.LabelFrame(right, text="History / Reports", padding=8)
         repbox.pack(fill="both", expand=True, pady=(0, 8))
@@ -292,6 +324,7 @@ class WeightsTab(BaseTab):
         self.txt.configure(state="disabled")
 
         self.on_dataset_changed()
+        self._refresh_cmp_datasets()
         self._load_favorites()
         self._refresh_models()
         self._refresh_reports()
@@ -307,6 +340,191 @@ class WeightsTab(BaseTab):
         active = self.sim_root / "outputs" / "models" / f"{self.state.dataset_dir.name}.pt"
         self.var_active_model.set(str(active))
         self.var_dataset_samples.set(self._describe_dataset_samples(self.state.dataset_dir))
+        # If user hasn't selected compare datasets yet, default to current dataset.
+        try:
+            if hasattr(self, "list_cmp_datasets") and self.list_cmp_datasets.size() > 0:
+                if not self.list_cmp_datasets.curselection():
+                    self._select_current_dataset_for_compare()
+        except Exception:
+            pass
+
+    def _sim_data_roots(self) -> tuple[Path, Path]:
+        sim_data = self.sim_root / "outputs" / "sim_data"
+        return sim_data / "runs", sim_data / "versions"
+
+    def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
+        try:
+            rp = p.resolve()
+            if str(rp).startswith(str(runs.resolve()) + os.sep):
+                return rp.name
+            if str(rp).startswith(str(versions.resolve()) + os.sep):
+                return f"{rp.parent.name}:{rp.name}"
+        except Exception:
+            pass
+        return p.name
+
+    def _refresh_cmp_datasets(self) -> None:
+        """Refresh dataset list used for compare runs (multi-select)."""
+        runs, versions = self._sim_data_roots()
+        runs.mkdir(parents=True, exist_ok=True)
+        versions.mkdir(parents=True, exist_ok=True)
+
+        cand: list[Path] = []
+        cand.extend([p for p in runs.iterdir() if p.is_dir()])
+        for p in versions.glob("*/*"):
+            if p.is_dir():
+                cand.append(p)
+
+        def is_version(p: Path) -> bool:
+            try:
+                return str(p.resolve()).startswith(str(versions.resolve()) + os.sep)
+            except Exception:
+                return False
+
+        def sort_key(p: Path) -> tuple:
+            if is_version(p):
+                try:
+                    mt = p.stat().st_mtime
+                except Exception:
+                    mt = 0.0
+                return (1, -mt, p.name)
+            return (0, p.name)
+
+        cand.sort(key=sort_key)
+        self._cmp_dataset_dirs = cand
+
+        # Preserve existing selections by label.
+        old_sel: set[str] = set()
+        try:
+            for i in self.list_cmp_datasets.curselection():
+                old_sel.add(str(self.list_cmp_datasets.get(i)))
+        except Exception:
+            pass
+
+        self._cmp_dataset_labels = []
+        self._cmp_dataset_by_label = {}
+        seen: dict[str, int] = {}
+        for p in cand:
+            base = self._display_for_dataset(p, runs=runs, versions=versions)
+            n = seen.get(base, 0) + 1
+            seen[base] = n
+            label = base if n == 1 else f"{base} ({n})"
+            self._cmp_dataset_labels.append(label)
+            self._cmp_dataset_by_label[label] = p
+
+        self.list_cmp_datasets.delete(0, "end")
+        for label in self._cmp_dataset_labels:
+            self.list_cmp_datasets.insert("end", label)
+
+        # Restore old selection where possible.
+        if old_sel:
+            for idx, label in enumerate(self._cmp_dataset_labels):
+                if label in old_sel:
+                    try:
+                        self.list_cmp_datasets.selection_set(idx)
+                    except Exception:
+                        pass
+        else:
+            self._select_current_dataset_for_compare()
+
+    def _select_current_dataset_for_compare(self) -> None:
+        """Select only the current dataset in the compare dataset list (if present)."""
+        try:
+            self.list_cmp_datasets.selection_clear(0, "end")
+        except Exception:
+            return
+        if not self.state.dataset_dir:
+            return
+        runs, versions = self._sim_data_roots()
+        want = self._display_for_dataset(self.state.dataset_dir, runs=runs, versions=versions)
+        # Might have been disambiguated.
+        for idx, label in enumerate(self._cmp_dataset_labels):
+            if label == want:
+                self.list_cmp_datasets.selection_set(idx)
+                self.list_cmp_datasets.see(idx)
+                return
+            p = self._cmp_dataset_by_label.get(label)
+            if p and p == self.state.dataset_dir:
+                self.list_cmp_datasets.selection_set(idx)
+                self.list_cmp_datasets.see(idx)
+                return
+
+    def _select_all_datasets_for_compare(self) -> None:
+        try:
+            self.list_cmp_datasets.selection_set(0, "end")
+        except Exception:
+            pass
+
+    def _selected_compare_datasets(self) -> List[Path]:
+        ds: List[Path] = []
+        try:
+            for i in self.list_cmp_datasets.curselection():
+                label = str(self.list_cmp_datasets.get(i))
+                p = self._cmp_dataset_by_label.get(label)
+                if p:
+                    ds.append(p)
+        except Exception:
+            pass
+        # Fallback: current dataset.
+        if not ds and self.state.dataset_dir:
+            ds = [self.state.dataset_dir]
+        # Filter out non-existent dirs (stale list).
+        out: List[Path] = []
+        for p in ds:
+            try:
+                if p.exists() and p.is_dir():
+                    out.append(p)
+            except Exception:
+                continue
+        return out
+
+    def _dataset_classes(self, ds_dir: Path) -> Optional[List[str]]:
+        """Best-effort dataset class list (from manifest if present, else from labels.jsonl)."""
+        try:
+            mp = ds_dir / "dataset_manifest.json"
+            if mp.exists():
+                obj = json.loads(mp.read_text(encoding="utf-8"))
+                classes = (obj.get("dataset_stats") or {}).get("classes") or {}
+                if isinstance(classes, dict):
+                    keys = [str(k) for k in classes.keys() if k]
+                    if keys:
+                        return sorted(set(keys))
+        except Exception:
+            pass
+        try:
+            lp = ds_dir / "labels.jsonl"
+            if not lp.exists():
+                return None
+            seen: set[str] = set()
+            with open(lp, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    c = obj.get("class_name")
+                    if isinstance(c, str) and c:
+                        seen.add(c)
+            return sorted(seen) if seen else None
+        except Exception:
+            return None
+
+    def _model_classes(self, model_path: Path) -> Optional[List[str]]:
+        """Best-effort model class list from checkpoint metadata."""
+        try:
+            import torch  # local import to keep module import light
+            ckpt = torch.load(model_path, map_location="cpu")
+            cls = ckpt.get("class_names")
+            if isinstance(cls, list) and cls:
+                out = [str(x) for x in cls if isinstance(x, (str, int, float))]
+                out = [s for s in out if s]
+                return sorted(set(out)) if out else None
+        except Exception:
+            pass
+        return None
 
     def _describe_dataset_samples(self, ds: Optional[Path]) -> str:
         if ds is None:
@@ -1237,12 +1455,111 @@ class WeightsTab(BaseTab):
             return
 
         def worker() -> None:
-            ra = self._run_predict_blocking(a, label=f"A({a.name})")
-            rb = self._run_predict_blocking(b, label=f"B({b.name})")
-            if ra and rb:
-                self.log_q.put(self._compare_summary(ra, rb, model_a=a, model_b=b))
+            ds_dirs = self._selected_compare_datasets()
+            if not ds_dirs:
+                self.log_q.put("[error] no dataset selected\n")
+                return
+
+            # Pre-load model classes once; if missing, still allow running predict.sh.
+            cls_a = self._model_classes(a)
+            cls_b = self._model_classes(b)
+
+            paired: List[Tuple[Path, Dict[str, Any], Dict[str, Any]]] = []
+
+            for ds in ds_dirs:
+                ds_classes = self._dataset_classes(ds)
+
+                if ds_classes and cls_a and sorted(ds_classes) != sorted(cls_a):
+                    self.log_q.put(
+                        f"\n[skip] A({a.name}) incompatible with dataset {ds.name}: "
+                        f"model classes={cls_a} dataset classes={ds_classes}\n"
+                    )
+                    continue
+                if ds_classes and cls_b and sorted(ds_classes) != sorted(cls_b):
+                    self.log_q.put(
+                        f"\n[skip] B({b.name}) incompatible with dataset {ds.name}: "
+                        f"model classes={cls_b} dataset classes={ds_classes}\n"
+                    )
+                    continue
+
+                ra = self._run_predict_blocking(a, data_dir=ds, label=f"A({a.name})")
+                rb = self._run_predict_blocking(b, data_dir=ds, label=f"B({b.name})")
+                if ra and rb:
+                    paired.append((ds, ra, rb))
+                    self.log_q.put(self._compare_summary(ra, rb, model_a=a, model_b=b))
+                else:
+                    self.log_q.put(f"\n[skip] compare incomplete for dataset {ds.name} (see logs above)\n")
+
+            if len(paired) > 1:
+                self.log_q.put(self._compare_summary_multi(paired, model_a=a, model_b=b))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _compare_summary_multi(
+        self,
+        paired: List[Tuple[Path, Dict[str, Any], Dict[str, Any]]],
+        *,
+        model_a: Path,
+        model_b: Path,
+    ) -> str:
+        def metric(r: Dict[str, Any], k: str) -> Optional[float]:
+            try:
+                return float((r.get("metrics") or {}).get(k))
+            except Exception:
+                return None
+
+        def seen(r: Dict[str, Any]) -> int:
+            try:
+                return int(r.get("seen_samples") or 0)
+            except Exception:
+                return 0
+
+        def wavg(which: str, k: str) -> Optional[float]:
+            num = 0.0
+            den = 0.0
+            for _ds, ra, rb in paired:
+                r = ra if which == "A" else rb
+                s = seen(r)
+                v = metric(r, k)
+                if s <= 0 or v is None:
+                    continue
+                num += v * float(s)
+                den += float(s)
+            return (num / den) if den > 0 else None
+
+        split = str(self.var_split.get().strip() or "test")
+        names = [ds.name for ds, _ra, _rb in paired]
+        acc_a = wavg("A", "accuracy")
+        acc_b = wavg("B", "accuracy")
+        f1_a = wavg("A", "macro_f1")
+        f1_b = wavg("B", "macro_f1")
+
+        winner = "TIE"
+        try:
+            eps = 1e-12
+            if f1_a is not None and f1_b is not None and abs(f1_a - f1_b) > eps:
+                winner = "A" if f1_a > f1_b else "B"
+            elif acc_a is not None and acc_b is not None and abs(acc_a - acc_b) > eps:
+                winner = "A" if acc_a > acc_b else "B"
+        except Exception:
+            pass
+
+        lines: List[str] = []
+        lines.append("\n[compare multi]")
+        lines.append(f"  split: {split}")
+        lines.append(f"  datasets ({len(names)}): {', '.join(names)}")
+        if acc_a is not None and acc_b is not None:
+            lines.append(f"  accuracy (wavg): A={acc_a:.4f}  B={acc_b:.4f}  delta(B-A)={acc_b-acc_a:+.4f}")
+        if f1_a is not None and f1_b is not None:
+            lines.append(f"  macro_f1 (wavg):  A={f1_a:.4f}  B={f1_b:.4f}  delta(B-A)={f1_b-f1_a:+.4f}")
+        if winner == "TIE":
+            lines.append("  winner: TIE (no measurable difference with current metrics)")
+        else:
+            lines.append(f"  winner: {winner}")
+        lines.append(f"  A: {model_a.name}")
+        lines.append(f"  B: {model_b.name}")
+        lines.append("")
+        return "\n".join(lines)
 
     def _compare_summary(self, ra: Dict[str, Any], rb: Dict[str, Any], *, model_a: Path, model_b: Path) -> str:
         """Return a human-readable compare summary including a winner line."""
@@ -1313,10 +1630,7 @@ class WeightsTab(BaseTab):
                 return mp
         return None
 
-    def _predict_cmd(self, model_path: Path) -> Tuple[List[str], Path]:
-        if not self.state.dataset_dir:
-            raise ValueError("No dataset selected")
-        data_dir = self.state.dataset_dir
+    def _predict_cmd(self, model_path: Path, *, data_dir: Path) -> Tuple[List[str], Path]:
         split = self.var_split.get().strip() or "test"
         device = self.var_device.get().strip() or "auto"
         max_samples_s = self.var_max_samples.get().strip()
@@ -1358,7 +1672,7 @@ class WeightsTab(BaseTab):
             return
 
         try:
-            cmd, out_dir = self._predict_cmd(model_path)
+            cmd, out_dir = self._predict_cmd(model_path, data_dir=self.state.dataset_dir)
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
@@ -1419,13 +1733,10 @@ class WeightsTab(BaseTab):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _run_predict_blocking(self, model_path: Path, *, label: str) -> Optional[Dict[str, Any]]:
+    def _run_predict_blocking(self, model_path: Path, *, data_dir: Path, label: str) -> Optional[Dict[str, Any]]:
         """Run predict.sh sequentially from a background thread; returns report json if found."""
-        if not self.state.dataset_dir:
-            self.log_q.put("[error] no dataset selected\n")
-            return None
         try:
-            cmd, out_dir = self._predict_cmd(model_path)
+            cmd, out_dir = self._predict_cmd(model_path, data_dir=data_dir)
         except Exception as e:
             self.log_q.put(f"[error] {e}\n")
             return None
@@ -1444,9 +1755,12 @@ class WeightsTab(BaseTab):
                 bufsize=1,
             )
             assert proc.stdout is not None
+            class_mismatch = False
             for line in proc.stdout:
                 if self.stop_evt.is_set():
                     break
+                if "do not match dataset classes" in line:
+                    class_mismatch = True
                 self.log_q.put(line)
                 if "Report saved to:" in line:
                     try:
@@ -1458,6 +1772,9 @@ class WeightsTab(BaseTab):
                 self.log_q.put("\n[stopped]\n")
                 return None
             if rc != 0:
+                if class_mismatch:
+                    self.log_q.put(f"[skip] incompatible model/dataset (class mismatch)\n")
+                    return None
                 self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
                 return None
         except Exception as e:
