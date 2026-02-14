@@ -245,7 +245,8 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
                 roi_size=(roi_width, roi_height),
                 config=config['render'],
                 tolerances=tolerances,
-                rng=rng
+                rng=rng,
+                footprint=footprint,
             )
 
             image_path = f"images/{sample_index:06d}.png"
