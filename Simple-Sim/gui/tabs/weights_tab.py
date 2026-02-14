@@ -1280,11 +1280,35 @@ class WeightsTab(BaseTab):
         if not p:
             messagebox.showinfo("Info", "Select a model first.")
             return
+        # Bundles are directories; export them as a .zip archive by default.
+        if p.is_dir():
+            dst = filedialog.asksaveasfilename(
+                title="Export selected bundle (zip)",
+                initialfile=f"{p.name}.zip" if not p.name.endswith(".zip") else p.name,
+                defaultextension=".zip",
+                filetypes=[("Bundle archive", "*.zip"), ("All files", "*.*")],
+            )
+            if not dst:
+                return
+            dst_p = Path(dst)
+            try:
+                # shutil.make_archive wants a base name without extension.
+                base = dst_p
+                if base.suffix.lower() == ".zip":
+                    base = base.with_suffix("")
+                # Include the bundle directory itself in the archive.
+                shutil.make_archive(str(base), "zip", root_dir=str(p.parent), base_dir=p.name)
+            except Exception as e:
+                messagebox.showerror("Error", f"Export failed:\n{e}")
+                return
+            self._append_log(f"[export] bundle {p} -> {dst_p.with_suffix('.zip')}\n")
+            return
+
         dst = filedialog.asksaveasfilename(
             title="Export selected model",
             initialfile=p.name,
             defaultextension=".pt",
-            filetypes=[("PyTorch checkpoint", "*.pt"), ("All files", "*.*")]
+            filetypes=[("PyTorch checkpoint", "*.pt"), ("All files", "*.*")],
         )
         if not dst:
             return
