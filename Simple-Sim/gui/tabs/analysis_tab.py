@@ -61,7 +61,20 @@ class AnalysisTab(BaseTab):
         self.info_text: tk.Text
         self.combo_run: ttk.Combobox
         self.combo_domain: ttk.Combobox
+        self.combo_class: ttk.Combobox
         self._preview_max_px: int = 420
+
+    def _sorted_class_values(self, classes: set[str]) -> list[str]:
+        # Prefer a stable, human-friendly ordering for common classes.
+        priority = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+        pr_set = set(priority)
+        rest = sorted([c for c in classes if c not in pr_set])
+        out: list[str] = []
+        for p in priority:
+            if p in classes:
+                out.append(p)
+        out.extend(rest)
+        return out
 
     def build_ui(self) -> None:
         """Build the analysis UI."""
@@ -130,15 +143,15 @@ class AnalysisTab(BaseTab):
 
         self.var_filter = tk.StringVar(value="All")
         ttk.Label(row2, text="Class").pack(side="left")
-        combo_class = ttk.Combobox(
+        self.combo_class = ttk.Combobox(
             row2,
             textvariable=self.var_filter,
-            values=["All", "OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
+            values=["All"],
             state="readonly",
             width=12,
         )
-        combo_class.pack(side="left", padx=(4, 0))
-        combo_class.bind("<<ComboboxSelected>>", lambda e: self._filter_images(display_first=True))
+        self.combo_class.pack(side="left", padx=(4, 0))
+        self.combo_class.bind("<<ComboboxSelected>>", lambda e: self._filter_images(display_first=True))
 
         # Tree with scrollbar
         tree_frame = ttk.Frame(left)
@@ -395,6 +408,19 @@ class AnalysisTab(BaseTab):
                 self.combo_domain.configure(values=domain_values)
                 if self.var_domain.get() not in domain_values:
                     self.var_domain.set("All")
+
+            # Update class dropdown to match dataset labels (profiles can define extra classes,
+            # e.g. SOLDER_BRIDGE/CORNER_LIFT for QFN).
+            if hasattr(self, "combo_class"):
+                classes: set[str] = set()
+                for c in self.label_dict.values():
+                    if not c or c == "?":
+                        continue
+                    classes.add(c)
+                class_values = ["All"] + self._sorted_class_values(classes)
+                self.combo_class.configure(values=class_values)
+                if self.var_filter.get() not in class_values:
+                    self.var_filter.set("All")
 
             self._populate_tree()
         except Exception as e:
