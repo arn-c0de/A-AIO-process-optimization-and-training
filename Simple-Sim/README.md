@@ -22,7 +22,12 @@ Simple-Sim generates deterministic synthetic datasets of PCB component defects f
 
 Key idea: the pipeline is **profile-based**. A **component profile** (versioned YAML) defines the component geometry/tolerances/render defaults and the intended defect set for a component type (e.g. 0603 resistor, SOT-23 transistor, QFN-32 IC). Run configs select a profile via `run.component_profile`.
 
-The system uses 2D OpenCV-based rendering to create AOI-like ROI images. Defect classes are **component-dependent**; common classes include:
+The system supports two rendering backends to create AOI-like ROI images:
+
+- `opencv_2d`: 2D OpenCV renderer (fast, default)
+- `blender_3d`: 3D physically-based renderer via Blender/Cycles (batch rendering)
+
+Defect classes are **component-dependent**; common classes include:
 
 - **OK**: Component within tolerance
 - **MISSING**: Component not present
@@ -77,10 +82,20 @@ Included profiles:
 - `sot23_transistor@1`: 3-pad SOT-23 transistor (OK/MISSING/MISALIGNED/TOMBSTONE)
 - `qfn32_ic@1`: 4-pad QFN-32 IC (OK/MISSING/MISALIGNED/TOMBSTONE)
 
+3D profiles are intentionally **separate profile IDs** to keep datasets distinct in the GUI:
+- `chip_0603_resistor_3d@1`
+- `sot23_transistor_3d@1`
+- `qfn32_ic_3d@1`
+
 Reference run configs you can start from:
 - `configs/run_0001.yaml` (0603 resistor, 256×256 ROI)
 - `configs/run_sot23.yaml` (SOT-23 transistor, 256×256 ROI)
 - `configs/run_qfn32.yaml` (QFN-32 IC, 768×768 ROI)
+
+3D reference configs:
+- `configs/run_0001_3d.yaml`
+- `configs/run_sot23_3d.yaml`
+- `configs/run_qfn32_3d.yaml`
 
 
 ```bash
@@ -136,7 +151,7 @@ One row per sample with complete generation metadata:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "run_0001/domain_A/train/000042",
   "run_id": "run_0001",
   "domain": "domain_A",
@@ -147,9 +162,12 @@ One row per sample with complete generation metadata:
   "footprint": "0603",
   "nominal": {...},
   "defect": {...},
-  "augment": {...}
+  "augment": {...},
+  "render_meta": {}
 }
 ```
+
+For `render_backend: blender_3d`, `render_meta` stores backend-specific information (e.g. Cycles samples/device and 3D scene defaults from the selected 3D profile).
 
 ### labels.jsonl
 One row per sample with class label:
@@ -185,6 +203,8 @@ Simple-Sim/
 │   ├── dataset_store.py       # Atomic dataset writing
 │   ├── defects.py             # Defect classification
 │   ├── generator_2d.py        # OpenCV rendering
+│   ├── generator_3d.py        # Blender/Cycles batch rendering (invokes Blender once per dataset)
+│   ├── blender/               # Blender Python scripts (headless batch renderer)
 │   ├── splits.py              # Stratified splitting
 │   ├── metrics.py             # Evaluation metrics
 │   ├── data_loader.py         # PyTorch Dataset
@@ -226,6 +246,8 @@ The GUI is a multi-tab Tkinter application launched via `./gui/run.sh`.
 ### Pipeline Control
 
 Runs the generation/training/evaluation pipeline. Supports single, multiple, and continuous run modes. Dataset and model selection are profile-aware: the model dropdown only shows checkpoints and bundles whose embedded profile matches the selected dataset. Legacy checkpoints (no profile metadata) are listed at the bottom of the dropdown. Profile compatibility is checked and displayed next to the dataset info. When no compatible model exists (e.g. after switching to a new profile), the "+" button creates a new model entry by name for training.
+
+The tab also exposes a `Render:` selector (`opencv_2d` vs `blender_3d`). The Profile dropdown is filtered based on the selected render backend, and the GUI auto-selects a matching config when possible (based on `run.component_profile` + `render.backend`).
 
 ### Analysis
 
@@ -291,7 +313,7 @@ A merged bundle appears as a first-class entry in the Weights tab and can be sel
 
 - Multi-domain generation (MVP: single domain_A)
 - Challenge sets (MVP: train/val/test only)
-- 3D rendering with Blender (MVP: 2D OpenCV only)
+- More advanced 3D physics/geometry (current Blender backend is an early MVP batch renderer)
 - Dashboard/TensorBoard (MVP: console + JSON reports)
 - Hyperparameter sweeps (MVP: single config)
 - Advanced augmentation (MVP: basic blur/noise/brightness)

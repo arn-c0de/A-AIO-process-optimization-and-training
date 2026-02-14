@@ -1,0 +1,68 @@
+# Component Profile (Schema v1, 3D)
+
+profile:
+  profile_id: "sot23_transistor_3d@1"
+  schema_version: 1
+  supported_render_backends: ["blender_3d"]
+  description: "SOT-23 3D (Blender/Cycles): simple PBR scene for AOI-style ROI"
+  created_at: "2026-02-14T00:00:00Z"
+
+component:
+  type: "sot_transistor"
+  footprint: "sot23"
+  package: "SOT-23"
+  nominal_dims_mm:
+    length: 3.0
+    width: 1.25
+    height: 1.0
+
+geometry_ranges:
+  pad_width: [60.0, 80.0]
+  pad_height: [90.0, 110.0]
+  pad_spacing: [130.0, 160.0]
+  pad_spacing_y: [80.0, 110.0]
+  component_length: [80.0, 90.0]
+  component_width: [35.0, 45.0]
+
+tolerances:
+  ok_shift_px: 4.0
+  ok_rotation_deg: 6.0
+  tombstone_tilt_deg: 75.0
+
+defect_set:
+  - "OK"
+  - "MISSING"
+  - "MISALIGNED"
+  - "TOMBSTONE"
+
+render_3d:
+  camera:
+    location_mm: [0.0, -10.0, 14.0]
+    look_at_mm: [0.0, 0.0, 0.0]
+    focal_length_mm: 40.0
+  lighting:
+    key_light:
+      location_mm: [6.0, -6.0, 16.0]
+      power_w: 420.0
+      size_mm: 14.0
+    fill_light:
+      location_mm: [-6.0, 6.0, 12.0]
+      power_w: 160.0
+      size_mm: 16.0
+  materials:
+    substrate:
+      base_color: [0.05, 0.20, 0.05]
+      roughness: 0.85
+      metallic: 0.0
+    copper:
+      base_color: [0.80, 0.45, 0.10]
+      roughness: 0.25
+      metallic: 1.0
+    body:
+      base_color: [0.02, 0.02, 0.02]
+      roughness: 0.60
+      metallic: 0.0
+    solder:
+      base_color: [0.70, 0.70, 0.72]
+      roughness: 0.18
+      metallic: 1.0

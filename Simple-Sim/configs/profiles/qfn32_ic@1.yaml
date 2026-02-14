@@ -31,6 +31,7 @@
 profile:
   profile_id: qfn32_ic@1
   schema_version: 1
+  supported_render_backends: ["opencv_2d"]
   description: "QFN-32 IC (flat body, 32 land pads around perimeter)"
   created_at: "2026-02-14T12:00:00Z"
 

@@ -144,33 +144,63 @@ def validate_config(cfg: Dict[str, Any]) -> None:
 
     # Validate render section
     render = cfg['render']
-    # component_color is optional for schema v2 (comes from profile)
-    if schema_version == 1:
-        required_render = ['backend', 'substrate_color', 'copper_color', 'component_color', 'solder_mask_alpha']
+    if 'backend' not in render:
+        raise ValueError("Missing render.backend")
+    backend = render.get('backend')
+
+    if mode == 'profile_classifier':
+        # Keep this mode simple for now; mixed-profile dataset generation is currently 2D-only.
+        if backend != 'opencv_2d':
+            raise ValueError("mode=profile_classifier currently supports only render.backend='opencv_2d'")
+
+    if backend == 'opencv_2d':
+        # component_color is optional for schema v2 (comes from profile)
+        if schema_version == 1:
+            required_render = ['backend', 'substrate_color', 'copper_color', 'component_color', 'solder_mask_alpha']
+        else:
+            required_render = ['backend', 'substrate_color', 'copper_color', 'solder_mask_alpha']
+
+        for field in required_render:
+            if field not in render:
+                raise ValueError(f"Missing render.{field}")
+
+        # Validate color fields (component_color optional for v2)
+        color_fields = ['substrate_color', 'copper_color']
+        if schema_version == 1 or 'component_color' in render:
+            color_fields.append('component_color')
+
+        for color_field in color_fields:
+            if color_field in render:
+                color = render[color_field]
+                if not isinstance(color, list) or len(color) != 3:
+                    raise ValueError(f"render.{color_field} must be a list of 3 integers (BGR)")
+                if not all(isinstance(c, int) and 0 <= c <= 255 for c in color):
+                    raise ValueError(f"render.{color_field} values must be in [0, 255]")
+
+        if not isinstance(render['solder_mask_alpha'], (int, float)) or not 0 <= render['solder_mask_alpha'] <= 1:
+            raise ValueError("render.solder_mask_alpha must be in [0, 1]")
+
+    elif backend == 'blender_3d':
+        # 3D renderer config: keep required fields minimal; the generator will fail fast if Blender is missing.
+        blender = render.get('blender')
+        if not isinstance(blender, dict):
+            raise ValueError("render.blender must be a mapping for backend=blender_3d")
+
+        # Optional (defaults allowed): executable, engine. Required: samples.
+        samples = blender.get('samples')
+        if not isinstance(samples, int) or samples <= 0:
+            raise ValueError("render.blender.samples must be a positive integer")
+
+        exe = blender.get('executable', 'blender')
+        if not isinstance(exe, str) or not exe.strip():
+            raise ValueError("render.blender.executable must be a non-empty string if provided")
+
+        engine = blender.get('engine', 'CYCLES')
+        if not isinstance(engine, str) or not engine.strip():
+            raise ValueError("render.blender.engine must be a non-empty string if provided")
+
     else:
-        required_render = ['backend', 'substrate_color', 'copper_color', 'solder_mask_alpha']
-
-    for field in required_render:
-        if field not in render:
-            raise ValueError(f"Missing render.{field}")
-    if render['backend'] != 'opencv_2d':
-        raise ValueError(f"Unsupported render backend: {render['backend']}")
-
-    # Validate color fields (component_color optional for v2)
-    color_fields = ['substrate_color', 'copper_color']
-    if schema_version == 1 or 'component_color' in render:
-        color_fields.append('component_color')
-
-    for color_field in color_fields:
-        if color_field in render:
-            color = render[color_field]
-            if not isinstance(color, list) or len(color) != 3:
-                raise ValueError(f"render.{color_field} must be a list of 3 integers (BGR)")
-            if not all(isinstance(c, int) and 0 <= c <= 255 for c in color):
-                raise ValueError(f"render.{color_field} values must be in [0, 255]")
-
-    if not isinstance(render['solder_mask_alpha'], (int, float)) or not 0 <= render['solder_mask_alpha'] <= 1:
-        raise ValueError("render.solder_mask_alpha must be in [0, 1]")
+        raise ValueError(f"Unsupported render backend: {backend}")
 
     # Validate augment section
     augment = cfg['augment']

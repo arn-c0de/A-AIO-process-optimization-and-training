@@ -1,0 +1,68 @@
+# Component Profile (Schema v1, 3D)
+
+profile:
+  profile_id: "qfn32_ic_3d@1"
+  schema_version: 1
+  supported_render_backends: ["blender_3d"]
+  description: "QFN-32 3D (Blender/Cycles): simple PBR scene for AOI-style ROI"
+  created_at: "2026-02-14T00:00:00Z"
+
+component:
+  type: "qfn_ic"
+  footprint: "qfn_32"
+  package: "QFN-32"
+  nominal_dims_mm:
+    length: 5.0
+    width: 5.0
+    height: 0.85
+
+geometry_ranges:
+  pad_width: [45.0, 55.0]
+  pad_height: [110.0, 130.0]
+  pad_spacing: [520.0, 560.0]
+  pad_spacing_y: [520.0, 560.0]
+  component_length: [485.0, 515.0]
+  component_width: [485.0, 515.0]
+
+tolerances:
+  ok_shift_px: 5.0
+  ok_rotation_deg: 3.0
+  tombstone_tilt_deg: 70.0
+
+defect_set:
+  - "OK"
+  - "MISSING"
+  - "MISALIGNED"
+  - "TOMBSTONE"
+
+render_3d:
+  camera:
+    location_mm: [0.0, -30.0, 40.0]
+    look_at_mm: [0.0, 0.0, 0.0]
+    focal_length_mm: 60.0
+  lighting:
+    key_light:
+      location_mm: [20.0, -20.0, 45.0]
+      power_w: 1200.0
+      size_mm: 28.0
+    fill_light:
+      location_mm: [-16.0, 16.0, 40.0]
+      power_w: 480.0
+      size_mm: 32.0
+  materials:
+    substrate:
+      base_color: [0.05, 0.20, 0.05]
+      roughness: 0.85
+      metallic: 0.0
+    copper:
+      base_color: [0.80, 0.45, 0.10]
+      roughness: 0.25
+      metallic: 1.0
+    body:
+      base_color: [0.02, 0.02, 0.02]
+      roughness: 0.60
+      metallic: 0.0
+    solder:
+      base_color: [0.70, 0.70, 0.72]
+      roughness: 0.18
+      metallic: 1.0
