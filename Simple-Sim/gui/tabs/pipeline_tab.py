@@ -1300,7 +1300,15 @@ class PipelineControlTab(BaseTab):
         return None, None
 
     def _update_model_dropdown_for_dataset(self) -> None:
-        """Show only models matching the selected dataset profile (plus multi-model bundles)."""
+        """Show only models matching the selected dataset profile (plus multi-model bundles).
+
+        Filtering priority:
+        1. Exact profile_id + profile_hash match
+        2. Same profile_id (hash mismatch / different version)
+        3. Multi-model bundles (compatible with any profile)
+        4. Legacy models (no profile metadata) shown with warning marker
+        Models with a *different* profile_id are hidden entirely.
+        """
         ds = self.state.dataset_dir
         values = list(self._all_model_combo_values)
         if ds:
@@ -1311,6 +1319,7 @@ class PipelineControlTab(BaseTab):
                 exact: list[str] = []
                 id_only: list[str] = []
                 multi: list[str] = []
+                legacy: list[str] = []
 
                 for p in self._model_paths:
                     rel_path = str(p.resolve())
@@ -1324,6 +1333,16 @@ class PipelineControlTab(BaseTab):
                             multi.append(str(p))
                         continue
 
+                    # Legacy model (no profile metadata) - show with marker.
+                    if pid is None:
+                        try:
+                            disp = str(p.resolve().relative_to(self.sim_root.resolve()))
+                        except Exception:
+                            disp = str(p)
+                        legacy.append(disp)
+                        continue
+
+                    # Different profile - hide entirely.
                     if pid != profile_id:
                         continue
 
@@ -1337,8 +1356,8 @@ class PipelineControlTab(BaseTab):
                     else:
                         id_only.append(disp)
 
-                # Order: exact matches, same-ID matches, then multi bundles.
-                values = exact + id_only + multi
+                # Order: exact matches, same-ID matches, multi bundles, legacy at end.
+                values = exact + id_only + multi + legacy
         try:
             self.model_combo["values"] = values
         except Exception:
@@ -1595,30 +1614,6 @@ class PipelineControlTab(BaseTab):
                 values.append(str(p.resolve().relative_to(self.sim_root.resolve())))
             except Exception:
                 values.append(str(p))
-
-        try:
-            self.model_combo["values"] = values
-        except Exception:
-            return
-
-        cur = self.var_model.get().strip()
-        if cur and cur in values:
-            return
-
-        # Prefer dataset-specific active model if available.
-        if self.state.dataset_dir:
-            dm = self.sim_root / "outputs" / "models" / f"{self.state.dataset_dir.name}.pt"
-            if dm.exists():
-                try:
-                    rel = str(dm.resolve().relative_to(self.sim_root.resolve()))
-                except Exception:
-                    rel = str(dm)
-                if rel in values:
-                    self.var_model.set(rel)
-                    return
-
-        if values:
-            self.var_model.set(values[0])
 
         self._all_model_combo_values = values
         self._update_model_dropdown_for_dataset()
