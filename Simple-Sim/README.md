@@ -5,6 +5,9 @@ Synthetic AOI-style ROI generation + training/evaluation pipeline for PCB compon
 ![Simple-Sim Pipeline Dashboard](images/pipeline-dashboard-simple-sim-v1.0.png)
 ![Simple-Sim Prediction Dashboard](images/simlesim-prediction-tab.png)
 ![Simple-Sim A/B Testing Dashboard](images/simple-sim-a-b-testing.png)
+![Simple-Sim Weight Merge Dashboard](images/simple-sim-weight-merge.png)
+
+
 
 
 ## Overview
@@ -33,6 +36,8 @@ The system uses 2D OpenCV-based rendering to create AOI-like ROI images. Defect 
 - **Provenance + safety (v1.0.1)**: Dataset manifests + profile hashing + pipeline guards to prevent profile/class mismatches
 - **GUI profile awareness (v1.0.1)**: Profile dropdown, compatibility indicators, dataset/model profile display, info dialogs
 - **Batch scoring with history (v1.0.1)**: `scripts/batch_predict.py` with report history compare and class-mismatch guards
+- **Profile-filtered model selection (v1.0.1)**: Pipeline model dropdown only shows checkpoints matching the dataset profile
+- **Weight merging (v1.0.1)**: Merge tab to combine per-profile checkpoints into a single multi-profile bundle
 
 ## Quick Start
 
@@ -71,115 +76,6 @@ Reference run configs you can start from:
 - `configs/run_sot23.yaml` (SOT-23 transistor, 256×256 ROI)
 - `configs/run_qfn32.yaml` (QFN-32 IC, 768×768 ROI)
 
-## Licensing / Third-Party Dependencies
-
-- This repository is **proprietary** (see `../LICENSE`).
-- Python dependencies in `requirements.txt` are **third-party software** under their own licenses (see `THIRD_PARTY_LICENSES.md`).
-- `wheelhouse/` is intentionally **not** committed to git (it is ignored) so users build/download their own wheels as needed.
-
-## Production Data Notes (For Later)
-
-If/when you train on real production AOI images:
-
-- Treat PCB images, layouts, and BOM-related visuals as **confidential** by default.
-- Keep datasets and trained weights in controlled storage (access control, audit, backups).
-- Define retention and deletion rules (especially for failed builds/experiments).
-- If any images/metadata could include people, screens, or workspace context, check privacy/legal requirements before broader distribution.
-
-## Live GUI Monitor (Optional)
-
-If you want a live view of progress + the latest images during generation/training/eval:
-
-```bash
-cd Simple-Sim
-./gui/run.sh
-```
-
-Notes:
-- This uses `tkinter`. On Ubuntu/Debian you may need: `sudo apt-get install python3-tk`
-
-## Single Image Prediction
-
-```bash
-cd Simple-Sim
-.venv/bin/python scripts/predict.py --model outputs/models/run_0001.pt --image outputs/sim_data/runs/run_0001/images/000000.png
-```
-
-## Batch Prediction / Scoring (Like Eval, With History)
-
-```bash
-cd Simple-Sim
-./predict.sh --model outputs/models/run_0001.pt --data outputs/sim_data/runs/run_0001 --split test --save-preds
-```
-
-History table options:
-```bash
-./predict.sh --model outputs/models/run_0001.pt --data outputs/sim_data/runs/run_0001 --split test \
-  --history-scope model --history-metric macro_f1 --history-limit 10
-
-./predict.sh --model outputs/models/run_0001.pt --data outputs/sim_data/runs/run_0001 --split test \
-  --history-scope dataset --history-metric accuracy --history-split any --history-limit 20
-
-./predict.sh --model outputs/models/run_0001.pt --data outputs/sim_data/runs/run_0001 --split test \
-  --history-scope all --history-metric critical_fn_rate --history-critical-class MISALIGNED --history-limit 10
-```
-
-Notes:
-- `scripts/batch_predict.py` includes guards to prevent scoring a dataset whose class list does not match the model checkpoint.
-- `--model` may also point to a **model bundle directory** (multi-profile). In that case the script resolves the best checkpoint for the dataset profile using `dataset_manifest.json`.
-
-### 2. Generate Dataset
-
-Generate 400 samples (100 per class) with reference configuration:
-
-```bash
-.venv/bin/python scripts/generate.py \
-  --config configs/run_0001.yaml \
-  --out outputs/sim_data/runs/run_0001
-```
-
-**Expected output:**
-- 400 images (256×256 px) in ~2 minutes
-- 70/15/15 train/val/test split
-- JSONL metadata and labels
-- Stratified splits by (domain, class)
-
-### 3. Validate Dataset
-
-Run quality checks on generated dataset:
-
-```bash
-.venv/bin/python tools/validate_dataset.py \
-  --data outputs/sim_data/runs/run_0001
-```
-
-**Checks performed:**
-- Schema validation (JSONL parsing)
-- Row count matching
-- ID consistency
-- Image file existence and readability
-- Split overlap detection
-- Class distribution
-- Determinism verification
-
-### 4. Train Model
-
-Train ResNet18 classifier for 10 epochs:
-
-```bash
-.venv/bin/python scripts/train.py \
-  --data outputs/sim_data/runs/run_0001 \
-  --out outputs/models/run_0001.pt
-```
-
-**Expected results:**
-- Training completes without errors
-- Val accuracy > 70% (target: > 90%)
-- Best model saved by macro-F1 score
-
-### 5. Evaluate on Test Set
-
-Run frozen test evaluation:
 
 ```bash
 .venv/bin/python scripts/eval.py \
@@ -299,18 +195,53 @@ Simple-Sim/
 │   ├── validate_dataset.py    # Dataset validation
 │   ├── backfill_manifest.py   # Add manifest to legacy datasets
 │   └── create_multi_dataset.py # Helper for multi-dataset workflows
+├── gui/                       # Tkinter multi-tab GUI
+│   ├── monitor.py             # Main application (MonitorAppTabbed)
+│   ├── state.py               # Shared UI state
+│   ├── tabs/
+│   │   ├── pipeline_tab.py    # Pipeline control with profile-filtered model selection
+│   │   ├── analysis_tab.py    # Image browser with defect overlays
+│   │   ├── predictions_tab.py # Batch prediction interface
+│   │   ├── weights_tab.py     # Checkpoint management and evaluation
+│   │   ├── validation_tab.py  # Automated dataset validation
+│   │   └── merge_tab.py       # Multi-profile weight merging into bundles
+│   ├── components/            # Reusable UI components
+│   └── utils/                 # Settings, tooltips, inference helpers
 ├── tests/                     # Unit tests
 └── outputs/
     ├── sim_data/runs/         # Generated datasets
-    └── models/                # Trained models
+    └── models/                # Trained models and .bundle directories
 ```
 
-## GUI Profile Support (New)
+## GUI Tabs
 
-The GUI is profile-aware:
-- Pipeline tab includes a profile selector (and shows the selected dataset/model profiles)
-- Model picker is filtered to show only models compatible with the selected profile
-- Compatibility indicators and info dialogs help prevent accidentally mixing components
+The GUI is a multi-tab Tkinter application launched via `./gui/run.sh`.
+
+### Pipeline Control
+
+Runs the generation/training/evaluation pipeline. Supports single, multiple, and continuous run modes. Dataset and model selection are profile-aware: the model dropdown only shows checkpoints whose embedded profile matches the selected dataset. Legacy checkpoints (no profile metadata) are listed at the bottom of the dropdown. Profile compatibility is checked and displayed next to the dataset info.
+
+### Analysis
+
+Interactive image browser with defect overlays. Allows browsing generated samples, viewing metadata, and inspecting per-sample defect parameters.
+
+### Predictions
+
+Batch prediction interface. Runs `predict.sh` against a dataset with a selected model and displays per-sample results with confidence scores.
+
+### Weights
+
+Model checkpoint management. Lists all checkpoints (active, snapshots, imports) grouped into categories. Supports snapshot, import, export, rename, duplicate, delete, favorites, and drag-and-drop grouping. Includes an evaluation runner to score any checkpoint against the current dataset and a compare mode to run two checkpoints side-by-side with a winner summary. Report history is searchable by scope, split, and sort order.
+
+### Validation
+
+Automated dataset validation with flagging. Runs structural and semantic checks on the selected dataset and reports issues.
+
+### Merge
+
+Combines profile-specific weights into a single multi-profile bundle. The tab scans all checkpoints under `outputs/models/`, groups them by their embedded `profile_id`, and displays them in a tree with columns for accuracy, F1, size, modification date, and profile hash. For each profile type, exactly one checkpoint can be selected. The merge operation copies the selected checkpoints into a `.bundle` directory and writes `bundle.json` metadata (using `simple_sim/model_bundle.py`). Existing bundles are listed with their included profiles and creation date, and can be inspected or deleted.
+
+A merged bundle can be selected as a model in the Pipeline Control tab. When a bundle is used, the pipeline resolves the correct per-profile checkpoint based on the dataset manifest.
 
 ## Success Criteria
 
