@@ -277,6 +277,11 @@ def main() -> None:
     model, class_names, checkpoint = load_checkpoint_model(effective_model_path, device)
     cfg = checkpoint.get("config", {}) or {}
     eval_cfg = (cfg.get("eval") or {}) if isinstance(cfg, dict) else {}
+    ckpt_profile_id = ""
+    try:
+        ckpt_profile_id = str((checkpoint.get("component_profile") or {}).get("profile_id") or "")
+    except Exception:
+        ckpt_profile_id = ""
 
     batch_size = args.batch_size if args.batch_size is not None else int(eval_cfg.get("batch_size", 64))
     num_workers = args.num_workers if args.num_workers is not None else int(eval_cfg.get("num_workers", 0))
@@ -406,6 +411,17 @@ def main() -> None:
                     if gt_prof:
                         profile_gt_labels.append(gt_prof)
                         profile_pred_labels.append(pred_prof)
+                elif ckpt_profile_id:
+                    # Fallback: for single-profile checkpoints, propagate the checkpoint's profile_id as prediction.
+                    # This makes profile columns usable without requiring a separate profile classifier model.
+                    gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
+                    row["pred_profile"] = ckpt_profile_id
+                    row["gt_profile"] = gt_prof
+                    row["profile_correct"] = bool(ckpt_profile_id == gt_prof) if gt_prof else None
+                    row["profile_confidence"] = 1.0
+                    if gt_prof:
+                        profile_gt_labels.append(gt_prof)
+                        profile_pred_labels.append(ckpt_profile_id)
 
                 preds_rows.append(row)
 
@@ -429,9 +445,9 @@ def main() -> None:
     print("")
     print(format_metrics(metrics, class_names))
 
-    # Profile metrics (when --profile-model is set and GT labels were available)
+    # Profile metrics (when profile preds were available and GT labels were available)
     profile_metrics: Optional[Dict[str, Any]] = None
-    if profile_model is not None and profile_gt_labels:
+    if profile_gt_labels:
         # Build index arrays for profile metrics
         all_profile_names = sorted(set(profile_gt_labels) | set(profile_pred_labels))
         prof_name_to_idx = {n: i for i, n in enumerate(all_profile_names)}
