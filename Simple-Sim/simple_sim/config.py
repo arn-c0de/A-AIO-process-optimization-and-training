@@ -57,7 +57,20 @@ def validate_config(cfg: Dict[str, Any]) -> None:
         raise ValueError(f"Unsupported schema version: {schema_version}")
 
     # Schema version-specific validation
-    if schema_version == 1:
+    mode = run.get('mode', '')
+
+    if mode == 'profile_classifier':
+        # Profile classifier mode: requires list of 2+ profiles, no singular component_profile needed
+        if 'component_profiles' not in run:
+            raise ValueError("mode=profile_classifier requires run.component_profiles (list of 2+ profile IDs)")
+        profiles = run['component_profiles']
+        if not isinstance(profiles, list) or len(profiles) < 2:
+            raise ValueError("run.component_profiles must be a list of 2+ profile ID strings")
+        for p in profiles:
+            if not isinstance(p, str) or not p:
+                raise ValueError("run.component_profiles entries must be non-empty strings")
+        required_sections = ['run', 'roi', 'classes', 'domains', 'splits', 'render', 'augment', 'train', 'eval']
+    elif schema_version == 1:
         # v1: tolerances and geometry_ranges required, component_profile optional
         required_sections = ['run', 'roi', 'classes', 'tolerances', 'domains', 'splits', 'render', 'augment', 'train', 'eval']
     elif schema_version == 2:

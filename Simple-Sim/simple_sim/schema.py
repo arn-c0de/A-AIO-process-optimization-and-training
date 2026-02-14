@@ -68,19 +68,26 @@ class MetaRow:
 
 @dataclass
 class LabelRow:
-    """Schema for labels.jsonl - one row per sample."""
+    """Schema for labels.jsonl - one row per sample.
+
+    schema_version 1: original (id + class_name only)
+    schema_version 2: adds profile_id for multi-profile datasets
+    """
     schema_version: int
     id: str
     class_name: str
+    profile_id: str = ""
 
     def __post_init__(self):
         """Validate required fields."""
-        if self.schema_version != 1:
+        if self.schema_version not in (1, 2):
             raise ValueError(f"Unsupported schema version: {self.schema_version}")
         if not self.id:
             raise ValueError("id cannot be empty")
         if self.class_name not in VALID_CLASSES:
             raise ValueError(f"Invalid class: {self.class_name}")
+        if self.schema_version == 2 and not self.profile_id:
+            raise ValueError("schema_version=2 requires non-empty profile_id")
 
 
 def write_jsonl(path: Path, rows: List[Any]) -> None:
@@ -139,13 +146,17 @@ def read_jsonl(path: Path, schema_cls: Type[T]) -> List[T]:
                 expected_fields = {'schema_version', 'id', 'run_id', 'domain', 'split', 'seed',
                                  'image_path', 'render_backend', 'footprint', 'nominal', 'defect', 'augment'}
             elif schema_cls == LabelRow:
-                expected_fields = {'schema_version', 'id', 'class_name'}
+                expected_fields = {'schema_version', 'id', 'class_name', 'profile_id'}
             else:
                 raise ValueError(f"Unknown schema class: {schema_cls}")
 
             unknown_fields = set(data.keys()) - expected_fields
             if unknown_fields:
                 raise ValueError(f"Unknown fields at line {line_num}: {unknown_fields}")
+
+            # Backward compat: default profile_id for v1 LabelRows
+            if schema_cls == LabelRow and 'profile_id' not in data:
+                data['profile_id'] = ""
 
             try:
                 row = schema_cls(**data)

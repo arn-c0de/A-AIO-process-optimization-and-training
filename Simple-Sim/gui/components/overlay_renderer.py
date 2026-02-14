@@ -198,6 +198,61 @@ def draw_defect_overlay(img: np.ndarray, defect_params: Dict[str, Any],
     return img_overlay
 
 
+def draw_two_stage_overlay(
+    img: np.ndarray,
+    gt_class: str,
+    pred_class: str,
+    defect_conf: float,
+    gt_profile: str,
+    pred_profile: str,
+    profile_conf: float,
+) -> np.ndarray:
+    """Draw two-stage prediction overlay showing both profile and defect match info.
+
+    Args:
+        img: Image array (BGR format)
+        gt_class: Ground-truth defect class
+        pred_class: Predicted defect class
+        defect_conf: Defect prediction confidence (0-1)
+        gt_profile: Ground-truth profile id
+        pred_profile: Predicted profile id
+        profile_conf: Profile prediction confidence (0-1)
+
+    Returns:
+        Image with two-stage overlay
+    """
+    img_overlay = img.copy()
+    h, w = img.shape[:2]
+
+    profile_ok = (gt_profile == pred_profile)
+    defect_ok = (gt_class == pred_class)
+
+    # Border color: both correct → green, profile wrong → orange, defect wrong → red
+    if defect_ok and profile_ok:
+        border_color = (0, 255, 0)      # green
+    elif not defect_ok:
+        border_color = (0, 0, 255)      # red (defect wrong, regardless of profile)
+    else:
+        border_color = (0, 165, 255)    # orange (profile wrong only)
+
+    border_thickness = 8
+    cv2.rectangle(img_overlay, (0, 0), (w - 1, h - 1), border_color, border_thickness)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    # Top section: profile info
+    prof_mark = "Y" if profile_ok else "X"
+    prof_text = f"Profile: {pred_profile} ({profile_conf:.0%}) {prof_mark} (GT: {gt_profile})"
+    cv2.putText(img_overlay, prof_text, (10, 30), font, 0.6, (255, 255, 255), 2)
+
+    # Bottom section: defect info
+    def_mark = "Y" if defect_ok else "X"
+    def_text = f"Defect: {pred_class} ({defect_conf:.0%}) {def_mark} (GT: {gt_class})"
+    cv2.putText(img_overlay, def_text, (10, h - 15), font, 0.6, (255, 255, 255), 2)
+
+    return img_overlay
+
+
 def draw_prediction_overlay(img: np.ndarray, ground_truth: str, predicted: str,
                             confidence: float) -> np.ndarray:
     """Draw prediction comparison overlay on image.

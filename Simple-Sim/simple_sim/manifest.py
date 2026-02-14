@@ -193,6 +193,8 @@ def write_dataset_manifest(
 def read_dataset_manifest(manifest_path: Path) -> Dict[str, Any]:
     """Read and validate dataset manifest.
 
+    Supports manifest_version 1 (single profile) and manifest_version 2 (multi-profile).
+
     Args:
         manifest_path: Path to dataset_manifest.json
 
@@ -214,7 +216,6 @@ def read_dataset_manifest(manifest_path: Path) -> Dict[str, Any]:
         'manifest_version',
         'created_at',
         'run_id',
-        'component_profile',
         'generator',
         'dataset_stats',
         'extend_history'
@@ -224,13 +225,31 @@ def read_dataset_manifest(manifest_path: Path) -> Dict[str, Any]:
         if field not in manifest:
             raise ValueError(f"Invalid manifest: missing field '{field}'")
 
-    # Validate component_profile section
-    profile_fields = ['profile_id', 'profile_hash', 'profile_path']
-    for field in profile_fields:
-        if field not in manifest['component_profile']:
-            raise ValueError(
-                f"Invalid manifest: missing component_profile.{field}"
-            )
+    version = manifest.get('manifest_version', 1)
+
+    if version == 1:
+        # Single-profile manifest
+        if 'component_profile' not in manifest:
+            raise ValueError("Invalid manifest: missing 'component_profile'")
+        profile_fields = ['profile_id', 'profile_hash', 'profile_path']
+        for field in profile_fields:
+            if field not in manifest['component_profile']:
+                raise ValueError(
+                    f"Invalid manifest: missing component_profile.{field}"
+                )
+    elif version == 2:
+        # Multi-profile manifest
+        if 'component_profiles' not in manifest:
+            raise ValueError("Invalid manifest: missing 'component_profiles'")
+        profiles = manifest['component_profiles']
+        if not isinstance(profiles, list) or len(profiles) < 2:
+            raise ValueError("manifest_version=2 requires component_profiles list with 2+ entries")
+        for i, p in enumerate(profiles):
+            for field in ['profile_id', 'profile_hash', 'profile_path']:
+                if field not in p:
+                    raise ValueError(f"Invalid manifest: missing component_profiles[{i}].{field}")
+    else:
+        raise ValueError(f"Unsupported manifest_version: {version}")
 
     return manifest
 
@@ -277,3 +296,76 @@ def validate_manifest_profile(
             raise ValueError(message)
         else:
             print(f"WARNING: {message}")
+
+
+def write_multi_profile_manifest(
+    output_dir: Path,
+    run_id: str,
+    profiles: List[Dict[str, str]],
+    meta_rows: List[Any],
+    label_rows: List[Any],
+    splits: Dict[str, List[str]],
+    script_name: str = "scripts/generate_profile_dataset.py",
+) -> None:
+    """Write a multi-profile dataset manifest (manifest_version 2).
+
+    Args:
+        output_dir: Dataset output directory
+        run_id: Run identifier
+        profiles: List of dicts with keys: profile_id, profile_hash, profile_path
+        meta_rows: List of MetaRow instances
+        label_rows: List of LabelRow instances
+        splits: Dictionary mapping split names to sample IDs
+        script_name: Generator script name for metadata
+    """
+    output_dir = Path(output_dir)
+    manifest_path = output_dir / "dataset_manifest.json"
+
+    git_commit = _get_git_commit()
+
+    class_counts: Dict[str, int] = {}
+    for label_row in label_rows:
+        class_counts[label_row.class_name] = class_counts.get(label_row.class_name, 0) + 1
+
+    split_counts = {k: len(v) for k, v in splits.items()}
+
+    # Profile sample counts
+    profile_counts: Dict[str, int] = {}
+    for label_row in label_rows:
+        pid = getattr(label_row, 'profile_id', '')
+        if pid:
+            profile_counts[pid] = profile_counts.get(pid, 0) + 1
+
+    manifest = {
+        'manifest_version': 2,
+        'created_at': datetime.now().isoformat(),
+        'run_id': run_id,
+
+        'component_profiles': profiles,
+
+        'generator': {
+            'version': '1.0.1',
+            'git_commit': git_commit,
+            'script': script_name,
+        },
+
+        'dataset_stats': {
+            'total_samples': len(meta_rows),
+            'splits': split_counts,
+            'classes': class_counts,
+            'profile_counts': profile_counts,
+        },
+
+        'extend_history': [{
+            'timestamp': datetime.now().isoformat(),
+            'samples_added': len(meta_rows),
+            'git_commit': git_commit,
+        }],
+    }
+
+    temp_path = manifest_path.with_suffix('.tmp')
+    with open(temp_path, 'w') as f:
+        json.dump(manifest, f, indent=2)
+    temp_path.replace(manifest_path)
+
+    print(f"✓ Multi-profile dataset manifest written: {manifest_path}")
