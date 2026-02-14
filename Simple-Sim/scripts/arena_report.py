@@ -9,6 +9,7 @@ Scans:
 
 Writes:
   ARENA_REPORT.md (in sim root)
+  ARENA_REPORT_assets/*.svg (static charts referenced by the markdown)
 """
 
 from __future__ import annotations
@@ -269,6 +270,147 @@ def _md_escape(s: str) -> str:
     return (s or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
+def _xml_escape(s: str) -> str:
+    # Minimal escaping for SVG/XML text nodes/attributes.
+    return (
+        (s or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def _write_svg_barh(
+    out_path: Path,
+    *,
+    title: str,
+    labels: List[str],
+    values: List[float],
+    value_fmt: str = "{:.4f}",
+) -> None:
+    """Write a simple horizontal bar chart as SVG (no external deps)."""
+    if not labels or not values or len(labels) != len(values):
+        return
+
+    # Layout tuned for markdown rendering on Git hosts.
+    w = 980
+    top_pad = 64
+    bot_pad = 28
+    left_pad = 260
+    right_pad = 90
+    row_h = 26
+    bar_h = 14
+
+    n = len(labels)
+    h = top_pad + bot_pad + n * row_h
+
+    vmax = max(values) if values else 0.0
+    vmin = min(values) if values else 0.0
+    if vmax <= 0:
+        vmax = 1.0
+    # If values are extremely close, avoid dividing by ~0. Keep scaling stable.
+    span = max(1e-12, vmax - min(0.0, vmin))
+
+    plot_w = w - left_pad - right_pad
+
+    def x_for(v: float) -> float:
+        # Start bars at 0 baseline.
+        vv = max(0.0, float(v))
+        return left_pad + (vv / (vmax)) * plot_w
+
+    # Colors: readable on white + GitHub markdown.
+    bg = "#ffffff"
+    axis = "#d0d7de"
+    text = "#24292f"
+    bar = "#0969da"
+    bar2 = "#54aeff"
+
+    lines: List[str] = []
+    lines.append('<?xml version="1.0" encoding="UTF-8"?>')
+    lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">')
+    lines.append(f'<rect x="0" y="0" width="{w}" height="{h}" fill="{bg}"/>')
+
+    # Title
+    lines.append(
+        f'<text x="{left_pad}" y="34" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
+        f'font-size="20" font-weight="700" fill="{text}">{_xml_escape(title)}</text>'
+    )
+
+    # Axis baseline
+    y0 = top_pad - 8
+    lines.append(f'<line x1="{left_pad}" y1="{y0}" x2="{w - right_pad}" y2="{y0}" stroke="{axis}" stroke-width="1"/>')
+
+    for i, (lab, val) in enumerate(zip(labels, values), start=0):
+        y = top_pad + i * row_h
+        # Row separator
+        lines.append(
+            f'<line x1="{left_pad}" y1="{y + row_h - 1}" x2="{w - right_pad}" y2="{y + row_h - 1}" '
+            f'stroke="{axis}" stroke-width="1" opacity="0.35"/>'
+        )
+
+        # Label
+        lines.append(
+            f'<text x="{left_pad - 10}" y="{y + 16}" text-anchor="end" '
+            f'font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
+            f'font-size="12" fill="{text}">{_xml_escape(lab)}</text>'
+        )
+
+        # Bar
+        x_end = x_for(val)
+        bw = max(0.0, x_end - left_pad)
+        y_bar = y + (row_h - bar_h) / 2.0
+        lines.append(
+            f'<rect x="{left_pad}" y="{y_bar:.1f}" width="{bw:.1f}" height="{bar_h}" rx="3" fill="{bar if i % 2 == 0 else bar2}"/>'
+        )
+
+        # Value
+        try:
+            vs = value_fmt.format(float(val))
+        except Exception:
+            vs = str(val)
+        lines.append(
+            f'<text x="{w - right_pad + 6}" y="{y + 16}" text-anchor="start" '
+            f'font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
+            f'font-size="12" fill="{text}">{_xml_escape(vs)}</text>'
+        )
+
+    lines.append("</svg>")
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_charts(sim_root: Path, overall: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
+    """Write SVG charts and return markdown-relative paths to embed."""
+    assets_dir = sim_root / "ARENA_REPORT_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    charts: List[Tuple[str, str]] = []
+
+    # Top-N by avg accuracy (overall is already sorted by avg_acc desc).
+    acc_items = [(it["model_name"], it["avg_acc"]) for it in overall if it.get("avg_acc") is not None]
+    acc_items = acc_items[:15]
+    if acc_items:
+        labels = [str(a[0]) for a in acc_items]
+        values = [float(a[1]) for a in acc_items]
+        p = assets_dir / "top_avg_accuracy.svg"
+        _write_svg_barh(p, title="Top Avg Accuracy (Top 15)", labels=labels, values=values, value_fmt="{:.4f}")
+        charts.append(("Top Avg Accuracy", "ARENA_REPORT_assets/top_avg_accuracy.svg"))
+
+    # Top-N by avg F1.
+    f1_items = [(it["model_name"], it["avg_f1"]) for it in overall if it.get("avg_f1") is not None]
+    f1_items.sort(key=lambda t: -float(t[1]))
+    f1_items = f1_items[:15]
+    if f1_items:
+        labels = [str(a[0]) for a in f1_items]
+        values = [float(a[1]) for a in f1_items]
+        p = assets_dir / "top_avg_f1.svg"
+        _write_svg_barh(p, title="Top Avg F1 (Top 15)", labels=labels, values=values, value_fmt="{:.4f}")
+        charts.append(("Top Avg F1", "ARENA_REPORT_assets/top_avg_f1.svg"))
+
+    return charts
+
+
 def _render(
     sim_root: Path,
     tracked: Dict[str, Dict[str, Any]],
@@ -368,6 +510,8 @@ def _render(
         for r in rows:
             dataset_to_models.setdefault(r.dataset_name, []).append((model_abs, r))
 
+    charts = _write_charts(sim_root, overall)
+
     lines: List[str] = []
     lines.append("# Model Arena Report")
     lines.append(f"> Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -382,6 +526,15 @@ def _render(
         if len(missing) > 20:
             lines.append(f"- ... (+{len(missing) - 20} more)")
         lines.append("")
+
+    if charts:
+        lines.append("## Charts")
+        lines.append("")
+        for title, rel_path in charts:
+            lines.append(f"### {title}")
+            lines.append("")
+            lines.append(f"![{_md_escape(title)}]({rel_path})")
+            lines.append("")
 
     lines.append("## Overall Ranking")
     lines.append("")
