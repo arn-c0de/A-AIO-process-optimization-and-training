@@ -158,6 +158,7 @@ class MergeTab(BaseTab):
         bundle_btns = ttk.Frame(bundles_frame)
         bundle_btns.pack(fill="x", pady=(6, 0))
         ttk.Button(bundle_btns, text="Bundle Info", command=self._show_bundle_info).pack(side="left")
+        ttk.Button(bundle_btns, text="Load Into Selection", command=self._load_bundle_into_selection).pack(side="left", padx=(8, 0))
         ttk.Button(bundle_btns, text="Delete Bundle", command=self._delete_bundle).pack(side="left", padx=(8, 0))
 
         # Logs
@@ -261,6 +262,19 @@ class MergeTab(BaseTab):
         cand.extend(sorted(root.glob("*.pt")))
         cand.extend(sorted((root / "versions").glob("**/*.pt")))
         cand.extend(sorted((root / "imports").glob("*.pt")))
+        # Include checkpoints inside bundles so they can be selected/re-merged.
+        # Bundles are directories like <name>.bundle or outputs/models/bundles/<name>/.
+        bundle_dirs: List[Path] = []
+        for p in sorted(root.glob("*.bundle")):
+            if is_bundle_dir(p):
+                bundle_dirs.append(p)
+        bundles_subdir = root / "bundles"
+        if bundles_subdir.exists():
+            for p in sorted(bundles_subdir.iterdir()):
+                if is_bundle_dir(p):
+                    bundle_dirs.append(p)
+        for bd in bundle_dirs:
+            cand.extend(sorted(bd.glob("*.pt")))
 
         # Deduplicate
         uniq: Dict[str, Path] = {}
@@ -735,6 +749,44 @@ class MergeTab(BaseTab):
         text.insert("1.0", info)
         text.config(state="disabled")
         ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
+
+    def _load_bundle_into_selection(self) -> None:
+        """Load per-profile checkpoints from the selected bundle into the merge selection.
+
+        This allows re-bundling an existing bundle (or using it as a starting point).
+        """
+        sel = self.bundle_tree.selection()
+        if not sel:
+            messagebox.showinfo("Info", "Select a bundle first.")
+            return
+
+        bd = Path(sel[0])
+        if not bd.exists():
+            messagebox.showerror("Error", f"Bundle not found:\n{bd}")
+            return
+
+        meta = read_bundle_meta(bd)
+        loaded = 0
+        if meta and meta.checkpoints:
+            for pid, fname in sorted(meta.checkpoints.items()):
+                p = bd / fname
+                if p.exists():
+                    self._selected_weights[str(pid)] = p
+                    loaded += 1
+        else:
+            # Fallback: infer profile_id from checkpoint metadata.
+            for p in sorted(bd.glob("*.pt")):
+                pid, _phash, _acc, _f1 = self._load_model_meta(p)
+                if pid and pid != "multi":
+                    self._selected_weights[str(pid)] = p
+                    loaded += 1
+
+        if loaded <= 0:
+            messagebox.showwarning("No checkpoints", f"No usable checkpoints found in:\n{bd}")
+            return
+
+        self._rebuild_tree()
+        self._append_log(f"[bundle] loaded {loaded} checkpoint(s) into selection from {bd.name}\n")
 
     def _delete_bundle(self) -> None:
         """Delete the selected bundle."""

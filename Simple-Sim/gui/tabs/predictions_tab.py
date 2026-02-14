@@ -543,7 +543,7 @@ class PredictionsTab(BaseTab):
         ]
 
     def _refresh_models(self) -> None:
-        # List available checkpoints including snapshots.
+        # List available checkpoints including snapshots and bundle directories.
         cand: List[Path] = []
         for root in self._model_search_paths():
             if not root.exists():
@@ -552,12 +552,17 @@ class PredictionsTab(BaseTab):
                 cand.extend(sorted(root.glob("**/*.pt")))
             else:
                 cand.extend(sorted(root.glob("*.pt")))
+                # Bundles can exist as <name>.bundle dirs or under outputs/models/bundles/<name>/.
+                cand.extend([p for p in sorted(root.glob("*.bundle")) if p.is_dir()])
+                bundles_subdir = root / "bundles"
+                if bundles_subdir.exists():
+                    cand.extend([p for p in sorted(bundles_subdir.iterdir()) if p.is_dir()])
 
         # Dedup + sort
         uniq: Dict[str, Path] = {}
         for p in cand:
             try:
-                if p.is_file():
+                if p.is_file() or p.is_dir():
                     uniq[str(p.resolve())] = p
             except Exception:
                 continue
