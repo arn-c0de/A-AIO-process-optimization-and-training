@@ -104,7 +104,24 @@ def build_dataset(data_dir: Path, split: str, class_names: List[str], return_id:
 
 
 def _now_tag() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Include microseconds so repeated runs within the same second never collide.
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+
+def _unique_path(p: Path) -> Path:
+    """Return a non-existing path by appending an incrementing suffix if needed."""
+    p = Path(p)
+    if not p.exists():
+        return p
+    stem = p.stem
+    suf = p.suffix
+    parent = p.parent
+    for i in range(1, 10000):
+        cand = parent / f"{stem}_{i:03d}{suf}"
+        if not cand.exists():
+            return cand
+    # Extremely unlikely; fall back to ns timestamp.
+    return parent / f"{stem}_{time.time_ns()}{suf}"
 
 
 def load_previous_reports(search_dirs: List[Path], model_stem: str) -> List[Dict[str, Any]]:
@@ -359,8 +376,8 @@ def main() -> None:
 
     tag = _now_tag()
     model_stem = requested_model_path.stem
-    report_path = out_dir / f"batch_report_{model_stem}_{args.split}_{tag}.json"
-    preds_path = out_dir / f"batch_preds_{model_stem}_{args.split}_{tag}.jsonl"
+    report_path = _unique_path(out_dir / f"batch_report_{model_stem}_{args.split}_{tag}.json")
+    preds_path = _unique_path(out_dir / f"batch_preds_{model_stem}_{args.split}_{tag}.jsonl")
 
     report = {
         "timestamp": datetime.now().isoformat(),
