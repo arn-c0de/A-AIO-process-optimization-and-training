@@ -62,6 +62,7 @@ class PredictionsTab(BaseTab):
         self.combo_model: ttk.Combobox
 
         self._dataset_dirs: List[Path] = []
+        self._dataset_by_label: Dict[str, Path] = {}
 
         self._ui_tick_id: Optional[str] = None
 
@@ -69,8 +70,8 @@ class PredictionsTab(BaseTab):
         # Use a grid so the start/stop buttons remain visible even on narrower windows.
         top = ttk.Frame(self.frame)
         top.pack(fill="x", pady=(0, 8))
-        top.columnconfigure(1, weight=1)
-        top.columnconfigure(3, weight=1)
+        top.columnconfigure(1, weight=1)  # dataset combo
+        top.columnconfigure(4, weight=1)  # model combo
 
         ttk.Label(top, text="Dataset:").grid(row=0, column=0, sticky="w")
         self.var_dataset = tk.StringVar(value="")
@@ -80,16 +81,16 @@ class PredictionsTab(BaseTab):
         ToolTip(self.combo_dataset, text_func=lambda: self.var_dataset.get())
         ttk.Button(top, text="↻", width=3, command=self._refresh_datasets).grid(row=0, column=2, sticky="w", padx=(0, 12))
 
-        ttk.Label(top, text="Model:").grid(row=0, column=2, sticky="w")
+        ttk.Label(top, text="Model:").grid(row=0, column=3, sticky="w")
         self.var_model = tk.StringVar(value="")
         self.combo_model = ttk.Combobox(top, textvariable=self.var_model, state="readonly")
-        self.combo_model.grid(row=0, column=3, sticky="ew", padx=(6, 6))
-        ttk.Button(top, text="↻", width=3, command=self._refresh_models).grid(row=0, column=4, sticky="w", padx=(0, 12))
+        self.combo_model.grid(row=0, column=4, sticky="ew", padx=(6, 6))
+        ttk.Button(top, text="↻", width=3, command=self._refresh_models).grid(row=0, column=5, sticky="w", padx=(0, 12))
 
         self.btn_run = ttk.Button(top, text="Start Predictions", command=self._run_predictions, width=16)
-        self.btn_run.grid(row=0, column=5, sticky="e")
+        self.btn_run.grid(row=0, column=6, sticky="e")
         self.btn_stop = ttk.Button(top, text="Stop", command=self._stop_predictions, state="disabled", width=8)
-        self.btn_stop.grid(row=0, column=6, sticky="e", padx=(8, 0))
+        self.btn_stop.grid(row=0, column=7, sticky="e", padx=(8, 0))
 
         opts = ttk.Frame(self.frame)
         opts.pack(fill="x", pady=(0, 8))
@@ -205,6 +206,11 @@ class PredictionsTab(BaseTab):
         self._refresh_datasets()
         self._refresh_models()
         self._load_persisted_settings()
+        # Persisted dataset selection is loaded after the initial refresh; sync state now.
+        try:
+            self._on_dataset_selected()
+        except Exception:
+            pass
         self._wire_settings_autosave()
         self._tick_ui()
 
@@ -212,7 +218,19 @@ class PredictionsTab(BaseTab):
         if not self.state.dataset_dir:
             return
         # Keep combobox showing the dataset name, not the full path.
-        self.var_dataset.set(self.state.dataset_dir.name)
+        # Prefer matching the current dropdown label if we already have a mapping.
+        try:
+            if self._dataset_by_label:
+                for label, p in self._dataset_by_label.items():
+                    if p == self.state.dataset_dir:
+                        self.var_dataset.set(label)
+                        break
+                else:
+                    self.var_dataset.set(self.state.dataset_dir.name)
+            else:
+                self.var_dataset.set(self.state.dataset_dir.name)
+        except Exception:
+            self.var_dataset.set(self.state.dataset_dir.name)
         # Refresh dropdowns to include the current dataset/model.
         try:
             self._refresh_datasets()
@@ -484,42 +502,48 @@ class PredictionsTab(BaseTab):
                 pass
             return p.name
 
-        names = [display(p) for p in cand]
-        self.combo_dataset["values"] = names
+        self._dataset_by_label = {}
+        labels: List[str] = []
+        seen: Dict[str, int] = {}
+        for p in cand:
+            base = display(p)
+            n = seen.get(base, 0) + 1
+            seen[base] = n
+            label = base if n == 1 else f"{base} ({n})"
+            labels.append(label)
+            self._dataset_by_label[label] = p
+
+        self.combo_dataset["values"] = labels
 
         # Keep current selection if still valid.
-        if self.var_dataset.get() in names:
+        cur = self.var_dataset.get().strip()
+        if cur and cur in self._dataset_by_label:
+            # Ensure state follows the UI selection (important after loading persisted settings).
+            self.state.dataset_dir = self._dataset_by_label[cur]
             return
 
         # Prefer current state.dataset_dir
         if self.state.dataset_dir:
             want = display(self.state.dataset_dir)
-            if want in names:
-                self.var_dataset.set(want)
-                return
+            # Might have been disambiguated.
+            for label, p in self._dataset_by_label.items():
+                if p == self.state.dataset_dir:
+                    self.var_dataset.set(label)
+                    return
+                if label == want:
+                    self.var_dataset.set(label)
+                    return
 
-        if names:
-            self.var_dataset.set(names[0])
+        if labels:
+            self.var_dataset.set(labels[0])
             self._on_dataset_selected()
 
     def _selected_dataset_dir(self) -> Optional[Path]:
         disp = self.var_dataset.get().strip()
         if not disp:
             return None
-        for p in self._dataset_dirs:
-            if p.name == disp:
-                return p
-            # versions display: group:snap
-            try:
-                sim_data = self._datasets_base()
-                versions = (sim_data / "versions").resolve()
-                rp = p.resolve()
-                if str(rp).startswith(str(versions) + os.sep):
-                    if disp == f"{rp.parent.name}:{rp.name}":
-                        return p
-            except Exception:
-                pass
-        return None
+        p = self._dataset_by_label.get(disp)
+        return p if p and p.exists() else None
 
     def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
         ds = self._selected_dataset_dir()
