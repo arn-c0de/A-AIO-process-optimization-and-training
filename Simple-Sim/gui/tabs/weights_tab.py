@@ -11,6 +11,7 @@ import threading
 import time
 import tkinter as tk
 import re
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog
@@ -1253,8 +1254,12 @@ class WeightsTab(BaseTab):
 
     def _import_model(self) -> None:
         src = filedialog.askopenfilename(
-            title="Import model checkpoint (.pt)",
-            filetypes=[("PyTorch checkpoint", "*.pt"), ("All files", "*.*")]
+            title="Import model (.pt) or bundle (.zip)",
+            filetypes=[
+                ("PyTorch checkpoint", "*.pt"),
+                ("Bundle archive", "*.zip"),
+                ("All files", "*.*"),
+            ],
         )
         if not src:
             return
@@ -1262,9 +1267,85 @@ class WeightsTab(BaseTab):
         if not src_p.exists():
             return
 
+        tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Bundle import (.zip): extract into outputs/models/bundles/<name>.bundle/
+        if src_p.suffix.lower() == ".zip":
+            bundles_dir = self._model_root() / "bundles"
+            bundles_dir.mkdir(parents=True, exist_ok=True)
+
+            # Prefer keeping a ".bundle" suffix in the extracted folder name.
+            stem = src_p.stem  # "foo.bundle" if file is foo.bundle.zip
+            if not stem.endswith(".bundle"):
+                stem = f"{stem}.bundle"
+            dst = bundles_dir / f"{tag}_{stem}"
+
+            # Avoid collisions.
+            if dst.exists():
+                for i in range(1, 1000):
+                    cand = bundles_dir / f"{tag}_{src_p.stem}_{i:03d}.bundle"
+                    if not cand.exists():
+                        dst = cand
+                        break
+
+            tmp = bundles_dir / f".tmp_import_{tag}"
+            try:
+                if tmp.exists():
+                    shutil.rmtree(tmp)
+                tmp.mkdir(parents=True, exist_ok=True)
+
+                with zipfile.ZipFile(src_p, "r") as zf:
+                    members = zf.namelist()
+                    if not members:
+                        raise ValueError("Empty zip archive")
+
+                    # Safe extract: prevent absolute paths and path traversal.
+                    for m in members:
+                        mp = Path(m)
+                        if mp.is_absolute() or ".." in mp.parts:
+                            raise ValueError(f"Unsafe path in zip: {m}")
+                    zf.extractall(tmp)
+
+                # If zip contains a single top-level dir, use it; else use tmp itself.
+                kids = [p for p in tmp.iterdir()]
+                top_dirs = [p for p in kids if p.is_dir()]
+                extracted_root = tmp
+                if len(kids) == 1 and kids[0].is_dir():
+                    extracted_root = kids[0]
+
+                # If extracted_root isn't bundle-like, but contains exactly one *.bundle dir, use that.
+                if not extracted_root.name.endswith(".bundle"):
+                    bundle_dirs = [p for p in extracted_root.iterdir() if p.is_dir() and p.name.endswith(".bundle")]
+                    if len(bundle_dirs) == 1:
+                        extracted_root = bundle_dirs[0]
+
+                pts = list(extracted_root.glob("*.pt"))
+                if not pts:
+                    raise ValueError("Bundle archive contains no .pt checkpoints at the expected level")
+
+                # Move into place.
+                shutil.move(str(extracted_root), str(dst))
+            except Exception as e:
+                try:
+                    if dst.exists():
+                        shutil.rmtree(dst)
+                except Exception:
+                    pass
+                messagebox.showerror("Error", f"Bundle import failed:\n{e}")
+                return
+            finally:
+                try:
+                    if tmp.exists():
+                        shutil.rmtree(tmp)
+                except Exception:
+                    pass
+
+            self._append_log(f"[import] bundle {src_p} -> {dst}\n")
+            self._refresh_models()
+            return
+
+        # Default: single checkpoint import (.pt)
         dst_dir = self._model_root() / "imports"
         dst_dir.mkdir(parents=True, exist_ok=True)
-        tag = datetime.now().strftime("%Y%m%d_%H%M%S")
         dst = dst_dir / f"{tag}_{src_p.name}"
         try:
             shutil.copy2(src_p, dst)
