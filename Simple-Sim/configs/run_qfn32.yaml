@@ -13,8 +13,7 @@ classes:
   OK: 200
   MISSING: 200
   MISALIGNED: 200
-  SOLDER_BRIDGE: 200
-  CORNER_LIFT: 200
+  TOMBSTONE: 200
 
 domains:
   domain_A:
@@ -55,4 +54,4 @@ eval:
   batch_size: 64
   num_workers: 0
   metrics: ['accuracy', 'precision', 'recall', 'f1', 'confusion_matrix']
-  critical_classes: ['MISSING', 'MISALIGNED', 'SOLDER_BRIDGE', 'CORNER_LIFT']
+  critical_classes: ['MISSING', 'MISALIGNED', 'TOMBSTONE']
