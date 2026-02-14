@@ -23,11 +23,26 @@ def draw_defect_overlay(img: np.ndarray, defect_params: Dict[str, Any],
     h, w = img.shape[:2]
     center_x, center_y = w // 2, h // 2
 
-    defect_type = defect_params.get('type', 'OK')
+    defect_type = str(defect_params.get('type', 'OK') or 'OK')
     shift_x = defect_params.get('shift_x', 0.0)
     shift_y = defect_params.get('shift_y', 0.0)
     rotation_deg = defect_params.get('rotation_deg', 0.0)
     tilt_deg = defect_params.get('tilt_deg', 0.0)
+
+    def _label(text: str, *, color: tuple[int, int, int], xy: tuple[int, int] = (10, 30)) -> None:
+        # Readable label with a subtle backing box (works on bright/dark ROIs).
+        x, y = xy
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.8
+        thick = 2
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+        pad = 4
+        x0 = max(0, x - pad)
+        y0 = max(0, y - th - pad)
+        x1 = min(w - 1, x + tw + pad)
+        y1 = min(h - 1, y + pad)
+        cv2.rectangle(img_overlay, (x0, y0), (x1, y1), (0, 0, 0), -1)
+        cv2.putText(img_overlay, text, (x, y), font, scale, color, thick)
 
     if defect_type == 'OK':
         # Green checkmark at component center
@@ -44,8 +59,7 @@ def draw_defect_overlay(img: np.ndarray, defect_params: Dict[str, Any],
         cv2.line(img_overlay, check_pt2, check_pt3, color, thickness)
 
         # Label
-        cv2.putText(img_overlay, 'OK', (center_x + size, center_y - size//2),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+        _label('OK', color=color, xy=(center_x + size, max(25, center_y - size // 2)))
 
     elif defect_type == 'MISSING':
         # Red X mark at expected location
@@ -64,8 +78,7 @@ def draw_defect_overlay(img: np.ndarray, defect_params: Dict[str, Any],
                 color, thickness)
 
         # Label
-        cv2.putText(img_overlay, 'MISSING', (center_x + size, center_y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+        _label('MISSING', color=color, xy=(center_x + size, max(25, center_y)))
 
     elif defect_type == 'MISALIGNED':
         # Yellow arrow showing shift vector + rotation arc
@@ -108,8 +121,7 @@ def draw_defect_overlay(img: np.ndarray, defect_params: Dict[str, Any],
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         # Main label
-        cv2.putText(img_overlay, 'MISALIGNED',
-                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+        _label('MISALIGNED', color=color, xy=(10, 30))
 
     elif defect_type == 'TOMBSTONE':
         # Purple vertical bar with tilt angle label
@@ -153,10 +165,35 @@ def draw_defect_overlay(img: np.ndarray, defect_params: Dict[str, Any],
         cv2.polylines(img_overlay, [pts], True, color, 2)
 
         # Labels
-        cv2.putText(img_overlay, 'TOMBSTONE',
-                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-        cv2.putText(img_overlay, f'tilt: {tilt_deg:.1f}°',
-                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        _label('TOMBSTONE', color=color, xy=(10, 30))
+        _label(f'tilt: {tilt_deg:.1f}°', color=color, xy=(10, 60))
+
+    elif defect_type == 'SOLDER_BRIDGE':
+        # Red "bridge" bar across the component area. (We don't rely on footprint-specific pad geometry here.)
+        color = (0, 0, 255)  # Red
+        thickness = 10
+        y = center_y
+        x0 = max(10, center_x - int(0.35 * w))
+        x1 = min(w - 10, center_x + int(0.35 * w))
+        cv2.line(img_overlay, (x0, y), (x1, y), color, thickness)
+        _label('SOLDER_BRIDGE', color=color, xy=(10, 30))
+
+    elif defect_type == 'CORNER_LIFT':
+        # Orange corner marker + tilt label.
+        color = (0, 165, 255)  # Orange (BGR)
+        t = 4
+        size = max(18, min(w, h) // 8)
+        # Draw a highlighted top-right corner "lift"
+        cx, cy = min(w - 5, center_x + size), max(5, center_y - size)
+        pts = np.array([[cx, cy], [cx + size, cy], [cx + size, cy + size]], dtype=np.int32)
+        cv2.polylines(img_overlay, [pts], True, color, t)
+        _label('CORNER_LIFT', color=color, xy=(10, 30))
+        _label(f'tilt: {tilt_deg:.1f}°', color=color, xy=(10, 60))
+
+    else:
+        # Fallback: always show the class label even if we don't have a bespoke icon yet.
+        color = (255, 255, 0)  # Cyan-ish (BGR)
+        _label(defect_type, color=color, xy=(10, 30))
 
     return img_overlay
 
