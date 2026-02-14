@@ -116,6 +116,8 @@ class WeightsTab(BaseTab):
 
         tree_frame = ttk.Frame(left)
         tree_frame.pack(fill="both", expand=True)
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
 
         self.tree = ttk.Treeview(
             tree_frame,
@@ -139,10 +141,12 @@ class WeightsTab(BaseTab):
         self.tree.column("Group", width=120, anchor="w")
         self.tree.tag_configure("group_header", font=("TkDefaultFont", 10, "bold"))
 
-        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
+        scroll_y = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        scroll_x = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         # Right-click context menu for quick actions (delete/export/activate).
         self.tree.bind("<Button-3>", self._on_models_right_click)
@@ -289,6 +293,8 @@ class WeightsTab(BaseTab):
 
         rep_tree_frame = ttk.Frame(repbox)
         rep_tree_frame.pack(fill="both", expand=True)
+        rep_tree_frame.columnconfigure(0, weight=1)
+        rep_tree_frame.rowconfigure(0, weight=1)
 
         self.tree_reports = ttk.Treeview(
             rep_tree_frame,
@@ -313,10 +319,12 @@ class WeightsTab(BaseTab):
         self.tree_reports.column("Dataset", width=120, anchor="w")
         self.tree_reports.column("Path", width=380, anchor="w")
 
-        rep_scroll = ttk.Scrollbar(rep_tree_frame, orient="vertical", command=self.tree_reports.yview)
-        self.tree_reports.configure(yscrollcommand=rep_scroll.set)
-        self.tree_reports.pack(side="left", fill="both", expand=True)
-        rep_scroll.pack(side="right", fill="y")
+        rep_scroll_y = ttk.Scrollbar(rep_tree_frame, orient="vertical", command=self.tree_reports.yview)
+        rep_scroll_x = ttk.Scrollbar(rep_tree_frame, orient="horizontal", command=self.tree_reports.xview)
+        self.tree_reports.configure(yscrollcommand=rep_scroll_y.set, xscrollcommand=rep_scroll_x.set)
+        self.tree_reports.grid(row=0, column=0, sticky="nsew")
+        rep_scroll_y.grid(row=0, column=1, sticky="ns")
+        rep_scroll_x.grid(row=1, column=0, sticky="ew")
 
         ttk.Label(right, text="Logs / Output").pack(anchor="w")
         self.txt = tk.Text(right, height=14, wrap="none")
