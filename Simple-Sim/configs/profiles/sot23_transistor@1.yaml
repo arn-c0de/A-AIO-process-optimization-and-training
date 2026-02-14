@@ -1,3 +1,29 @@
+# Component Profile (Schema v1)
+#
+# This file defines a *versioned* component profile used by the generation pipeline.
+# It is selected via `run.component_profile: sot23_transistor@1` in a run config and
+# loaded by `scripts/generate.py` from `configs/profiles/`.
+#
+# What the code uses from this profile (current implementation):
+# - `component.footprint` is written into `meta.jsonl` as `footprint`.
+# - `geometry_ranges` drives nominal geometry sampling in `simple_sim/generator_2d.py`.
+# - `tolerances` drives defect parameter sampling + class labeling in `simple_sim/defects.py`
+#   and also affects tombstone rendering threshold in `simple_sim/generator_2d.py`.
+# - `render.component_color_bgr` is merged into `render.component_color` if the run config
+#   does not specify a component color (schema v2 behavior).
+#
+# Units and conventions:
+# - `geometry_ranges` values are in *pixels* at the ROI scaling (`roi.mm_per_px`) used by
+#   the run config. If you change `roi.mm_per_px`, you usually must re-tune these ranges.
+# - `tolerances.ok_shift_px` is pixels; `ok_rotation_deg` and `tombstone_tilt_deg` are degrees.
+# - Colors are BGR order (OpenCV convention): [blue, green, red], each 0..255.
+#
+# Versioning and hashing:
+# - The pipeline computes a deterministic SHA256 hash for this file (excluding metadata
+#   fields like `profile.description` and `profile.created_at`). Any semantic changes to
+#   geometry/tolerances/defect_set will change the hash and will be rejected when extending
+#   existing datasets. Create a new profile version (e.g. `...@2`) for such changes.
+#
 profile:
   profile_id: sot23_transistor@1
   schema_version: 1
