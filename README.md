@@ -7,6 +7,7 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 ![Simple-Sim Pipeline Dashboard](Simple-Sim/images/pipeline-dashboard-simple-sim-v1.0.png)
 
 - [`Simple-Sim`](Simple-Sim/README.md): synthetic dataset generation + training + evaluation
+- Sample images: [`Simple-Sim/SAMPLE_GALLERY.md`](Simple-Sim/SAMPLE_GALLERY.md)
 
 ## License
 
