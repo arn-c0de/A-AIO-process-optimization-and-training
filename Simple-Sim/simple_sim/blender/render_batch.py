@@ -91,9 +91,10 @@ def _mk_plane(name: str, *, size_xy: Tuple[float, float], loc_xyz: Tuple[float, 
     return obj
 
 
-def _look_at(obj: bpy.types.Object, target: Vector) -> None:
+def _look_at(obj: bpy.types.Object, target: Vector, *, track_axis: str = "-Z", up_axis: str = "Y") -> None:
+    """Point an object at a target location."""
     direction = target - obj.location
-    rot_quat = direction.to_track_quat("-Z", "Y")
+    rot_quat = direction.to_track_quat(track_axis, up_axis)
     obj.rotation_euler = rot_quat.to_euler()
 
 
@@ -151,6 +152,23 @@ def _configure_cycles(*, width_px: int, height_px: int, samples: int, seed: int,
         scene.cycles.device = "CPU" if str(device).upper() == "CPU" else "GPU"
     except Exception:
         scene.cycles.device = "CPU"
+
+    # Setup world environment for realistic lighting
+    world = scene.world
+    if world is None:
+        world = bpy.data.worlds.new("World")
+        scene.world = world
+    world.use_nodes = True
+    world_nodes = world.node_tree.nodes
+    world_nodes.clear()
+
+    # Environment texture (subtle gradient)
+    node_bg = world_nodes.new(type="ShaderNodeBackground")
+    node_bg.inputs["Color"].default_value = (0.15, 0.15, 0.18, 1.0)  # Subtle gray-blue
+    node_bg.inputs["Strength"].default_value = 0.4  # Subtle ambient light
+
+    node_output = world_nodes.new(type="ShaderNodeOutputWorld")
+    world.node_tree.links.new(node_bg.outputs["Background"], node_output.inputs["Surface"])
 
     return scene
 
@@ -228,24 +246,29 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
     key = light_cfg.get("key_light") or {}
     fill = light_cfg.get("fill_light") or {}
 
-    def add_area(name: str, loc_mm, power_w: float, size_mm: float) -> None:
+    def add_area(name: str, loc_mm, power_w: float, size_mm: float, target_mm=(0.0, 0.0, 0.0)) -> None:
         bpy.ops.object.light_add(type="AREA", location=(float(loc_mm[0]), float(loc_mm[1]), float(loc_mm[2])))
         l = bpy.context.active_object
         l.name = name
         l.data.energy = float(power_w)
         l.data.size = float(size_mm)
+        # Point the light at the target
+        _look_at(l, Vector(target_mm), track_axis="-Z", up_axis="Y")
 
+    target = Vector((0.0, 0.0, pad_th + comp_h / 2.0 if comp_obj else 0.0))
     add_area(
         "key_light",
         key.get("location_mm", [4.0, -4.0, 10.0]),
         float(key.get("power_w", 300.0)),
         float(key.get("size_mm", 10.0)),
+        target,
     )
     add_area(
         "fill_light",
         fill.get("location_mm", [-4.0, 4.0, 8.0]),
         float(fill.get("power_w", 120.0)),
         float(fill.get("size_mm", 12.0)),
+        target,
     )
 
     # Camera
