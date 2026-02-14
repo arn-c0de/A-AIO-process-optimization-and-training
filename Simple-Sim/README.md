@@ -13,7 +13,7 @@ Synthetic AOI-style ROI generation + training/evaluation pipeline for PCB compon
 
 See [Sample Gallery](SAMPLE_GALLERY.md) for auto-generated reference images with defect overlays from all available datasets and profiles.
 
-See Latest Arena stats : [’Simple-Sim/ARENA_REPORT.md’](Simple-Sim/ARENA_REPORT.md)
+See Latest Arena stats : [Simple-Sim/ARENA_REPORT.md](Simple-Sim/ARENA_REPORT.md)
 
 
 ## Overview
