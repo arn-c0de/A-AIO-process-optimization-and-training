@@ -233,27 +233,29 @@ def main() -> None:
                     help="Comma-separated list of dirs to search for reports (default: outputs/models and outputs/models/history)")
     args = ap.parse_args()
 
-    model_path = Path(args.model)
+    requested_model_path = Path(args.model)
     data_dir = Path(args.data)
     device = torch.device(args.device)
 
     # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
-    if model_path.exists() and model_path.is_dir():
+    effective_model_path = requested_model_path
+    dataset_profile_id: Optional[str] = None
+    if requested_model_path.exists() and requested_model_path.is_dir():
         manifest_path = data_dir / "dataset_manifest.json"
         if not manifest_path.exists():
             raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
         manifest = read_dataset_manifest(manifest_path)
         dataset_profile_id = manifest["component_profile"]["profile_id"]
-        resolved = bundle_checkpoint_path(model_path, dataset_profile_id, kind="best")
+        resolved = bundle_checkpoint_path(requested_model_path, dataset_profile_id, kind="best")
         if not resolved.exists():
             raise FileNotFoundError(
                 f"Multi-model bundle has no checkpoint for profile '{dataset_profile_id}':\n"
-                f"  bundle: {model_path}\n"
+                f"  bundle: {requested_model_path}\n"
                 f"  expected: {resolved}"
             )
-        model_path = resolved
+        effective_model_path = resolved
 
-    model, class_names, checkpoint = load_checkpoint_model(model_path, device)
+    model, class_names, checkpoint = load_checkpoint_model(effective_model_path, device)
     cfg = checkpoint.get("config", {}) or {}
     eval_cfg = (cfg.get("eval") or {}) if isinstance(cfg, dict) else {}
 
@@ -340,7 +342,9 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("BATCH PREDICT REPORT")
     print("=" * 60)
-    print(f"Model:       {model_path}")
+    print(f"Model:       {requested_model_path}")
+    if effective_model_path.resolve() != requested_model_path.resolve():
+        print(f"Resolved:    {effective_model_path}")
     print(f"Dataset:     {data_dir}")
     print(f"Split:       {args.split}")
     print(f"Seen:        {seen}")
@@ -350,19 +354,23 @@ def main() -> None:
     print(format_metrics(metrics, class_names))
 
     # Write outputs
-    out_dir = Path(args.out_dir) if args.out_dir else (model_path.parent / "history")
+    out_dir = Path(args.out_dir) if args.out_dir else (requested_model_path.parent / "history")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     tag = _now_tag()
-    model_stem = model_path.stem
+    model_stem = requested_model_path.stem
     report_path = out_dir / f"batch_report_{model_stem}_{args.split}_{tag}.json"
     preds_path = out_dir / f"batch_preds_{model_stem}_{args.split}_{tag}.jsonl"
 
     report = {
         "timestamp": datetime.now().isoformat(),
         "mode": "batch_predict",
-        "model_path": str(model_path),
+        # Persist the *requested* model path for history grouping.
+        # For bundles, this is the bundle directory; the resolved per-profile checkpoint is stored separately.
+        "model_path": str(requested_model_path),
         "model_stem": model_stem,
+        "resolved_model_path": str(effective_model_path) if str(effective_model_path) != str(requested_model_path) else None,
+        "bundle_profile_id": dataset_profile_id,
         "dataset_path": str(data_dir),
         "split": args.split,
         "seen_samples": int(seen),
@@ -389,12 +397,15 @@ def main() -> None:
     if args.history_dirs:
         compare_dirs = [Path(p.strip()) for p in args.history_dirs.split(",") if p.strip()]
     else:
-        compare_dirs = [model_path.parent, model_path.parent / "history"]
+        compare_dirs = [requested_model_path.parent, requested_model_path.parent / "history"]
 
     all_prev = load_all_reports(compare_dirs)
     # Scope filters
     if args.history_scope == "model":
-        all_prev = [r for r in all_prev if r.get("model_stem") == model_stem or _basename(r.get("model_path")) == model_path.name]
+        all_prev = [
+            r for r in all_prev
+            if r.get("model_stem") == model_stem or _basename(r.get("model_path")) == requested_model_path.name
+        ]
     elif args.history_scope == "dataset":
         all_prev = [r for r in all_prev if r.get("dataset_path") == str(data_dir)]
 
