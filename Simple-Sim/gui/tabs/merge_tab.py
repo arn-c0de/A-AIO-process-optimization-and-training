@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .base_tab import BaseTab
 from gui.state import UiState
+from gui.utils.settings_store import SettingsStore
 from simple_sim.model_bundle import (
     bundle_checkpoint_path,
     upsert_bundle_meta,
@@ -37,6 +38,10 @@ class MergeTab(BaseTab):
         self._iid_to_model: Dict[str, Tuple[str, Path]] = {}  # iid -> (profile_id, path)
         # Cache: resolved_path -> (profile_id, profile_hash, val_accuracy, val_f1)
         self._model_meta_cache: Dict[str, Tuple[Optional[str], Optional[str], Optional[float], Optional[float]]] = {}
+        # Group data (shared with weights tab via settings store + favorites.json)
+        self._favorites: Dict[str, Dict[str, Any]] = {}
+        self._group_assignments: Dict[str, str] = {}
+        self._custom_groups: List[str] = []
 
     def build_ui(self) -> None:
         top = ttk.Frame(self.frame)
@@ -77,6 +82,7 @@ class MergeTab(BaseTab):
         self.tree.heading("Hash", text="Profile Hash")
         self.tree.column("Hash", width=110, anchor="w")
         self.tree.tag_configure("profile_header", font=("TkDefaultFont", 10, "bold"))
+        self.tree.tag_configure("group_header", font=("TkDefaultFont", 9, "italic"))
         self.tree.tag_configure("selected_weight", foreground="green")
 
         scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
@@ -173,8 +179,81 @@ class MergeTab(BaseTab):
     def _model_root(self) -> Path:
         return self.sim_root / "outputs" / "models"
 
+    def _rel(self, p: Path) -> str:
+        try:
+            return str(p.resolve().relative_to(self.sim_root.resolve()))
+        except Exception:
+            return str(p)
+
+    def _load_group_data(self) -> None:
+        """Load favorites and group assignments (same data as weights tab)."""
+        # Favorites from favorites.json
+        self._favorites.clear()
+        fav_path = self._model_root() / "favorites.json"
+        if fav_path.exists():
+            try:
+                obj = json.loads(fav_path.read_text(encoding="utf-8"))
+                if isinstance(obj, dict):
+                    for it in (obj.get("favorites") or []):
+                        if isinstance(it, dict):
+                            rp = str(it.get("path") or "").strip()
+                            if rp:
+                                self._favorites[rp] = it
+            except Exception:
+                pass
+
+        # Group assignments and custom groups from settings store
+        self._group_assignments.clear()
+        self._custom_groups.clear()
+        try:
+            st = SettingsStore(self.sim_root)
+            custom_raw = st.get("weights.custom_groups")
+            if isinstance(custom_raw, str):
+                parsed = json.loads(custom_raw)
+                if isinstance(parsed, list):
+                    self._custom_groups = [str(k) for k in parsed if isinstance(k, str) and k]
+            assign_raw = st.get("weights.group_assignments")
+            if isinstance(assign_raw, str):
+                parsed = json.loads(assign_raw)
+                if isinstance(parsed, dict):
+                    self._group_assignments = {str(k): str(v) for k, v in parsed.items() if k and v}
+        except Exception:
+            pass
+
+    def _available_groups(self) -> List[str]:
+        names: List[str] = ["Favorites", "Snapshots", "Imports"]
+        for custom in self._custom_groups:
+            if custom and custom not in names:
+                names.append(custom)
+        for val in sorted(set(self._group_assignments.values())):
+            if val and val not in names:
+                names.append(val)
+        if "Uncategorized" not in names:
+            names.append("Uncategorized")
+        return names
+
+    def _group_for_path(self, p: Path) -> str:
+        rel = self._rel(p)
+        if rel in self._group_assignments:
+            candidate = self._group_assignments[rel]
+            if candidate in self._available_groups():
+                return candidate
+        if self._rel(p) in self._favorites:
+            return "Favorites"
+        rp = p.resolve()
+        root = self._model_root().resolve()
+        versions = (root / "versions").resolve()
+        imports = (root / "imports").resolve()
+        rp_str = str(rp)
+        if rp_str.startswith(str(versions) + os.sep):
+            return "Snapshots"
+        if rp_str.startswith(str(imports) + os.sep):
+            return "Imports"
+        return "Uncategorized"
+
     def _scan_models(self) -> None:
         """Scan all model checkpoints and group by profile_id."""
+        self._load_group_data()
         root = self._model_root()
         root.mkdir(parents=True, exist_ok=True)
 
@@ -265,10 +344,20 @@ class MergeTab(BaseTab):
         return result
 
     def _rebuild_tree(self) -> None:
-        """Rebuild the profile/model tree."""
+        """Rebuild the profile/model tree with group sub-nodes (same categories as weights tab)."""
+        # Preserve expanded state
+        prev_open: set = set()
+        for child in self.tree.get_children():
+            if self.tree.item(child, "open"):
+                prev_open.add(child)
+            for sub in self.tree.get_children(child):
+                if self.tree.item(sub, "open"):
+                    prev_open.add(sub)
+
         self.tree.delete(*self.tree.get_children())
         self._iid_to_model.clear()
 
+        group_names = self._available_groups()
         counter = 0
         for profile_id in sorted(self._profile_models.keys()):
             models = self._profile_models[profile_id]
@@ -278,6 +367,7 @@ class MergeTab(BaseTab):
             count = len(models)
             sel_marker = " [SELECTED]" if selected else ""
             profile_iid = f"profile::{profile_id}"
+            was_open = profile_iid in prev_open if prev_open else True
             self.tree.insert(
                 "",
                 "end",
@@ -285,41 +375,69 @@ class MergeTab(BaseTab):
                 text=f"{profile_id} ({count} weights){sel_marker}",
                 values=("", "", "", "", ""),
                 tags=("profile_header",),
-                open=True,
+                open=was_open,
             )
 
+            # Group models within this profile
+            grouped: Dict[str, List[Tuple[str, Path]]] = {g: [] for g in group_names}
             for disp, p in models:
-                try:
-                    st = p.stat()
-                    size_s = self._fmt_bytes(int(st.st_size))
-                    mt = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
-                except Exception:
-                    size_s = "?"
-                    mt = "?"
+                g = self._group_for_path(p)
+                if g not in grouped:
+                    grouped[g] = []
+                grouped[g].append((disp, p))
 
-                _, phash, val_acc, val_f1 = self._load_model_meta(p)
-                acc_s = f"{val_acc:.4f}" if val_acc is not None else "-"
-                f1_s = f"{val_f1:.4f}" if val_f1 is not None else "-"
-                hash_short = ""
-                if phash:
-                    hash_short = phash.split(":")[1][:12] if ":" in phash else phash[:12]
+            for group in group_names:
+                members = grouped.get(group, [])
+                if not members:
+                    continue
 
-                iid = f"model::{counter}"
-                counter += 1
-
-                is_selected = selected is not None and selected.resolve() == p.resolve()
-                tags = ("selected_weight",) if is_selected else ()
-                marker = " *" if is_selected else ""
-
+                group_iid = f"group::{profile_id}::{group}"
+                was_group_open = group_iid in prev_open if prev_open else True
                 self.tree.insert(
                     profile_iid,
                     "end",
-                    iid=iid,
-                    text=f"{disp}{marker}",
-                    values=(acc_s, f1_s, size_s, mt, hash_short),
-                    tags=tags,
+                    iid=group_iid,
+                    text=f"{group} ({len(members)})",
+                    values=("", "", "", "", ""),
+                    tags=("group_header",),
+                    open=was_group_open,
                 )
-                self._iid_to_model[iid] = (profile_id, p)
+
+                for disp, p in members:
+                    try:
+                        st = p.stat()
+                        size_s = self._fmt_bytes(int(st.st_size))
+                        mt = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        size_s = "?"
+                        mt = "?"
+
+                    _, phash, val_acc, val_f1 = self._load_model_meta(p)
+                    acc_s = f"{val_acc:.4f}" if val_acc is not None else "-"
+                    f1_s = f"{val_f1:.4f}" if val_f1 is not None else "-"
+                    hash_short = ""
+                    if phash:
+                        hash_short = phash.split(":")[1][:12] if ":" in phash else phash[:12]
+
+                    iid = f"model::{counter}"
+                    counter += 1
+
+                    is_selected = selected is not None and selected.resolve() == p.resolve()
+                    tags = ("selected_weight",) if is_selected else ()
+                    marker = " *" if is_selected else ""
+
+                    fav_s = "★" if self._rel(p) in self._favorites else ""
+                    display_name = f"{fav_s} {disp}{marker}".strip()
+
+                    self.tree.insert(
+                        group_iid,
+                        "end",
+                        iid=iid,
+                        text=display_name,
+                        values=(acc_s, f1_s, size_s, mt, hash_short),
+                        tags=tags,
+                    )
+                    self._iid_to_model[iid] = (profile_id, p)
 
         self._refresh_selection_summary()
 
@@ -413,6 +531,7 @@ class MergeTab(BaseTab):
             try:
                 bundle_dir.mkdir(parents=True, exist_ok=True)
                 profiles_merged = []
+                model_details: Dict[str, Any] = {}
 
                 for profile_id, src_path in sorted(self._selected_weights.items()):
                     dst = bundle_checkpoint_path(bundle_dir, profile_id, kind="best")
@@ -420,6 +539,27 @@ class MergeTab(BaseTab):
                     shutil.copy2(src_path, dst)
                     upsert_bundle_meta(bundle_dir, profile_id, dst)
                     profiles_merged.append(profile_id)
+
+                    # Collect detailed model info
+                    _, phash, val_acc, val_f1 = self._load_model_meta(src_path)
+                    try:
+                        src_size = src_path.stat().st_size
+                        src_mtime = datetime.fromtimestamp(src_path.stat().st_mtime).isoformat(timespec="seconds")
+                    except Exception:
+                        src_size = 0
+                        src_mtime = ""
+                    model_details[profile_id] = {
+                        "source_path": str(src_path),
+                        "source_name": src_path.name,
+                        "profile_hash": phash,
+                        "val_accuracy": val_acc,
+                        "val_f1": val_f1,
+                        "source_size_bytes": src_size,
+                        "source_modified": src_mtime,
+                    }
+
+                # Write extended bundle info with model details
+                self._write_bundle_details(bundle_dir, model_details)
 
                 self._log_threadsafe(
                     f"\n[merge] Bundle created: {bundle_dir}\n"
@@ -452,6 +592,29 @@ class MergeTab(BaseTab):
                     pass
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _write_bundle_details(self, bundle_dir: Path, model_details: Dict[str, Any]) -> None:
+        """Write extended model details into bundle_details.json."""
+        details_path = bundle_dir / "bundle_details.json"
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        obj = {
+            "created_at": now,
+            "models": model_details,
+        }
+        details_path.write_text(
+            json.dumps(obj, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def _read_bundle_details(self, bundle_dir: Path) -> Optional[Dict[str, Any]]:
+        """Read bundle_details.json if present."""
+        details_path = bundle_dir / "bundle_details.json"
+        if not details_path.exists():
+            return None
+        try:
+            return json.loads(details_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
 
     def _log_threadsafe(self, msg: str) -> None:
         """Append log from any thread."""
@@ -542,6 +705,27 @@ class MergeTab(BaseTab):
                     except Exception:
                         pass
                 info += f"  {pid} -> {fname} [{exists}]{size}\n"
+
+            # Show detailed model info if available
+            details = self._read_bundle_details(bd)
+            if details and isinstance(details.get("models"), dict):
+                info += "\nModel Details:\n"
+                info += "-" * 50 + "\n"
+                for pid, minfo in sorted(details["models"].items()):
+                    info += f"\n  Profile: {pid}\n"
+                    info += f"    Source:   {minfo.get('source_name', '?')}\n"
+                    info += f"    Path:     {minfo.get('source_path', '?')}\n"
+                    acc = minfo.get('val_accuracy')
+                    f1 = minfo.get('val_f1')
+                    info += f"    Accuracy: {acc:.4f}\n" if acc is not None else "    Accuracy: -\n"
+                    info += f"    F1:       {f1:.4f}\n" if f1 is not None else "    F1:       -\n"
+                    phash = minfo.get('profile_hash') or ""
+                    if phash:
+                        info += f"    Hash:     {phash[:40]}...\n"
+                    info += f"    Modified: {minfo.get('source_modified', '?')}\n"
+                    src_size = minfo.get('source_size_bytes', 0)
+                    if src_size:
+                        info += f"    Size:     {self._fmt_bytes(int(src_size))}\n"
         else:
             info += "(No bundle.json metadata)\n\n"
             info += "Files:\n"

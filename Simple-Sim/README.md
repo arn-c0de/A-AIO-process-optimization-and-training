@@ -26,8 +26,6 @@ The system uses 2D OpenCV-based rendering to create AOI-like ROI images. Defect 
 - **MISSING**: Component not present
 - **MISALIGNED**: Excessive shift or rotation
 - **TOMBSTONE**: Component tilted beyond profile tolerance
-- **SOLDER_BRIDGE**: Shorts between pads/leads (e.g. QFN)
-- **CORNER_LIFT**: Lifted corner / partial non-wet (e.g. QFN)
 
 ## Features
 
@@ -37,11 +35,13 @@ The system uses 2D OpenCV-based rendering to create AOI-like ROI images. Defect 
 - **Modular structure**: Training/eval code decoupled from generation
 - **Comprehensive metrics**: Accuracy, precision, recall, F1, confusion matrix, FN rates
 - **Multi-component profiles (v1.0.1)**: Versioned profiles in `configs/profiles/` (resistor/SOT-23/QFN-32 included)
+- **Footprint-aware rendering**: 2-pad (chip), 3-pad (SOT-23), and 4-pad (QFN) layouts driven by the component profile
 - **Provenance + safety (v1.0.1)**: Dataset manifests + profile hashing + pipeline guards to prevent profile/class mismatches
 - **GUI profile awareness (v1.0.1)**: Profile dropdown, compatibility indicators, dataset/model profile display, info dialogs
 - **Batch scoring with history (v1.0.1)**: `scripts/batch_predict.py` with report history compare and class-mismatch guards
 - **Profile-filtered model selection (v1.0.1)**: Pipeline model dropdown only shows checkpoints matching the dataset profile
-- **Weight merging (v1.0.1)**: Merge tab to combine per-profile checkpoints into a single multi-profile bundle
+- **Multi-profile bundles**: Merge per-profile checkpoints into a single `.bundle` directory. Bundles are first-class entries in the Weights tab and can be selected as models for training, evaluation, and prediction. The pipeline automatically resolves the correct per-profile checkpoint from the bundle.
+- **Bundle metadata**: Each bundle stores `bundle_details.json` with per-model source info (accuracy, F1, profile hash, source path, size)
 
 ## Quick Start
 
@@ -72,8 +72,8 @@ Profiles live in `configs/profiles/` and are versioned via `profile_id` like `ch
 
 Included profiles:
 - `chip_0603_resistor@1`: 2-pad 0603 chip resistor (OK/MISSING/MISALIGNED/TOMBSTONE)
-- `sot23_transistor@1`: 3-lead SOT-23 transistor (OK/MISSING/MISALIGNED/TOMBSTONE)
-- `qfn32_ic@1`: QFN-32 IC (OK/MISSING/MISALIGNED/SOLDER_BRIDGE/CORNER_LIFT)
+- `sot23_transistor@1`: 3-pad SOT-23 transistor (OK/MISSING/MISALIGNED/TOMBSTONE)
+- `qfn32_ic@1`: 4-pad QFN-32 IC (OK/MISSING/MISALIGNED/TOMBSTONE)
 
 Reference run configs you can start from:
 - `configs/run_0001.yaml` (0603 resistor, 256×256 ROI)
@@ -223,7 +223,7 @@ The GUI is a multi-tab Tkinter application launched via `./gui/run.sh`.
 
 ### Pipeline Control
 
-Runs the generation/training/evaluation pipeline. Supports single, multiple, and continuous run modes. Dataset and model selection are profile-aware: the model dropdown only shows checkpoints whose embedded profile matches the selected dataset. Legacy checkpoints (no profile metadata) are listed at the bottom of the dropdown. Profile compatibility is checked and displayed next to the dataset info.
+Runs the generation/training/evaluation pipeline. Supports single, multiple, and continuous run modes. Dataset and model selection are profile-aware: the model dropdown only shows checkpoints and bundles whose embedded profile matches the selected dataset. Legacy checkpoints (no profile metadata) are listed at the bottom of the dropdown. Profile compatibility is checked and displayed next to the dataset info. When no compatible model exists (e.g. after switching to a new profile), the "+" button creates a new model entry by name for training.
 
 ### Analysis
 
@@ -235,7 +235,7 @@ Batch prediction interface. Runs `predict.sh` against a dataset with a selected 
 
 ### Weights
 
-Model checkpoint management. Lists all checkpoints (active, snapshots, imports) grouped into categories. Supports snapshot, import, export, rename, duplicate, delete, favorites, and drag-and-drop grouping. Includes an evaluation runner to score any checkpoint against the current dataset and a compare mode to run two checkpoints side-by-side with a winner summary. Report history is searchable by scope, split, and sort order.
+Model checkpoint management. Lists all checkpoints (active, snapshots, imports) and multi-profile bundles grouped into categories. Supports snapshot, import, export, rename, duplicate, delete, favorites, and drag-and-drop grouping. Bundles appear with a `[Bundle]` marker and aggregated size. Includes an evaluation runner to score any checkpoint against the current dataset and a compare mode to run two checkpoints side-by-side with a winner summary. Report history is searchable by scope, split, and sort order.
 
 ### Validation
 
@@ -243,9 +243,9 @@ Automated dataset validation with flagging. Runs structural and semantic checks 
 
 ### Merge
 
-Combines profile-specific weights into a single multi-profile bundle. The tab scans all checkpoints under `outputs/models/`, groups them by their embedded `profile_id`, and displays them in a tree with columns for accuracy, F1, size, modification date, and profile hash. For each profile type, exactly one checkpoint can be selected. The merge operation copies the selected checkpoints into a `.bundle` directory and writes `bundle.json` metadata (using `simple_sim/model_bundle.py`). Existing bundles are listed with their included profiles and creation date, and can be inspected or deleted.
+Combines profile-specific weights into a single multi-profile bundle. The tab scans all checkpoints under `outputs/models/`, groups them by their embedded `profile_id`, and organizes them into the same group categories as the Weights tab (Favorites, Snapshots, Imports, custom groups). Each model shows accuracy, F1, size, modification date, and profile hash. For each profile type, exactly one checkpoint can be selected. The merge operation copies the selected checkpoints into a `.bundle` directory and writes both `bundle.json` metadata and `bundle_details.json` with detailed per-model information (source path, accuracy, F1, profile hash, size, modification date). Existing bundles are listed with their included profiles and creation date, and can be inspected or deleted.
 
-A merged bundle can be selected as a model in the Pipeline Control tab. When a bundle is used, the pipeline resolves the correct per-profile checkpoint based on the dataset manifest.
+A merged bundle appears as a first-class entry in the Weights tab and can be selected as a model in the Pipeline Control tab. When a bundle is used for training, evaluation, or prediction, the pipeline automatically resolves the correct per-profile checkpoint based on the dataset profile.
 
 ## Success Criteria
 

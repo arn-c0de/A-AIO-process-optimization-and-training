@@ -664,12 +664,17 @@ class WeightsTab(BaseTab):
         cand.extend(sorted(root.glob("*.pt")))
         cand.extend(sorted((root / "versions").glob("**/*.pt")))
         cand.extend(sorted((root / "imports").glob("*.pt")))
+        # Include bundle directories
+        cand.extend([p for p in sorted(root.glob("*.bundle")) if p.is_dir()])
+        bundles_subdir = root / "bundles"
+        if bundles_subdir.exists():
+            cand.extend([p for p in sorted(bundles_subdir.iterdir()) if p.is_dir()])
 
         # Deduplicate + sort by (favorite first, then mtime desc)
         uniq: Dict[str, Path] = {}
         for p in cand:
             try:
-                if p.is_file():
+                if p.is_file() or p.is_dir():
                     uniq[str(p.resolve())] = p
             except Exception:
                 continue
@@ -725,7 +730,15 @@ class WeightsTab(BaseTab):
             self._group_iids[group] = group_iid
             for p in group_members.get(group, []):
                 st = p.stat()
-                size_s = self._fmt_bytes(int(st.st_size))
+                is_bundle = p.is_dir()
+                if is_bundle:
+                    # Sum size of all files in bundle directory
+                    total = sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+                    size_s = self._fmt_bytes(int(total))
+                    display_name = f"[Bundle] {p.name}"
+                else:
+                    size_s = self._fmt_bytes(int(st.st_size))
+                    display_name = p.name
                 mt = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
                 rel = self._rel(p)
                 runs_s = self._runs_for_model(p)
@@ -736,7 +749,7 @@ class WeightsTab(BaseTab):
                     group_iid,
                     "end",
                     iid=iid,
-                    text=p.name,
+                    text=display_name,
                     values=(fav_s, runs_s, size_s, mt, rel, group),
                     tags=("model_entry",),
                 )
