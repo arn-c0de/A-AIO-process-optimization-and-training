@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="420" viewBox="0 0 980 420">
-<rect x="0" y="0" width="980" height="420" fill="#ffffff"/>
-<text x="260" y="34" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="20" font-weight="700" fill="#24292f">Model Storage Breakdown</text>
-<path d="M 250.0 230.0 L 250.0 90.0 A 140.0 140.0 0 1 1 250.0 370.0 Z" fill="#0969da" stroke="#ffffff" stroke-width="2"/>
-<path d="M 250.0 230.0 L 250.0 370.0 A 140.0 140.0 0 0 1 128.8 300.0 Z" fill="#1f883d" stroke="#ffffff" stroke-width="2"/>
-<path d="M 250.0 230.0 L 128.8 300.0 A 140.0 140.0 0 0 1 128.8 160.0 Z" fill="#bf8700" stroke="#ffffff" stroke-width="2"/>
-<path d="M 250.0 230.0 L 128.8 160.0 A 140.0 140.0 0 0 1 250.0 90.0 Z" fill="#cf222e" stroke="#ffffff" stroke-width="2"/>
-<circle cx="250.0" cy="230.0" r="140.0" fill="none" stroke="#d0d7de" stroke-width="1"/>
-<text x="520.0" y="68.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" font-weight="700" fill="#24292f">Legend (size, %)</text>
+<rect x="0" y="0" width="980" height="420" fill="#0b0f14"/>
+<text x="260" y="34" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="20" font-weight="700" fill="#f0f6fc">Model Storage Breakdown</text>
+<path d="M 250.0 230.0 L 250.0 90.0 A 140.0 140.0 0 1 1 250.0 370.0 Z" fill="#0969da" stroke="#0b0f14" stroke-width="2"/>
+<path d="M 250.0 230.0 L 250.0 370.0 A 140.0 140.0 0 0 1 128.8 300.0 Z" fill="#1f883d" stroke="#0b0f14" stroke-width="2"/>
+<path d="M 250.0 230.0 L 128.8 300.0 A 140.0 140.0 0 0 1 128.8 160.0 Z" fill="#bf8700" stroke="#0b0f14" stroke-width="2"/>
+<path d="M 250.0 230.0 L 128.8 160.0 A 140.0 140.0 0 0 1 250.0 90.0 Z" fill="#cf222e" stroke="#0b0f14" stroke-width="2"/>
+<circle cx="250.0" cy="230.0" r="140.0" fill="none" stroke="#30363d" stroke-width="1"/>
+<text x="520.0" y="68.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" font-weight="700" fill="#f0f6fc">Legend (size, %)</text>
 <rect x="520.0" y="82.0" width="12" height="12" rx="2" fill="#0969da"/>
-<text x="538.0" y="92.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#24292f">DeepMind-small-v1_20260214_210452.bundle  384.17 MB  (50.0%)</text>
+<text x="538.0" y="92.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">DeepMind-small-v1_20260214_210452.bundle  384.17 MB  (50.0%)</text>
 <rect x="520.0" y="104.0" width="12" height="12" rx="2" fill="#1f883d"/>
-<text x="538.0" y="114.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#24292f">Transistor-v1.pt  128.06 MB  (16.7%)</text>
+<text x="538.0" y="114.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-v1.pt  128.06 MB  (16.7%)</text>
 <rect x="520.0" y="126.0" width="12" height="12" rx="2" fill="#bf8700"/>
-<text x="538.0" y="136.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#24292f">Resistor-v1.pt  128.06 MB  (16.7%)</text>
+<text x="538.0" y="136.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-v1.pt  128.06 MB  (16.7%)</text>
 <rect x="520.0" y="148.0" width="12" height="12" rx="2" fill="#cf222e"/>
-<text x="538.0" y="158.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#24292f">QFN-v1.pt  128.05 MB  (16.7%)</text>
-<text x="520.0" y="398" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#24292f">Total: 768.33 MB</text>
+<text x="538.0" y="158.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN-v1.pt  128.05 MB  (16.7%)</text>
+<text x="520.0" y="398" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Total: 768.33 MB</text>
 </svg>
