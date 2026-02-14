@@ -222,7 +222,7 @@ class MergeTab(BaseTab):
             pass
 
     def _available_groups(self) -> List[str]:
-        names: List[str] = ["Favorites", "Snapshots", "Imports"]
+        names: List[str] = ["Favorites", "Snapshots", "Imports", "Bundles"]
         for custom in self._custom_groups:
             if custom and custom not in names:
                 names.append(custom)
@@ -233,6 +233,31 @@ class MergeTab(BaseTab):
             names.append("Uncategorized")
         return names
 
+    def _bundle_root_for_path(self, p: Path) -> Optional[Path]:
+        """Return bundle directory if p is inside a bundle, else None."""
+        try:
+            rp = p.resolve()
+        except Exception:
+            rp = p
+        try:
+            root = self._model_root().resolve()
+        except Exception:
+            root = self._model_root()
+        cur = rp if rp.is_dir() else rp.parent
+        while True:
+            try:
+                if is_bundle_dir(cur):
+                    return cur
+            except Exception:
+                pass
+            if cur == root:
+                break
+            nxt = cur.parent
+            if nxt == cur:
+                break
+            cur = nxt
+        return None
+
     def _group_for_path(self, p: Path) -> str:
         rel = self._rel(p)
         if rel in self._group_assignments:
@@ -241,6 +266,8 @@ class MergeTab(BaseTab):
                 return candidate
         if self._rel(p) in self._favorites:
             return "Favorites"
+        if self._bundle_root_for_path(p) is not None:
+            return "Bundles"
         rp = p.resolve()
         root = self._model_root().resolve()
         versions = (root / "versions").resolve()
@@ -297,6 +324,9 @@ class MergeTab(BaseTab):
                 self._profile_models[profile_id] = []
             try:
                 disp = p.name
+                bd = self._bundle_root_for_path(p)
+                if bd is not None:
+                    disp = f"[Bundle:{bd.name}] {p.name}"
             except Exception:
                 disp = str(p)
             self._profile_models[profile_id].append((disp, p))
@@ -546,6 +576,7 @@ class MergeTab(BaseTab):
                 bundle_dir.mkdir(parents=True, exist_ok=True)
                 profiles_merged = []
                 model_details: Dict[str, Any] = {}
+                sources: Dict[str, Any] = {}
 
                 for profile_id, src_path in sorted(self._selected_weights.items()):
                     dst = bundle_checkpoint_path(bundle_dir, profile_id, kind="best")
@@ -562,7 +593,7 @@ class MergeTab(BaseTab):
                     except Exception:
                         src_size = 0
                         src_mtime = ""
-                    model_details[profile_id] = {
+                    entry: Dict[str, Any] = {
                         "source_path": str(src_path),
                         "source_name": src_path.name,
                         "profile_hash": phash,
@@ -572,8 +603,49 @@ class MergeTab(BaseTab):
                         "source_modified": src_mtime,
                     }
 
+                    # Provenance: if this weight came out of a previous bundle, embed its details once (top-level)
+                    # and attach the per-profile "upstream" info to this model entry.
+                    bd = self._bundle_root_for_path(src_path)
+                    if bd is not None:
+                        bd_key = str(bd)
+                        if bd_key not in sources:
+                            src_obj: Dict[str, Any] = {"bundle_dir": bd_key}
+                            try:
+                                meta = read_bundle_meta(bd)
+                                if meta:
+                                    src_obj["bundle_meta"] = {
+                                        "bundle_version": meta.bundle_version,
+                                        "created_at": meta.created_at,
+                                        "updated_at": meta.updated_at,
+                                        "checkpoints": dict(meta.checkpoints),
+                                    }
+                            except Exception:
+                                pass
+                            try:
+                                details = self._read_bundle_details(bd)
+                                if details:
+                                    src_obj["bundle_details"] = details
+                            except Exception:
+                                pass
+                            sources[bd_key] = src_obj
+
+                        entry["provenance"] = {"type": "bundle", "bundle_dir": bd_key}
+                        # Pull upstream per-profile details from the source bundle_details.json (if any).
+                        try:
+                            bd_details = (sources.get(bd_key) or {}).get("bundle_details") or {}
+                            if isinstance(bd_details, dict):
+                                models = bd_details.get("models") or {}
+                                if isinstance(models, dict) and profile_id in models:
+                                    entry["upstream"] = models.get(profile_id)
+                        except Exception:
+                            pass
+                    else:
+                        entry["provenance"] = {"type": "checkpoint"}
+
+                    model_details[profile_id] = entry
+
                 # Write extended bundle info with model details
-                self._write_bundle_details(bundle_dir, model_details)
+                self._write_bundle_details(bundle_dir, model_details, sources=sources)
 
                 self._log_threadsafe(
                     f"\n[merge] Bundle created: {bundle_dir}\n"
@@ -607,13 +679,14 @@ class MergeTab(BaseTab):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _write_bundle_details(self, bundle_dir: Path, model_details: Dict[str, Any]) -> None:
+    def _write_bundle_details(self, bundle_dir: Path, model_details: Dict[str, Any], *, sources: Optional[Dict[str, Any]] = None) -> None:
         """Write extended model details into bundle_details.json."""
         details_path = bundle_dir / "bundle_details.json"
         now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         obj = {
             "created_at": now,
             "models": model_details,
+            "sources": sources or {},
         }
         details_path.write_text(
             json.dumps(obj, indent=2, ensure_ascii=True) + "\n",
