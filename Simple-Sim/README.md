@@ -1,6 +1,6 @@
 # Simple-Sim: Synthetic PCB Defect Detection System
 
-Complete M0 MVP implementation for generating synthetic PCB defect datasets, training classifiers, and evaluating performance.
+Synthetic AOI-style ROI generation + training/evaluation pipeline for PCB component defect classification.
 
 ![Simple-Sim Pipeline Dashboard](images/pipeline-dashboard-simple-sim-v1.0.png)
 ![Simple-Sim Prediction Dashboard](images/simlesim-prediction-tab.png)
@@ -9,12 +9,18 @@ Complete M0 MVP implementation for generating synthetic PCB defect datasets, tra
 
 ## Overview
 
-Simple-Sim generates deterministic synthetic datasets of PCB component defects for training and evaluating machine learning models. The system uses 2D OpenCV-based rendering to create realistic ROI images with four defect classes:
+Simple-Sim generates deterministic synthetic datasets of PCB component defects for training and evaluating machine learning models.
+
+Key idea: the pipeline is **profile-based**. A **component profile** (versioned YAML) defines the component geometry/tolerances/render defaults and the intended defect set for a component type (e.g. 0603 resistor, SOT-23 transistor, QFN-32 IC). Run configs select a profile via `run.component_profile`.
+
+The system uses 2D OpenCV-based rendering to create AOI-like ROI images. Defect classes are **component-dependent**; common classes include:
 
 - **OK**: Component within tolerance
 - **MISSING**: Component not present
 - **MISALIGNED**: Excessive shift or rotation
-- **TOMBSTONE**: Component tilted ≥75°
+- **TOMBSTONE**: Component tilted beyond profile tolerance
+- **SOLDER_BRIDGE**: Shorts between pads/leads (e.g. QFN)
+- **CORNER_LIFT**: Lifted corner / partial non-wet (e.g. QFN)
 
 ## Features
 
@@ -23,6 +29,10 @@ Simple-Sim generates deterministic synthetic datasets of PCB component defects f
 - **Quality gates**: Validation at each pipeline stage
 - **Modular structure**: Training/eval code decoupled from generation
 - **Comprehensive metrics**: Accuracy, precision, recall, F1, confusion matrix, FN rates
+- **Multi-component profiles (v1.0.1)**: Versioned profiles in `configs/profiles/` (resistor/SOT-23/QFN-32 included)
+- **Provenance + safety (v1.0.1)**: Dataset manifests + profile hashing + pipeline guards to prevent profile/class mismatches
+- **GUI profile awareness (v1.0.1)**: Profile dropdown, compatibility indicators, dataset/model profile display, info dialogs
+- **Batch scoring with history (v1.0.1)**: `scripts/batch_predict.py` with report history compare and class-mismatch guards
 
 ## Quick Start
 
@@ -46,6 +56,20 @@ To build a wheelhouse on a machine with internet:
 cd Simple-Sim
 ./tools/build_wheelhouse.sh wheelhouse
 ```
+
+## Component Profiles (New)
+
+Profiles live in `configs/profiles/` and are versioned via `profile_id` like `chip_0603_resistor@1`.
+
+Included profiles:
+- `chip_0603_resistor@1`: 2-pad 0603 chip resistor (OK/MISSING/MISALIGNED/TOMBSTONE)
+- `sot23_transistor@1`: 3-lead SOT-23 transistor (OK/MISSING/MISALIGNED/TOMBSTONE)
+- `qfn32_ic@1`: QFN-32 IC (OK/MISSING/MISALIGNED/SOLDER_BRIDGE/CORNER_LIFT)
+
+Reference run configs you can start from:
+- `configs/run_0001.yaml` (0603 resistor, 256×256 ROI)
+- `configs/run_sot23.yaml` (SOT-23 transistor, 256×256 ROI)
+- `configs/run_qfn32.yaml` (QFN-32 IC, 768×768 ROI)
 
 ## Licensing / Third-Party Dependencies
 
@@ -100,12 +124,16 @@ History table options:
   --history-scope all --history-metric critical_fn_rate --history-critical-class MISALIGNED --history-limit 10
 ```
 
+Notes:
+- `scripts/batch_predict.py` includes guards to prevent scoring a dataset whose class list does not match the model checkpoint.
+- `--model` may also point to a **model bundle directory** (multi-profile). In that case the script resolves the best checkpoint for the dataset profile using `dataset_manifest.json`.
+
 ### 2. Generate Dataset
 
 Generate 400 samples (100 per class) with reference configuration:
 
 ```bash
-python scripts/generate.py \
+.venv/bin/python scripts/generate.py \
   --config configs/run_0001.yaml \
   --out outputs/sim_data/runs/run_0001
 ```
@@ -121,7 +149,7 @@ python scripts/generate.py \
 Run quality checks on generated dataset:
 
 ```bash
-python tools/validate_dataset.py \
+.venv/bin/python tools/validate_dataset.py \
   --data outputs/sim_data/runs/run_0001
 ```
 
@@ -139,7 +167,7 @@ python tools/validate_dataset.py \
 Train ResNet18 classifier for 10 epochs:
 
 ```bash
-python scripts/train.py \
+.venv/bin/python scripts/train.py \
   --data outputs/sim_data/runs/run_0001 \
   --out outputs/models/run_0001.pt
 ```
@@ -154,7 +182,7 @@ python scripts/train.py \
 Run frozen test evaluation:
 
 ```bash
-python scripts/eval.py \
+.venv/bin/python scripts/eval.py \
   --data outputs/sim_data/runs/run_0001 \
   --model outputs/models/run_0001.pt
 ```
@@ -164,6 +192,23 @@ python scripts/eval.py \
 - File: `outputs/models/report_run_0001.json`
 - Success criteria check results
 
+## Manifests + Pipeline Guards (New)
+
+Each generated dataset includes a `dataset_manifest.json` with provenance (profile id/hash/path, generator version, git commit) and extend history.
+
+The CLI scripts include guards to prevent silent corruption, for example:
+- `scripts/generate.py --extend ...` refuses to extend datasets if the profile id/hash differs
+- `scripts/train.py --resume ...` refuses to resume across profile mismatches
+- `scripts/predict.py` / `scripts/eval.py` / `scripts/batch_predict.py` validate dataset/model compatibility
+
+Legacy datasets (without a manifest) can be migrated:
+```bash
+cd Simple-Sim
+.venv/bin/python tools/backfill_manifest.py --data outputs/sim_data/runs/run_0001
+```
+
+Implementation notes: `PROFILE_SYSTEM_IMPLEMENTATION.md`.
+
 ## Configuration
 
 Configuration files (`configs/*.yaml`) define all dataset and training parameters. See `configs/run_0001.yaml` for annotated reference.
@@ -171,9 +216,10 @@ Configuration files (`configs/*.yaml`) define all dataset and training parameter
 ### Key Sections
 
 - **run**: Run ID, master seed, schema version
+- **run.component_profile (v2)**: Component profile ID from `configs/profiles/`
 - **roi**: Image dimensions, mm/pixel scaling
 - **classes**: Sample counts per class
-- **tolerances**: Classification thresholds (shift, rotation, tilt)
+- **tolerances**: Classification thresholds (shift, rotation, tilt) (profile-provided in schema v2)
 - **domains**: Lighting, blur, noise ranges per domain
 - **splits**: Train/val/test fractions and domain assignments
 - **render**: Colors, rendering backend
@@ -226,7 +272,10 @@ Simple-Sim/
 ├── README.md
 ├── requirements.txt
 ├── configs/
-│   └── run_0001.yaml          # Reference configuration
+│   ├── profiles/              # Versioned component profiles (YAML)
+│   ├── run_0001.yaml          # 0603 resistor reference (schema v2 + profile)
+│   ├── run_sot23.yaml         # SOT-23 transistor example
+│   └── run_qfn32.yaml         # QFN-32 example (larger ROI + extra defect classes)
 ├── simple_sim/                # Core package
 │   ├── schema.py              # Data contracts
 │   ├── config.py              # Config validation
@@ -236,18 +285,32 @@ Simple-Sim/
 │   ├── generator_2d.py        # OpenCV rendering
 │   ├── splits.py              # Stratified splitting
 │   ├── metrics.py             # Evaluation metrics
-│   └── data_loader.py         # PyTorch Dataset
+│   ├── data_loader.py         # PyTorch Dataset
+│   ├── manifest.py            # dataset_manifest.json read/write
+│   ├── profile_hash.py        # Deterministic profile hashing + loading
+│   └── model_bundle.py         # Multi-model bundle support
 ├── scripts/
 │   ├── generate.py            # Dataset generation
 │   ├── train.py               # Model training
-│   └── eval.py                # Test evaluation
+│   ├── eval.py                # Test evaluation
+│   ├── predict.py             # Single-image prediction
+│   └── batch_predict.py       # Batch scoring + report history
 ├── tools/
-│   └── validate_dataset.py    # Dataset validation
+│   ├── validate_dataset.py    # Dataset validation
+│   ├── backfill_manifest.py   # Add manifest to legacy datasets
+│   └── create_multi_dataset.py # Helper for multi-dataset workflows
 ├── tests/                     # Unit tests
 └── outputs/
     ├── sim_data/runs/         # Generated datasets
     └── models/                # Trained models
 ```
+
+## GUI Profile Support (New)
+
+The GUI is profile-aware:
+- Pipeline tab includes a profile selector (and shows the selected dataset/model profiles)
+- Model picker is filtered to show only models compatible with the selected profile
+- Compatibility indicators and info dialogs help prevent accidentally mixing components
 
 ## Success Criteria
 
@@ -295,7 +358,7 @@ Simple-Sim/
 - Dashboard/TensorBoard (MVP: console + JSON reports)
 - Hyperparameter sweeps (MVP: single config)
 - Advanced augmentation (MVP: basic blur/noise/brightness)
-- BRIDGE defect class (MVP: 4 classes only)
+- More defect types (e.g. opens, insufficient solder, polarity/marking)
 
 ## Testing
 
