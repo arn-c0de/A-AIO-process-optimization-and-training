@@ -36,6 +36,7 @@ class WeightsTab(BaseTab):
         self._models: List[Path] = []
         self._model_by_iid: Dict[str, Path] = {}
         self._favorites: Dict[str, Dict[str, Any]] = {}  # rel_path -> metadata
+        self._arena: Dict[str, Dict[str, Any]] = {}  # rel_path -> metadata
 
         self._group_assignments: Dict[str, str] = {}
         self._custom_groups: List[str] = []
@@ -163,6 +164,11 @@ class WeightsTab(BaseTab):
         self._models_menu.add_separator()
         self._models_menu.add_command(label="Add to Favorites", command=self._add_selected_to_favorites)
         self._models_menu.add_command(label="Remove from Favorites", command=self._remove_selected_from_favorites)
+        self._models_menu.add_separator()
+        self._models_menu.add_command(label="Add to Arena", command=self._add_selected_to_arena)
+        self._models_menu.add_command(label="Remove from Arena", command=self._remove_selected_from_arena)
+        self._models_menu.add_separator()
+        self._models_menu.add_command(label="Generate Arena Report", command=self._generate_arena_report)
         self._models_menu.add_separator()
         self._models_menu.add_command(label="Set as Compare A", command=self._set_selected_as_compare_a)
         self._models_menu.add_command(label="Set as Compare B", command=self._set_selected_as_compare_b)
@@ -342,6 +348,7 @@ class WeightsTab(BaseTab):
         self.on_dataset_changed()
         self._refresh_cmp_datasets()
         self._load_favorites()
+        self._load_arena()
         self._refresh_models()
         self._refresh_reports()
         self._load_persisted_settings()
@@ -747,6 +754,8 @@ class WeightsTab(BaseTab):
                 else:
                     size_s = self._fmt_bytes(int(st.st_size))
                     display_name = p.name
+                if self._is_arena_tracked(p):
+                    display_name = f"[A] {display_name}"
                 mt = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
                 rel = self._rel(p)
                 runs_s = self._runs_for_model(p)
@@ -1048,7 +1057,10 @@ class WeightsTab(BaseTab):
         # Enable/disable "Delete selected" based on whether selection is deletable.
         try:
             paths = self._selected_model_paths()
-            can_delete = any(self._is_deletable_checkpoint(p) and not self._is_favorited(p) for p in paths)
+            can_delete = any(
+                self._is_deletable_checkpoint(p) and (not self._is_favorited(p)) and (not self._is_arena_tracked(p))
+                for p in paths
+            )
             self._models_menu.entryconfigure("Delete selected", state=("normal" if can_delete else "disabled"))
             can_run = bool(paths) and bool(self.state.dataset_dir)
             self._models_menu.entryconfigure("Run selected", state=("normal" if can_run else "disabled"))
@@ -1063,9 +1075,16 @@ class WeightsTab(BaseTab):
                 is_fav = self._is_favorited(paths[0])
                 self._models_menu.entryconfigure("Add to Favorites", state=("disabled" if is_fav else "normal"))
                 self._models_menu.entryconfigure("Remove from Favorites", state=("normal" if is_fav else "disabled"))
+                is_arena = self._is_arena_tracked(paths[0])
+                self._models_menu.entryconfigure("Add to Arena", state=("disabled" if is_arena else "normal"))
+                self._models_menu.entryconfigure("Remove from Arena", state=("normal" if is_arena else "disabled"))
+                self._models_menu.entryconfigure("Generate Arena Report", state="normal")
             else:
                 self._models_menu.entryconfigure("Add to Favorites", state="disabled")
                 self._models_menu.entryconfigure("Remove from Favorites", state="disabled")
+                self._models_menu.entryconfigure("Add to Arena", state="disabled")
+                self._models_menu.entryconfigure("Remove from Arena", state="disabled")
+                self._models_menu.entryconfigure("Generate Arena Report", state="normal")
         except Exception:
             pass
 
@@ -1166,6 +1185,9 @@ class WeightsTab(BaseTab):
     def _favorites_path(self) -> Path:
         return self.sim_root / "outputs" / "models" / "favorites.json"
 
+    def _arena_path(self) -> Path:
+        return self.sim_root / "outputs" / "models" / "arena.json"
+
     def _load_favorites(self) -> None:
         p = self._favorites_path()
         self._favorites = {}
@@ -1199,6 +1221,111 @@ class WeightsTab(BaseTab):
     def _is_favorited(self, p: Path) -> bool:
         rp = self._rel(p)
         return rp in self._favorites
+
+    def _load_arena(self) -> None:
+        p = self._arena_path()
+        self._arena = {}
+        if not p.exists():
+            return
+        try:
+            obj = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(obj, dict):
+            return
+        items = obj.get("arena_models")
+        if isinstance(items, list):
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                rp = str(it.get("path") or "").strip()
+                if not rp:
+                    continue
+                self._arena[rp] = it
+
+    def _save_arena(self) -> None:
+        p = self._arena_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        items = list(self._arena.values())
+        items.sort(key=lambda it: str(it.get("path") or ""))
+        obj = {"arena_models": items}
+        p.write_text(json.dumps(obj, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+
+    def _is_arena_tracked(self, p: Path) -> bool:
+        rp = self._rel(p)
+        return rp in self._arena
+
+    def _add_selected_to_arena(self) -> None:
+        paths = self._selected_model_paths()
+        if not paths:
+            return
+        changed = False
+        for p in paths:
+            rel = self._rel(p)
+            if rel in self._arena:
+                continue
+            self._arena[rel] = {
+                "path": rel,
+                "added_at": datetime.now().isoformat(timespec="seconds"),
+                "note": "",
+            }
+            changed = True
+        if not changed:
+            return
+        self._save_arena()
+        self._append_log(f"[arena] added {len(paths)} model(s)\n")
+        self._refresh_models()
+
+    def _remove_selected_from_arena(self) -> None:
+        paths = [p for p in self._selected_model_paths() if self._is_arena_tracked(p)]
+        if not paths:
+            return
+        names = "\n".join(self._rel(p) for p in paths[:8])
+        if len(paths) > 8:
+            names += f"\n... (+{len(paths) - 8} more)"
+        if not messagebox.askyesno("Remove from arena", f"Remove from arena tracking?\n\n{names}"):
+            return
+        changed = False
+        for p in paths:
+            rel = self._rel(p)
+            if rel in self._arena:
+                self._arena.pop(rel, None)
+                changed = True
+        if not changed:
+            return
+        self._save_arena()
+        self._append_log(f"[arena] removed {len(paths)} model(s)\n")
+        self._refresh_models()
+
+    def _generate_arena_report(self) -> None:
+        script = self.sim_root / "scripts" / "arena_report.py"
+        if not script.exists():
+            messagebox.showerror("Missing script", f"Script not found:\n{script}")
+            return
+
+        cmd = ["python3", str(script), "--sim-root", str(self.sim_root)]
+        self._append_log(f"\n$ {' '.join(cmd)}\n")
+
+        def worker() -> None:
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(self.sim_root),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    self.log_q.put(line)
+                rc = proc.wait()
+                if rc != 0:
+                    self.log_q.put(f"\n[error] arena_report.py exited with code {rc}\n")
+            except Exception as e:
+                self.log_q.put(f"\n[error] Failed to run arena_report.py: {e}\n")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _add_selected_to_favorites(self) -> None:
         paths = self._selected_model_paths()
@@ -1448,6 +1575,16 @@ class WeightsTab(BaseTab):
             messagebox.showwarning("Favorited", msg)
             return
 
+        arena = [p for p in paths if self._is_arena_tracked(p)]
+        if arena:
+            msg = "These selected checkpoint(s) are tracked in the Arena and cannot be deleted from here.\n\n"
+            msg += "\n".join(self._rel(p) for p in arena[:8])
+            if len(arena) > 8:
+                msg += f"\n... (+{len(arena) - 8} more)"
+            msg += "\n\nRemove from Arena first, then delete."
+            messagebox.showwarning("Arena-tracked", msg)
+            return
+
         deletable = [p for p in paths if self._is_deletable_checkpoint(p)]
         blocked = [p for p in paths if p not in deletable]
 
@@ -1613,6 +1750,8 @@ class WeightsTab(BaseTab):
         # If favorited, we update the favorites entry to the new path.
         was_fav = old_rel in self._favorites
         fav_entry = self._favorites.get(old_rel) if was_fav else None
+        was_arena = old_rel in self._arena
+        arena_entry = self._arena.get(old_rel) if was_arena else None
 
         try:
             src.rename(dst)
@@ -1636,6 +1775,16 @@ class WeightsTab(BaseTab):
                 fav_entry["renamed"] = datetime.now().isoformat(timespec="seconds")
                 self._favorites[fav_entry["path"]] = fav_entry
                 self._save_favorites()
+            except Exception:
+                pass
+        if was_arena and arena_entry is not None:
+            try:
+                self._arena.pop(old_rel, None)
+                arena_entry = dict(arena_entry)
+                arena_entry["path"] = self._rel(dst)
+                arena_entry["renamed"] = datetime.now().isoformat(timespec="seconds")
+                self._arena[arena_entry["path"]] = arena_entry
+                self._save_arena()
             except Exception:
                 pass
         if old_rel in self._group_assignments:
