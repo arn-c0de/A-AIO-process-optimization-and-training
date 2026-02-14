@@ -1,0 +1,73 @@
+# Component Profile (Schema v1, 3D)
+#
+# 3D backend profiles are intentionally separated from 2D ones by profile_id.
+# This avoids dataset collisions in the GUI and makes it explicit which renderer
+# a dataset was generated with.
+#
+profile:
+  profile_id: "chip_0603_resistor_3d@1"
+  schema_version: 1
+  supported_render_backends: ["blender_3d"]
+  description: "0603 resistor 3D (Blender/Cycles): simple PBR scene for AOI-style ROI"
+  created_at: "2026-02-14T00:00:00Z"
+
+component:
+  type: "chip_resistor"
+  footprint: "chip_2pad"
+  package: "0603"
+  nominal_dims_mm:
+    length: 1.6
+    width: 0.8
+    height: 0.45
+
+geometry_ranges:
+  pad_width: [25.0, 35.0]
+  pad_height: [30.0, 40.0]
+  pad_spacing: [50.0, 65.0]
+  component_length: [55.0, 65.0]
+  component_width: [25.0, 35.0]
+
+tolerances:
+  ok_shift_px: 3.0
+  ok_rotation_deg: 5.0
+  tombstone_tilt_deg: 75.0
+
+defect_set:
+  - "OK"
+  - "MISSING"
+  - "MISALIGNED"
+  - "TOMBSTONE"
+
+# 3D scene defaults (consumed by the Blender batch renderer).
+render_3d:
+  camera:
+    # AOI-like top-down with slight tilt.
+    location_mm: [0.0, -7.0, 9.0]
+    look_at_mm: [0.0, 0.0, 0.0]
+    focal_length_mm: 35.0
+  lighting:
+    key_light:
+      location_mm: [4.0, -4.0, 10.0]
+      power_w: 300.0
+      size_mm: 10.0
+    fill_light:
+      location_mm: [-4.0, 4.0, 8.0]
+      power_w: 120.0
+      size_mm: 12.0
+  materials:
+    substrate:
+      base_color: [0.05, 0.20, 0.05]
+      roughness: 0.85
+      metallic: 0.0
+    copper:
+      base_color: [0.80, 0.45, 0.10]
+      roughness: 0.25
+      metallic: 1.0
+    body:
+      base_color: [0.02, 0.02, 0.02]
+      roughness: 0.60
+      metallic: 0.0
+    solder:
+      base_color: [0.70, 0.70, 0.72]
+      roughness: 0.18
+      metallic: 1.0
