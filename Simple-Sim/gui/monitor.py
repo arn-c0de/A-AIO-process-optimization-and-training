@@ -38,7 +38,7 @@ except Exception as e:
     )
 
 from gui.state import UiState
-from gui.tabs import PipelineControlTab, AnalysisTab, PredictionsTab, WeightsTab, ValidationTab, BaseTab
+from gui.tabs import PipelineControlTab, AnalysisTab, PredictionsTab, WeightsTab, ValidationTab, MergeTab, BaseTab
 from gui.utils.settings_store import SettingsStore
 
 
@@ -148,6 +148,13 @@ class MonitorAppTabbed:
         )
         self.notebook.add(self.tabs["validation"].frame, text="Validation")
 
+        self.tabs["merge"] = MergeTab(
+            self.notebook,
+            self.sim_root,
+            self.state
+        )
+        self.notebook.add(self.tabs["merge"].frame, text="Merge")
+
         # Activate first tab immediately (not lazy for first tab)
         self.current_tab = "pipeline"
         self.tabs["pipeline"].on_activate()
@@ -165,7 +172,7 @@ class MonitorAppTabbed:
         selected_idx = self.notebook.index(self.notebook.select())
 
         # Map index to tab name
-        tab_names = ["pipeline", "analysis", "predictions", "weights", "validation"]
+        tab_names = ["pipeline", "analysis", "predictions", "weights", "validation", "merge"]
         if selected_idx < len(tab_names):
             tab_name = tab_names[selected_idx]
             self.current_tab = tab_name
