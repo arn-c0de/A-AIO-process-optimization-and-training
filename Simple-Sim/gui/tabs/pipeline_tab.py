@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 import shutil
 from datetime import datetime
 import re
+import shlex
 
 from PIL import Image, ImageTk
 import cv2
@@ -117,6 +118,10 @@ class PipelineControlTab(BaseTab):
         self.var_name: tk.StringVar
         self.var_name_ts: tk.BooleanVar
         self.var_model_bundle: tk.BooleanVar
+        self.var_profile_model: tk.StringVar
+        self.var_profile_model_lock: tk.BooleanVar
+        self.var_profile_build_preset: tk.StringVar
+        self.combo_profile_model: ttk.Combobox
 
         # Profile management
         self.var_profile: tk.StringVar
@@ -337,6 +342,27 @@ class PipelineControlTab(BaseTab):
         )
         ttk.Button(dsbtns, text="Continue Train", command=self._continue_train_selected).pack(side="left")
 
+        # Profile classifier model (optional, used by Predictions/Eval as a separate stage)
+        profmod = ttk.Frame(left)
+        profmod.pack(fill="x", pady=(6, 0))
+        ttk.Label(profmod, text="Profile model:").pack(side="left")
+        self.var_profile_model = tk.StringVar(value="")
+        self.combo_profile_model = ttk.Combobox(profmod, textvariable=self.var_profile_model, state="readonly", width=42)
+        self.combo_profile_model.pack(side="left", padx=(6, 6), fill="x", expand=True)
+        ToolTip(self.combo_profile_model, text_func=lambda: self.var_profile_model.get())
+        ttk.Button(profmod, text="↻", width=3, command=self._refresh_profile_models).pack(side="left", padx=(0, 6))
+
+        self.var_profile_model_lock = tk.BooleanVar(value=False)
+        ttk.Checkbutton(profmod, text="Lock", variable=self.var_profile_model_lock, command=self._apply_profile_model_lock).pack(side="left")
+
+        ttk.Separator(profmod, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Label(profmod, text="Build:").pack(side="left")
+        self.var_profile_build_preset = tk.StringVar(value="quick")
+        ttk.Combobox(profmod, textvariable=self.var_profile_build_preset, values=["quick", "full"], state="readonly", width=7).pack(
+            side="left", padx=(6, 6)
+        )
+        ttk.Button(profmod, text="Build Profile Model", command=self._build_profile_model).pack(side="left")
+
         # Dataset profile info
         dsprofile = ttk.Frame(left)
         dsprofile.pack(fill="x", pady=(6, 0))
@@ -384,9 +410,11 @@ class PipelineControlTab(BaseTab):
         # Initialize datasets and start UI ticker
         self._refresh_datasets()
         self._refresh_models()
+        self._refresh_profile_models()
         self._refresh_profiles()
         self._load_persisted_settings()
         self._wire_settings_autosave()
+        self._apply_profile_model_lock()
 
         # Add trace to model selection to check compatibility
         self.var_model.trace("w", lambda *args: self._check_profile_compatibility())
@@ -424,6 +452,9 @@ class PipelineControlTab(BaseTab):
         set_if(self.var_name, "pipeline.name")
         set_if(self.var_name_ts, "pipeline.name_ts")
         set_if(self.var_dataset, "pipeline.dataset_selection")
+        set_if(self.var_profile_model, "pipeline.profile_model")
+        set_if(self.var_profile_model_lock, "pipeline.profile_model_locked")
+        set_if(self.var_profile_build_preset, "pipeline.profile_build_preset")
 
         # Ensure dropdowns reflect loaded values.
         try:
@@ -471,6 +502,118 @@ class PipelineControlTab(BaseTab):
         bind(self.var_name, "pipeline.name")
         bind(self.var_name_ts, "pipeline.name_ts")
         bind(self.var_dataset, "pipeline.dataset_selection")
+        bind(self.var_profile_model, "pipeline.profile_model")
+        bind(self.var_profile_model_lock, "pipeline.profile_model_locked")
+        bind(self.var_profile_build_preset, "pipeline.profile_build_preset")
+
+    def _refresh_profile_models(self) -> None:
+        root = self.sim_root / "outputs" / "models"
+        cand: list[Path] = []
+        if root.exists():
+            cand.extend(sorted(root.glob("profile_classifier_*.pt")))
+            cand.extend(sorted(root.glob("**/profile_classifier_*.pt")))
+        # De-dup + sort by mtime desc
+        seen: dict[str, Path] = {}
+        for p in cand:
+            try:
+                if p.is_file():
+                    seen[str(p.resolve())] = p
+            except Exception:
+                continue
+        paths = list(seen.values())
+        paths.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0, reverse=True)
+
+        values = [""]
+        for p in paths:
+            try:
+                values.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+            except Exception:
+                values.append(str(p))
+        try:
+            self.combo_profile_model["values"] = values
+        except Exception:
+            pass
+
+        cur = self.var_profile_model.get().strip()
+        if cur and cur in values:
+            return
+        if not cur:
+            self.var_profile_model.set("")
+
+    def _apply_profile_model_lock(self) -> None:
+        locked = bool(self.var_profile_model_lock.get())
+        if locked:
+            if not self.var_profile_model.get().strip():
+                # Don't allow locking an empty selection.
+                try:
+                    self.var_profile_model_lock.set(False)
+                except Exception:
+                    pass
+                return
+        try:
+            self.combo_profile_model.configure(state="disabled" if locked else "readonly")
+        except Exception:
+            pass
+
+    def _build_profile_model(self) -> None:
+        """Generate a mixed-profile dataset and train a profile classifier checkpoint."""
+        if self.proc is not None:
+            messagebox.showwarning("Busy", "A process is already running. Stop it first.")
+            return
+
+        preset = (self.var_profile_build_preset.get().strip() or "quick").lower()
+        if preset not in ("quick", "full"):
+            preset = "quick"
+
+        if preset == "full":
+            cfg = self.sim_root / "configs" / "run_profile_cls.yaml"
+            out_ds = self.sim_root / "outputs" / "sim_data" / "runs" / "run_profile_cls"
+            out_model = self.sim_root / "outputs" / "models" / "profile_classifier_v1.pt"
+        else:
+            cfg = self.sim_root / "configs" / "run_profile_cls_quick.yaml"
+            out_ds = self.sim_root / "outputs" / "sim_data" / "runs" / "run_profile_cls_quick"
+            out_model = self.sim_root / "outputs" / "models" / "profile_classifier_quick.pt"
+
+        if not cfg.exists():
+            messagebox.showerror("Missing config", f"Config not found:\n{cfg}")
+            return
+
+        # If targets exist, create timestamped variants to avoid clobbering.
+        tag = time.strftime("%Y%m%d_%H%M%S")
+        if out_ds.exists():
+            out_ds = out_ds.parent / f"{out_ds.name}_{tag}"
+        if out_model.exists():
+            out_model = out_model.with_name(f"{out_model.stem}_{tag}{out_model.suffix}")
+
+        # Pre-select and lock (optional) so users don't accidentally switch mid-build.
+        try:
+            rel_model = str(out_model.resolve().relative_to(self.sim_root.resolve()))
+        except Exception:
+            rel_model = str(out_model)
+        self.var_profile_model.set(rel_model)
+        self.var_profile_model_lock.set(True)
+        self._apply_profile_model_lock()
+
+        # Build as a single shell command so it runs sequentially.
+        cmd = [
+            "./.venv/bin/python", "scripts/generate_profile_dataset.py",
+            "--config", str(cfg.resolve().relative_to(self.sim_root.resolve()) if str(cfg).startswith(str(self.sim_root)) else str(cfg)),
+            "--out", str(out_ds.resolve().relative_to(self.sim_root.resolve()) if str(out_ds).startswith(str(self.sim_root)) else str(out_ds)),
+            "&&",
+            "./.venv/bin/python", "scripts/train_profile.py",
+            "--data", str(out_ds.resolve().relative_to(self.sim_root.resolve()) if str(out_ds).startswith(str(self.sim_root)) else str(out_ds)),
+            "--out", rel_model,
+        ]
+
+        # Quote args for bash -lc.
+        cmd_q = " ".join(shlex.quote(x) for x in cmd)
+        self._append_log(f"\n[build profile model] preset={preset}\n")
+        self._append_log(f"config: {cfg}\n")
+        self._append_log(f"data:   {out_ds}\n")
+        self._append_log(f"out:    {out_model}\n")
+        self._append_log(f"[cmd] {cmd_q}\n\n")
+        # _run_simple_cmd already wraps args into bash -lc, so pass the shell string only.
+        self._run_simple_cmd([cmd_q])
 
     def start_pipeline(self) -> None:
         """Start the pipeline process with configured run mode."""
