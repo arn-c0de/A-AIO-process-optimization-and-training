@@ -24,6 +24,7 @@ import argparse
 import json
 import math
 import random
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -37,7 +38,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out_root", required=True)
     parser.add_argument("--samples", type=int, required=True)
     parser.add_argument("--device", default="CPU")
-    return parser.parse_args()
+    # Blender passes custom args after a `--` separator.
+    argv = sys.argv
+    if "--" in argv:
+        argv = argv[argv.index("--") + 1 :]
+    else:
+        argv = argv[1:]
+    return parser.parse_args(argv)
 
 
 def _clean_scene() -> None:
@@ -284,4 +291,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
