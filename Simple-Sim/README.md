@@ -3,9 +3,13 @@
 Synthetic AOI-style ROI generation + training/evaluation pipeline for PCB component defect classification.
 
 ![Simple-Sim Pipeline Dashboard](images/pipeline-dashboard-simple-sim-v1.0.png)
+*Note:* Pipeline overview showing the end-to-end workflow (generate, validate, train, evaluate) and run status.
 ![Simple-Sim Prediction Dashboard](images/simlesim-prediction-tab.png)
+*Note:* Prediction view for scoring an ROI image and inspecting the predicted class and confidence.
 ![Simple-Sim A/B Testing Dashboard](images/simple-sim-a-b-testing.png)
+*Note:* A/B testing view to compare two runs/models side-by-side using the same evaluation data.
 ![Simple-Sim Weight Merge Dashboard](images/simple-sim-weight-merge.png)
+*Note:* Weight merge view to combine per-profile checkpoints into a single multi-profile bundle.
 
 
 
