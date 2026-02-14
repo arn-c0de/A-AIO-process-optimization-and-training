@@ -1,5 +1,5 @@
 # Model Arena Report
-> Last updated: 2026-02-14 21:17:37
+> Last updated: 2026-02-14 21:19:43
 
 ## Charts
 
@@ -10,6 +10,10 @@
 ### Top Avg F1
 
 ![Top Avg F1](ARENA_REPORT_assets/top_avg_f1.svg)
+
+### Model Storage Breakdown
+
+![Model Storage Breakdown](ARENA_REPORT_assets/model_size_pie.svg)
 
 ## Overall Ranking
 
