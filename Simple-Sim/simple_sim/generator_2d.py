@@ -152,6 +152,31 @@ def _compute_pad_positions(
             {'x': p2_x, 'y': p2_y, 'w': pad_width, 'h': small_h},
             {'x': p3_x, 'y': p3_y, 'w': pad_width, 'h': pad_height},
         ]
+    elif footprint.startswith('qfn'):
+        pad_spacing_y = int(nominal['pad_spacing_y'])
+        # 4 pads around perimeter: left, right, top, bottom
+        # Left pad (vertical orientation)
+        left_x = center_x - pad_spacing // 2 - pad_width // 2
+        left_y = center_y - pad_height // 2
+
+        # Right pad (vertical orientation)
+        right_x = center_x + pad_spacing // 2 - pad_width // 2
+        right_y = center_y - pad_height // 2
+
+        # Top pad (horizontal orientation — dimensions swapped)
+        top_x = center_x - pad_height // 2
+        top_y = center_y - pad_spacing_y // 2 - pad_width // 2
+
+        # Bottom pad (horizontal orientation — dimensions swapped)
+        bot_x = center_x - pad_height // 2
+        bot_y = center_y + pad_spacing_y // 2 - pad_width // 2
+
+        return [
+            {'x': left_x,  'y': left_y,  'w': pad_width,  'h': pad_height},
+            {'x': right_x, 'y': right_y, 'w': pad_width,  'h': pad_height},
+            {'x': top_x,   'y': top_y,   'w': pad_height,  'h': pad_width},
+            {'x': bot_x,   'y': bot_y,   'w': pad_height,  'h': pad_width},
+        ]
     else:
         # Default: chip_2pad — two symmetric pads (left/right)
         left_x = center_x - pad_spacing // 2 - pad_width // 2
