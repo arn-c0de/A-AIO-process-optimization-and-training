@@ -75,6 +75,7 @@ class WeightsTab(BaseTab):
 
         self._ui_tick_id: Optional[str] = None
         self._models_menu: Optional[tk.Menu] = None
+        self._reports_menu: Optional[tk.Menu] = None
 
     def build_ui(self) -> None:
         top = ttk.Frame(self.frame)
@@ -325,6 +326,12 @@ class WeightsTab(BaseTab):
         self.tree_reports.grid(row=0, column=0, sticky="nsew")
         rep_scroll_y.grid(row=0, column=1, sticky="ns")
         rep_scroll_x.grid(row=1, column=0, sticky="ew")
+
+        # Right-click context menu for report rows.
+        self._reports_menu = tk.Menu(self.frame, tearoff=0)
+        self._reports_menu.add_command(label="Delete report file", command=self._delete_selected_report)
+        self.tree_reports.bind("<Button-3>", self._on_reports_right_click)
+        self.tree_reports.bind("<Button-2>", self._on_reports_right_click)  # macOS
 
         ttk.Label(right, text="Logs / Output").pack(anchor="w")
         self.txt = tk.Text(right, height=14, wrap="none")
@@ -1070,10 +1077,76 @@ class WeightsTab(BaseTab):
                 pass
 
     def _hide_models_menu(self, _event: Optional[tk.Event] = None) -> None:
-        if not self._models_menu:
+        try:
+            if self._models_menu:
+                self._models_menu.unpost()
+        except Exception:
+            pass
+        try:
+            if self._reports_menu:
+                self._reports_menu.unpost()
+        except Exception:
+            pass
+
+    def _on_reports_right_click(self, event: tk.Event) -> None:
+        if not self._reports_menu:
             return
         try:
-            self._models_menu.unpost()
+            iid = self.tree_reports.identify_row(event.y)
+        except Exception:
+            iid = ""
+        if not iid:
+            return
+        try:
+            self.tree_reports.selection_set(iid)
+            self.tree_reports.focus(iid)
+        except Exception:
+            pass
+        try:
+            self._reports_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            try:
+                self._reports_menu.grab_release()
+            except Exception:
+                pass
+
+    def _delete_selected_report(self) -> None:
+        sel = self.tree_reports.selection()
+        if not sel:
+            messagebox.showinfo("Info", "Select a report first.")
+            return
+        r = self._report_by_iid.get(sel[0])
+        if not r:
+            return
+        p = r.get("_path")
+        if not p:
+            messagebox.showerror("Error", "Report path missing.")
+            return
+        rp = Path(str(p))
+        if not rp.exists():
+            messagebox.showwarning("Not found", f"Report file not found:\n{rp}")
+            return
+
+        # Safety: only allow deleting files under this repo root.
+        try:
+            root = self.sim_root.resolve()
+            rr = rp.resolve()
+            rr.relative_to(root)
+        except Exception:
+            messagebox.showerror("Blocked", f"Refusing to delete file outside repo:\n{rp}")
+            return
+
+        if not messagebox.askyesno("Delete report", f"Delete this report file?\n\n{rp}"):
+            return
+        try:
+            rp.unlink()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete:\n{rp}\n\n{e}")
+            return
+
+        self._append_log(f"[delete] report: {rp}\n")
+        try:
+            self._refresh_reports()
         except Exception:
             pass
 
