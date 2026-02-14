@@ -19,7 +19,7 @@ import os
 from .base_tab import BaseTab
 from gui.state import UiState
 from gui.components.chart_widgets import create_confusion_matrix_widget
-from gui.components.overlay_renderer import draw_prediction_overlay
+from gui.components.overlay_renderer import draw_prediction_overlay, draw_two_stage_overlay
 from gui.utils.tooltip import ToolTip
 from gui.utils.settings_store import SettingsStore
 
@@ -52,6 +52,8 @@ class PredictionsTab(BaseTab):
         self.var_preds_path: tk.StringVar
         self.chk_save_preds: tk.BooleanVar
 
+        self.var_profile_model: tk.StringVar
+
         self.tree: ttk.Treeview
         self.canvas: tk.Canvas
         self.txt_metrics: tk.Text
@@ -60,6 +62,7 @@ class PredictionsTab(BaseTab):
         self.btn_stop: ttk.Button
         self.combo_dataset: ttk.Combobox
         self.combo_model: ttk.Combobox
+        self.combo_profile_model: ttk.Combobox
 
         self._dataset_dirs: List[Path] = []
         self._dataset_by_label: Dict[str, Path] = {}
@@ -115,6 +118,13 @@ class PredictionsTab(BaseTab):
         self.chk_save_preds = tk.BooleanVar(value=True)
         ttk.Checkbutton(opts, text="Save per-sample preds", variable=self.chk_save_preds).pack(side="left")
 
+        ttk.Separator(opts, orient="vertical").pack(side="left", fill="y", padx=(12, 12), pady=2)
+        ttk.Label(opts, text="Profile Model:").pack(side="left")
+        self.var_profile_model = tk.StringVar(value="")
+        self.combo_profile_model = ttk.Combobox(opts, textvariable=self.var_profile_model, state="readonly", width=30)
+        self.combo_profile_model.pack(side="left", padx=(6, 4))
+        ttk.Button(opts, text="↻", width=3, command=self._refresh_profile_models).pack(side="left")
+
         status = ttk.Frame(self.frame)
         status.pack(fill="x", pady=(0, 8))
         self.var_status = tk.StringVar(value="status: idle")
@@ -141,13 +151,14 @@ class PredictionsTab(BaseTab):
         ttk.Radiobutton(filters, text="All", variable=self.var_filter, value="all", command=self._refresh_tree).pack(side="left", padx=(6, 0))
         ttk.Radiobutton(filters, text="Wrong", variable=self.var_filter, value="wrong", command=self._refresh_tree).pack(side="left", padx=(6, 0))
         ttk.Radiobutton(filters, text="Correct", variable=self.var_filter, value="correct", command=self._refresh_tree).pack(side="left", padx=(6, 0))
+        ttk.Radiobutton(filters, text="Prof Wrong", variable=self.var_filter, value="prof_wrong", command=self._refresh_tree).pack(side="left", padx=(6, 0))
 
         tree_frame = ttk.Frame(left)
         tree_frame.pack(fill="both", expand=True)
 
         self.tree = ttk.Treeview(
             tree_frame,
-            columns=("GT", "Pred", "Conf", "OK"),
+            columns=("GT", "Pred", "Conf", "OK", "GT Prof", "Pred Prof", "Prof"),
             show="tree headings",
         )
         self.tree.heading("#0", text="Sample ID")
@@ -155,11 +166,17 @@ class PredictionsTab(BaseTab):
         self.tree.heading("Pred", text="Pred")
         self.tree.heading("Conf", text="Conf")
         self.tree.heading("OK", text="OK")
-        self.tree.column("#0", width=260)
-        self.tree.column("GT", width=90, anchor="center")
-        self.tree.column("Pred", width=100, anchor="center")
-        self.tree.column("Conf", width=70, anchor="e")
-        self.tree.column("OK", width=50, anchor="center")
+        self.tree.heading("GT Prof", text="GT Prof")
+        self.tree.heading("Pred Prof", text="Pred Prof")
+        self.tree.heading("Prof", text="Prof")
+        self.tree.column("#0", width=200)
+        self.tree.column("GT", width=80, anchor="center")
+        self.tree.column("Pred", width=90, anchor="center")
+        self.tree.column("Conf", width=60, anchor="e")
+        self.tree.column("OK", width=40, anchor="center")
+        self.tree.column("GT Prof", width=120, anchor="center")
+        self.tree.column("Pred Prof", width=120, anchor="center")
+        self.tree.column("Prof", width=40, anchor="center")
 
         scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -205,6 +222,7 @@ class PredictionsTab(BaseTab):
         self.on_dataset_changed()
         self._refresh_datasets()
         self._refresh_models()
+        self._refresh_profile_models()
         self._load_persisted_settings()
         # Persisted dataset selection is loaded after the initial refresh; sync state now.
         try:
@@ -251,6 +269,7 @@ class PredictionsTab(BaseTab):
             ("pred.split", self.var_split),
             ("pred.device", self.var_device),
             ("pred.max_samples", self.var_max_samples),
+            ("pred.profile_model", self.var_profile_model),
         ]:
             v = st.get(key)
             if v is None:
@@ -290,6 +309,7 @@ class PredictionsTab(BaseTab):
         bind(self.var_split, "pred.split")
         bind(self.var_device, "pred.device")
         bind(self.var_max_samples, "pred.max_samples")
+        bind(self.var_profile_model, "pred.profile_model")
 
         def on_chk() -> None:
             try:
@@ -379,6 +399,12 @@ class PredictionsTab(BaseTab):
             cmd.extend(["--max-samples", max_samples_s])
         if save_preds:
             cmd.append("--save-preds")
+
+        profile_model_s = self.var_profile_model.get().strip()
+        if profile_model_s:
+            pm_path = self._resolve_model_path(profile_model_s)
+            if pm_path.exists():
+                cmd.extend(["--profile-model", str(pm_path)])
 
         self.var_status.set("status: running...")
         self.var_report_path.set("report: -")
@@ -623,6 +649,39 @@ class PredictionsTab(BaseTab):
         if values:
             self.var_model.set(values[0])
 
+    def _refresh_profile_models(self) -> None:
+        """Populate the profile model combobox with available profile classifier checkpoints."""
+        root = self.sim_root / "outputs" / "models"
+        cand: List[Path] = []
+        if root.exists():
+            cand.extend(sorted(root.glob("profile_classifier_*.pt")))
+            # Also check sub-directories
+            cand.extend(sorted(root.glob("**/profile_classifier_*.pt")))
+        # Dedup
+        seen: Dict[str, Path] = {}
+        for p in cand:
+            try:
+                seen[str(p.resolve())] = p
+            except Exception:
+                continue
+        paths = list(seen.values())
+        paths.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0, reverse=True)
+
+        values = [""]  # empty = no profile model (default)
+        for p in paths:
+            try:
+                values.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+            except Exception:
+                values.append(str(p))
+        self.combo_profile_model["values"] = values
+
+        cur = self.var_profile_model.get().strip()
+        if cur and cur in values:
+            return
+        # Keep empty (disabled) by default
+        if not cur:
+            self.var_profile_model.set("")
+
     def _resolve_model_path(self, s: str) -> Path:
         p = Path(s)
         if p.is_absolute():
@@ -719,9 +778,23 @@ class PredictionsTab(BaseTab):
             if mode == "correct" and not correct:
                 continue
 
+            # Profile data (may be absent)
+            gt_prof = str(r.get("gt_profile") or "")
+            pred_prof = str(r.get("pred_profile") or "")
+            profile_correct = r.get("profile_correct")
+
+            if mode == "prof_wrong":
+                # Only show rows where profile was wrong (skip rows without profile data)
+                if profile_correct is None or profile_correct:
+                    continue
+
             conf = self._top1_confidence(r)
             ok = "✓" if correct else "✗"
-            self.tree.insert("", "end", iid=sid, text=sid, values=(gt, pred, f"{conf:.1%}", ok))
+            prof_mark = ""
+            if profile_correct is not None:
+                prof_mark = "✓" if profile_correct else "✗"
+            self.tree.insert("", "end", iid=sid, text=sid,
+                             values=(gt, pred, f"{conf:.1%}", ok, gt_prof, pred_prof, prof_mark))
 
     def _top1_confidence(self, row: Dict[str, Any]) -> float:
         try:
@@ -758,11 +831,20 @@ class PredictionsTab(BaseTab):
         pred = str(row.get("pred") or "?")
         conf = self._top1_confidence(row)
 
+        gt_profile = str(row.get("gt_profile") or "")
+        pred_profile = str(row.get("pred_profile") or "")
+        profile_conf = float(row.get("profile_confidence") or 0.0)
+
         try:
             img = cv2.imread(str(image_path))
             if img is None:
                 raise ValueError("failed to read image")
-            img_overlay = draw_prediction_overlay(img, gt, pred, conf)
+            if gt_profile and pred_profile:
+                img_overlay = draw_two_stage_overlay(
+                    img, gt, pred, conf, gt_profile, pred_profile, profile_conf
+                )
+            else:
+                img_overlay = draw_prediction_overlay(img, gt, pred, conf)
             img_rgb = cv2.cvtColor(img_overlay, cv2.COLOR_BGR2RGB)
             pil = Image.fromarray(img_rgb)
             pil.thumbnail((520, 520))

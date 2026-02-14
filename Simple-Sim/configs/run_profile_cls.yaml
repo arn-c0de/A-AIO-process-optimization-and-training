@@ -1,0 +1,65 @@
+# Profile Classifier Reference Configuration
+# Mixed-profile dataset for training a component type identifier.
+# Uses all 3 available profiles with 4 defect classes for visual variety.
+
+run:
+  run_id: "run_profile_cls"
+  seed: 7777
+  schema_version: 2
+  mode: "profile_classifier"
+  component_profiles:
+    - "chip_0603_resistor@1"
+    - "qfn32_ic@1"
+    - "sot23_transistor@1"
+
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.01
+
+classes:
+  OK: 100
+  MISSING: 100
+  MISALIGNED: 100
+  TOMBSTONE: 100
+
+domains:
+  domain_A:
+    lighting_brightness: [0.9, 1.1]
+    blur_sigma: [0.0, 1.0]
+    noise_stddev: [0.0, 10.0]
+
+splits:
+  train_domains: ['domain_A']
+  val_domains: ['domain_A']
+  test_domains: ['domain_A']
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+
+render:
+  backend: 'opencv_2d'
+  substrate_color: [40, 90, 40]
+  copper_color: [60, 120, 180]
+  solder_mask_alpha: 0.3
+
+augment:
+  rotation_deg_range: [-5, 5]
+  brightness_factor_range: [0.85, 1.15]
+  contrast_factor_range: [0.9, 1.1]
+
+train:
+  model: 'resnet18'
+  pretrained: true
+  epochs: 10
+  batch_size: 32
+  num_workers: 0
+  lr: 0.001
+  optimizer: 'adam'
+  weight_decay: 0.0001
+
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics: ['accuracy', 'precision', 'recall', 'f1', 'confusion_matrix']
+  critical_classes: ['MISSING', 'MISALIGNED', 'TOMBSTONE']

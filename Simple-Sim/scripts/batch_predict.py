@@ -248,6 +248,8 @@ def main() -> None:
     ap.add_argument("--history-limit", type=int, default=10, help="How many history rows to print")
     ap.add_argument("--history-dirs", default=None,
                     help="Comma-separated list of dirs to search for reports (default: outputs/models and outputs/models/history)")
+    ap.add_argument("--profile-model", default=None,
+                    help="Optional path to profile classifier checkpoint (.pt) for two-stage evaluation")
     args = ap.parse_args()
 
     requested_model_path = Path(args.model)
@@ -280,6 +282,22 @@ def main() -> None:
     num_workers = args.num_workers if args.num_workers is not None else int(eval_cfg.get("num_workers", 0))
     critical_classes = eval_cfg.get("critical_classes")
 
+    # --- Profile classifier (optional two-stage) ---
+    profile_model = None
+    profile_class_names: List[str] = []
+    gt_profile_map: Dict[str, str] = {}  # sample id -> GT profile_id
+
+    if args.profile_model:
+        profile_model_path = Path(args.profile_model)
+        if not profile_model_path.exists():
+            raise FileNotFoundError(f"Profile model not found: {profile_model_path}")
+        profile_model, profile_class_names, _ = load_checkpoint_model(profile_model_path, device)
+        # Build GT profile mapping from v2 labels
+        label_rows_v2 = read_jsonl(data_dir / "labels.jsonl", LabelRow)
+        for lr in label_rows_v2:
+            if lr.profile_id:
+                gt_profile_map[lr.id] = lr.profile_id
+
     info = dataset_info(data_dir)
     info.split = args.split
 
@@ -295,6 +313,10 @@ def main() -> None:
 
     y_true: List[int] = []
     y_pred: List[int] = []
+
+    # Profile tracking (only when --profile-model is set)
+    profile_gt_labels: List[str] = []
+    profile_pred_labels: List[str] = []
 
     preds_rows: List[Dict[str, Any]] = []
 
@@ -315,6 +337,17 @@ def main() -> None:
             logits = model(images)
             pred_idx = torch.argmax(logits, dim=1)
             probs = torch.softmax(logits, dim=1)
+
+        # Profile classification (optional)
+        profile_pred_idx_np = None
+        profile_probs_np = None
+        if profile_model is not None:
+            with torch.no_grad():
+                profile_logits = profile_model(images)
+                profile_probs_t = torch.softmax(profile_logits, dim=1)
+                profile_pred_idx_t = torch.argmax(profile_logits, dim=1)
+            profile_pred_idx_np = profile_pred_idx_t.detach().cpu().numpy()
+            profile_probs_np = profile_probs_t.detach().cpu().numpy()
 
         dt = max(1e-9, time.perf_counter() - bt0)
         bs = int(images.shape[0])
@@ -348,6 +381,21 @@ def main() -> None:
                     {"class": class_names[int(top_inds[i, j])], "prob": float(top_vals[i, j])}
                     for j in range(topk)
                 ]
+
+                # Enrich with profile data when available
+                if profile_model is not None and profile_pred_idx_np is not None:
+                    pred_prof = profile_class_names[int(profile_pred_idx_np[i])]
+                    gt_prof = gt_profile_map.get(tid, "")
+                    prof_conf = float(profile_probs_np[i, int(profile_pred_idx_np[i])])
+                    row["pred_profile"] = pred_prof
+                    row["gt_profile"] = gt_prof
+                    row["profile_correct"] = bool(pred_prof == gt_prof) if gt_prof else None
+                    row["profile_confidence"] = prof_conf
+
+                    if gt_prof:
+                        profile_gt_labels.append(gt_prof)
+                        profile_pred_labels.append(pred_prof)
+
                 preds_rows.append(row)
 
         if args.max_samples is not None and seen >= args.max_samples:
@@ -369,6 +417,28 @@ def main() -> None:
     print(f"Dataset size: total={info.total_samples} splits={info.split_sizes}")
     print("")
     print(format_metrics(metrics, class_names))
+
+    # Profile metrics (when --profile-model is set and GT labels were available)
+    profile_metrics: Optional[Dict[str, Any]] = None
+    if profile_model is not None and profile_gt_labels:
+        # Build index arrays for profile metrics
+        all_profile_names = sorted(set(profile_gt_labels) | set(profile_pred_labels))
+        prof_name_to_idx = {n: i for i, n in enumerate(all_profile_names)}
+        prof_y_true = np.array([prof_name_to_idx[n] for n in profile_gt_labels])
+        prof_y_pred = np.array([prof_name_to_idx[n] for n in profile_pred_labels])
+        profile_metrics = compute_metrics(prof_y_true, prof_y_pred, all_profile_names, critical_classes=[])
+        print("")
+        print("=" * 60)
+        print("PROFILE CLASSIFICATION")
+        print("=" * 60)
+        print(f"Profile Accuracy: {profile_metrics['accuracy']:.4f}")
+        print(f"Profile Macro F1: {profile_metrics['macro_f1']:.4f}")
+        pc = profile_metrics.get("per_class") or {}
+        if pc:
+            print(f"{'Profile':<30} {'Prec':>8} {'Rec':>8} {'F1':>8} {'N':>6}")
+            for pn in all_profile_names:
+                m = pc.get(pn, {})
+                print(f"{pn:<30} {m.get('precision',0):.4f}   {m.get('recall',0):.4f}   {m.get('f1',0):.4f}   {m.get('support',0):>5}")
 
     # Write outputs
     out_dir = Path(args.out_dir) if args.out_dir else (requested_model_path.parent / "history")
@@ -401,6 +471,9 @@ def main() -> None:
         "checkpoint_val_f1": float(checkpoint.get("val_f1", 0.0)),
         "metrics": metrics,
     }
+    if profile_metrics is not None:
+        report["profile_accuracy"] = profile_metrics["accuracy"]
+        report["profile_metrics"] = profile_metrics
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"\nReport saved to: {report_path}")
 
