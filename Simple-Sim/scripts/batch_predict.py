@@ -282,21 +282,26 @@ def main() -> None:
     num_workers = args.num_workers if args.num_workers is not None else int(eval_cfg.get("num_workers", 0))
     critical_classes = eval_cfg.get("critical_classes")
 
+    # --- GT profile mapping (from v2 labels, if available) ---
+    # We build this regardless of --profile-model so reports/preds can still carry GT profile metadata.
+    gt_profile_map: Dict[str, str] = {}  # sample id -> GT profile_id
+    try:
+        label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
+        for lr in label_rows:
+            if lr.profile_id:
+                gt_profile_map[lr.id] = lr.profile_id
+    except Exception:
+        # Legacy datasets may not have labels.jsonl or may not include profile_id; ignore.
+        gt_profile_map = {}
+
     # --- Profile classifier (optional two-stage) ---
     profile_model = None
     profile_class_names: List[str] = []
-    gt_profile_map: Dict[str, str] = {}  # sample id -> GT profile_id
-
     if args.profile_model:
         profile_model_path = Path(args.profile_model)
         if not profile_model_path.exists():
             raise FileNotFoundError(f"Profile model not found: {profile_model_path}")
         profile_model, profile_class_names, _ = load_checkpoint_model(profile_model_path, device)
-        # Build GT profile mapping from v2 labels
-        label_rows_v2 = read_jsonl(data_dir / "labels.jsonl", LabelRow)
-        for lr in label_rows_v2:
-            if lr.profile_id:
-                gt_profile_map[lr.id] = lr.profile_id
 
     info = dataset_info(data_dir)
     info.split = args.split
@@ -382,10 +387,16 @@ def main() -> None:
                     for j in range(topk)
                 ]
 
+                # Include GT profile_id when available (even without two-stage profile prediction).
+                if gt_profile_map:
+                    gt_prof = gt_profile_map.get(tid, "")
+                    if gt_prof:
+                        row["gt_profile"] = gt_prof
+
                 # Enrich with profile data when available
                 if profile_model is not None and profile_pred_idx_np is not None:
                     pred_prof = profile_class_names[int(profile_pred_idx_np[i])]
-                    gt_prof = gt_profile_map.get(tid, "")
+                    gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
                     prof_conf = float(profile_probs_np[i, int(profile_pred_idx_np[i])])
                     row["pred_profile"] = pred_prof
                     row["gt_profile"] = gt_prof

@@ -220,11 +220,25 @@ def draw_solder(img: np.ndarray, nominal: Dict[str, float],
     """
     solder_color = (200, 200, 200)  # Light gray/white
     pads = _compute_pad_positions(footprint, nominal, img.shape[:2])
+    h, w = img.shape[:2]
     for pad in pads:
         x, y, pw, ph = pad['x'], pad['y'], pad['w'], pad['h']
-        solder_region = img[y:y + ph, x:x + pw].copy()
-        cv2.addWeighted(solder_region, 0.7, np.full_like(solder_region, solder_color), 0.3, 0, solder_region)
-        img[y:y + ph, x:x + pw] = solder_region
+        # Clamp to image bounds; some footprints (e.g. qfn) can produce pads that partially
+        # fall outside the ROI depending on geometry ranges.
+        x0 = max(0, int(x))
+        y0 = max(0, int(y))
+        x1 = min(w, int(x + pw))
+        y1 = min(h, int(y + ph))
+        if x1 <= x0 or y1 <= y0:
+            continue
+
+        solder_region = img[y0:y1, x0:x1].copy()
+        overlay = np.full_like(solder_region, solder_color)
+        # Avoid passing a pre-allocated dst to OpenCV here; some array layouts can trip the bindings.
+        blended = cv2.addWeighted(solder_region, 0.7, overlay, 0.3, 0)
+        if blended is None:
+            continue
+        img[y0:y1, x0:x1] = blended
 
 
 def draw_component(

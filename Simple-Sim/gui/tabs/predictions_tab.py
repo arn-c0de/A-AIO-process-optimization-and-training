@@ -6,6 +6,7 @@ import json
 import queue
 import subprocess
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
@@ -36,6 +37,13 @@ class PredictionsTab(BaseTab):
 
         self._pred_rows: List[Dict[str, Any]] = []
         self._pred_row_by_id: Dict[str, Dict[str, Any]] = {}
+        self._active_dataset_dir: Optional[Path] = None
+
+        # Multi-dataset run support
+        self.var_multi_datasets: tk.BooleanVar
+        self._multi_dataset_paths: List[str] = []  # dataset dirs (string paths, typically sim_root-relative)
+        self._multi_results: List[Dict[str, Any]] = []
+        self._multi_result_by_key: Dict[str, Dict[str, Any]] = {}
 
         self._cm_canvas = None
         self._photo: Optional[ImageTk.PhotoImage] = None
@@ -53,8 +61,11 @@ class PredictionsTab(BaseTab):
         self.chk_save_preds: tk.BooleanVar
 
         self.var_profile_model: tk.StringVar
+        self.var_multi_sel: tk.StringVar
 
         self.tree: ttk.Treeview
+        self.tree_ds: ttk.Treeview
+        self.ds_summary_frame: ttk.Frame
         self.canvas: tk.Canvas
         self.txt_metrics: tk.Text
         self.txt_logs: tk.Text
@@ -125,6 +136,13 @@ class PredictionsTab(BaseTab):
         self.combo_profile_model.pack(side="left", padx=(6, 4))
         ttk.Button(opts, text="↻", width=3, command=self._refresh_profile_models).pack(side="left")
 
+        ttk.Separator(opts, orient="vertical").pack(side="left", fill="y", padx=(12, 12), pady=2)
+        self.var_multi_datasets = tk.BooleanVar(value=False)
+        ttk.Checkbutton(opts, text="Multi datasets", variable=self.var_multi_datasets, command=self._on_multi_toggle).pack(side="left")
+        ttk.Button(opts, text="Select…", command=self._open_multi_dataset_dialog).pack(side="left", padx=(8, 0))
+        self.var_multi_sel = tk.StringVar(value="selected: 0")
+        ttk.Label(opts, textvariable=self.var_multi_sel).pack(side="left", padx=(8, 0))
+
         status = ttk.Frame(self.frame)
         status.pack(fill="x", pady=(0, 8))
         self.var_status = tk.StringVar(value="status: idle")
@@ -143,6 +161,34 @@ class PredictionsTab(BaseTab):
         # Left: prediction table
         left = ttk.Frame(main, padding=5)
         main.add(left, weight=2)
+
+        # Multi-run dataset summary (hidden in single-dataset mode)
+        self.ds_summary_frame = ttk.Frame(left)
+        ttk.Label(self.ds_summary_frame, text="Dataset Results").pack(anchor="w")
+        ds_tree_frame = ttk.Frame(self.ds_summary_frame)
+        ds_tree_frame.pack(fill="x", expand=False, pady=(4, 0))
+        self.tree_ds = ttk.Treeview(
+            ds_tree_frame,
+            columns=("Dataset", "Acc", "F1", "Seen", "ProfAcc"),
+            show="headings",
+            height=6,
+        )
+        self.tree_ds.heading("Dataset", text="Dataset")
+        self.tree_ds.heading("Acc", text="Acc")
+        self.tree_ds.heading("F1", text="Macro F1")
+        self.tree_ds.heading("Seen", text="Seen")
+        self.tree_ds.heading("ProfAcc", text="Prof Acc")
+        self.tree_ds.column("Dataset", width=210, anchor="w")
+        self.tree_ds.column("Acc", width=70, anchor="e")
+        self.tree_ds.column("F1", width=80, anchor="e")
+        self.tree_ds.column("Seen", width=60, anchor="e")
+        self.tree_ds.column("ProfAcc", width=80, anchor="e")
+        ds_scroll = ttk.Scrollbar(ds_tree_frame, orient="vertical", command=self.tree_ds.yview)
+        self.tree_ds.configure(yscrollcommand=ds_scroll.set)
+        self.tree_ds.pack(side="left", fill="x", expand=True)
+        ds_scroll.pack(side="right", fill="y")
+        self.tree_ds.bind("<<TreeviewSelect>>", self._on_tree_ds_select)
+        self.ds_summary_frame.pack_forget()
 
         filters = ttk.Frame(left)
         filters.pack(fill="x", pady=(0, 6))
@@ -230,6 +276,8 @@ class PredictionsTab(BaseTab):
         except Exception:
             pass
         self._wire_settings_autosave()
+        self._update_multi_sel_label()
+        self._apply_multi_mode_ui()
         self._tick_ui()
 
     def on_dataset_changed(self) -> None:
@@ -282,6 +330,18 @@ class PredictionsTab(BaseTab):
             self.chk_save_preds.set(bool(st.get("pred.save_preds", True)))
         except Exception:
             pass
+        try:
+            self.var_multi_datasets.set(bool(st.get("pred.multi_datasets", False)))
+        except Exception:
+            pass
+        try:
+            raw = st.get("pred.multi_dataset_paths_json")
+            if isinstance(raw, str) and raw.strip():
+                obj = json.loads(raw)
+                if isinstance(obj, list):
+                    self._multi_dataset_paths = [str(x) for x in obj if str(x).strip()]
+        except Exception:
+            self._multi_dataset_paths = []
 
     def _wire_settings_autosave(self) -> None:
         st = self._store()
@@ -310,6 +370,7 @@ class PredictionsTab(BaseTab):
         bind(self.var_device, "pred.device")
         bind(self.var_max_samples, "pred.max_samples")
         bind(self.var_profile_model, "pred.profile_model")
+        bind(self.var_multi_datasets, "pred.multi_datasets")
 
         def on_chk() -> None:
             try:
@@ -322,6 +383,127 @@ class PredictionsTab(BaseTab):
             self.chk_save_preds.trace_add("write", lambda *_a: on_chk())
         except Exception:
             pass
+
+    def _persist_multi_dataset_paths(self) -> None:
+        st = self._store()
+        if st is None:
+            return
+        try:
+            st.set("pred.multi_dataset_paths_json", json.dumps(self._multi_dataset_paths, ensure_ascii=True))
+            st.schedule_save(self.frame)
+        except Exception:
+            pass
+
+    def _update_multi_sel_label(self) -> None:
+        # Keep it stable even if dataset list hasn't been refreshed yet.
+        n = len([p for p in self._multi_dataset_paths if str(p).strip()])
+        try:
+            self.var_multi_sel.set(f"selected: {n}")
+        except Exception:
+            pass
+
+    def _on_multi_toggle(self) -> None:
+        self._apply_multi_mode_ui()
+        self._update_multi_sel_label()
+
+    def _apply_multi_mode_ui(self) -> None:
+        try:
+            if bool(self.var_multi_datasets.get()):
+                if self.ds_summary_frame.winfo_ismapped() == 0:
+                    self.ds_summary_frame.pack(fill="x", pady=(0, 8))
+            else:
+                if self.ds_summary_frame.winfo_ismapped() != 0:
+                    self.ds_summary_frame.pack_forget()
+                # Clear any stale summary.
+                try:
+                    self.tree_ds.delete(*self.tree_ds.get_children())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _open_multi_dataset_dialog(self) -> None:
+        # Ensure we have up-to-date dataset list.
+        try:
+            self._refresh_datasets()
+        except Exception:
+            pass
+
+        dlg = tk.Toplevel(self.frame)
+        dlg.title("Select Datasets")
+        dlg.transient(self.frame.winfo_toplevel())
+        dlg.grab_set()
+
+        frm = ttk.Frame(dlg, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Select one or more datasets (Ctrl/Shift):").pack(anchor="w")
+
+        list_frame = ttk.Frame(frm)
+        list_frame.pack(fill="both", expand=True, pady=(8, 8))
+        lb = tk.Listbox(list_frame, selectmode="extended", height=16)
+        sb = ttk.Scrollbar(list_frame, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        lb.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        labels = list(self._dataset_by_label.keys())
+        for x in labels:
+            lb.insert("end", x)
+
+        # Preselect currently stored paths.
+        want = set()
+        for p in self._multi_dataset_paths:
+            rp = str(p).strip()
+            if not rp:
+                continue
+            want.add(rp)
+        for idx, lab in enumerate(labels):
+            p = self._dataset_by_label.get(lab)
+            if not p:
+                continue
+            try:
+                rel = str(p.resolve().relative_to(self.sim_root.resolve()))
+            except Exception:
+                rel = str(p.resolve())
+            if rel in want:
+                lb.selection_set(idx)
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+
+        def on_ok() -> None:
+            sel = list(lb.curselection())
+            picked: List[str] = []
+            for i in sel:
+                try:
+                    lab = labels[int(i)]
+                except Exception:
+                    continue
+                p = self._dataset_by_label.get(lab)
+                if not p:
+                    continue
+                try:
+                    picked.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+                except Exception:
+                    picked.append(str(p.resolve()))
+            self._multi_dataset_paths = picked
+            self._persist_multi_dataset_paths()
+            self._update_multi_sel_label()
+            try:
+                dlg.destroy()
+            except Exception:
+                pass
+
+        ttk.Button(btns, text="OK", command=on_ok).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=lambda: dlg.destroy()).pack(side="right", padx=(0, 8))
+
+        try:
+            dlg.geometry("560x420")
+        except Exception:
+            pass
+
+    def _active_data_dir(self) -> Optional[Path]:
+        return self._active_dataset_dir or self.state.dataset_dir
 
     def _append_log(self, s: str) -> None:
         self.txt_logs.configure(state="normal")
@@ -356,12 +538,38 @@ class PredictionsTab(BaseTab):
                 pass
         self.var_status.set("status: stopping...")
 
+    def _resolve_dataset_path(self, s: str) -> Path:
+        p = Path(s)
+        if p.is_absolute():
+            return p
+        return (self.sim_root / p).resolve()
+
+    def _selected_dataset_paths(self) -> List[Path]:
+        """Return dataset dirs to run on (single or multi)."""
+        if hasattr(self, "var_multi_datasets") and bool(self.var_multi_datasets.get()):
+            out: List[Path] = []
+            for s in self._multi_dataset_paths:
+                s = str(s).strip()
+                if not s:
+                    continue
+                out.append(self._resolve_dataset_path(s))
+            # De-dup while preserving order
+            seen = set()
+            uniq: List[Path] = []
+            for p in out:
+                key = str(p)
+                if key in seen:
+                    continue
+                seen.add(key)
+                uniq.append(p)
+            return uniq
+
+        ds = self.state.dataset_dir
+        return [ds] if ds else []
+
     def _run_predictions(self) -> None:
         if self.proc and self.proc.poll() is None:
             messagebox.showinfo("Info", "Predictions already running.")
-            return
-        if not self.state.dataset_dir:
-            messagebox.showinfo("Info", "No dataset selected.")
             return
 
         model_s = self.var_model.get().strip()
@@ -370,41 +578,30 @@ class PredictionsTab(BaseTab):
             messagebox.showerror("Error", f"Model not found:\n{model_path}")
             return
 
-        data_dir = self.state.dataset_dir
-        if not (data_dir / "meta.jsonl").exists() or not (data_dir / "labels.jsonl").exists():
-            messagebox.showerror("Error", f"Dataset missing meta.jsonl/labels.jsonl:\n{data_dir}")
+        dataset_dirs = self._selected_dataset_paths()
+        if not dataset_dirs:
+            messagebox.showinfo("Info", "No dataset selected.")
             return
-
-        out_dir = data_dir / "predictions"
-        out_dir.mkdir(parents=True, exist_ok=True)
 
         split = self.var_split.get().strip() or "test"
         device = self.var_device.get().strip() or "auto"
         max_samples_s = self.var_max_samples.get().strip()
         save_preds = bool(self.chk_save_preds.get())
-
-        cmd: List[str] = ["bash", str(self.sim_root / "predict.sh"),
-                          "--model", str(model_path),
-                          "--data", str(data_dir),
-                          "--split", split,
-                          "--out-dir", str(out_dir)]
-        if device != "auto":
-            cmd.extend(["--device", device])
+        started_s = time.time()
         if max_samples_s:
             try:
                 int(max_samples_s)
             except Exception:
                 messagebox.showerror("Error", "Max must be empty or an integer.")
                 return
-            cmd.extend(["--max-samples", max_samples_s])
-        if save_preds:
-            cmd.append("--save-preds")
 
         profile_model_s = self.var_profile_model.get().strip()
+        pm_path: Optional[Path] = None
         if profile_model_s:
             pm_path = self._resolve_model_path(profile_model_s)
-            if pm_path.exists():
-                cmd.extend(["--profile-model", str(pm_path)])
+            if not pm_path.exists():
+                messagebox.showerror("Error", f"Profile model not found:\n{pm_path}")
+                return
 
         self.var_status.set("status: running...")
         self.var_report_path.set("report: -")
@@ -414,58 +611,120 @@ class PredictionsTab(BaseTab):
         self._pred_rows = []
         self._pred_row_by_id = {}
         self._refresh_tree()
+        self._multi_results = []
+        self._multi_result_by_key = {}
+        try:
+            self.tree_ds.delete(*self.tree_ds.get_children())
+        except Exception:
+            pass
 
         self.btn_run.configure(state="disabled")
         self.btn_stop.configure(state="normal")
         self.stop_evt.clear()
 
         def worker() -> None:
-            report_path: Optional[Path] = None
-            preds_path: Optional[Path] = None
+            last_report_path: Optional[Path] = None
+            last_preds_path: Optional[Path] = None
+            last_dataset_dir: Optional[Path] = None
             try:
-                self.proc = subprocess.Popen(
-                    cmd,
-                    cwd=str(self.sim_root),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
-                assert self.proc.stdout is not None
-                for line in self.proc.stdout:
+                for idx, data_dir in enumerate(dataset_dirs, 1):
                     if self.stop_evt.is_set():
                         break
-                    self.log_q.put(line)
-                    if "Report saved to:" in line:
-                        try:
-                            report_path = Path(line.split("Report saved to:", 1)[-1].strip())
-                        except Exception:
-                            report_path = None
-                    if "Predictions saved to:" in line:
-                        try:
-                            preds_path = Path(line.split("Predictions saved to:", 1)[-1].strip())
-                        except Exception:
-                            preds_path = None
 
-                rc = self.proc.wait()
-                if self.stop_evt.is_set():
-                    self.log_q.put("\n[stopped]\n")
-                elif rc != 0:
-                    self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
+                    if not (data_dir / "meta.jsonl").exists() or not (data_dir / "labels.jsonl").exists():
+                        self.log_q.put(f"[error] dataset missing meta.jsonl/labels.jsonl: {data_dir}\n")
+                        continue
+
+                    out_dir = data_dir / "predictions"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+
+                    cmd: List[str] = ["bash", str(self.sim_root / "predict.sh"),
+                                      "--model", str(model_path),
+                                      "--data", str(data_dir),
+                                      "--split", split,
+                                      "--out-dir", str(out_dir)]
+                    if device != "auto":
+                        cmd.extend(["--device", device])
+                    if max_samples_s:
+                        cmd.extend(["--max-samples", max_samples_s])
+                    if save_preds:
+                        cmd.append("--save-preds")
+                    if pm_path is not None:
+                        cmd.extend(["--profile-model", str(pm_path)])
+
+                    self.log_q.put(f"\n[dataset {idx}/{len(dataset_dirs)}] {data_dir}\n")
+                    self.log_q.put("[cmd] " + " ".join(cmd) + "\n")
+
+                    report_path: Optional[Path] = None
+                    preds_path: Optional[Path] = None
+                    self.proc = subprocess.Popen(
+                        cmd,
+                        cwd=str(self.sim_root),
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
+                    assert self.proc.stdout is not None
+                    for line in self.proc.stdout:
+                        if self.stop_evt.is_set():
+                            break
+                        self.log_q.put(line)
+                        if "Report saved to:" in line:
+                            try:
+                                report_path = Path(line.split("Report saved to:", 1)[-1].strip())
+                            except Exception:
+                                report_path = None
+                        if "Predictions saved to:" in line:
+                            try:
+                                preds_path = Path(line.split("Predictions saved to:", 1)[-1].strip())
+                            except Exception:
+                                preds_path = None
+
+                    rc = self.proc.wait()
+                    if self.stop_evt.is_set():
+                        self.log_q.put("\n[stopped]\n")
+                        break
+                    if rc != 0:
+                        self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
+                        continue
+
+                    # Best-effort: if we didn't parse paths, pick newest from out_dir, but only
+                    # from this run (mtime >= started_s) to avoid accidentally loading stale results.
+                    try:
+                        if report_path is None:
+                            cand = [p for p in out_dir.glob("batch_report_*.json") if p.stat().st_mtime >= started_s - 0.5]
+                            cand = sorted(cand, key=lambda p: p.stat().st_mtime)
+                            report_path = cand[-1] if cand else None
+                        if save_preds and preds_path is None:
+                            cand = [p for p in out_dir.glob("batch_preds_*.jsonl") if p.stat().st_mtime >= started_s - 0.5]
+                            cand = sorted(cand, key=lambda p: p.stat().st_mtime)
+                            preds_path = cand[-1] if cand else None
+                    except Exception:
+                        pass
+
+                    # Collect multi-run results
+                    try:
+                        key = str(data_dir.resolve())
+                        label = data_dir.name
+                        result = {
+                            "key": key,
+                            "label": label,
+                            "dataset_dir": data_dir,
+                            "report_path": report_path,
+                            "preds_path": preds_path,
+                        }
+                        self._multi_results.append(result)
+                        self._multi_result_by_key[key] = result
+                    except Exception:
+                        pass
+
+                    last_report_path = report_path
+                    last_preds_path = preds_path
+                    last_dataset_dir = data_dir
             except Exception as e:
                 self.log_q.put(f"\n[error] Failed to run predictions: {e}\n")
             finally:
-                # Best-effort: if we didn't parse paths, pick newest from out_dir.
-                try:
-                    if report_path is None:
-                        cand = sorted(out_dir.glob("batch_report_*.json"), key=lambda p: p.stat().st_mtime)
-                        report_path = cand[-1] if cand else None
-                    if preds_path is None:
-                        cand = sorted(out_dir.glob("batch_preds_*.jsonl"), key=lambda p: p.stat().st_mtime)
-                        preds_path = cand[-1] if cand else None
-                except Exception:
-                    pass
-
                 def apply() -> None:
                     self.btn_run.configure(state="normal")
                     self.btn_stop.configure(state="disabled")
@@ -473,10 +732,17 @@ class PredictionsTab(BaseTab):
                         self.var_status.set("status: stopped")
                     else:
                         self.var_status.set("status: done")
-                    if report_path and report_path.exists():
-                        self._load_report(report_path)
-                    if preds_path and preds_path.exists():
-                        self._load_preds(preds_path)
+                    if bool(self.var_multi_datasets.get()):
+                        if last_dataset_dir:
+                            self._active_dataset_dir = last_dataset_dir
+                        self._render_multi_summary()
+                    else:
+                        if dataset_dirs:
+                            self._active_dataset_dir = dataset_dirs[0]
+                        if last_report_path and last_report_path.exists():
+                            self._load_report(last_report_path)
+                        if last_preds_path and last_preds_path.exists():
+                            self._load_preds(last_preds_path)
 
                 try:
                     self.frame.after(0, apply)
@@ -484,6 +750,104 @@ class PredictionsTab(BaseTab):
                     pass
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _render_multi_summary(self) -> None:
+        """Populate the dataset-results table from collected report JSONs."""
+        try:
+            self._apply_multi_mode_ui()
+        except Exception:
+            pass
+
+        try:
+            self.tree_ds.delete(*self.tree_ds.get_children())
+        except Exception:
+            return
+
+        rows: List[Tuple[str, str, str, str, str, str]] = []
+        for res in self._multi_results:
+            key = str(res.get("key") or "")
+            label = str(res.get("label") or "")
+            report_path = res.get("report_path")
+            preds_path = res.get("preds_path")
+
+            acc_s = ""
+            f1_s = ""
+            seen_s = ""
+            prof_acc_s = ""
+
+            if isinstance(report_path, Path) and report_path.exists():
+                try:
+                    obj = json.loads(report_path.read_text(encoding="utf-8"))
+                    metrics = obj.get("metrics") or {}
+                    acc = metrics.get("accuracy")
+                    f1 = metrics.get("macro_f1")
+                    seen = obj.get("seen_samples")
+                    prof_acc = obj.get("profile_accuracy")
+                    if acc is not None:
+                        acc_s = f"{float(acc):.4f}"
+                    if f1 is not None:
+                        f1_s = f"{float(f1):.4f}"
+                    if seen is not None:
+                        seen_s = str(int(seen))
+                    if prof_acc is not None:
+                        prof_acc_s = f"{float(prof_acc):.4f}"
+                except Exception:
+                    pass
+
+            # Keep paths around for selection handler.
+            res["report_path"] = report_path
+            res["preds_path"] = preds_path
+
+            if not key:
+                # fallback iid must be unique; use label + index
+                key = f"{label}:{len(rows)}"
+                res["key"] = key
+                self._multi_result_by_key[key] = res
+            rows.append((key, label, acc_s, f1_s, seen_s, prof_acc_s))
+
+        for key, label, acc_s, f1_s, seen_s, prof_acc_s in rows:
+            try:
+                self.tree_ds.insert("", "end", iid=key, values=(label, acc_s, f1_s, seen_s, prof_acc_s))
+            except Exception:
+                # iid collisions should be rare; fall back to auto iid
+                self.tree_ds.insert("", "end", values=(label, acc_s, f1_s, seen_s, prof_acc_s))
+
+        # Autoselect first dataset to show details.
+        try:
+            kids = list(self.tree_ds.get_children())
+            if kids:
+                self.tree_ds.selection_set(kids[0])
+                self.tree_ds.see(kids[0])
+                self._on_tree_ds_select()
+        except Exception:
+            pass
+
+    def _on_tree_ds_select(self, _evt: Optional[object] = None) -> None:
+        sel = self.tree_ds.selection()
+        if not sel:
+            return
+        key = sel[0]
+        res = self._multi_result_by_key.get(key)
+        if not res:
+            return
+        data_dir = res.get("dataset_dir")
+        if isinstance(data_dir, Path):
+            self._active_dataset_dir = data_dir
+
+        report_path = res.get("report_path")
+        preds_path = res.get("preds_path")
+        if isinstance(report_path, Path) and report_path.exists():
+            self._load_report(report_path)
+        if isinstance(preds_path, Path) and preds_path.exists():
+            self._load_preds(preds_path)
+        else:
+            # No per-sample preds saved; clear table.
+            try:
+                self._pred_rows = []
+                self._pred_row_by_id = {}
+                self._refresh_tree()
+            except Exception:
+                pass
 
     def _datasets_base(self) -> Path:
         return self.sim_root / "outputs" / "sim_data"
@@ -576,6 +940,7 @@ class PredictionsTab(BaseTab):
         if not ds:
             return
         self.state.dataset_dir = ds
+        self._active_dataset_dir = ds
         # Notify other tabs (MonitorAppTabbed listens to this).
         try:
             self.parent.event_generate("<<DatasetChanged>>", when="tail")
@@ -756,9 +1121,61 @@ class PredictionsTab(BaseTab):
             messagebox.showerror("Error", f"Failed to load predictions:\n{e}")
             return
 
+        # Backfill GT profile from dataset labels.jsonl (so the table can show GT Prof even when
+        # batch_predict wasn't run with --profile-model and thus didn't emit gt_profile fields).
+        try:
+            self._enrich_rows_with_gt_profile(rows)
+        except Exception as e:
+            # Non-fatal: keep rendering the table even if enrichment fails.
+            self._append_log(f"[warn] failed to enrich rows with GT profile: {e}\n")
+
         self._pred_rows = rows
         self._pred_row_by_id = {str(r.get("id")): r for r in rows if r.get("id")}
         self._refresh_tree()
+
+    def _load_gt_profile_map_from_labels(self) -> Dict[str, str]:
+        """Load sample-id -> profile_id map from the current dataset's labels.jsonl (v2)."""
+        data_dir = self._active_data_dir()
+        if not data_dir:
+            return {}
+        labels_path = data_dir / "labels.jsonl"
+        if not labels_path.exists():
+            return {}
+
+        gt_profile_map: Dict[str, str] = {}
+        with open(labels_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                sid = str(obj.get("id") or "")
+                pid = str(obj.get("profile_id") or "")
+                if sid and pid:
+                    gt_profile_map[sid] = pid
+        return gt_profile_map
+
+    def _enrich_rows_with_gt_profile(self, rows: List[Dict[str, Any]]) -> None:
+        gt_profile_map = self._load_gt_profile_map_from_labels()
+        if not gt_profile_map:
+            return
+
+        for r in rows:
+            sid = str(r.get("id") or "")
+            if not sid:
+                continue
+
+            if not r.get("gt_profile"):
+                pid = gt_profile_map.get(sid, "")
+                if pid:
+                    r["gt_profile"] = pid
+
+            # If a profile prediction exists, compute correctness if absent.
+            if r.get("pred_profile") and r.get("gt_profile") and r.get("profile_correct") is None:
+                r["profile_correct"] = bool(str(r.get("pred_profile")) == str(r.get("gt_profile")))
 
     def _refresh_tree(self) -> None:
         if not hasattr(self, "tree"):
@@ -816,13 +1233,14 @@ class PredictionsTab(BaseTab):
             return
         sid = sel[0]
         row = self._pred_row_by_id.get(sid)
-        if not row or not self.state.dataset_dir:
+        data_dir = self._active_data_dir()
+        if not row or not data_dir:
             return
 
         image_rel = row.get("image_path")
         if not image_rel:
             return
-        image_path = self.state.dataset_dir / str(image_rel)
+        image_path = data_dir / str(image_rel)
         if not image_path.exists():
             messagebox.showerror("Error", f"Image not found:\n{image_path}")
             return
