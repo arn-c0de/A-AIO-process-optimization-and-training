@@ -396,6 +396,13 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
                 cycles_samples=samples,
                 device=device,
             )
+            # Sanity check: ensure Blender produced the expected images.
+            try:
+                img_count = len(list((output_dir / "images").glob("*.png")))
+            except Exception:
+                img_count = 0
+            if img_count < len(records):
+                raise RuntimeError(f"Blender render incomplete (extend): expected >= {len(records)} images, found {img_count} under {output_dir / 'images'}")
         else:
             raise ValueError(f"Unsupported render backend: {backend}")
 
@@ -475,6 +482,14 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
                     cycles_samples=samples,
                     device=device,
                 )
+
+                # Sanity check: ensure Blender produced the expected images.
+                try:
+                    img_count = len(list((temp_dir / "images").glob("*.png")))
+                except Exception:
+                    img_count = 0
+                if img_count != len(records):
+                    raise RuntimeError(f"Blender render incomplete: expected {len(records)} images, found {img_count} under {temp_dir / 'images'}")
 
                 write_jsonl(temp_dir / "meta.jsonl", meta_rows)
                 write_jsonl(temp_dir / "labels.jsonl", label_rows)

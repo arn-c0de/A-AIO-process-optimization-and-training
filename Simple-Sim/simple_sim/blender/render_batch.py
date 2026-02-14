@@ -132,7 +132,9 @@ def _configure_cycles(*, width_px: int, height_px: int, samples: int, seed: int,
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
     scene.cycles.samples = int(samples)
-    scene.cycles.seed = int(seed)
+    # Cycles seed must fit a signed 32-bit int.
+    seed32 = int(seed) % 2147483647
+    scene.cycles.seed = int(seed32)
     scene.cycles.use_adaptive_sampling = False
     scene.cycles.use_denoising = False
     scene.render.resolution_x = int(width_px)
@@ -276,17 +278,28 @@ def main() -> None:
             jobs.append(json.loads(line))
 
     # One blender process; rebuild a minimal scene per job.
+    errors = 0
     for i, job in enumerate(jobs, 1):
-        _clean_scene()
-        _build_scene_for_job(job, samples=int(args.samples), device=str(args.device))
-        out_path = out_root / str(job["image_path"])
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        bpy.context.scene.render.filepath = str(out_path)
-        bpy.ops.render.render(write_still=True)
+        try:
+            _clean_scene()
+            _build_scene_for_job(job, samples=int(args.samples), device=str(args.device))
+            out_path = out_root / str(job["image_path"])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            bpy.context.scene.render.filepath = str(out_path)
+            bpy.ops.render.render(write_still=True)
+        except Exception as exc:
+            errors += 1
+            print(f"[render][error] job {i}/{len(jobs)} failed: {exc}")
+            # Fail fast; leaving a partially-rendered dataset is worse than stopping.
+            break
 
         # Flush stdout-ish progress for long runs.
         if i == 1 or i % 50 == 0 or i == len(jobs):
             print(f"[render] {i}/{len(jobs)} -> {out_path}")
+
+    if errors:
+        # Ensure Blender returns non-zero so upstream can abort.
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
