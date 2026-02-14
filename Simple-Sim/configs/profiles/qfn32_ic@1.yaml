@@ -13,8 +13,8 @@
 #   does not specify a component color (schema v2 behavior).
 #
 # Notes for QFN profiles:
-# - `SOLDER_BRIDGE` and `CORNER_LIFT` are treated as explicit defect types in
-#   `simple_sim/defects.py` (they bypass the tolerance thresholds and are labeled directly).
+# - Uses standard defect set (OK, MISSING, MISALIGNED, TOMBSTONE).
+# - SOLDER_BRIDGE and CORNER_LIFT removed: not distinguishable from MISALIGNED in 2D rendering.
 #
 # Units and conventions:
 # - `geometry_ranges` values are in *pixels* at the ROI scaling (`roi.mm_per_px`) used by
@@ -46,8 +46,8 @@ component:
 geometry_ranges:
   pad_width: [45.0, 55.0]
   pad_height: [110.0, 130.0]
-  pad_spacing: [300.0, 340.0]       # horizontal (X) distance between left/right pad rows
-  pad_spacing_y: [300.0, 340.0]     # vertical (Y) distance between top/bottom pad rows
+  pad_spacing: [520.0, 560.0]       # horizontal (X) distance between left/right pad rows
+  pad_spacing_y: [520.0, 560.0]     # vertical (Y) distance between top/bottom pad rows
   component_length: [485.0, 515.0]
   component_width: [485.0, 515.0]
 
@@ -60,8 +60,7 @@ defect_set:
   - OK
   - MISSING
   - MISALIGNED
-  - SOLDER_BRIDGE
-  - CORNER_LIFT
+  - TOMBSTONE
 
 render:
   component_color_bgr: [6, 6, 6]
