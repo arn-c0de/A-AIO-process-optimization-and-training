@@ -1901,14 +1901,35 @@ class WeightsTab(BaseTab):
         return obj if isinstance(obj, dict) else None
 
     def _report_search_dirs(self) -> List[Path]:
+        def add_dataset_prediction_dirs(ds: Path) -> None:
+            # PredictionsTab default out-dir: <dataset>/predictions
+            dirs.append(ds / "predictions")
+            # WeightsTab default out-dir: <dataset>/predictions/weights_tab
+            dirs.append(ds / "predictions" / "weights_tab")
+
         dirs: List[Path] = []
         # Common default from scripts/batch_predict.py
         dirs.append(self.sim_root / "outputs" / "models")
         dirs.append(self.sim_root / "outputs" / "models" / "history")
-        # PredictionsTab default out-dir: <dataset>/predictions
-        if self.state.dataset_dir:
-            dirs.append(self.state.dataset_dir / "predictions")
-            dirs.append(self.state.dataset_dir / "predictions" / "weights_tab")
+        # Also scan prediction report dirs across all datasets, so history does not "disappear"
+        # when switching datasets in the UI.
+        sim_data = self.sim_root / "outputs" / "sim_data"
+        runs = sim_data / "runs"
+        versions = sim_data / "versions"
+        try:
+            if runs.exists():
+                for ds in runs.iterdir():
+                    if ds.is_dir():
+                        add_dataset_prediction_dirs(ds)
+        except Exception:
+            pass
+        try:
+            if versions.exists():
+                for ds in versions.glob("*/*"):
+                    if ds.is_dir():
+                        add_dataset_prediction_dirs(ds)
+        except Exception:
+            pass
         # Dedup
         out: List[Path] = []
         seen = set()
