@@ -1,5 +1,15 @@
 # Model Arena Report
-> Last updated: 2026-02-14 21:09:06
+> Last updated: 2026-02-14 21:17:37
+
+## Charts
+
+### Top Avg Accuracy
+
+![Top Avg Accuracy](ARENA_REPORT_assets/top_avg_accuracy.svg)
+
+### Top Avg F1
+
+![Top Avg F1](ARENA_REPORT_assets/top_avg_f1.svg)
 
 ## Overall Ranking
 
