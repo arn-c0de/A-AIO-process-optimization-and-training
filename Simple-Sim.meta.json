@@ -1,8 +1,0 @@
-{
-  "timestamp": "2026-02-14T20:54:50",
-  "run_iteration": 1,
-  "dataset_mode": "new",
-  "dataset_dir": "/home/arn/Documents/Projects/A-AIO-process-optimization-and-training/Simple-Sim/outputs/sim_data/runs/Transistor-v1",
-  "out_dir": "/home/arn/Documents/Projects/A-AIO-process-optimization-and-training/Simple-Sim/outputs/sim_data/runs/Transistor-v1",
-  "model_path": "/home/arn/Documents/Projects/A-AIO-process-optimization-and-training/Simple-Sim"
-}
