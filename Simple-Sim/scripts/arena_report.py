@@ -321,12 +321,13 @@ def _write_svg_barh(
         vv = max(0.0, float(v))
         return left_pad + (vv / (vmax)) * plot_w
 
-    # Colors: readable on white + GitHub markdown.
-    bg = "#ffffff"
-    axis = "#d0d7de"
-    text = "#24292f"
-    bar = "#0969da"
-    bar2 = "#54aeff"
+    # Dark theme: readable on typical Git markdown (light background) without needing CSS/JS.
+    # Background is black, text is white.
+    bg = "#0b0f14"
+    axis = "#30363d"
+    text = "#f0f6fc"
+    bar = "#2f81f7"
+    bar2 = "#79c0ff"
 
     lines: List[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
@@ -458,9 +459,9 @@ def _write_svg_pie_with_legend(
     legend_y = 92.0
     legend_row = 22.0
 
-    bg = "#ffffff"
-    text = "#24292f"
-    axis = "#d0d7de"
+    bg = "#0b0f14"
+    text = "#f0f6fc"
+    axis = "#30363d"
     palette = [
         "#0969da",
         "#1f883d",
