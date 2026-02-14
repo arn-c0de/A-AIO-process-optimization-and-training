@@ -249,6 +249,7 @@ class PipelineControlTab(BaseTab):
         self.model_combo.pack(side="left")
         ToolTip(self.model_combo, text_func=lambda: self.var_model.get())
         ttk.Button(top2, text="↻", width=3, command=self._refresh_models).pack(side="left", padx=(6, 0))
+        ttk.Button(top2, text="+", width=3, command=self._add_new_model).pack(side="left", padx=(2, 0))
 
         ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
 
@@ -1617,6 +1618,36 @@ class PipelineControlTab(BaseTab):
 
         self._all_model_combo_values = values
         self._update_model_dropdown_for_dataset()
+
+    def _add_new_model(self) -> None:
+        """Create a new model entry so training can write to it."""
+        ds = self._selected_dataset_dir()
+        default_name = ds.name if ds else ""
+        name = simpledialog.askstring(
+            "New Model",
+            "Model name (without .pt):",
+            initialvalue=default_name,
+            parent=self.frame,
+        )
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+
+        model_path = self.sim_root / "outputs" / "models" / f"{name}.pt"
+        rel = str(model_path.resolve().relative_to(self.sim_root.resolve()))
+
+        # Add to dropdown values if not already present
+        if rel not in self._all_model_combo_values:
+            self._all_model_combo_values.insert(0, rel)
+        current_values = list(self.model_combo["values"])
+        if rel not in current_values:
+            current_values.insert(0, rel)
+            self.model_combo["values"] = current_values
+
+        self.var_model.set(rel)
+        self._append_log(f"[model] New model target: {rel}\n")
 
     def _refresh_profiles(self) -> None:
         """Refresh profile dropdown list."""

@@ -46,7 +46,8 @@ component:
 geometry_ranges:
   pad_width: [45.0, 55.0]
   pad_height: [110.0, 130.0]
-  pad_spacing: [300.0, 340.0]
+  pad_spacing: [300.0, 340.0]       # horizontal (X) distance between left/right pad rows
+  pad_spacing_y: [300.0, 340.0]     # vertical (Y) distance between top/bottom pad rows
   component_length: [485.0, 515.0]
   component_width: [485.0, 515.0]
 

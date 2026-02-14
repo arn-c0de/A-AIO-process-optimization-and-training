@@ -674,6 +674,17 @@ class WeightsTab(BaseTab):
         )
         self._models = paths
 
+        # Preserve expanded groups and selection before rebuilding
+        prev_open_groups: set = set()
+        for child in self.tree.get_children():
+            if child.startswith("group::") and self.tree.item(child, "open"):
+                prev_open_groups.add(child)
+
+        prev_selected_paths: set = set()
+        for iid in self.tree.selection():
+            if iid in self._model_by_iid:
+                prev_selected_paths.add(str(self._model_by_iid[iid].resolve()))
+
         self.tree.delete(*self.tree.get_children())
         self._model_by_iid.clear()
         self._group_iids.clear()
@@ -688,6 +699,7 @@ class WeightsTab(BaseTab):
                 group_members[group] = []
             group_members[group].append(p)
 
+        restore_selection: List[str] = []
         item_counter = 0
         for group in group_names:
             group_iid = f"group::{group}"
@@ -700,6 +712,7 @@ class WeightsTab(BaseTab):
                 text=label,
                 values=("", "", "", "", "", f"{count} models"),
                 tags=("group_header",),
+                open=group_iid in prev_open_groups,
             )
             self._group_iids[group] = group_iid
             for p in group_members.get(group, []):
@@ -720,6 +733,12 @@ class WeightsTab(BaseTab):
                     tags=("model_entry",),
                 )
                 self._model_by_iid[iid] = p
+                if str(p.resolve()) in prev_selected_paths:
+                    restore_selection.append(iid)
+
+        # Restore previous selection
+        if restore_selection:
+            self.tree.selection_set(restore_selection)
 
         # Populate compare selectors
         self.combo_a.configure(values=display_values)
@@ -1206,15 +1225,11 @@ class WeightsTab(BaseTab):
         self._refresh_models()
 
     def _is_deletable_checkpoint(self, p: Path) -> bool:
-        """Allow deleting only snapshots/imports inside this repo (avoid accidental deletion elsewhere)."""
+        """Allow deleting any checkpoint inside outputs/models/ (avoid accidental deletion elsewhere)."""
         try:
             rp = p.resolve()
             root = (self.sim_root / "outputs" / "models").resolve()
-            versions = (root / "versions").resolve()
-            imports = (root / "imports").resolve()
-            # Explicitly do NOT allow deleting the active models directly under outputs/models/*.pt
-            # (those are the main entrypoints for training/eval).
-            return str(rp).startswith(str(versions) + os.sep) or str(rp).startswith(str(imports) + os.sep)
+            return str(rp).startswith(str(root) + os.sep)
         except Exception:
             return False
 
