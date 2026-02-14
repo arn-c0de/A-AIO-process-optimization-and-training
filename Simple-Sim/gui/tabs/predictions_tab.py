@@ -93,7 +93,14 @@ class PredictionsTab(BaseTab):
         self.combo_dataset.grid(row=0, column=1, sticky="ew", padx=(6, 6))
         self.combo_dataset.bind("<<ComboboxSelected>>", self._on_dataset_selected)
         ToolTip(self.combo_dataset, text_func=lambda: self.var_dataset.get())
-        ttk.Button(top, text="↻", width=3, command=self._refresh_datasets).grid(row=0, column=2, sticky="w", padx=(0, 12))
+        ds_tools = ttk.Frame(top)
+        ds_tools.grid(row=0, column=2, sticky="w", padx=(0, 12))
+        ttk.Button(ds_tools, text="↻", width=3, command=self._refresh_datasets).pack(side="left")
+        self.var_multi_datasets = tk.BooleanVar(value=False)
+        ttk.Checkbutton(ds_tools, text="Multi", variable=self.var_multi_datasets, command=self._on_multi_toggle).pack(side="left", padx=(8, 0))
+        ttk.Button(ds_tools, text="Select…", command=self._open_multi_dataset_dialog).pack(side="left", padx=(6, 0))
+        self.var_multi_sel = tk.StringVar(value="selected: 0")
+        ttk.Label(ds_tools, textvariable=self.var_multi_sel).pack(side="left", padx=(8, 0))
 
         ttk.Label(top, text="Model:").grid(row=0, column=3, sticky="w")
         self.var_model = tk.StringVar(value="")
@@ -135,13 +142,6 @@ class PredictionsTab(BaseTab):
         self.combo_profile_model = ttk.Combobox(opts, textvariable=self.var_profile_model, state="readonly", width=30)
         self.combo_profile_model.pack(side="left", padx=(6, 4))
         ttk.Button(opts, text="↻", width=3, command=self._refresh_profile_models).pack(side="left")
-
-        ttk.Separator(opts, orient="vertical").pack(side="left", fill="y", padx=(12, 12), pady=2)
-        self.var_multi_datasets = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opts, text="Multi datasets", variable=self.var_multi_datasets, command=self._on_multi_toggle).pack(side="left")
-        ttk.Button(opts, text="Select…", command=self._open_multi_dataset_dialog).pack(side="left", padx=(8, 0))
-        self.var_multi_sel = tk.StringVar(value="selected: 0")
-        ttk.Label(opts, textvariable=self.var_multi_sel).pack(side="left", padx=(8, 0))
 
         status = ttk.Frame(self.frame)
         status.pack(fill="x", pady=(0, 8))
@@ -409,9 +409,17 @@ class PredictionsTab(BaseTab):
     def _apply_multi_mode_ui(self) -> None:
         try:
             if bool(self.var_multi_datasets.get()):
+                try:
+                    self.combo_dataset.configure(state="disabled")
+                except Exception:
+                    pass
                 if self.ds_summary_frame.winfo_ismapped() == 0:
                     self.ds_summary_frame.pack(fill="x", pady=(0, 8))
             else:
+                try:
+                    self.combo_dataset.configure(state="readonly")
+                except Exception:
+                    pass
                 if self.ds_summary_frame.winfo_ismapped() != 0:
                     self.ds_summary_frame.pack_forget()
                 # Clear any stale summary.
