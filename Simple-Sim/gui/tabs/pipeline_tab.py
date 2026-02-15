@@ -340,6 +340,7 @@ class PipelineControlTab(BaseTab):
         ttk.Button(dsbar, text="Snapshot", command=self._snapshot_dataset_selected).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Rename", command=self._rename_dataset_selected).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Delete", command=self._delete_dataset).pack(side="left", padx=(8, 0))
+        ttk.Button(dsbar, text="Create New", command=self._create_new_dataset).pack(side="left", padx=(8, 0))
 
         dsbtns = ttk.Frame(left)
         dsbtns.pack(fill="x", pady=(6, 0))
@@ -2438,6 +2439,77 @@ class PipelineControlTab(BaseTab):
         except Exception as e:
             messagebox.showerror("Delete failed", str(e))
         self._refresh_datasets()
+
+    def _create_new_dataset(self) -> None:
+        """Create a new dataset folder under outputs/sim_data/runs with a placeholder manifest."""
+        if self.proc is not None:
+            messagebox.showwarning("Busy", "Stop the running process before creating datasets.")
+            return
+
+        initial = self._slugify_name(getattr(self, "var_name", tk.StringVar(value="")).get())
+        new_name = simpledialog.askstring(
+            "Create dataset",
+            "New dataset folder name (will be created under outputs/sim_data/runs):",
+            initialvalue=initial,
+            parent=self.frame.winfo_toplevel(),
+        )
+        if not new_name:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            return
+        if "/" in new_name or "\\" in new_name:
+            messagebox.showerror("Error", "Name must not contain path separators.")
+            return
+
+        out_dir = (self.sim_root / "outputs" / "sim_data" / "runs" / new_name).resolve()
+        if out_dir.exists():
+            if messagebox.askyesno("Dataset exists", f"Dataset already exists:\n\n{out_dir}\n\nSelect it?"):
+                self._select_dataset(out_dir)
+            return
+
+        config_candidate = Path(self.var_config.get().strip()) if hasattr(self, "var_config") else None
+        if not config_candidate or not config_candidate.exists():
+            messagebox.showerror(
+                "Missing config",
+                f"Config not found:\n\n{config_candidate}\n\nPick a valid Config first, then retry.",
+            )
+            return
+
+        profile_id = self.var_profile.get().strip() if hasattr(self, "var_profile") else ""
+        if not profile_id:
+            messagebox.showerror("Missing profile", "No profile selected.")
+            return
+
+        try:
+            self._ensure_dataset_skeleton(profile_id, config_candidate, out_dir)
+        except Exception as e:
+            messagebox.showerror("Create failed", str(e))
+            return
+
+        # Prepare pipeline fields to generate into this folder.
+        try:
+            self.var_dataset_mode.set("new")
+        except Exception:
+            pass
+        try:
+            self.var_out.set(str(out_dir))
+        except Exception:
+            pass
+        try:
+            self.var_name.set(new_name)
+        except Exception:
+            pass
+        try:
+            model_path = (self.sim_root / "outputs" / "models" / f"{new_name}.pt").resolve()
+            self.var_model.set(str(model_path))
+            self._refresh_models()
+        except Exception:
+            pass
+
+        self._refresh_datasets()
+        self._select_dataset(out_dir)
+        self._append_log(f"[create dataset] {out_dir}\n")
 
     def _snapshot_dataset_selected(self) -> None:
         """Create a dataset snapshot under outputs/sim_data/versions/ for later training/testing.

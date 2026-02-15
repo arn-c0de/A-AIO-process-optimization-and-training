@@ -24,6 +24,8 @@ from gui.components.overlay_renderer import draw_prediction_overlay, draw_two_st
 from gui.utils.tooltip import ToolTip
 from gui.utils.settings_store import SettingsStore
 
+from simple_sim.model_bundle import bundle_checkpoint_path
+
 
 class PredictionsTab(BaseTab):
     """Tab: Batch predictions + dataset-level evaluation, powered by predict.sh."""
@@ -59,6 +61,7 @@ class PredictionsTab(BaseTab):
         self.var_report_path: tk.StringVar
         self.var_preds_path: tk.StringVar
         self.chk_save_preds: tk.BooleanVar
+        self.chk_auto_train_bundle: tk.BooleanVar
 
         self.var_profile_model: tk.StringVar
         self.var_multi_sel: tk.StringVar
@@ -135,6 +138,11 @@ class PredictionsTab(BaseTab):
 
         self.chk_save_preds = tk.BooleanVar(value=True)
         ttk.Checkbutton(opts, text="Save per-sample preds", variable=self.chk_save_preds).pack(side="left")
+
+        self.chk_auto_train_bundle = tk.BooleanVar(value=False)
+        ttk.Checkbutton(opts, text="Auto-train missing bundle ckpt", variable=self.chk_auto_train_bundle).pack(
+            side="left", padx=(10, 0)
+        )
 
         ttk.Separator(opts, orient="vertical").pack(side="left", fill="y", padx=(12, 12), pady=2)
         ttk.Label(opts, text="Profile Model:").pack(side="left")
@@ -331,6 +339,10 @@ class PredictionsTab(BaseTab):
         except Exception:
             pass
         try:
+            self.chk_auto_train_bundle.set(bool(st.get("pred.auto_train_bundle", False)))
+        except Exception:
+            pass
+        try:
             self.var_multi_datasets.set(bool(st.get("pred.multi_datasets", False)))
         except Exception:
             pass
@@ -381,6 +393,18 @@ class PredictionsTab(BaseTab):
 
         try:
             self.chk_save_preds.trace_add("write", lambda *_a: on_chk())
+        except Exception:
+            pass
+
+        def on_chk_bundle() -> None:
+            try:
+                st.set("pred.auto_train_bundle", bool(self.chk_auto_train_bundle.get()))
+                st.schedule_save(self.frame)
+            except Exception:
+                pass
+
+        try:
+            self.chk_auto_train_bundle.trace_add("write", lambda *_a: on_chk_bundle())
         except Exception:
             pass
 
@@ -643,11 +667,93 @@ class PredictionsTab(BaseTab):
                         self.log_q.put(f"[error] dataset missing meta.jsonl/labels.jsonl: {data_dir}\n")
                         continue
 
+                    # Preflight multi-model bundles: resolve per-profile checkpoint to avoid runtime failures.
+                    model_arg_path = model_path
+                    if model_path.exists() and model_path.is_dir():
+                        manifest_path = data_dir / "dataset_manifest.json"
+                        if not manifest_path.exists():
+                            self.log_q.put(f"[error] dataset manifest missing: {manifest_path}\n")
+                            continue
+                        try:
+                            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                            profile_id = str((manifest.get("component_profile") or {}).get("profile_id") or "").strip()
+                        except Exception as e:
+                            self.log_q.put(f"[error] failed to read dataset manifest: {manifest_path} ({e})\n")
+                            continue
+                        if not profile_id:
+                            self.log_q.put(f"[error] dataset manifest missing component_profile.profile_id: {manifest_path}\n")
+                            continue
+                        expected = bundle_checkpoint_path(model_path, profile_id, kind="best")
+                        if not expected.exists():
+                            avail = sorted([p.name for p in model_path.glob("*.pt")])[:12]
+                            if bool(self.chk_auto_train_bundle.get()):
+                                py = self.sim_root / ".venv" / "bin" / "python"
+                                cmd_train: List[str] = [
+                                    str(py),
+                                    "scripts/train.py",
+                                    "--data",
+                                    str(data_dir),
+                                    "--out",
+                                    str(model_path),
+                                ]
+                                if device != "auto":
+                                    cmd_train.extend(["--device", device])
+                                self.log_q.put(
+                                    f"[bundle] missing '{profile_id}.pt' -> training into bundle...\n"
+                                    f"[cmd] " + " ".join(cmd_train) + "\n"
+                                )
+                                try:
+                                    proc = subprocess.Popen(
+                                        cmd_train,
+                                        cwd=str(self.sim_root),
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT,
+                                        text=True,
+                                        bufsize=1,
+                                    )
+                                    assert proc.stdout is not None
+                                    for line in proc.stdout:
+                                        if self.stop_evt.is_set():
+                                            break
+                                        self.log_q.put(line)
+                                    rc = proc.wait()
+                                    if self.stop_evt.is_set():
+                                        self.log_q.put("\n[stopped]\n")
+                                        break
+                                    if rc != 0:
+                                        self.log_q.put(f"\n[error] train.py exited with code {rc}\n")
+                                        continue
+                                except Exception as e:
+                                    self.log_q.put(f"\n[error] failed to run train.py: {e}\n")
+                                    continue
+
+                                # Re-check now that training finished.
+                                if not expected.exists():
+                                    avail2 = sorted([p.name for p in model_path.glob("*.pt")])[:12]
+                                    self.log_q.put(
+                                        f"[error] bundle still missing checkpoint for profile '{profile_id}':\n"
+                                        f"  bundle: {model_path}\n"
+                                        f"  expected: {expected}\n"
+                                        f"  available: {', '.join(avail2) if avail2 else '(none)'}\n"
+                                    )
+                                    continue
+                            else:
+                                self.log_q.put(
+                                    f"[error] multi-model bundle missing checkpoint for profile '{profile_id}':\n"
+                                    f"  bundle: {model_path}\n"
+                                    f"  expected: {expected}\n"
+                                    f"  available: {', '.join(avail) if avail else '(none)'}\n"
+                                    f"[hint] Enable 'Auto-train missing bundle ckpt' or train manually:\n"
+                                    f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {model_path}\n"
+                                )
+                                continue
+                        model_arg_path = expected
+
                     out_dir = data_dir / "predictions"
                     out_dir.mkdir(parents=True, exist_ok=True)
 
                     cmd: List[str] = ["bash", str(self.sim_root / "predict.sh"),
-                                      "--model", str(model_path),
+                                      "--model", str(model_arg_path),
                                       "--data", str(data_dir),
                                       "--split", split,
                                       "--out-dir", str(out_dir)]

@@ -22,6 +22,8 @@ from .base_tab import BaseTab
 from gui.state import UiState
 from gui.utils.settings_store import SettingsStore
 
+from simple_sim.model_bundle import bundle_checkpoint_path
+
 
 class WeightsTab(BaseTab):
     """Tab: manage model weights (snapshots/import/export) and run evaluations."""
@@ -2005,6 +2007,31 @@ class WeightsTab(BaseTab):
         device = self.var_device.get().strip() or "auto"
         max_samples_s = self.var_max_samples.get().strip()
         save_preds = bool(self.chk_save_preds.get())
+
+        # Multi-model bundles: resolve per-profile checkpoint early so predict.sh doesn't fail mid-run.
+        if model_path.exists() and model_path.is_dir():
+            manifest_path = data_dir / "dataset_manifest.json"
+            if not manifest_path.exists():
+                raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                profile_id = str((manifest.get("component_profile") or {}).get("profile_id") or "").strip()
+            except Exception as e:
+                raise ValueError(f"Failed to read dataset manifest: {manifest_path} ({e})")
+            if not profile_id:
+                raise ValueError(f"Dataset manifest missing component_profile.profile_id: {manifest_path}")
+            expected = bundle_checkpoint_path(model_path, profile_id, kind="best")
+            if not expected.exists():
+                avail = sorted([p.name for p in model_path.glob("*.pt")])[:12]
+                raise FileNotFoundError(
+                    f"Multi-model bundle has no checkpoint for profile '{profile_id}':\n"
+                    f"  bundle: {model_path}\n"
+                    f"  expected: {expected}\n"
+                    f"  available: {', '.join(avail) if avail else '(none)'}\n\n"
+                    f"Train this dataset into the same bundle to add it:\n"
+                    f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {model_path}\n"
+                )
+            model_path = expected
 
         out_dir = data_dir / "predictions" / "weights_tab"
         out_dir.mkdir(parents=True, exist_ok=True)
