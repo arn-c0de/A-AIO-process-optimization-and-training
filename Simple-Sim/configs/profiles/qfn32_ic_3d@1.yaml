@@ -13,16 +13,16 @@ component:
   package: "QFN-32"
   nominal_dims_mm:
     length: 5.0
-    width: 5.0
+    width: 4.0
     height: 0.85
 
 geometry_ranges:
   pad_width: [45.0, 55.0]
   pad_height: [110.0, 130.0]
-  pad_spacing: [520.0, 560.0]
-  pad_spacing_y: [520.0, 560.0]
+  pad_spacing: [250.0, 280.0]
+  pad_spacing_y: [180.0, 210.0]
   component_length: [485.0, 515.0]
-  component_width: [485.0, 515.0]
+  component_width: [400.0, 430.0]
 
 tolerances:
   ok_shift_px: 5.0
@@ -42,11 +42,12 @@ render_3d:
     focal_length_mm: 60.0
   lighting:
     key_light:
-      location_mm: [20.0, -20.0, 45.0]
+      # Bring lights closer to the part; far lights make the scene much darker (roughly 1/r^2 falloff).
+      location_mm: [10.0, -10.0, 24.0]
       power_w: 1200.0
       size_mm: 28.0
     fill_light:
-      location_mm: [-16.0, 16.0, 40.0]
+      location_mm: [-10.0, 10.0, 20.0]
       power_w: 480.0
       size_mm: 32.0
   materials:

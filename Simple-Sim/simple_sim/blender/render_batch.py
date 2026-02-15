@@ -122,16 +122,11 @@ def _mk_chip_resistor(name: str, *, length: float, width: float, height: float, 
 
 def _mk_sot23_transistor(name: str, *, length: float, width: float, height: float, loc_xyz: Tuple[float, float, float]) -> bpy.types.Object:
     """Create realistic SOT-23 transistor package with tapered shape."""
-    # SOT-23 has trapezoidal profile (narrower at top)
+    # Keep sharp edges (no bevel). AOI-style renders look wrong with rounded corners.
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc_xyz)
     obj = bpy.context.active_object
     obj.name = name
     obj.scale = (length / 2.0, width / 2.0, height / 2.0)
-
-    # Bevel for realistic edges
-    bevel_mod = obj.modifiers.new(name="Bevel", type='BEVEL')
-    bevel_mod.width = min(width, length) * 0.08
-    bevel_mod.segments = 1
 
     return obj
 
@@ -142,11 +137,6 @@ def _mk_qfn_package(name: str, *, length: float, width: float, height: float, lo
     obj = bpy.context.active_object
     obj.name = name
     obj.scale = (length / 2.0, width / 2.0, height / 2.0)
-
-    # Sharp edges for IC package
-    bevel_mod = obj.modifiers.new(name="Bevel", type='BEVEL')
-    bevel_mod.width = min(width, length) * 0.05
-    bevel_mod.segments = 1
 
     return obj
 
@@ -191,12 +181,15 @@ def _pad_positions_mm(footprint: str, nominal: Dict[str, float], *, mm_per_px: f
         ]
     if footprint.startswith("qfn"):
         pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
-        # left/right vertical pads + top/bottom horizontal (swap dims)
+        # QFN: treat pad_height as the *radial* pad length (towards/away from package),
+        # and pad_width as the *tangential* dimension along the package edge.
         return [
-            (-pad_spacing / 2.0, 0.0, pad_w, pad_h),
-            (+pad_spacing / 2.0, 0.0, pad_w, pad_h),
-            (0.0, -pad_spacing_y / 2.0, pad_h, pad_w),
-            (0.0, +pad_spacing_y / 2.0, pad_h, pad_w),
+            # Left/right pads: radial along X, tangential along Y.
+            (-pad_spacing / 2.0, 0.0, pad_h, pad_w),
+            (+pad_spacing / 2.0, 0.0, pad_h, pad_w),
+            # Top/bottom pads: tangential along X, radial along Y.
+            (0.0, -pad_spacing_y / 2.0, pad_w, pad_h),
+            (0.0, +pad_spacing_y / 2.0, pad_w, pad_h),
         ]
     # chip_2pad default
     return [
@@ -336,45 +329,120 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
                            roughness=float(mats_cfg.get("body", {}).get("roughness", 0.75)),
                            metallic=float(mats_cfg.get("body", {}).get("metallic", 0.0)))
 
+    # Pad thickness and component dims (used for sizing + placement)
+    pad_th = 0.05
+    comp_h = float(job.get("component_height_mm") or 0.45)
+
+    # Compute base geometry in mm.
+    pad_w = float(nominal["pad_width"]) * mm_per_px
+    pad_h = float(nominal["pad_height"]) * mm_per_px
+    comp_l_raw = float(nominal["component_length"]) * mm_per_px
+    comp_w_raw = float(nominal["component_width"]) * mm_per_px
+
+    # For QFN, keep pads close to the body. Some configs sample pad_spacing larger than
+    # the body size, which looks like pads "floating away".
+    nominal_pads = dict(nominal)
+    if footprint.startswith("qfn"):
+        pad_spacing_px = float(nominal_pads["pad_spacing"])
+        pad_spacing_y_px = float(nominal_pads.get("pad_spacing_y", pad_spacing_px))
+        pad_radial_px = float(nominal_pads["pad_height"])
+        comp_l_px = float(nominal_pads["component_length"])
+        comp_w_px = float(nominal_pads["component_width"])
+
+        # Keep pads directly at the package edges for QFN.
+        # pad_spacing is center-to-center distance between opposite pads.
+        # For pads to align with package edge: spacing = component_size - pad_radial_length
+        # This positions pad outer edges exactly at the component edges.
+        desired_spacing_px = comp_l_px - pad_radial_px
+        desired_spacing_y_px = comp_w_px - pad_radial_px
+        nominal_pads["pad_spacing"] = min(pad_spacing_px, desired_spacing_px)
+        nominal_pads["pad_spacing_y"] = min(pad_spacing_y_px, desired_spacing_y_px)
+        print(f"[QFN] YAML pad_spacing={pad_spacing_px:.1f}px, desired={desired_spacing_px:.1f}px, FINAL={nominal_pads['pad_spacing']:.1f}px")
+        print(f"[QFN] YAML pad_spacing_y={pad_spacing_y_px:.1f}px, desired={desired_spacing_y_px:.1f}px, FINAL={nominal_pads['pad_spacing_y']:.1f}px")
+
+    # Pre-compute pad positions and ensure the board (substrate) is large enough.
+    # Some profiles use large geometry ranges relative to ROI; if we keep the board
+    # fixed to ROI size, pads/components can overhang and look wrong.
+    pad_positions = _pad_positions_mm(footprint, nominal_pads, mm_per_px=mm_per_px)
+
+    # Use the actual spacing used for pad placement.
+    pad_spacing = float(nominal_pads["pad_spacing"]) * mm_per_px
+
+    # Component sizing rules:
+    # - 2-pad parts need generous overlap so they read as soldered.
+    # - QFN should NOT be stretched to cover the pads; keep nominal body size.
+    if footprint.startswith("qfn"):
+        comp_l = comp_l_raw
+        comp_w = comp_w_raw
+    else:
+        # Component must span far enough to visually reach the pad copper.
+        # Pad outer-edge distance (left-to-right) is: pad_spacing + pad_w.
+        # Use a generous overlap so the part looks soldered even with small jitter.
+        # (pad_spacing + 2.5*pad_w) means ~0.75*pad_w overhang beyond each outer pad edge.
+        required_length = pad_spacing + (2.5 * pad_w)
+        comp_l = max(comp_l_raw, required_length)
+        comp_w = comp_w_raw
+
+    # SOT-23 has 2 pads on one side separated in Y; ensure the body isn't narrower
+    # than the pad cluster, otherwise it can look "not connected" even in OK.
+    if footprint == "sot23":
+        pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
+        required_width = (pad_spacing_y + pad_h) * 1.05
+        comp_w = max(comp_w, required_width)
+
+    print(
+        f"[COMP] Length={comp_l:.3f}mm (pad_spacing={pad_spacing:.3f}mm, pad_w={pad_w:.3f}mm) "
+        f"Width={comp_w:.3f}mm (raw={comp_w_raw:.3f}mm)"
+    )
+
     # Substrate plane
     board_w_mm = max(1e-6, float(width_px) * mm_per_px)
     board_h_mm = max(1e-6, float(height_px) * mm_per_px)
+    if pad_positions:
+        min_x = min((cx - pw / 2.0) for (cx, cy, pw, ph) in pad_positions)
+        max_x = max((cx + pw / 2.0) for (cx, cy, pw, ph) in pad_positions)
+        min_y = min((cy - ph / 2.0) for (cx, cy, pw, ph) in pad_positions)
+        max_y = max((cy + ph / 2.0) for (cx, cy, pw, ph) in pad_positions)
+        pad_span_x = max(1e-6, max_x - min_x)
+        pad_span_y = max(1e-6, max_y - min_y)
+    else:
+        pad_span_x = pad_span_y = 1e-6
+
+    # Size around the larger of pad cluster and component, with margin.
+    # Use a generous margin (or full ROI size) so pads are well within the PCB, not at edges.
+    needed_span_x = max(pad_span_x, comp_l)
+    needed_span_y = max(pad_span_y, comp_w)
+    margin = max(3.0, max(pad_w, pad_h, 0.8) * 3.0)  # Much larger margin for realistic PCB
+    board_w_mm = max(board_w_mm, needed_span_x + 2.0 * margin)
+    board_h_mm = max(board_h_mm, needed_span_y + 2.0 * margin)
+
     sub = _mk_plane("substrate", size_xy=(board_w_mm, board_h_mm), loc_xyz=(0.0, 0.0, 0.0))
     _apply_material(sub, m_sub)
 
     # Pads (thin boxes)
-    pad_th = 0.05
-    for i, (cx, cy, pw, ph) in enumerate(_pad_positions_mm(footprint, nominal, mm_per_px=mm_per_px), 1):
+    for i, (cx, cy, pw, ph) in enumerate(pad_positions, 1):
         pad = _mk_box(f"pad_{i}", size_xyz=(pw, ph, pad_th), loc_xyz=(cx, cy, pad_th / 2.0))
         _apply_material(pad, m_cu)
 
     # Component body
     comp_type = str(defect.get("type", "OK"))
-    comp_h = float(job.get("component_height_mm") or 0.45)
-
-    # FIX: Component MUST fully cover both pads!
-    pad_spacing = float(nominal["pad_spacing"]) * mm_per_px
-    pad_w = float(nominal["pad_width"]) * mm_per_px
-    pad_h = float(nominal["pad_height"]) * mm_per_px
-    comp_l_raw = float(nominal["component_length"]) * mm_per_px
-
-    # Component must span: (pad_spacing + full pad width on both sides)
-    # = pad_spacing + 2 * pad_width to ensure it reaches OUTER edges of both pads
-    required_length = pad_spacing + (1.5 * pad_w)  # Generous overlap
-
-    comp_l = max(comp_l_raw, required_length)
-    comp_w = float(nominal["component_width"]) * mm_per_px
-
-    print(f"[COMP] Length={comp_l:.3f}mm (pad_spacing={pad_spacing:.3f}mm, pad_w={pad_w:.3f}mm)")
 
     comp_obj = None
     if comp_type != "MISSING":
         # Create realistic 3D component based on footprint type
         comp_z = pad_th + comp_h / 2.0
 
+        # Place the body centered over the pad cluster. For SOT-23 the pad cluster
+        # centroid is not at (0,0) because there are 2 pads on one side and 1 on the other.
+        base_x, base_y = 0.0, 0.0
+        if footprint == "sot23":
+            if pad_positions:
+                base_x = sum(p[0] for p in pad_positions) / float(len(pad_positions))
+                base_y = sum(p[1] for p in pad_positions) / float(len(pad_positions))
+
         if footprint == "chip_2pad":
             # Chip resistor/capacitor with realistic rounded shape
-            comp_obj = _mk_chip_resistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(0.0, 0.0, comp_z))
+            comp_obj = _mk_chip_resistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
 
             # Add metallic end caps (solder terminals)
             end_cap_material = _new_material("mat_endcap", base_color=(0.7, 0.7, 0.75), roughness=0.2, metallic=0.95)
@@ -400,7 +468,7 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
 
         elif footprint == "sot23":
             # SOT-23 transistor package
-            comp_obj = _mk_sot23_transistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(0.0, 0.0, comp_z))
+            comp_obj = _mk_sot23_transistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
 
             # Add solder joints at the 3 SOT-23 pins
             # SOT-23: 2 pins on one side (left), 1 pin on other side (right)
@@ -419,10 +487,26 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
             _add_solder_joint("solder_R", pos_xyz=(pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
         elif footprint.startswith("qfn"):
             # QFN IC package
-            comp_obj = _mk_qfn_package("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(0.0, 0.0, comp_z))
+            comp_obj = _mk_qfn_package("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
+
+            # Add solder joints at the 4 QFN pads (left, right, top, bottom)
+            pad_w = float(nominal["pad_width"]) * mm_per_px
+            pad_spacing_val = float(nominal_pads["pad_spacing"]) * mm_per_px
+            pad_spacing_y = float(nominal_pads.get("pad_spacing_y", pad_spacing_val)) * mm_per_px
+
+            solder_size = min(pad_w, comp_h) * 0.25
+            solder_z = pad_th + solder_size * 0.3
+
+            # Left and right pads (along X axis)
+            _add_solder_joint("solder_L", pos_xyz=(-pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
+            _add_solder_joint("solder_R", pos_xyz=(pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
+
+            # Top and bottom pads (along Y axis)
+            _add_solder_joint("solder_T", pos_xyz=(0.0, -pad_spacing_y / 2.0, solder_z), size=solder_size, material=m_solder)
+            _add_solder_joint("solder_B", pos_xyz=(0.0, pad_spacing_y / 2.0, solder_z), size=solder_size, material=m_solder)
         else:
             # Fallback: simple box
-            comp_obj = _mk_box("component", size_xyz=(comp_l, comp_w, comp_h), loc_xyz=(0.0, 0.0, comp_z))
+            comp_obj = _mk_box("component", size_xyz=(comp_l, comp_w, comp_h), loc_xyz=(base_x, base_y, comp_z))
 
         _apply_material(comp_obj, m_body)
 
