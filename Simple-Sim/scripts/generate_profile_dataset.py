@@ -49,6 +49,9 @@ def generate_profile_dataset(config_path: Path, output_dir: Path):
 
     domain_name = 'domain_A'
     domain_config = config['domains'][domain_name]
+    backend = config.get("render", {}).get("backend", "opencv_2d")
+    if backend != "opencv_2d":
+        raise ValueError("generate_profile_dataset.py currently supports only render.backend='opencv_2d'")
 
     # Load all profiles
     profile_data = []
@@ -136,18 +139,19 @@ def generate_profile_dataset(config_path: Path, output_dir: Path):
     for r in records:
         tmp_id = f"{domain_name}/{r['index']:06d}"
         tmp_meta_rows.append(MetaRow(
-            schema_version=1,
+            schema_version=2,
             id=tmp_id,
             run_id=run_id,
             domain=domain_name,
             split='train',
             seed=r['seed'],
             image_path=r['image_path'],
-            render_backend='opencv_2d',
+            render_backend=str(backend),
             footprint=r['footprint'],
             nominal=r['nominal'],
             defect=r['defect'],
             augment=r['augment'],
+            render_meta={},
         ))
         tmp_label_rows.append(LabelRow(schema_version=2, id=tmp_id, class_name=r['class_name'], profile_id=r['profile_id']))
 
@@ -169,18 +173,19 @@ def generate_profile_dataset(config_path: Path, output_dir: Path):
         sample_id = make_sample_id(run_id, domain_name, split_name, r['index'])
 
         meta_rows.append(MetaRow(
-            schema_version=1,
+            schema_version=2,
             id=sample_id,
             run_id=run_id,
             domain=domain_name,
             split=split_name,
             seed=r['seed'],
             image_path=r['image_path'],
-            render_backend='opencv_2d',
+            render_backend=str(backend),
             footprint=r['footprint'],
             nominal=r['nominal'],
             defect=r['defect'],
             augment=r['augment'],
+            render_meta={},
         ))
         label_rows.append(LabelRow(
             schema_version=2,

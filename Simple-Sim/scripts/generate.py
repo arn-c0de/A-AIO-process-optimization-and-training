@@ -21,13 +21,14 @@ from simple_sim.defects import sample_defect_params, classify_defect
 from simple_sim.generator_2d import (
     sample_nominal_geometry,
     sample_augment_params,
-    render_roi
+    render_roi,
 )
 from simple_sim.dataset_store import write_dataset
 from simple_sim.splits import generate_splits, assert_no_overlap, write_splits, check_class_coverage
 from simple_sim.telemetry import emit
 from simple_sim.profile_hash import load_profile, hash_profile
 from simple_sim.manifest import write_dataset_manifest, read_dataset_manifest
+from simple_sim.generator_3d import write_jobs_jsonl, render_blender_batch
 
 
 def _append_jsonl(path: Path, rows) -> None:
@@ -86,6 +87,7 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
     roi_width = config['roi']['width_px']
     roi_height = config['roi']['height_px']
     classes = config['classes']
+    backend = config.get("render", {}).get("backend", "opencv_2d")
 
     # Load component profile
     # Use project root to find profiles, not config file location
@@ -103,6 +105,8 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
     footprint = profile['component']['footprint']
     geometry_ranges = profile.get('geometry_ranges')
     tolerances = profile.get('tolerances')
+    component_height_mm = float(profile.get("component", {}).get("nominal_dims_mm", {}).get("height", 0.45) or 0.45)
+    profile_render_3d = profile.get("render_3d") or {}
 
     # Backward compatibility: v1 configs can override from config
     if schema_version == 1:
@@ -188,6 +192,7 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
     print(f"Classes: {classes}")
     total_target = sum(classes.values())
     print(f"Total samples: {total_target}")
+    print(f"Render backend: {backend}")
     emit(
         "gen_start",
         run_id=run_id,
@@ -201,8 +206,6 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
         start_index=int(start_index),
     )
 
-    # Storage for all data
-    all_images = {}
     # Store intermediate records keyed by stable index; split gets assigned after stratification.
     records = []
 
@@ -237,22 +240,7 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
             # Sample augmentation
             augment = sample_augment_params(config['augment'], domain_config, rng)
 
-            # Render image
-            img = render_roi(
-                nominal=nominal,
-                defect_params=defect_params,
-                augment=augment,
-                roi_size=(roi_width, roi_height),
-                config=config['render'],
-                tolerances=tolerances,
-                rng=rng,
-                footprint=footprint,
-            )
-
             image_path = f"images/{sample_index:06d}.png"
-
-            # Store image
-            all_images[image_path] = img
 
             records.append({
                 'index': sample_index,
@@ -286,18 +274,19 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
     for r in records:
         tmp_id = f"{domain_name}/{r['index']:06d}"
         tmp_meta_rows.append(MetaRow(
-            schema_version=1,
+            schema_version=2,
             id=tmp_id,
             run_id=run_id,
             domain=domain_name,
             split='train',  # placeholder; only used for grouping, not persisted
             seed=r['seed'],
             image_path=r['image_path'],
-            render_backend='opencv_2d',
+            render_backend=str(backend),
             footprint=footprint,
             nominal=r['nominal'],
             defect=r['defect'],
             augment=r['augment'],
+            render_meta={},
         ))
         tmp_label_rows.append(LabelRow(schema_version=1, id=tmp_id, class_name=r['class_name']))
 
@@ -319,19 +308,31 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
         split_name = id_to_split[tmp_id]
         sample_id = make_sample_id(run_id, domain_name, split_name, r['index'])
 
+        render_meta: dict = {}
+        if backend == "blender_3d":
+            blender_cfg = (config.get("render") or {}).get("blender") or {}
+            render_meta = {
+                "backend": "blender_3d",
+                "mm_per_px": float(config["roi"]["mm_per_px"]),
+                "cycles_samples": int(blender_cfg.get("samples", 0) or 0),
+                "device": str(blender_cfg.get("device", "CPU")),
+                "profile_render_3d": profile_render_3d,
+            }
+
         meta_rows.append(MetaRow(
-            schema_version=1,
+            schema_version=2,
             id=sample_id,
             run_id=run_id,
             domain=domain_name,
             split=split_name,
             seed=r['seed'],
             image_path=r['image_path'],
-            render_backend='opencv_2d',
+            render_backend=str(backend),
             footprint=footprint,
             nominal=r['nominal'],
             defect=r['defect'],
             augment=r['augment'],
+            render_meta=render_meta,
         ))
         label_rows.append(LabelRow(schema_version=1, id=sample_id, class_name=r['class_name']))
         updated_splits[split_name].append(sample_id)
@@ -346,13 +347,64 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
         # Append mode: keep existing dataset, add new images + rows + update split files.
         images_dir = output_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
-        import cv2
-        for image_path, image_array in all_images.items():
-            full_path = output_dir / image_path
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            ok = cv2.imwrite(str(full_path), image_array)
-            if not ok:
-                raise IOError(f"Failed to write image: {image_path}")
+        if backend == "opencv_2d":
+            import cv2
+            for r in records:
+                seed = int(r["seed"])
+                rng = np.random.default_rng(seed)
+                img = render_roi(
+                    nominal=r["nominal"],
+                    defect_params=r["defect"],
+                    augment=r["augment"],
+                    roi_size=(roi_width, roi_height),
+                    config=config["render"],
+                    tolerances=tolerances,
+                    rng=rng,
+                    footprint=footprint,
+                )
+                full_path = output_dir / r["image_path"]
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                ok = cv2.imwrite(str(full_path), img)
+                if not ok:
+                    raise IOError(f"Failed to write image: {r['image_path']}")
+        elif backend == "blender_3d":
+            blender_cfg = (config.get("render") or {}).get("blender") or {}
+            exe = str(blender_cfg.get("executable", "blender"))
+            samples = int(blender_cfg.get("samples", 64))
+            device = str(blender_cfg.get("device", "CPU"))
+            jobs = []
+            for r in records:
+                jobs.append({
+                    "image_path": r["image_path"],
+                    "seed": int(r["seed"]),
+                    "mm_per_px": float(config["roi"]["mm_per_px"]),
+                    "roi_width_px": int(roi_width),
+                    "roi_height_px": int(roi_height),
+                    "footprint": str(footprint),
+                    "component_height_mm": float(component_height_mm),
+                    "nominal": r["nominal"],
+                    "defect": r["defect"],
+                    "render_3d": profile_render_3d,
+                })
+            jobs_path = output_dir / "blender_jobs_extend.jsonl"
+            write_jobs_jsonl(jobs_path, jobs)
+            render_blender_batch(
+                sim_root=project_root,
+                jobs_path=jobs_path,
+                output_root=output_dir,
+                blender_executable=exe,
+                cycles_samples=samples,
+                device=device,
+            )
+            # Sanity check: ensure Blender produced the expected images.
+            try:
+                img_count = len(list((output_dir / "images").glob("*.png")))
+            except Exception:
+                img_count = 0
+            if img_count < len(records):
+                raise RuntimeError(f"Blender render incomplete (extend): expected >= {len(records)} images, found {img_count} under {output_dir / 'images'}")
+        else:
+            raise ValueError(f"Unsupported render backend: {backend}")
 
         _append_jsonl(output_dir / "meta.jsonl", meta_rows)
         _append_jsonl(output_dir / "labels.jsonl", label_rows)
@@ -365,7 +417,98 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
         assert_no_overlap(merged)
         write_splits(output_dir, merged)
     else:
-        write_dataset(output_dir, all_images, meta_rows, label_rows, config)
+        if backend == "opencv_2d":
+            # Keep existing atomic writer for 2D.
+            all_images = {}
+            for r in records:
+                seed = int(r["seed"])
+                rng = np.random.default_rng(seed)
+                img = render_roi(
+                    nominal=r["nominal"],
+                    defect_params=r["defect"],
+                    augment=r["augment"],
+                    roi_size=(roi_width, roi_height),
+                    config=config["render"],
+                    tolerances=tolerances,
+                    rng=rng,
+                    footprint=footprint,
+                )
+                all_images[r["image_path"]] = img
+            write_dataset(output_dir, all_images, meta_rows, label_rows, config)
+        elif backend == "blender_3d":
+            # Atomic write similar to dataset_store.write_dataset, but images come from Blender batch render.
+            import shutil
+            import yaml
+            from simple_sim.dataset_store import validate_dataset_files
+            from simple_sim.schema import write_jsonl
+
+            output_dir = Path(output_dir)
+            output_dir.parent.mkdir(parents=True, exist_ok=True)
+            temp_dir = output_dir.with_name(output_dir.name + ".tmp")
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+            temp_dir.mkdir(parents=True)
+
+            try:
+                (temp_dir / "images").mkdir(parents=True, exist_ok=True)
+
+                blender_cfg = (config.get("render") or {}).get("blender") or {}
+                exe = str(blender_cfg.get("executable", "blender"))
+                samples = int(blender_cfg.get("samples", 64))
+                device = str(blender_cfg.get("device", "CPU"))
+
+                jobs = []
+                for r in records:
+                    jobs.append({
+                        "image_path": r["image_path"],
+                        "seed": int(r["seed"]),
+                        "mm_per_px": float(config["roi"]["mm_per_px"]),
+                        "roi_width_px": int(roi_width),
+                        "roi_height_px": int(roi_height),
+                        "footprint": str(footprint),
+                        "component_height_mm": float(component_height_mm),
+                        "nominal": r["nominal"],
+                        "defect": r["defect"],
+                        "render_3d": profile_render_3d,
+                    })
+
+                jobs_path = temp_dir / "blender_jobs.jsonl"
+                write_jobs_jsonl(jobs_path, jobs)
+                render_blender_batch(
+                    sim_root=project_root,
+                    jobs_path=jobs_path,
+                    output_root=temp_dir,
+                    blender_executable=exe,
+                    cycles_samples=samples,
+                    device=device,
+                )
+
+                # Sanity check: ensure Blender produced the expected images.
+                try:
+                    img_count = len(list((temp_dir / "images").glob("*.png")))
+                except Exception:
+                    img_count = 0
+                if img_count != len(records):
+                    raise RuntimeError(f"Blender render incomplete: expected {len(records)} images, found {img_count} under {temp_dir / 'images'}")
+
+                write_jsonl(temp_dir / "meta.jsonl", meta_rows)
+                write_jsonl(temp_dir / "labels.jsonl", label_rows)
+
+                with open(temp_dir / "config.yaml", "w", encoding="utf-8") as f:
+                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+                validate_dataset_files(temp_dir)
+
+                if output_dir.exists():
+                    shutil.rmtree(output_dir)
+                temp_dir.rename(output_dir)
+
+            except Exception:
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+                raise
+        else:
+            raise ValueError(f"Unsupported render backend: {backend}")
 
     # Validate splits
     assert_no_overlap(updated_splits)

@@ -127,6 +127,7 @@ class PipelineControlTab(BaseTab):
         self.var_profile: tk.StringVar
         self.profile_combo: ttk.Combobox
         self._profile_paths: list[Path] = []
+        self.var_render_backend: tk.StringVar
         self.var_dataset_profile: tk.StringVar
         self.var_model_profile: tk.StringVar
         self._dataset_milestones: dict[str, int] = {}
@@ -241,6 +242,21 @@ class PipelineControlTab(BaseTab):
         self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
         ttk.Button(top2, text="↻", width=3, command=self._refresh_profiles).pack(side="left", padx=(6, 0))
         ttk.Button(top2, text="ⓘ", width=3, command=self._show_profile_info).pack(side="left", padx=(3, 0))
+
+        ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
+
+        ttk.Label(top2, text="Render:").pack(side="left", padx=(0, 6))
+        self.var_render_backend = tk.StringVar(value="opencv_2d")
+        self.render_combo = ttk.Combobox(
+            top2,
+            textvariable=self.var_render_backend,
+            values=["opencv_2d", "blender_3d"],
+            state="readonly",
+            width=12,
+        )
+        self.render_combo.pack(side="left")
+        ToolTip(self.render_combo, text_func=lambda: self.var_render_backend.get())
+        self.render_combo.bind("<<ComboboxSelected>>", self._on_render_backend_changed)
 
         ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
 
@@ -455,6 +471,7 @@ class PipelineControlTab(BaseTab):
         set_if(self.var_profile_model, "pipeline.profile_model")
         set_if(self.var_profile_model_lock, "pipeline.profile_model_locked")
         set_if(self.var_profile_build_preset, "pipeline.profile_build_preset")
+        set_if(self.var_render_backend, "pipeline.render_backend")
 
         # Ensure dropdowns reflect loaded values.
         try:
@@ -505,6 +522,7 @@ class PipelineControlTab(BaseTab):
         bind(self.var_profile_model, "pipeline.profile_model")
         bind(self.var_profile_model_lock, "pipeline.profile_model_locked")
         bind(self.var_profile_build_preset, "pipeline.profile_build_preset")
+        bind(self.var_render_backend, "pipeline.render_backend")
 
     def _refresh_profile_models(self) -> None:
         root = self.sim_root / "outputs" / "models"
@@ -1801,10 +1819,24 @@ class PipelineControlTab(BaseTab):
         profile_files = sorted(profiles_dir.glob("*.yaml"))
         self._profile_paths = profile_files
 
-        # Extract profile IDs (filename without .yaml)
+        want_backend = (getattr(self, "var_render_backend", None).get() if hasattr(self, "var_render_backend") else "opencv_2d") or "opencv_2d"
+
+        # Extract profile IDs (filename without .yaml), filtered by supported_render_backends if present.
         values: list[str] = []
         for p in profile_files:
             profile_id = p.stem
+            try:
+                import yaml
+                data = yaml.safe_load(p.read_text(encoding="utf-8"))
+                supported = (((data or {}).get("profile") or {}).get("supported_render_backends") or [])
+                if not supported:
+                    supported = ["opencv_2d"]
+                if want_backend not in supported:
+                    continue
+            except Exception:
+                # If parsing fails, keep it visible in 2D mode only.
+                if want_backend != "opencv_2d":
+                    continue
             values.append(profile_id)
 
         try:
@@ -1821,6 +1853,16 @@ class PipelineControlTab(BaseTab):
                 self.var_profile.set(values[0])
         self._on_profile_selected()
 
+    def _on_render_backend_changed(self, _event: Optional[object] = None) -> None:
+        """Render backend selection affects which profiles are shown."""
+        try:
+            self._refresh_profiles()
+            pid = self.var_profile.get().strip()
+            if pid:
+                self._autoselect_config_for_profile(pid, prefer_quiet=True)
+        except Exception:
+            pass
+
     def _on_profile_selected(self, _event: Optional[object] = None) -> None:
         if self._suspend_profile_event:
             self._suspend_profile_event = False
@@ -1829,6 +1871,12 @@ class PipelineControlTab(BaseTab):
         profile_id = self.var_profile.get().strip()
         if not profile_id:
             return
+
+        # Keep config selection aligned with Profile + Render mode without prompting.
+        try:
+            self._autoselect_config_for_profile(profile_id, prefer_quiet=True)
+        except Exception:
+            pass
 
         ds = self._selected_dataset_dir()
         current_profile = self._dataset_profile_id(ds)
@@ -1849,7 +1897,7 @@ class PipelineControlTab(BaseTab):
             self._revert_profile_selection()
             return
 
-        cfg_info = self._config_for_profile(profile_id)
+        cfg_info = self._config_for_profile(profile_id, want_backend=(self.var_render_backend.get().strip() if hasattr(self, "var_render_backend") else None))
         if messagebox.askyesno(
             "Create dataset",
             f"No dataset currently matches profile '{profile_id}'.\n"
@@ -1953,9 +2001,10 @@ class PipelineControlTab(BaseTab):
             return
         messagebox.showinfo(title, message)
 
-    def _config_for_profile(self, profile_id: str) -> Optional[Dict[str, Any]]:
-        if profile_id in self._profile_config_cache:
-            return self._profile_config_cache[profile_id]
+    def _config_for_profile(self, profile_id: str, *, want_backend: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        cache_key = f"{profile_id}|{want_backend or ''}"
+        if cache_key in self._profile_config_cache:
+            return self._profile_config_cache[cache_key]
 
         configs_root = self.sim_root / "configs"
         best_entry = None
@@ -1965,6 +2014,12 @@ class PipelineControlTab(BaseTab):
             except Exception:
                 continue
             run_block = data.get("run") or {}
+            if run_block.get("component_profile") != profile_id:
+                continue
+            if want_backend:
+                backend = ((data.get("render") or {}).get("backend") or "").strip()
+                if backend and backend != want_backend:
+                    continue
             if run_block.get("component_profile") == profile_id:
                 best_entry = {
                     "path": cfg,
@@ -1982,11 +2037,60 @@ class PipelineControlTab(BaseTab):
                 except Exception:
                     continue
                 if needle in text or needle_quoted in text:
+                    if want_backend:
+                        # Avoid selecting a mismatched backend config in fallback mode.
+                        try:
+                            data = yaml.safe_load(text)
+                            backend = ((data.get("render") or {}).get("backend") or "").strip()
+                            if backend and backend != want_backend:
+                                continue
+                        except Exception:
+                            continue
                     best_entry = {"path": cfg, "run_id": cfg.stem}
                     break
 
-        self._profile_config_cache[profile_id] = best_entry
+        self._profile_config_cache[cache_key] = best_entry
         return best_entry
+
+    def _autoselect_config_for_profile(self, profile_id: str, *, prefer_quiet: bool) -> None:
+        """Auto-pick a config that matches current Profile + Render backend.
+
+        prefer_quiet=True: do not overwrite a matching config silently.
+        """
+        want_backend = None
+        if hasattr(self, "var_render_backend"):
+            want_backend = self.var_render_backend.get().strip() or None
+
+        cfg_info = self._config_for_profile(profile_id, want_backend=want_backend)
+        if not cfg_info and want_backend:
+            # If no backend-specific config exists, fall back to any config for the profile.
+            cfg_info = self._config_for_profile(profile_id, want_backend=None)
+        if not cfg_info:
+            return
+
+        cfg_path: Path = cfg_info["path"]
+        try:
+            rel = str(cfg_path.resolve().relative_to(self.sim_root.resolve()))
+        except Exception:
+            rel = str(cfg_path)
+
+        cur = self.var_config.get().strip()
+        if cur == rel:
+            return
+
+        if prefer_quiet and cur and want_backend:
+            # If current config already matches want_backend, don't override silently.
+            try:
+                cur_path = (self.sim_root / cur) if not Path(cur).is_absolute() else Path(cur)
+                if cur_path.exists():
+                    data = yaml.safe_load(cur_path.read_text(encoding="utf-8"))
+                    cur_backend = ((data.get("render") or {}).get("backend") or "").strip()
+                    if cur_backend == want_backend:
+                        return
+            except Exception:
+                return
+
+        self.var_config.set(rel)
 
     def _show_profile_info(self) -> None:
         """Show detailed information about the selected profile."""
