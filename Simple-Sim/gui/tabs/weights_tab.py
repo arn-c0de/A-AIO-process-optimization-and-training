@@ -2351,10 +2351,23 @@ class WeightsTab(BaseTab):
                     continue
                 rp = str(r.get("model_path") or "")
                 # Match by basename; allows comparing versions anywhere.
-                if Path(rp).name != selected_model.name:
+                matched = False
+                if Path(rp).name == selected_model.name:
+                    matched = True
+                elif str(r.get("model_stem") or "") == selected_model.stem:
                     # Some reports store "model_stem" only; fallback
-                    if str(r.get("model_stem") or "") != selected_model.stem:
-                        continue
+                    matched = True
+                elif selected_model.is_dir():
+                    # Bundle: check if report model_path is a checkpoint inside this bundle
+                    try:
+                        report_model = Path(rp).resolve()
+                        bundle_dir = selected_model.resolve()
+                        if report_model.parent == bundle_dir:
+                            matched = True
+                    except Exception:
+                        pass
+                if not matched:
+                    continue
             elif scope == "dataset":
                 if not ds_dir:
                     continue
