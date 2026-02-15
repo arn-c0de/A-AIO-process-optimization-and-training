@@ -10,7 +10,7 @@ Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 
 ![Simple-Sim Pipeline Dashboard](Simple-Sim/images/pipeline-dashboard-simple-sim-v1.0.png)
 
-- [`Simple-Sim`](Simple-Sim/README.md): synthetic dataset generation + training + evaluation
+- [`Simple-Sim`](Simple-Sim/README.md): A sandbox environment for pre-training and specializing models on synthetic datasets before passing them to main simulation and production training. Includes an arena system to evaluate and select the best-performing models for further training iterations.
 - Sample images: [`Simple-Sim/SAMPLE_GALLERY.md`](Simple-Sim/SAMPLE_GALLERY.md)
 
 ## License
