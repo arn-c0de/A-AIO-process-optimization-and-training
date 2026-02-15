@@ -9,7 +9,7 @@ Synthetic AOI-style ROI generation + training/evaluation pipeline for PCB compon
 ![Simple-Sim A/B Testing Dashboard](images/simple-sim-a-b-testing.png)
 *Note:* A/B testing view to compare two runs/models side-by-side using the same evaluation data.
 ![Simple-Sim Weight Merge Dashboard](images/simple-sim-weight-merge.png)
-*Note:* Weight merge view to combine per-profile checkpoints into a single multi-profile bundle.
+*Note:* Weight merge view to combine per-profile checkpoints into a bundle directory or a single-file ensemble model.
 
 See [`Sample Gallery`](SAMPLE_GALLERY.md) for auto-generated reference images with defect overlays from all available datasets and profiles.
 
@@ -54,7 +54,8 @@ Defect classes are **component-dependent**; common classes include:
 - **GUI profile awareness (v1.0.1)**: Profile dropdown, compatibility indicators, dataset/model profile display, info dialogs
 - **Batch scoring with history (v1.0.1)**: `scripts/batch_predict.py` with report history compare and class-mismatch guards
 - **Profile-filtered model selection (v1.0.1)**: Pipeline model dropdown only shows checkpoints matching the dataset profile
-- **Multi-profile bundles**: Merge per-profile checkpoints into a single `.bundle` directory. Bundles are first-class entries in the Weights tab and can be selected as models for training, evaluation, and prediction. The pipeline automatically resolves the correct per-profile checkpoint from the bundle.
+- **Multi-profile bundles**: Merge per-profile checkpoints into a single `.bundle` directory. A bundle is a *container* of per-profile checkpoints named `<profile_id>.pt`. Training into a bundle adds/updates the checkpoint for the dataset profile. Prediction/eval with a bundle resolves the dataset's `component_profile.profile_id` and loads that checkpoint.
+- **Single-file ensemble models (new)**: Merge multiple profile checkpoints into one `.pt` that contains an ensemble (multiple sub-models). At inference time, logits are averaged across sub-models. This is useful for quick cross-profile scoring without bundle dispatch, but it is not a replacement for true multi-profile training.
 - **Bundle metadata**: Each bundle stores `bundle_details.json` with per-model source info (accuracy, F1, profile hash, source path, size)
 
 ## Quick Start
@@ -132,6 +133,22 @@ cd Simple-Sim
 ```
 
 Implementation notes: `PROFILE_SYSTEM_IMPLEMENTATION.md`.
+
+## Bundles vs Ensembles (New)
+
+Simple-Sim supports two ways to "combine" multiple profile-specific checkpoints:
+
+1. **Bundle directory** (`*.bundle/`)
+   - Contains one checkpoint per profile: `chip_0603_resistor@1.pt`, `sot23_transistor@1.pt`, ...
+   - Predict/eval resolves the dataset profile from `dataset_manifest.json` and loads the matching file.
+   - If the bundle does not include a checkpoint for the dataset profile, you must train that profile into the bundle.
+
+2. **Single-file ensemble** (`*_ensemble.pt`)
+   - One `.pt` file that stores multiple sub-model checkpoints.
+   - Predict/eval averages logits across sub-models.
+   - Useful for experiments and broad scoring, but does not magically learn unseen component types.
+
+Full documentation: [`docs/guides/MODEL_MERGE_BUNDLES_ENSEMBLES.md`](docs/guides/MODEL_MERGE_BUNDLES_ENSEMBLES.md).
 
 ## Configuration
 
