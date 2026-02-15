@@ -32,6 +32,8 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
+from simple_sim.schema import write_jsonl
+from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
 
 
 class PipelineControlTab(BaseTab):
@@ -1471,7 +1473,12 @@ class PipelineControlTab(BaseTab):
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
-            return manifest.get("component_profile", {}).get("profile_hash")
+            mver = int(manifest.get("manifest_version", 1) or 1)
+            if mver == 1:
+                return manifest.get("component_profile", {}).get("profile_hash")
+            if mver == 2:
+                return "multi"
+            return None
         except Exception:
             return None
 
@@ -2245,7 +2252,12 @@ class PipelineControlTab(BaseTab):
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
-            return manifest.get("component_profile", {}).get("profile_id")
+            mver = int(manifest.get("manifest_version", 1) or 1)
+            if mver == 1:
+                return manifest.get("component_profile", {}).get("profile_id")
+            if mver == 2:
+                return "multi"
+            return None
         except Exception:
             return None
 
@@ -2486,8 +2498,16 @@ class PipelineControlTab(BaseTab):
 
             with open(manifest_path, 'r') as f:
                 manifest = json.load(f)
-            ds_profile_id = manifest.get('component_profile', {}).get('profile_id')
-            ds_profile_hash = manifest.get('component_profile', {}).get('profile_hash')
+            mver = int(manifest.get('manifest_version', 1) or 1)
+            if mver == 1:
+                ds_profile_id = manifest.get('component_profile', {}).get('profile_id')
+                ds_profile_hash = manifest.get('component_profile', {}).get('profile_hash')
+            elif mver == 2:
+                ds_profile_id = "multi"
+                ds_profile_hash = "multi"
+            else:
+                ds_profile_id = None
+                ds_profile_hash = None
 
             if not ds_profile_id:
                 self.var_profile_compat.set("")
@@ -3068,6 +3088,246 @@ class PipelineControlTab(BaseTab):
                 pids.add(pid)
         return len(pids) > 1
 
+    def _ask_multi_dataset_train_strategy(self, dss: list[Path]) -> Optional[str]:
+        """Ask user how to train when multiple datasets are selected.
+
+        Returns:
+            "sequential", "merge_keep", "merge_temp" or None if cancelled.
+        """
+        if len(dss) < 2:
+            return "sequential"
+
+        top = tk.Toplevel(self.frame.winfo_toplevel())
+        top.title("Multi-dataset training")
+        top.transient(self.frame.winfo_toplevel())
+        top.grab_set()
+
+        choice: tk.StringVar = tk.StringVar(value="")
+
+        frm = ttk.Frame(top, padding=12)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="You selected multiple datasets. Choose training strategy:", font=("TkDefaultFont", 10, "bold")).pack(
+            anchor="w"
+        )
+
+        # Show a short list so the user can sanity check selection.
+        labels = self._selected_dataset_labels()
+        if labels:
+            preview = labels[:8]
+            txt = "\n".join(f"- {x}" for x in preview)
+            if len(labels) > len(preview):
+                txt += f"\n- ... (+{len(labels) - len(preview)} more)"
+            ttk.Label(frm, text=txt, justify="left").pack(anchor="w", pady=(8, 10))
+
+        ttk.Label(
+            frm,
+            text=(
+                "Sequential: trains dataset 1, then resumes on dataset 2..N (+epochs).\n"
+                "Merge: creates one merged dataset and trains once (more stable, order-independent)."
+            ),
+            justify="left",
+        ).pack(anchor="w", pady=(0, 10))
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+
+        def set_and_close(v: str) -> None:
+            choice.set(v)
+            try:
+                top.grab_release()
+            except Exception:
+                pass
+            top.destroy()
+
+        ttk.Button(btns, text="Sequential (current)", command=lambda: set_and_close("sequential")).pack(side="left")
+        ttk.Button(btns, text="Merge and keep dataset", command=lambda: set_and_close("merge_keep")).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(btns, text="Merge temporarily", command=lambda: set_and_close("merge_temp")).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="Cancel", command=lambda: set_and_close("")).pack(side="right")
+
+        top.bind("<Escape>", lambda _e: set_and_close(""))
+
+        try:
+            top.minsize(560, 260)
+        except Exception:
+            pass
+
+        top.wait_window()
+        v = choice.get().strip() or ""
+        return v or None
+
+    def _merge_datasets_for_training(self, sources: list[Path], out_dir: Path) -> None:
+        """Merge multiple datasets into a single dataset directory.
+
+        Notes:
+        - Rewrites sample IDs and image names to avoid collisions.
+        - Writes v2 labels (includes profile_id) so we can represent multi-profile merges.
+        - Writes manifest v1 (single profile) if all sources share one profile, else manifest v2.
+        """
+        out_dir = Path(out_dir)
+        if out_dir.exists():
+            raise FileExistsError(f"Output directory already exists: {out_dir}")
+        out_dir.mkdir(parents=True, exist_ok=False)
+        images_dir = out_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=False)
+        (out_dir / "splits").mkdir(parents=True, exist_ok=False)
+
+        if not sources:
+            raise ValueError("No sources provided")
+
+        # Use config.yaml from the first dataset and validate class keys match across inputs.
+        cfg0_path = sources[0] / "config.yaml"
+        if not cfg0_path.exists():
+            raise FileNotFoundError(f"Missing config.yaml in {sources[0]}")
+        cfg0_text = cfg0_path.read_text(encoding="utf-8")
+        try:
+            cfg0 = yaml.safe_load(cfg0_text) or {}
+        except Exception:
+            cfg0 = {}
+        classes0 = cfg0.get("classes") or {}
+        class_keys0 = tuple(sorted((classes0.keys() if isinstance(classes0, dict) else [])))
+
+        # Load manifests and collect profile metadata per source.
+        src_profiles: dict[str, dict[str, str]] = {}
+        run_id = sources[0].name
+        for ds in sources:
+            manifest_path = ds / "dataset_manifest.json"
+            if not manifest_path.exists():
+                raise FileNotFoundError(
+                    f"Missing dataset_manifest.json in {ds}\n"
+                    f"Backfill first:\n  .venv/bin/python tools/backfill_manifest.py --data {ds}"
+                )
+            manifest = read_dataset_manifest(manifest_path)
+            mver = int(manifest.get("manifest_version", 1) or 1)
+            if mver != 1:
+                raise ValueError(f"Only manifest_version=1 source datasets are supported for merge (got {mver} in {ds})")
+            run_id = str(manifest.get("run_id") or run_id)
+            comp = manifest.get("component_profile") or {}
+            pid = str(comp.get("profile_id") or "")
+            phash = str(comp.get("profile_hash") or "")
+            ppath = str(comp.get("profile_path") or "")
+            if not pid or not phash:
+                raise ValueError(f"Invalid manifest in {ds}: missing profile_id/profile_hash")
+            src_profiles[str(ds.resolve())] = {"profile_id": pid, "profile_hash": phash, "profile_path": ppath}
+
+        # Validate config class keys match.
+        for ds in sources[1:]:
+            cfg_path = ds / "config.yaml"
+            if not cfg_path.exists():
+                raise FileNotFoundError(f"Missing config.yaml in {ds}")
+            try:
+                cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                cfg = {}
+            classes = cfg.get("classes") or {}
+            class_keys = tuple(sorted((classes.keys() if isinstance(classes, dict) else [])))
+            if class_keys != class_keys0:
+                raise ValueError(
+                    "Cannot merge datasets with different class sets.\n"
+                    f"  first: {class_keys0}\n"
+                    f"  {ds.name}: {class_keys}"
+                )
+
+        # Merge rows
+        meta_out: list[MetaRow] = []
+        label_out: list[LabelRow] = []
+        split_counters: dict[str, int] = {}
+        splits: dict[str, list[str]] = {"train": [], "val": [], "test": []}
+
+        def link_or_copy(src: Path, dst: Path) -> None:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(src, dst)
+            except Exception:
+                shutil.copy2(src, dst)
+
+        for ds in sources:
+            meta_rows = read_jsonl(ds / "meta.jsonl", MetaRow)
+            label_rows = read_jsonl(ds / "labels.jsonl", LabelRow)
+            label_map = {row.id: row.class_name for row in label_rows}
+
+            prof = src_profiles.get(str(ds.resolve())) or {}
+            pid = prof.get("profile_id") or ""
+
+            for row in meta_rows:
+                class_name = label_map.get(row.id)
+                if not class_name:
+                    continue
+
+                split = row.split
+                idx = split_counters.setdefault(split, 0)
+                new_id = f"{run_id}/{row.domain}/{split}/{idx:06d}"
+                split_counters[split] = idx + 1
+
+                new_image_name = f"{split}_{idx:06d}.png"
+                dst_image = images_dir / new_image_name
+                src_image = ds / row.image_path
+                link_or_copy(src_image, dst_image)
+
+                meta_out.append(
+                    MetaRow(
+                        schema_version=int(row.schema_version),
+                        id=new_id,
+                        run_id=str(run_id),
+                        domain=row.domain,
+                        split=split,
+                        seed=int(row.seed),
+                        image_path=str(Path("images") / new_image_name),
+                        render_backend=row.render_backend,
+                        footprint=row.footprint,
+                        nominal=row.nominal,
+                        defect=row.defect,
+                        augment=row.augment,
+                        render_meta=getattr(row, "render_meta", {}) or {},
+                    )
+                )
+                label_out.append(LabelRow(schema_version=2, id=new_id, class_name=class_name, profile_id=pid))
+                splits[split].append(new_id)
+
+        # Write dataset files
+        write_jsonl(out_dir / "meta.jsonl", meta_out)
+        write_jsonl(out_dir / "labels.jsonl", label_out)
+        for split in ["train", "val", "test"]:
+            with open(out_dir / "splits" / f"{split}.txt", "w", encoding="utf-8") as f_split:
+                for sid in splits[split]:
+                    f_split.write(sid + "\n")
+        (out_dir / "config.yaml").write_text(cfg0_text, encoding="utf-8")
+
+        # Manifest: v1 if single profile, else v2
+        uniq_profiles: dict[str, dict[str, str]] = {}
+        for prof in src_profiles.values():
+            key = prof["profile_id"]
+            uniq_profiles[key] = prof
+
+        if len(uniq_profiles) == 1:
+            only = next(iter(uniq_profiles.values()))
+            write_dataset_manifest(
+                out_dir,
+                run_id=str(run_id),
+                profile_id=str(only["profile_id"]),
+                profile_hash=str(only["profile_hash"]),
+                profile_path=str(only["profile_path"]),
+                meta_rows=meta_out,
+                label_rows=label_out,
+                splits=splits,
+                extend=False,
+            )
+        else:
+            write_multi_profile_manifest(
+                out_dir,
+                run_id=str(run_id),
+                profiles=[
+                    {"profile_id": p["profile_id"], "profile_hash": p["profile_hash"], "profile_path": p["profile_path"]}
+                    for p in sorted(uniq_profiles.values(), key=lambda x: x["profile_id"])
+                ],
+                meta_rows=meta_out,
+                label_rows=label_out,
+                splits=splits,
+                script_name="gui.merge_datasets",
+            )
+
     def _validate_selected(self) -> None:
         """Validate selected dataset."""
         dss = self._selected_dataset_dirs()
@@ -3089,6 +3349,90 @@ class PipelineControlTab(BaseTab):
         dss = self._selected_dataset_dirs()
         if not dss:
             return
+        if len(dss) > 1:
+            strat = self._ask_multi_dataset_train_strategy(dss)
+            if strat is None:
+                return
+            if strat in ("merge_keep", "merge_temp"):
+                if self.proc is not None:
+                    messagebox.showwarning("Busy", "A process is already running. Stop it first.")
+                    return
+
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                if strat == "merge_keep":
+                    default = f"{dss[0].name}_merged_{len(dss)}"
+                    name = simpledialog.askstring(
+                        "Merge datasets",
+                        "Output dataset folder name (will be created under outputs/sim_data/runs):",
+                        initialvalue=default,
+                        parent=self.frame.winfo_toplevel(),
+                    )
+                    if not name:
+                        return
+                    name = name.strip()
+                    if not name or "/" in name or "\\" in name:
+                        messagebox.showerror("Error", "Invalid dataset name.")
+                        return
+                else:
+                    name = f"__tmp_merge_{ts}"
+
+                out_ds = (self.sim_root / "outputs" / "sim_data" / "runs" / name).resolve()
+                if out_ds.exists():
+                    messagebox.showerror("Error", f"Merge output already exists:\n{out_ds}")
+                    return
+
+                # Respect the Model: field when present; fall back to outputs/models/<dataset>.pt
+                model_s = self.var_model.get().strip() if hasattr(self, "var_model") else ""
+                if model_s:
+                    model_out = self._resolve_model_path(model_s)
+                else:
+                    model_out = (self.sim_root / "outputs" / "models" / f"{name}.pt").resolve()
+
+                delete_after = (strat == "merge_temp")
+
+                self._append_log(f"\n=== Merge {len(dss)} datasets -> {out_ds.name} ===\n")
+                for ds in dss:
+                    self._append_log(f"  - {ds}\n")
+                self._append_log("\n")
+
+                def worker() -> None:
+                    try:
+                        self.log_q.put(f"[merge] building merged dataset: {out_ds}\n")
+                        self._merge_datasets_for_training(dss, out_ds)
+                        self.log_q.put(f"[merge] done: {out_ds}\n")
+
+                        def kick_off_train() -> None:
+                            try:
+                                if strat == "merge_keep":
+                                    self._select_dataset(out_ds)
+                                else:
+                                    self._refresh_datasets()
+                            except Exception:
+                                pass
+
+                            argv = ["./.venv/bin/python", "scripts/train.py", "--data", str(out_ds), "--out", str(model_out)]
+                            cmd = " ".join(shlex.quote(x) for x in argv)
+                            if delete_after:
+                                py = (
+                                    "import shutil, pathlib; "
+                                    f"p=pathlib.Path({out_ds.as_posix()!r}); "
+                                    "shutil.rmtree(p) if p.exists() else None"
+                                )
+                                cmd = cmd + " && " + " ".join(shlex.quote(x) for x in ["./.venv/bin/python", "-c", py])
+                            self._run_simple_cmd([cmd])
+
+                        self.frame.after(0, kick_off_train)
+                    except Exception as e:
+                        self.log_q.put(f"[merge] failed: {e}\n")
+                        if delete_after:
+                            try:
+                                shutil.rmtree(out_ds)
+                            except Exception:
+                                pass
+
+                threading.Thread(target=worker, daemon=True).start()
+                return
+
         # Respect the Model: field when present; fall back to outputs/models/<dataset>.pt
         model_s = self.var_model.get().strip() if hasattr(self, "var_model") else ""
         if model_s:
