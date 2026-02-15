@@ -596,12 +596,29 @@ def _render(
         if abs_mp is None:
             continue
         k_model = str(abs_mp)
-        if k_model not in tracked:
+
+        # Check if this model or its parent (for bundle checkpoints) is tracked
+        matched_key = None
+        if k_model in tracked:
+            matched_key = k_model
+        else:
+            # Bundle: check if report model_path is a checkpoint inside a tracked bundle
+            try:
+                parent = abs_mp.parent
+                parent_key = str(parent)
+                if parent_key in tracked and parent.is_dir():
+                    # Verify this is actually a checkpoint within the bundle
+                    if abs_mp.suffix == ".pt":
+                        matched_key = parent_key
+            except Exception:
+                pass
+
+        if matched_key is None:
             continue
 
         ds_path = str(r.get("dataset_path") or "").strip()
         ds_name = _basename(ds_path) if ds_path else "-"
-        per_model_dataset.setdefault((k_model, ds_name), []).append(r)
+        per_model_dataset.setdefault((matched_key, ds_name), []).append(r)
 
     best_rows: Dict[Tuple[str, str], BestByDataset] = {}
     for (model_abs, ds_name), rs in per_model_dataset.items():
