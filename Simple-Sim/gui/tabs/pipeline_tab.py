@@ -3163,6 +3163,7 @@ class PipelineControlTab(BaseTab):
 
         Notes:
         - Rewrites sample IDs and image names to avoid collisions.
+        - Normalizes image sizes across sources (required for batching).
         - Writes v2 labels (includes profile_id) so we can represent multi-profile merges.
         - Writes manifest v1 (single profile) if all sources share one profile, else manifest v2.
         """
@@ -3188,6 +3189,9 @@ class PipelineControlTab(BaseTab):
             cfg0 = {}
         classes0 = cfg0.get("classes") or {}
         class_keys0 = tuple(sorted((classes0.keys() if isinstance(classes0, dict) else [])))
+        roi0 = cfg0.get("roi") or {}
+        roi0_w = int(roi0.get("width_px") or 0)
+        roi0_h = int(roi0.get("height_px") or 0)
 
         # Load manifests and collect profile metadata per source.
         src_profiles: dict[str, dict[str, str]] = {}
@@ -3212,7 +3216,10 @@ class PipelineControlTab(BaseTab):
                 raise ValueError(f"Invalid manifest in {ds}: missing profile_id/profile_hash")
             src_profiles[str(ds.resolve())] = {"profile_id": pid, "profile_hash": phash, "profile_path": ppath}
 
-        # Validate config class keys match.
+        # Validate config class keys match and compute a common ROI size.
+        # We pick the smallest width/height found to avoid upscaling by default.
+        target_w = roi0_w if roi0_w > 0 else None
+        target_h = roi0_h if roi0_h > 0 else None
         for ds in sources[1:]:
             cfg_path = ds / "config.yaml"
             if not cfg_path.exists():
@@ -3229,6 +3236,21 @@ class PipelineControlTab(BaseTab):
                     f"  first: {class_keys0}\n"
                     f"  {ds.name}: {class_keys}"
                 )
+            roi = cfg.get("roi") or {}
+            try:
+                w = int(roi.get("width_px") or 0)
+                h = int(roi.get("height_px") or 0)
+            except Exception:
+                w, h = 0, 0
+            if w > 0:
+                target_w = w if target_w is None else min(int(target_w), w)
+            if h > 0:
+                target_h = h if target_h is None else min(int(target_h), h)
+
+        if target_w is None or target_h is None or int(target_w) <= 0 or int(target_h) <= 0:
+            raise ValueError("Cannot determine target ROI size for merged dataset (missing roi.width_px/height_px).")
+        target_w = int(target_w)
+        target_h = int(target_h)
 
         # Merge rows
         meta_out: list[MetaRow] = []
@@ -3264,7 +3286,24 @@ class PipelineControlTab(BaseTab):
                 new_image_name = f"{split}_{idx:06d}.png"
                 dst_image = images_dir / new_image_name
                 src_image = ds / row.image_path
-                link_or_copy(src_image, dst_image)
+                # Normalize image size so torch DataLoader can stack tensors.
+                try:
+                    img = cv2.imread(str(src_image))
+                    if img is None:
+                        raise ValueError("imread returned None")
+                    h, w = img.shape[:2]
+                    if w != target_w or h != target_h:
+                        interp = cv2.INTER_AREA if (w > target_w or h > target_h) else cv2.INTER_LINEAR
+                        img = cv2.resize(img, (target_w, target_h), interpolation=interp)
+                        dst_image.parent.mkdir(parents=True, exist_ok=True)
+                        ok = cv2.imwrite(str(dst_image), img)
+                        if not ok:
+                            raise IOError("imwrite failed")
+                    else:
+                        link_or_copy(src_image, dst_image)
+                except Exception:
+                    # Fallback: if resize path fails, at least copy the original.
+                    link_or_copy(src_image, dst_image)
 
                 meta_out.append(
                     MetaRow(
@@ -3293,7 +3332,16 @@ class PipelineControlTab(BaseTab):
             with open(out_dir / "splits" / f"{split}.txt", "w", encoding="utf-8") as f_split:
                 for sid in splits[split]:
                     f_split.write(sid + "\n")
-        (out_dir / "config.yaml").write_text(cfg0_text, encoding="utf-8")
+        # Write config, updating ROI to the merged size for consistency.
+        try:
+            cfg_out = dict(cfg0) if isinstance(cfg0, dict) else {}
+            roi_out = dict(cfg_out.get("roi") or {})
+            roi_out["width_px"] = int(target_w)
+            roi_out["height_px"] = int(target_h)
+            cfg_out["roi"] = roi_out
+            (out_dir / "config.yaml").write_text(yaml.safe_dump(cfg_out, sort_keys=False), encoding="utf-8")
+        except Exception:
+            (out_dir / "config.yaml").write_text(cfg0_text, encoding="utf-8")
 
         # Manifest: v1 if single profile, else v2
         uniq_profiles: dict[str, dict[str, str]] = {}
