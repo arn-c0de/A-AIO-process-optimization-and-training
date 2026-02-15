@@ -2098,8 +2098,15 @@ class PipelineControlTab(BaseTab):
 
     def _add_new_model(self) -> None:
         """Create a new model entry so training can write to it."""
-        ds = self._selected_dataset_dir()
-        default_name = ds.name if ds else ""
+        dss = self._selected_dataset_dirs()
+        ds0 = dss[0] if dss else None
+        default_name = ds0.name if ds0 else ""
+
+        # When multi-dataset is active, tag new model targets so it's obvious in the UI/file name.
+        is_multi = bool(getattr(self, "var_dataset_multi", tk.BooleanVar(value=False)).get()) and len(dss) > 1
+        if is_multi and default_name and "multitrained" not in default_name.lower():
+            default_name = f"{default_name}_MultiTrained"
+
         name = simpledialog.askstring(
             "New Model",
             "Model name (without .pt):",
@@ -2112,7 +2119,11 @@ class PipelineControlTab(BaseTab):
         if not name:
             return
 
-        model_path = self.sim_root / "outputs" / "models" / f"{name}.pt"
+        if is_multi and "multitrained" not in name.lower():
+            name = f"{name}_MultiTrained"
+
+        suffix = ".bundle" if (hasattr(self, "var_model_bundle") and bool(self.var_model_bundle.get())) else ".pt"
+        model_path = self.sim_root / "outputs" / "models" / f"{name}{suffix}"
         rel = str(model_path.resolve().relative_to(self.sim_root.resolve()))
 
         # Add to dropdown values if not already present
