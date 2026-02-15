@@ -130,8 +130,15 @@ def main():
         )
 
     manifest = read_dataset_manifest(manifest_path)
-    dataset_profile_id = manifest['component_profile']['profile_id']
-    dataset_profile_hash = manifest['component_profile']['profile_hash']
+    mver = int(manifest.get('manifest_version', 1) or 1)
+    if mver == 1:
+        dataset_profile_id = manifest['component_profile']['profile_id']
+        dataset_profile_hash = manifest['component_profile']['profile_hash']
+    elif mver == 2:
+        dataset_profile_id = "multi"
+        dataset_profile_hash = "multi"
+    else:
+        raise ValueError(f"Unsupported dataset manifest_version: {mver}")
 
     # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
     if model_path.exists() and model_path.is_dir():

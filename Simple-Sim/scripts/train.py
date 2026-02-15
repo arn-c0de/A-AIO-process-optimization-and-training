@@ -213,10 +213,23 @@ def main():
         )
 
     manifest = read_dataset_manifest(manifest_path)
-    dataset_profile_id = manifest['component_profile']['profile_id']
-    dataset_profile_hash = manifest['component_profile']['profile_hash']
-
-    print(f"Dataset Profile: {dataset_profile_id}")
+    mver = int(manifest.get('manifest_version', 1) or 1)
+    if mver == 1:
+        dataset_profile_id = manifest['component_profile']['profile_id']
+        dataset_profile_hash = manifest['component_profile']['profile_hash']
+        print(f"Dataset Profile: {dataset_profile_id}")
+    elif mver == 2:
+        # Multi-profile dataset: treat as a special logical profile for checkpoint metadata.
+        dataset_profile_id = "multi"
+        dataset_profile_hash = "multi"
+        profiles = manifest.get('component_profiles') or []
+        try:
+            pids = [p.get('profile_id') for p in profiles if isinstance(p, dict)]
+        except Exception:
+            pids = []
+        print(f"Dataset Profile: multi ({', '.join([x for x in pids if x])})")
+    else:
+        raise ValueError(f"Unsupported dataset manifest_version: {mver}")
 
     # "Multi-model" bundle support:
     # If --out is a directory (or ends with `.bundle`), write per-profile checkpoints into that dir.
