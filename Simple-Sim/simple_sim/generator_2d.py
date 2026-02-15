@@ -135,13 +135,18 @@ def _compute_pad_positions(
         # Pads 1+2 on the left side get 80% height
         small_h = int(pad_height * 0.8)
 
+        # Ensure minimum gap of 10 pixels between left pads (Pad1 and Pad2)
+        # Gap = pad_spacing_y - small_h, so ensure pad_spacing_y > small_h + min_gap
+        min_gap_px = 10
+        effective_spacing_y = max(pad_spacing_y, small_h + min_gap_px)
+
         # Pad 1 (left-top)
         p1_x = center_x - pad_spacing // 2 - pad_width // 2
-        p1_y = center_y - pad_spacing_y // 2 - small_h // 2
+        p1_y = center_y - effective_spacing_y // 2 - small_h // 2
 
         # Pad 2 (left-bottom)
         p2_x = center_x - pad_spacing // 2 - pad_width // 2
-        p2_y = center_y + pad_spacing_y // 2 - small_h // 2
+        p2_y = center_y + effective_spacing_y // 2 - small_h // 2
 
         # Pad 3 (right-center, full size)
         p3_x = center_x + pad_spacing // 2 - pad_width // 2
