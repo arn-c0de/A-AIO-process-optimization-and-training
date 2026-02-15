@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Render small per-profile preview images for debugging 3D (Blender) profiles.
+"""Render small per-profile preview images for debugging 2D/3D profiles.
 
 Goal: quickly verify that components/pads/defect states render correctly before AI training.
 
 This script:
-- Detects available 3D profiles under `configs/profiles/` (supported_render_backends includes "blender_3d")
-- Lets you select one or more profiles (interactive by default, or via --profiles/--all)
-- For each selected profile, renders exactly 1 image per defect state (OK/MISALIGNED/MISSING/TOMBSTONE, etc.)
-- Writes previews under `<out>/previews/<profile_id>/...` and an `<out>/index.html`
+- Detects available profiles under `configs/profiles/` (2D: "opencv_2d", 3D: "blender_3d")
+- Lets you choose backend mode (2D, 3D, or both), then select one or more profiles
+- Renders exactly 1 image per defect state (OK/MISALIGNED/MISSING/TOMBSTONE, etc.)
+- Writes previews under `<out>/previews/<profile_id>/<backend>/...` and an `<out>/index.html`
 
 Examples:
   .venv/bin/python scripts/render_debug_previews.py
+  .venv/bin/python scripts/render_debug_previews.py --backend opencv_2d --all
+  .venv/bin/python scripts/render_debug_previews.py --backend both --profiles chip_0603_resistor@1,chip_0603_resistor_3d@1
   .venv/bin/python scripts/render_debug_previews.py --all
   .venv/bin/python scripts/render_debug_previews.py --profiles chip_0603_resistor_3d@1,sot23_transistor_3d@1
   .venv/bin/python scripts/render_debug_previews.py --config configs/run_qfn32_3d.yaml --profiles qfn32_ic_3d@1
@@ -36,6 +38,14 @@ from simple_sim.config import load_config, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generator_3d import write_jobs_jsonl, render_blender_batch
 from simple_sim.profile_hash import load_profile
+
+
+BACKEND_2D = "opencv_2d"
+BACKEND_3D = "blender_3d"
+BACKEND_CHOICES = [BACKEND_2D, BACKEND_3D, "both", "auto"]
+
+# (profile_id, backend, defect, rel_image_path)
+PreviewRec = Tuple[str, str, str, str]
 
 
 @dataclass(frozen=True)
@@ -107,17 +117,33 @@ def _iter_profile_ids(profiles_dir: Path) -> List[str]:
     return ids
 
 
-def _discover_3d_profiles(profiles_dir: Path) -> List[Tuple[str, Dict[str, Any]]]:
-    out: List[Tuple[str, Dict[str, Any]]] = []
+def _profile_backends(profile: Dict[str, Any]) -> set[str]:
+    b = (profile.get("profile") or {}).get("supported_render_backends") or []
+    out = set()
+    for x in b:
+        s = str(x)
+        if s in {BACKEND_2D, BACKEND_3D}:
+            out.add(s)
+    return out
+
+
+def _discover_profiles(profiles_dir: Path, *, backend_mode: str) -> List[Tuple[str, Dict[str, Any], set[str]]]:
+    """Discover profiles supporting 2D and/or 3D."""
+    backend_mode = str(backend_mode or "auto")
+    out: List[Tuple[str, Dict[str, Any], set[str]]] = []
     for pid in _iter_profile_ids(profiles_dir):
         try:
             prof = load_profile(pid, profiles_dir)
         except Exception:
-            # Skip invalid profiles; this is a debug helper.
             continue
-        backends = prof.get("profile", {}).get("supported_render_backends") or []
-        if "blender_3d" in backends:
-            out.append((pid, prof))
+        backends = _profile_backends(prof)
+        if not backends:
+            continue
+        if backend_mode == BACKEND_2D and BACKEND_2D not in backends:
+            continue
+        if backend_mode == BACKEND_3D and BACKEND_3D not in backends:
+            continue
+        out.append((pid, prof, backends))
     out.sort(key=lambda t: t[0])
     return out
 
@@ -171,15 +197,16 @@ def _parse_selection(selection: str, n: int) -> List[int]:
     return final
 
 
-def _find_matching_run_configs(configs_dir: Path, *, profile_id: str) -> List[Path]:
+def _find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: str) -> List[Path]:
     configs_dir = Path(configs_dir)
+    backend = str(backend)
     hits: List[Path] = []
     for p in sorted(configs_dir.glob("*.yaml")):
         try:
             cfg = load_config(p)
         except Exception:
             continue
-        if str((cfg.get("render") or {}).get("backend", "")) != "blender_3d":
+        if str((cfg.get("render") or {}).get("backend", "")) != backend:
             continue
         run = cfg.get("run") or {}
         if str(run.get("component_profile", "")) == str(profile_id):
@@ -201,15 +228,15 @@ def _settings_from_config(cfg: Dict[str, Any]) -> RenderSettings:
     )
 
 
-def _write_index_html(out_root: Path, previews: List[Tuple[str, str, str]]) -> None:
-    """previews: list of (profile_id, defect, rel_image_path)."""
+def _write_index_html(out_root: Path, previews: List[PreviewRec]) -> None:
+    """previews: list of (profile_id, backend, defect, rel_image_path)."""
     out_root = Path(out_root)
     index_path = out_root / "index.html"
 
     # Group by profile id
-    by_profile: Dict[str, List[Tuple[str, str]]] = {}
-    for pid, defect, rel_path in previews:
-        by_profile.setdefault(pid, []).append((defect, rel_path))
+    by_profile: Dict[str, List[Tuple[str, str, str]]] = {}
+    for pid, backend, defect, rel_path in previews:
+        by_profile.setdefault(pid, []).append((backend, defect, rel_path))
 
     def _escape(s: str) -> str:
         return (
@@ -234,6 +261,7 @@ def _write_index_html(out_root: Path, previews: List[Tuple[str, str, str]]) -> N
     lines.append(".card{border:1px solid #ddd; border-radius:10px; padding:10px;}")
     lines.append(".cap{font-size:12px;color:#333;margin:0 0 8px 0; display:flex; gap:6px; flex-wrap:wrap; align-items:baseline;}")
     lines.append(".pill{font-size:11px; padding:2px 6px; border-radius:999px; border:1px solid #ddd; background:#fafafa;}")
+    lines.append(".pill.backend{border-color:#ddd; background:#fff;}")
     lines.append(".pill.state{border-color:#cfd8ff; background:#f5f7ff;}")
     lines.append("img{width:100%; height:auto; border-radius:8px; background:#f6f6f6;}")
     lines.append("</style></head><body>")
@@ -243,11 +271,12 @@ def _write_index_html(out_root: Path, previews: List[Tuple[str, str, str]]) -> N
         lines.append(f"<h2>{_escape(pid)}</h2>")
         lines.append("<div class='grid'>")
         items = by_profile[pid]
-        items.sort(key=lambda t: t[0])
-        for defect, rel_path in items:
+        items.sort(key=lambda t: (t[0], t[1]))
+        for backend, defect, rel_path in items:
             lines.append("<div class='card'>")
             lines.append("<div class='cap'>")
             lines.append(f"<span class='pill'>{_escape(pid)}</span>")
+            lines.append(f"<span class='pill backend'>{_escape(backend)}</span>")
             lines.append(f"<span class='pill state'>{_escape(defect)}</span>")
             lines.append("</div>")
             lines.append(f"<a href='{_escape(rel_path)}'><img loading='lazy' src='{_escape(rel_path)}'></a>")
@@ -261,12 +290,12 @@ def _write_index_html(out_root: Path, previews: List[Tuple[str, str, str]]) -> N
 
 def _open_tk_viewer(
     out_root: Path,
-    previews: List[Tuple[str, str, str]],
+    previews: List[PreviewRec],
     *,
     sim_root: Optional[Path] = None,
     profiles_dir: Optional[Path] = None,
     configs_dir: Optional[Path] = None,
-    all_profiles: Optional[List[Tuple[str, Dict[str, Any]]]] = None,
+    all_profiles: Optional[List[Tuple[str, Dict[str, Any], set[str]]]] = None,
     render_settings: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Open an interactive Tkinter viewer for rendered previews with rerun capabilities."""
@@ -291,16 +320,19 @@ def _open_tk_viewer(
         def __init__(self):
             self.previews = previews
             self.is_rendering = False
+            self.backend_filter = "both"
 
     state = ViewerState()
 
     def _load_items():
         """Load image items from current preview list."""
-        items: List[Tuple[str, str, Path]] = []
-        for pid, defect, rel in state.previews:
+        items: List[Tuple[str, str, str, Path]] = []
+        for pid, backend, defect, rel in state.previews:
+            if state.backend_filter != "both" and backend != state.backend_filter:
+                continue
             p = (out_root / rel).resolve()
             if p.exists():
-                items.append((pid, defect, p))
+                items.append((pid, backend, defect, p))
         return items
 
     root = tk.Tk()
@@ -326,15 +358,44 @@ def _open_tk_viewer(
         controls = ttk.Frame(top)
         controls.pack(fill="x", pady=(0, 10))
 
+        def _profiles_for_backend(mode: str) -> List[str]:
+            mode = str(mode or "both")
+            if mode == "both":
+                return [pid for pid, _prof, _b in all_profiles]
+            return [pid for pid, _prof, b in all_profiles if mode in b]
+
+        # Backend selection / filter
+        ttk.Label(controls, text="Backend:").pack(side="left", padx=(0, 5))
+        backend_var = tk.StringVar(value=str(render_settings.get("backend_mode", "both")))
+        backend_combo = ttk.Combobox(
+            controls,
+            textvariable=backend_var,
+            values=["both", BACKEND_2D, BACKEND_3D],
+            width=10,
+            state="readonly",
+        )
+        backend_combo.pack(side="left", padx=(0, 15))
+        state.backend_filter = backend_var.get()
+
         # Profile selection
         ttk.Label(controls, text="Profile:").pack(side="left", padx=(0, 5))
 
         profile_var = tk.StringVar()
-        profile_ids = [pid for pid, _ in all_profiles]
+        profile_ids = _profiles_for_backend(state.backend_filter)
         profile_combo = ttk.Combobox(controls, textvariable=profile_var, values=profile_ids, width=35, state="readonly")
         if profile_ids:
             profile_combo.current(0)
         profile_combo.pack(side="left", padx=(0, 15))
+
+        def _on_backend_change(_evt=None):
+            state.backend_filter = backend_var.get()
+            ids = _profiles_for_backend(state.backend_filter)
+            profile_combo["values"] = ids
+            if ids:
+                profile_combo.current(0)
+            _refresh_images()
+
+        backend_combo.bind("<<ComboboxSelected>>", _on_backend_change)
 
         # Seed controls
         ttk.Label(controls, text="Seed:").pack(side="left", padx=(0, 5))
@@ -358,14 +419,16 @@ def _open_tk_viewer(
                 status_label.config(text="No profile selected", foreground="#b00")
                 return
 
-            # Find the profile
-            selected_prof = None
-            for pid, prof in all_profiles:
+            # Find the profile + supported backends
+            selected_prof: Optional[Dict[str, Any]] = None
+            selected_backends: set[str] = set()
+            for pid, prof, backends in all_profiles:
                 if pid == selected_pid:
                     selected_prof = prof
+                    selected_backends = set(backends)
                     break
 
-            if not selected_prof:
+            if selected_prof is None:
                 status_label.config(text="Profile not found", foreground="#b00")
                 return
 
@@ -392,94 +455,173 @@ def _open_tk_viewer(
                     device_override = render_settings.get("device", "")
                     roi_override = render_settings.get("roi_override")
 
-                    # Get config for this profile
-                    if forced_cfg is not None:
-                        cfg = forced_cfg
-                    else:
-                        matches = _find_matching_run_configs(configs_dir, profile_id=selected_pid)
-                        if matches:
-                            cfg = load_config(matches[0])
-                        else:
-                            cfg = load_config(sim_root / "configs/run_0001_3d.yaml")
-
-                    settings = _settings_from_config(cfg)
-
-                    # Apply overrides
-                    if roi_override is not None:
-                        w, h, mpp = roi_override
-                        settings = RenderSettings(
-                            roi_width_px=int(w),
-                            roi_height_px=int(h),
-                            mm_per_px=float(mpp),
-                            blender_executable=settings.blender_executable,
-                            cycles_samples=settings.cycles_samples,
-                            device=settings.device,
-                        )
-
-                    if blender_override:
-                        settings = RenderSettings(
-                            roi_width_px=settings.roi_width_px,
-                            roi_height_px=settings.roi_height_px,
-                            mm_per_px=settings.mm_per_px,
-                            blender_executable=str(blender_override),
-                            cycles_samples=settings.cycles_samples,
-                            device=settings.device,
-                        )
-
-                    if samples_override and int(samples_override) > 0:
-                        settings = RenderSettings(
-                            roi_width_px=settings.roi_width_px,
-                            roi_height_px=settings.roi_height_px,
-                            mm_per_px=settings.mm_per_px,
-                            blender_executable=settings.blender_executable,
-                            cycles_samples=int(samples_override),
-                            device=settings.device,
-                        )
-
-                    if device_override:
-                        settings = RenderSettings(
-                            roi_width_px=settings.roi_width_px,
-                            roi_height_px=settings.roi_height_px,
-                            mm_per_px=settings.mm_per_px,
-                            blender_executable=settings.blender_executable,
-                            cycles_samples=settings.cycles_samples,
-                            device=str(device_override),
-                        )
-
                     # Get defect types
                     defect_types = _parse_csv_list(states_override) or list(selected_prof.get("defect_set") or [])
                     if not defect_types:
                         defect_types = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
 
-                    # Build and run jobs with unique run_id if variable seeds enabled
+                    # Determine which backend(s) to render in this run
+                    mode = backend_var.get()
+                    if mode == "both":
+                        backends_to_render = [b for b in [BACKEND_2D, BACKEND_3D] if b in selected_backends]
+                    else:
+                        backends_to_render = [mode] if mode in selected_backends else []
+                    if not backends_to_render:
+                        raise RuntimeError(f"Profile {selected_pid!r} does not support backend={mode!r}")
+
                     run_id = int(time.time() * 1000000) if use_variable_seeds else None
-                    jobs, new_previews = _build_preview_jobs(
-                        profile_id=selected_pid,
-                        profile=selected_prof,
-                        settings=settings,
-                        out_root=out_root,
-                        seed_base=int(seed_base),
-                        defect_types=defect_types,
-                        run_id=run_id,
-                    )
+                    all_new_previews: List[PreviewRec] = []
 
-                    jobs_path = out_root / "blender_jobs_previews.jsonl"
-                    write_jobs_jsonl(jobs_path, jobs)
+                    for backend in backends_to_render:
+                        # Select config for this profile/backend
+                        if forced_cfg is not None:
+                            cfg = forced_cfg
+                            validate_config(cfg)
+                            cfg_backend = str((cfg.get("render") or {}).get("backend", ""))
+                            if cfg_backend != backend:
+                                raise RuntimeError(f"Forced --config backend={cfg_backend!r} does not match requested backend={backend!r}")
+                        else:
+                            matches = _find_matching_run_configs(configs_dir, profile_id=selected_pid, backend=backend)
+                            if matches:
+                                cfg = load_config(matches[0])
+                            else:
+                                fallback = "configs/run_0001.yaml" if backend == BACKEND_2D else "configs/run_0001_3d.yaml"
+                                cfg = load_config(sim_root / fallback)
+                            validate_config(cfg)
 
-                    render_blender_batch(
-                        sim_root=sim_root,
-                        jobs_path=jobs_path,
-                        output_root=out_root,
-                        blender_executable=settings.blender_executable,
-                        cycles_samples=settings.cycles_samples,
-                        device=settings.device,
-                    )
+                        if backend == BACKEND_3D:
+                            settings = _settings_from_config(cfg)
 
-                    # Update state with new previews (replace old ones for this profile)
-                    # Remove old previews for this profile
-                    state.previews = [(pid, df, rp) for pid, df, rp in state.previews if pid != selected_pid]
-                    # Add new previews
-                    state.previews.extend(new_previews)
+                            # Apply overrides (3D only)
+                            if roi_override is not None:
+                                w, h, mpp = roi_override
+                                settings = RenderSettings(
+                                    roi_width_px=int(w),
+                                    roi_height_px=int(h),
+                                    mm_per_px=float(mpp),
+                                    blender_executable=settings.blender_executable,
+                                    cycles_samples=settings.cycles_samples,
+                                    device=settings.device,
+                                )
+
+                            if blender_override:
+                                settings = RenderSettings(
+                                    roi_width_px=settings.roi_width_px,
+                                    roi_height_px=settings.roi_height_px,
+                                    mm_per_px=settings.mm_per_px,
+                                    blender_executable=str(blender_override),
+                                    cycles_samples=settings.cycles_samples,
+                                    device=settings.device,
+                                )
+
+                            if samples_override and int(samples_override) > 0:
+                                settings = RenderSettings(
+                                    roi_width_px=settings.roi_width_px,
+                                    roi_height_px=settings.roi_height_px,
+                                    mm_per_px=settings.mm_per_px,
+                                    blender_executable=settings.blender_executable,
+                                    cycles_samples=int(samples_override),
+                                    device=settings.device,
+                                )
+
+                            if device_override:
+                                settings = RenderSettings(
+                                    roi_width_px=settings.roi_width_px,
+                                    roi_height_px=settings.roi_height_px,
+                                    mm_per_px=settings.mm_per_px,
+                                    blender_executable=settings.blender_executable,
+                                    cycles_samples=settings.cycles_samples,
+                                    device=str(device_override),
+                                )
+
+                            jobs, new_previews = _build_preview_jobs(
+                                profile_id=selected_pid,
+                                profile=selected_prof,
+                                settings=settings,
+                                out_root=out_root,
+                                seed_base=int(seed_base),
+                                defect_types=defect_types,
+                                run_id=run_id,
+                                backend=backend,
+                            )
+
+                            jobs_path = out_root / "blender_jobs_previews.jsonl"
+                            write_jobs_jsonl(jobs_path, jobs)
+                            render_blender_batch(
+                                sim_root=sim_root,
+                                jobs_path=jobs_path,
+                                output_root=out_root,
+                                blender_executable=settings.blender_executable,
+                                cycles_samples=settings.cycles_samples,
+                                device=settings.device,
+                            )
+                            all_new_previews.extend(new_previews)
+                        else:
+                            # 2D OpenCV render
+                            import cv2  # type: ignore
+                            from simple_sim.generator_2d import render_roi  # type: ignore
+
+                            roi = cfg["roi"]
+                            w = int(roi["width_px"])
+                            h = int(roi["height_px"])
+                            mpp = float(roi["mm_per_px"])
+                            if roi_override is not None:
+                                w, h, mpp = int(roi_override[0]), int(roi_override[1]), float(roi_override[2])
+
+                            roi_cfg = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
+
+                            render_cfg = dict(cfg["render"])
+                            # schema v2: allow render.component_color to come from profile.
+                            if "component_color" not in render_cfg and "render" in selected_prof:
+                                render_cfg["component_color"] = selected_prof["render"]["component_color_bgr"]
+
+                            footprint = str((selected_prof.get("component") or {}).get("footprint", "chip_2pad"))
+                            geometry_ranges = selected_prof.get("geometry_ranges") or {}
+                            tolerances = selected_prof.get("tolerances")
+
+                            augment = {
+                                "blur_sigma": 0.0,
+                                "noise_stddev": 0.0,
+                                "brightness_factor": 1.0,
+                                "contrast_factor": 1.0,
+                                "rotation_deg": 0.0,
+                            }
+
+                            profile_dir = _sanitize_dir_name(selected_pid)
+                            for defect_type in defect_types:
+                                if run_id is not None:
+                                    seed_str = f"{int(seed_base)}|{selected_pid}|{backend}|{str(defect_type)}|{int(run_id)}"
+                                else:
+                                    seed_str = f"{int(seed_base)}|{selected_pid}|{backend}|{str(defect_type)}"
+                                hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
+                                seed = int(hh[:12], 16)
+                                rng = np.random.default_rng(seed)
+
+                                nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
+                                defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
+                                img = render_roi(
+                                    nominal=nominal,
+                                    defect_params=defect,
+                                    augment=augment,
+                                    roi_size=(int(w), int(h)),
+                                    config=render_cfg,
+                                    tolerances=tolerances,
+                                    rng=rng,
+                                    footprint=footprint,
+                                )
+
+                                rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
+                                out_path = (out_root / rel_path).resolve()
+                                out_path.parent.mkdir(parents=True, exist_ok=True)
+                                ok = cv2.imwrite(str(out_path), img)
+                                if not ok:
+                                    raise RuntimeError(f"Failed to write image: {out_path}")
+                                all_new_previews.append((selected_pid, backend, str(defect_type), rel_path))
+
+                    # Update state with new previews (replace old ones for this profile+backend(s))
+                    rendered_b = set(backends_to_render)
+                    state.previews = [rec for rec in state.previews if not (rec[0] == selected_pid and rec[1] in rendered_b)]
+                    state.previews.extend(all_new_previews)
 
                     # Update index.html
                     _write_index_html(out_root, state.previews)
@@ -530,102 +672,170 @@ def _open_tk_viewer(
                     device_override = render_settings.get("device", "")
                     roi_override = render_settings.get("roi_override")
 
-                    all_new_previews = []
+                    mode = backend_var.get()
+                    all_new_previews: List[PreviewRec] = []
 
-                    for idx, (pid, prof) in enumerate(all_profiles, 1):
+                    for idx, (pid, prof, backends) in enumerate(all_profiles, 1):
+                        # Skip profiles not in the current backend filter.
+                        if mode != "both" and mode not in backends:
+                            continue
+
                         root.after(0, lambda i=idx, p=pid: status_label.config(
                             text=f"Rendering {i}/{len(all_profiles)}: {p}", foreground="#c60"))
 
-                        # Get config for this profile
-                        if forced_cfg is not None:
-                            cfg = forced_cfg
-                        else:
-                            matches = _find_matching_run_configs(configs_dir, profile_id=pid)
-                            if matches:
-                                cfg = load_config(matches[0])
-                            else:
-                                cfg = load_config(sim_root / "configs/run_0001_3d.yaml")
-
-                        settings = _settings_from_config(cfg)
-
-                        # Apply overrides
-                        if roi_override is not None:
-                            w, h, mpp = roi_override
-                            settings = RenderSettings(
-                                roi_width_px=int(w),
-                                roi_height_px=int(h),
-                                mm_per_px=float(mpp),
-                                blender_executable=settings.blender_executable,
-                                cycles_samples=settings.cycles_samples,
-                                device=settings.device,
-                            )
-
-                        if blender_override:
-                            settings = RenderSettings(
-                                roi_width_px=settings.roi_width_px,
-                                roi_height_px=settings.roi_height_px,
-                                mm_per_px=settings.mm_per_px,
-                                blender_executable=str(blender_override),
-                                cycles_samples=settings.cycles_samples,
-                                device=settings.device,
-                            )
-
-                        if samples_override and int(samples_override) > 0:
-                            settings = RenderSettings(
-                                roi_width_px=settings.roi_width_px,
-                                roi_height_px=settings.roi_height_px,
-                                mm_per_px=settings.mm_per_px,
-                                blender_executable=settings.blender_executable,
-                                cycles_samples=int(samples_override),
-                                device=settings.device,
-                            )
-
-                        if device_override:
-                            settings = RenderSettings(
-                                roi_width_px=settings.roi_width_px,
-                                roi_height_px=settings.roi_height_px,
-                                mm_per_px=settings.mm_per_px,
-                                blender_executable=settings.blender_executable,
-                                cycles_samples=settings.cycles_samples,
-                                device=str(device_override),
-                            )
-
-                        # Get defect types
                         defect_types = _parse_csv_list(states_override) or list(prof.get("defect_set") or [])
                         if not defect_types:
                             defect_types = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
 
-                        # Build and run jobs with unique run_id if variable seeds enabled
                         run_id = int(time.time() * 1000000) if use_variable_seeds else None
-                        jobs, new_previews = _build_preview_jobs(
-                            profile_id=pid,
-                            profile=prof,
-                            settings=settings,
-                            out_root=out_root,
-                            seed_base=int(seed_base),
-                            defect_types=defect_types,
-                            run_id=run_id,
-                        )
 
-                        jobs_path = out_root / f"blender_jobs_previews_{_sanitize_dir_name(pid)}.jsonl"
-                        write_jobs_jsonl(jobs_path, jobs)
+                        backends_to_render = [b for b in [BACKEND_2D, BACKEND_3D] if b in backends] if mode == "both" else [mode]
 
-                        render_blender_batch(
-                            sim_root=sim_root,
-                            jobs_path=jobs_path,
-                            output_root=out_root,
-                            blender_executable=settings.blender_executable,
-                            cycles_samples=settings.cycles_samples,
-                            device=settings.device,
-                        )
+                        for backend in backends_to_render:
+                            # Get config for this profile/backend
+                            if forced_cfg is not None:
+                                cfg = forced_cfg
+                                validate_config(cfg)
+                                cfg_backend = str((cfg.get("render") or {}).get("backend", ""))
+                                if cfg_backend != backend:
+                                    raise RuntimeError(f"Forced --config backend={cfg_backend!r} does not match requested backend={backend!r}")
+                            else:
+                                matches = _find_matching_run_configs(configs_dir, profile_id=pid, backend=backend)
+                                if matches:
+                                    cfg = load_config(matches[0])
+                                else:
+                                    fallback = "configs/run_0001.yaml" if backend == BACKEND_2D else "configs/run_0001_3d.yaml"
+                                    cfg = load_config(sim_root / fallback)
+                                validate_config(cfg)
 
-                        all_new_previews.extend(new_previews)
+                            if backend == BACKEND_3D:
+                                settings = _settings_from_config(cfg)
+
+                                if roi_override is not None:
+                                    w, h, mpp = roi_override
+                                    settings = RenderSettings(
+                                        roi_width_px=int(w),
+                                        roi_height_px=int(h),
+                                        mm_per_px=float(mpp),
+                                        blender_executable=settings.blender_executable,
+                                        cycles_samples=settings.cycles_samples,
+                                        device=settings.device,
+                                    )
+
+                                if blender_override:
+                                    settings = RenderSettings(
+                                        roi_width_px=settings.roi_width_px,
+                                        roi_height_px=settings.roi_height_px,
+                                        mm_per_px=settings.mm_per_px,
+                                        blender_executable=str(blender_override),
+                                        cycles_samples=settings.cycles_samples,
+                                        device=settings.device,
+                                    )
+
+                                if samples_override and int(samples_override) > 0:
+                                    settings = RenderSettings(
+                                        roi_width_px=settings.roi_width_px,
+                                        roi_height_px=settings.roi_height_px,
+                                        mm_per_px=settings.mm_per_px,
+                                        blender_executable=settings.blender_executable,
+                                        cycles_samples=int(samples_override),
+                                        device=settings.device,
+                                    )
+
+                                if device_override:
+                                    settings = RenderSettings(
+                                        roi_width_px=settings.roi_width_px,
+                                        roi_height_px=settings.roi_height_px,
+                                        mm_per_px=settings.mm_per_px,
+                                        blender_executable=settings.blender_executable,
+                                        cycles_samples=settings.cycles_samples,
+                                        device=str(device_override),
+                                    )
+
+                                jobs, new_previews = _build_preview_jobs(
+                                    profile_id=pid,
+                                    profile=prof,
+                                    settings=settings,
+                                    out_root=out_root,
+                                    seed_base=int(seed_base),
+                                    defect_types=defect_types,
+                                    run_id=run_id,
+                                    backend=backend,
+                                )
+
+                                jobs_path = out_root / f"blender_jobs_previews_{_sanitize_dir_name(pid)}.jsonl"
+                                write_jobs_jsonl(jobs_path, jobs)
+                                render_blender_batch(
+                                    sim_root=sim_root,
+                                    jobs_path=jobs_path,
+                                    output_root=out_root,
+                                    blender_executable=settings.blender_executable,
+                                    cycles_samples=settings.cycles_samples,
+                                    device=settings.device,
+                                )
+                                all_new_previews.extend(new_previews)
+                            else:
+                                import cv2  # type: ignore
+                                from simple_sim.generator_2d import render_roi  # type: ignore
+
+                                roi = cfg["roi"]
+                                w = int(roi["width_px"])
+                                h = int(roi["height_px"])
+                                mpp = float(roi["mm_per_px"])
+                                if roi_override is not None:
+                                    w, h, mpp = int(roi_override[0]), int(roi_override[1]), float(roi_override[2])
+
+                                roi_cfg = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
+
+                                render_cfg = dict(cfg["render"])
+                                if "component_color" not in render_cfg and "render" in prof:
+                                    render_cfg["component_color"] = prof["render"]["component_color_bgr"]
+
+                                footprint = str((prof.get("component") or {}).get("footprint", "chip_2pad"))
+                                geometry_ranges = prof.get("geometry_ranges") or {}
+                                tolerances = prof.get("tolerances")
+                                augment = {
+                                    "blur_sigma": 0.0,
+                                    "noise_stddev": 0.0,
+                                    "brightness_factor": 1.0,
+                                    "contrast_factor": 1.0,
+                                    "rotation_deg": 0.0,
+                                }
+
+                                profile_dir = _sanitize_dir_name(pid)
+                                for defect_type in defect_types:
+                                    if run_id is not None:
+                                        seed_str = f"{int(seed_base)}|{pid}|{backend}|{str(defect_type)}|{int(run_id)}"
+                                    else:
+                                        seed_str = f"{int(seed_base)}|{pid}|{backend}|{str(defect_type)}"
+                                    hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
+                                    seed = int(hh[:12], 16)
+                                    rng = np.random.default_rng(seed)
+                                    nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
+                                    defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
+                                    img = render_roi(
+                                        nominal=nominal,
+                                        defect_params=defect,
+                                        augment=augment,
+                                        roi_size=(int(w), int(h)),
+                                        config=render_cfg,
+                                        tolerances=tolerances,
+                                        rng=rng,
+                                        footprint=footprint,
+                                    )
+                                    rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
+                                    out_path = (out_root / rel_path).resolve()
+                                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                                    ok = cv2.imwrite(str(out_path), img)
+                                    if not ok:
+                                        raise RuntimeError(f"Failed to write image: {out_path}")
+                                    all_new_previews.append((pid, backend, str(defect_type), rel_path))
 
                     # Update state with all new previews
                     # Remove old previews for all rendered profiles
-                    rendered_pids = {pid for pid, _ in all_profiles}
-                    state.previews = [(pid, df, rp) for pid, df, rp in state.previews if pid not in rendered_pids]
-                    # Add all new previews
+                    rendered_pids = {pid for pid, _prof, _b in all_profiles}
+                    # Remove old previews for all rendered profiles (keep others)
+                    state.previews = [rec for rec in state.previews if rec[0] not in rendered_pids]
                     state.previews.extend(all_new_previews)
 
                     # Update index.html
@@ -716,15 +926,15 @@ def _open_tk_viewer(
 
         root.title(f"Simple-Sim Debug Previews ({len(items)} images)")
 
-        items.sort(key=lambda t: (t[0], t[1]))
-        for idx, (pid, defect, img_path) in enumerate(items):
+        items.sort(key=lambda t: (t[0], t[1], t[2]))
+        for idx, (pid, backend, defect, img_path) in enumerate(items):
             r = idx // cols
             c = idx % cols
 
             card = ttk.Frame(inner, padding=pad)
             card.grid(row=r, column=c, sticky="nsew", padx=6, pady=6)
 
-            cap = f"{pid}\n{defect}"
+            cap = f"{pid}\n{backend}\n{defect}"
             ttk.Label(card, text=cap, justify="left").pack(anchor="w")
 
             try:
@@ -763,7 +973,8 @@ def _build_preview_jobs(
     seed_base: int,
     defect_types: Sequence[str],
     run_id: Optional[int] = None,
-) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str, str]]]:
+    backend: str = BACKEND_3D,
+) -> Tuple[List[Dict[str, Any]], List[PreviewRec]]:
     """Return (jobs, preview_records). preview_records is for index.html.
 
     If run_id is provided, it will be included in seed generation to create
@@ -782,7 +993,7 @@ def _build_preview_jobs(
     }
 
     jobs: List[Dict[str, Any]] = []
-    previews: List[Tuple[str, str, str]] = []
+    previews: List[PreviewRec] = []
 
     profile_dir = _sanitize_dir_name(profile_id)
     for i, defect_type in enumerate(defect_types):
@@ -798,7 +1009,7 @@ def _build_preview_jobs(
         nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
         defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
 
-        rel_path = f"previews/{profile_dir}/{str(defect_type)}.png"
+        rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
         job = {
             "image_path": rel_path,
             "seed": int(seed),
@@ -812,33 +1023,33 @@ def _build_preview_jobs(
             "render_3d": render_3d,
         }
         jobs.append(job)
-        previews.append((profile_id, str(defect_type), rel_path))
+        previews.append((profile_id, backend, str(defect_type), rel_path))
 
     return jobs, previews
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Render per-profile 3D debug previews (OK/MISALIGNED/etc.)")
+    parser = argparse.ArgumentParser(description="Render per-profile debug previews (2D OpenCV and/or 3D Blender)")
     parser.add_argument("--profiles-dir", default="configs/profiles", help="Directory with component profile YAMLs")
     parser.add_argument("--configs-dir", default="configs", help="Directory with run_*.yaml configs (for auto matching)")
     parser.add_argument("--out", default="outputs/debug_previews", help="Output directory root")
 
-    parser.add_argument("--profiles", default="", help="Comma-separated profile IDs to render (e.g. chip_..._3d@1,sot23_..._3d@1)")
-    parser.add_argument("--all", action="store_true", help="Render all discovered 3D profiles")
-    parser.add_argument("--non-interactive", action="store_true", help="Do not prompt; requires --profiles or --all")
+    parser.add_argument("--backend", choices=BACKEND_CHOICES, default="auto", help="Render backend: opencv_2d|blender_3d|both|auto")
+    parser.add_argument("--profiles", default="", help="Comma-separated profile IDs to render")
+    parser.add_argument("--all", action="store_true", help="Render all discovered profiles (within backend selection)")
+    parser.add_argument("--non-interactive", action="store_true", help="Do not prompt; requires --profiles or --all (or --backend != auto)")
 
-    parser.add_argument("--config", default="", help="Optional run config YAML to use for ALL selected profiles")
+    parser.add_argument("--config", default="", help="Optional run config YAML to use for ALL selected profiles (must match backend unless --backend=both)")
     parser.add_argument("--seed", type=int, default=2026, help="Base seed for deterministic previews")
-    parser.add_argument("--variable-seeds", action="store_true", help="Generate different images on each run (like real 3D pipeline)")
-
+    parser.add_argument("--variable-seeds", action="store_true", help="Generate different images on each run (like real pipeline)")
     parser.add_argument("--states", default="", help="Comma-separated defect states to render (default: from profile.defect_set)")
 
-    parser.add_argument("--blender", default="", help="Override blender executable (else from config)")
-    parser.add_argument("--samples", type=int, default=0, help="Override Cycles samples (else from config)")
-    parser.add_argument("--device", default="", help="Override device (CPU/GPU; else from config)")
+    parser.add_argument("--blender", default="", help="(3D) Override blender executable (else from config)")
+    parser.add_argument("--samples", type=int, default=0, help="(3D) Override Cycles samples (else from config)")
+    parser.add_argument("--device", default="", help="(3D) Override device (CPU/GPU; else from config)")
 
     parser.add_argument("--roi", default="", help="Override ROI as WIDTHxHEIGHT@MM_PER_PX, e.g. 256x256@0.01")
-    parser.add_argument("--dry-run", action="store_true", help="Only write jobs file and index; do not invoke Blender")
+    parser.add_argument("--dry-run", action="store_true", help="Only write index/jobs; do not render (2D or 3D)")
     parser.add_argument("--view", choices=["tk", "browser", "none"], default="tk", help="How to open previews after run (default: tk)")
     # Back-compat flags
     open_group = parser.add_mutually_exclusive_group()
@@ -852,47 +1063,17 @@ def main() -> None:
     configs_dir = (sim_root / args.configs_dir).resolve()
     out_root = (sim_root / args.out).resolve()
 
-    discovered = _discover_3d_profiles(profiles_dir)
-    if not discovered:
-        raise SystemExit(f"No 3D (blender_3d) profiles found under: {profiles_dir}")
+    discovered_all = _discover_profiles(profiles_dir, backend_mode="both")
+    if not discovered_all:
+        raise SystemExit(f"No profiles found under: {profiles_dir}")
 
-    # Determine selected profile ids
-    selected_ids: List[str] = []
-    if args.all:
-        selected_ids = [pid for pid, _ in discovered]
-    else:
-        selected_ids = _parse_csv_list(args.profiles)
-
-    if not selected_ids and not args.non_interactive:
-        print("\nAvailable 3D profiles:\n")
-        for i, (pid, prof) in enumerate(discovered, 1):
-            desc = str((prof.get("profile") or {}).get("description", "") or "")
-            print(f"{i:2d}. {pid}" + (f"  ({desc})" if desc else ""))
-        print("\nSelect profiles by number (e.g. 1,3-4) or 'all':")
-        sel = input("> ").strip()
-        idxs = _parse_selection(sel, len(discovered))
-        selected_ids = [discovered[i][0] for i in idxs]
-
-    if not selected_ids:
-        raise SystemExit("No profiles selected. Use interactive mode or pass --profiles/--all.")
-
-    # Load profiles (dict) for selected ids and validate they're 3D.
-    selected: List[Tuple[str, Dict[str, Any]]] = []
-    pid_to_profile: Dict[str, Dict[str, Any]] = {pid: prof for pid, prof in discovered}
-    missing = [pid for pid in selected_ids if pid not in pid_to_profile]
-    if missing:
-        raise SystemExit(f"Unknown profiles: {missing}\nAvailable: {[pid for pid, _ in discovered]}")
-    for pid in selected_ids:
-        prof = pid_to_profile[pid]
-        backends = prof.get("profile", {}).get("supported_render_backends") or []
-        if "blender_3d" not in backends:
-            raise SystemExit(f"Profile is not a 3D backend profile: {pid}")
-        selected.append((pid, prof))
-
-    # Load settings: either one config for all, or auto match per profile.
+    # Load settings: either one config for all, or auto match per profile/backend.
     forced_cfg: Optional[Dict[str, Any]] = None
+    forced_backend: Optional[str] = None
     if args.config:
         forced_cfg = load_config(sim_root / args.config)
+        validate_config(forced_cfg)
+        forced_backend = str((forced_cfg.get("render") or {}).get("backend", ""))
 
     # Optional ROI override parsing
     roi_override: Optional[Tuple[int, int, float]] = None
@@ -902,100 +1083,75 @@ def main() -> None:
             raise SystemExit("Invalid --roi. Expected WIDTHxHEIGHT@MM_PER_PX, e.g. 256x256@0.01")
         roi_override = (int(m.group(1)), int(m.group(2)), float(m.group(3)))
 
-    previews_for_index: List[Tuple[str, str, str]] = []
+    # Resolve backend mode
+    backend_mode = str(args.backend or "auto")
+    if backend_mode == "auto" and forced_backend:
+        backend_mode = forced_backend
+    if backend_mode != "auto" and forced_backend and backend_mode not in {"both", forced_backend}:
+        raise SystemExit(f"--backend={backend_mode!r} conflicts with --config backend={forced_backend!r}")
+
+    def _prompt_backend() -> str:
+        print("\nSelect backend mode:\n")
+        print(f"  1. 3D ({BACKEND_3D})")
+        print(f"  2. 2D ({BACKEND_2D})")
+        print("  3. Both")
+        sel = input("> ").strip().lower()
+        if sel in {"1", "3d", BACKEND_3D}:
+            return BACKEND_3D
+        if sel in {"2", "2d", BACKEND_2D}:
+            return BACKEND_2D
+        if sel in {"3", "both", "b"}:
+            return "both"
+        raise SystemExit("Invalid backend selection.")
+
+    if backend_mode == "auto" and not args.non_interactive:
+        backend_mode = _prompt_backend()
+    elif backend_mode == "auto":
+        backend_mode = "both"
+
+    # Filter discovered profiles for CLI selection list
+    if backend_mode in {BACKEND_2D, BACKEND_3D}:
+        discovered = [(pid, prof, b) for (pid, prof, b) in discovered_all if backend_mode in b]
+    else:
+        discovered = list(discovered_all)
+
+    if not discovered:
+        raise SystemExit(f"No profiles match backend={backend_mode!r} under: {profiles_dir}")
+
+    # Determine selected profile ids
+    selected_ids: List[str] = []
+    if args.all:
+        selected_ids = [pid for pid, _prof, _b in discovered]
+    else:
+        selected_ids = _parse_csv_list(args.profiles)
+
+    if not selected_ids and not args.non_interactive:
+        print("\nAvailable profiles:\n")
+        for i, (pid, prof, b) in enumerate(discovered, 1):
+            desc = str((prof.get("profile") or {}).get("description", "") or "")
+            b_str = "/".join(sorted(b))
+            print(f"{i:2d}. {pid}  [{b_str}]" + (f"  ({desc})" if desc else ""))
+        print("\nSelect profiles by number (e.g. 1,3-4) or 'all':")
+        sel = input("> ").strip()
+        idxs = _parse_selection(sel, len(discovered))
+        selected_ids = [discovered[i][0] for i in idxs]
+
+    if not selected_ids:
+        raise SystemExit("No profiles selected. Use interactive mode or pass --profiles/--all.")
+
+    pid_to_entry: Dict[str, Tuple[str, Dict[str, Any], set[str]]] = {pid: (pid, prof, b) for pid, prof, b in discovered_all}
+    missing = [pid for pid in selected_ids if pid not in pid_to_entry]
+    if missing:
+        raise SystemExit(f"Unknown profiles: {missing}")
+
+    selected_entries: List[Tuple[str, Dict[str, Any], set[str]]] = []
+    for pid in selected_ids:
+        _pid, prof, b = pid_to_entry[pid]
+        selected_entries.append((pid, prof, b))
+
+    previews_for_index: List[PreviewRec] = []
     all_jobs: List[Dict[str, Any]] = []
     per_profile_settings: List[RenderSettings] = []
-
-    for pid, prof in selected:
-        if forced_cfg is not None:
-            cfg = forced_cfg
-            cfg_src = f"(forced) {args.config}"
-        else:
-            matches = _find_matching_run_configs(configs_dir, profile_id=pid)
-            if matches:
-                cfg = load_config(matches[0])
-                try:
-                    rel = str(matches[0].relative_to(sim_root))
-                except Exception:
-                    rel = str(matches[0])
-                cfg_src = f"(auto) {rel}"
-            else:
-                # Fallback minimal config (validated later after we fill required sections)
-                cfg = load_config(sim_root / "configs/run_0001_3d.yaml")
-                cfg_src = "(fallback) configs/run_0001_3d.yaml"
-
-        settings = _settings_from_config(cfg)
-
-        if roi_override is not None:
-            w, h, mpp = roi_override
-            settings = RenderSettings(
-                roi_width_px=int(w),
-                roi_height_px=int(h),
-                mm_per_px=float(mpp),
-                blender_executable=settings.blender_executable,
-                cycles_samples=settings.cycles_samples,
-                device=settings.device,
-            )
-
-        if args.blender:
-            settings = RenderSettings(
-                roi_width_px=settings.roi_width_px,
-                roi_height_px=settings.roi_height_px,
-                mm_per_px=settings.mm_per_px,
-                blender_executable=str(args.blender),
-                cycles_samples=settings.cycles_samples,
-                device=settings.device,
-            )
-        if args.samples and int(args.samples) > 0:
-            settings = RenderSettings(
-                roi_width_px=settings.roi_width_px,
-                roi_height_px=settings.roi_height_px,
-                mm_per_px=settings.mm_per_px,
-                blender_executable=settings.blender_executable,
-                cycles_samples=int(args.samples),
-                device=settings.device,
-            )
-        if args.device:
-            settings = RenderSettings(
-                roi_width_px=settings.roi_width_px,
-                roi_height_px=settings.roi_height_px,
-                mm_per_px=settings.mm_per_px,
-                blender_executable=settings.blender_executable,
-                cycles_samples=settings.cycles_samples,
-                device=str(args.device),
-            )
-
-        defect_types = _parse_csv_list(args.states) or list(prof.get("defect_set") or [])
-        if not defect_types:
-            defect_types = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
-
-        print(f"\n[preview] Profile: {pid}")
-        print(f"[preview] Config:   {cfg_src}")
-        print(f"[preview] ROI:      {settings.roi_width_px}x{settings.roi_height_px} @ {settings.mm_per_px} mm/px")
-        print(f"[preview] Blender:  {settings.blender_executable} (samples={settings.cycles_samples}, device={settings.device})")
-        print(f"[preview] States:   {defect_types}")
-
-        per_profile_settings.append(settings)
-
-        # Use variable seeds if requested (like real 3D pipeline)
-        run_id = int(time.time() * 1000000) if args.variable_seeds else None
-
-        jobs, previews = _build_preview_jobs(
-            profile_id=pid,
-            profile=prof,
-            settings=settings,
-            out_root=out_root,
-            seed_base=int(args.seed),
-            defect_types=defect_types,
-            run_id=run_id,
-        )
-        all_jobs.extend(jobs)
-        previews_for_index.extend(previews)
-
-    out_root.mkdir(parents=True, exist_ok=True)
-    jobs_path = out_root / "blender_jobs_previews.jsonl"
-    write_jobs_jsonl(jobs_path, all_jobs)
-    _write_index_html(out_root, previews_for_index)
 
     # Translate legacy flags into --view behavior if explicitly set.
     if args.open_browser is True:
@@ -1003,7 +1159,176 @@ def main() -> None:
     elif args.open_browser is False:
         args.view = "none"
 
-    # Prepare render settings dict for viewer
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    for pid, prof, backends in selected_entries:
+        defect_types = _parse_csv_list(args.states) or list(prof.get("defect_set") or [])
+        if not defect_types:
+            defect_types = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+
+        run_id = int(time.time() * 1000000) if args.variable_seeds else None
+        if backend_mode == "both":
+            backends_to_render = [b for b in [BACKEND_2D, BACKEND_3D] if b in backends]
+        else:
+            backends_to_render = [backend_mode] if backend_mode in backends else []
+        if not backends_to_render:
+            raise SystemExit(f"Profile {pid!r} does not support backend={backend_mode!r}")
+
+        for backend in backends_to_render:
+            if forced_cfg is not None:
+                cfg = forced_cfg
+                cfg_src = f"(forced) {args.config}"
+                cfg_backend = str((cfg.get("render") or {}).get("backend", ""))
+                if backend != "both" and cfg_backend != backend:
+                    raise SystemExit(f"--config backend={cfg_backend!r} does not match requested backend={backend!r}")
+            else:
+                matches = _find_matching_run_configs(configs_dir, profile_id=pid, backend=backend)
+                if matches:
+                    cfg = load_config(matches[0])
+                    try:
+                        rel = str(matches[0].relative_to(sim_root))
+                    except Exception:
+                        rel = str(matches[0])
+                    cfg_src = f"(auto) {rel}"
+                else:
+                    fallback = "configs/run_0001.yaml" if backend == BACKEND_2D else "configs/run_0001_3d.yaml"
+                    cfg = load_config(sim_root / fallback)
+                    cfg_src = f"(fallback) {fallback}"
+                validate_config(cfg)
+
+            if backend == BACKEND_2D:
+                roi = cfg["roi"]
+                w = int(roi["width_px"])
+                h = int(roi["height_px"])
+                mpp = float(roi["mm_per_px"])
+                if roi_override is not None:
+                    w, h, mpp = int(roi_override[0]), int(roi_override[1]), float(roi_override[2])
+
+                print(f"\n[preview] Profile:  {pid}")
+                print(f"[preview] Backend:  {backend}")
+                print(f"[preview] Config:    {cfg_src}")
+                print(f"[preview] ROI:       {w}x{h} @ {mpp} mm/px")
+                print(f"[preview] States:    {defect_types}")
+
+                profile_dir = _sanitize_dir_name(pid)
+                for defect_type in defect_types:
+                    rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
+                    previews_for_index.append((pid, backend, str(defect_type), rel_path))
+
+                if args.dry_run:
+                    continue
+
+                import cv2  # type: ignore
+                from simple_sim.generator_2d import render_roi  # type: ignore
+
+                roi_cfg = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
+                render_cfg = dict(cfg["render"])
+                if "component_color" not in render_cfg and "render" in prof:
+                    render_cfg["component_color"] = prof["render"]["component_color_bgr"]
+                footprint = str((prof.get("component") or {}).get("footprint", "chip_2pad"))
+                geometry_ranges = prof.get("geometry_ranges") or {}
+                tolerances = prof.get("tolerances")
+                augment = {
+                    "blur_sigma": 0.0,
+                    "noise_stddev": 0.0,
+                    "brightness_factor": 1.0,
+                    "contrast_factor": 1.0,
+                    "rotation_deg": 0.0,
+                }
+
+                out_root.mkdir(parents=True, exist_ok=True)
+                for defect_type in defect_types:
+                    if run_id is not None:
+                        seed_str = f"{int(args.seed)}|{pid}|{backend}|{str(defect_type)}|{int(run_id)}"
+                    else:
+                        seed_str = f"{int(args.seed)}|{pid}|{backend}|{str(defect_type)}"
+                    hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
+                    seed = int(hh[:12], 16)
+                    rng = np.random.default_rng(seed)
+                    nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
+                    defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
+                    img = render_roi(
+                        nominal=nominal,
+                        defect_params=defect,
+                        augment=augment,
+                        roi_size=(int(w), int(h)),
+                        config=render_cfg,
+                        tolerances=tolerances,
+                        rng=rng,
+                        footprint=footprint,
+                    )
+                    out_path = (out_root / f"previews/{profile_dir}/{backend}/{str(defect_type)}.png").resolve()
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    ok = cv2.imwrite(str(out_path), img)
+                    if not ok:
+                        raise SystemExit(f"Failed to write image: {out_path}")
+            else:
+                settings = _settings_from_config(cfg)
+                if roi_override is not None:
+                    w, h, mpp = roi_override
+                    settings = RenderSettings(
+                        roi_width_px=int(w),
+                        roi_height_px=int(h),
+                        mm_per_px=float(mpp),
+                        blender_executable=settings.blender_executable,
+                        cycles_samples=settings.cycles_samples,
+                        device=settings.device,
+                    )
+
+                if args.blender:
+                    settings = RenderSettings(
+                        roi_width_px=settings.roi_width_px,
+                        roi_height_px=settings.roi_height_px,
+                        mm_per_px=settings.mm_per_px,
+                        blender_executable=str(args.blender),
+                        cycles_samples=settings.cycles_samples,
+                        device=settings.device,
+                    )
+                if args.samples and int(args.samples) > 0:
+                    settings = RenderSettings(
+                        roi_width_px=settings.roi_width_px,
+                        roi_height_px=settings.roi_height_px,
+                        mm_per_px=settings.mm_per_px,
+                        blender_executable=settings.blender_executable,
+                        cycles_samples=int(args.samples),
+                        device=settings.device,
+                    )
+                if args.device:
+                    settings = RenderSettings(
+                        roi_width_px=settings.roi_width_px,
+                        roi_height_px=settings.roi_height_px,
+                        mm_per_px=settings.mm_per_px,
+                        blender_executable=settings.blender_executable,
+                        cycles_samples=settings.cycles_samples,
+                        device=str(args.device),
+                    )
+
+                print(f"\n[preview] Profile:  {pid}")
+                print(f"[preview] Backend:  {backend}")
+                print(f"[preview] Config:    {cfg_src}")
+                print(f"[preview] ROI:       {settings.roi_width_px}x{settings.roi_height_px} @ {settings.mm_per_px} mm/px")
+                print(f"[preview] Blender:   {settings.blender_executable} (samples={settings.cycles_samples}, device={settings.device})")
+                print(f"[preview] States:    {defect_types}")
+
+                per_profile_settings.append(settings)
+                jobs, previews = _build_preview_jobs(
+                    profile_id=pid,
+                    profile=prof,
+                    settings=settings,
+                    out_root=out_root,
+                    seed_base=int(args.seed),
+                    defect_types=defect_types,
+                    run_id=run_id,
+                    backend=backend,
+                )
+                all_jobs.extend(jobs)
+                previews_for_index.extend(previews)
+
+    jobs_path = out_root / "blender_jobs_previews.jsonl"
+    if all_jobs:
+        write_jobs_jsonl(jobs_path, all_jobs)
+    _write_index_html(out_root, previews_for_index)
+
     viewer_render_settings = {
         "forced_cfg": forced_cfg,
         "seed_base": int(args.seed),
@@ -1012,10 +1337,12 @@ def main() -> None:
         "samples": args.samples,
         "device": args.device,
         "roi_override": roi_override,
+        "backend_mode": backend_mode,
     }
 
     if args.dry_run:
-        print(f"\n[dry-run] Wrote jobs:  {jobs_path}")
+        if all_jobs:
+            print(f"\n[dry-run] Wrote jobs:  {jobs_path}")
         print(f"[dry-run] Wrote index: {out_root / 'index.html'}")
         if args.view == "browser":
             import webbrowser
@@ -1027,38 +1354,38 @@ def main() -> None:
                 sim_root=sim_root,
                 profiles_dir=profiles_dir,
                 configs_dir=configs_dir,
-                all_profiles=discovered,
+                all_profiles=discovered_all,
                 render_settings=viewer_render_settings,
             )
         return
 
-    # One Blender invocation for all selected profiles (fast).
-    # Cycles samples/device/executable are process-wide (can't vary per job).
-    exes = sorted({s.blender_executable for s in per_profile_settings} or {"blender"})
-    devices = sorted({s.device for s in per_profile_settings} or {"CPU"})
-    samples_list = sorted({int(s.cycles_samples) for s in per_profile_settings} or {64})
+    if all_jobs:
+        # One Blender invocation for all selected 3D jobs (fast).
+        exes = sorted({s.blender_executable for s in per_profile_settings} or {"blender"})
+        devices = sorted({s.device for s in per_profile_settings} or {"CPU"})
+        samples_list = sorted({int(s.cycles_samples) for s in per_profile_settings} or {64})
 
-    if len(exes) > 1 and not args.blender:
-        print(f"\n[warn] Multiple blender executables across auto configs: {exes} (using: {exes[-1]})")
-    if len(devices) > 1 and not args.device:
-        print(f"[warn] Multiple devices across auto configs: {devices} (using: {devices[-1]})")
-    if len(samples_list) > 1 and not args.samples:
-        print(f"[warn] Multiple sample counts across auto configs: {samples_list} (using max: {max(samples_list)})")
+        if len(exes) > 1 and not args.blender:
+            print(f"\n[warn] Multiple blender executables across auto configs: {exes} (using: {exes[-1]})")
+        if len(devices) > 1 and not args.device:
+            print(f"[warn] Multiple devices across auto configs: {devices} (using: {devices[-1]})")
+        if len(samples_list) > 1 and not args.samples:
+            print(f"[warn] Multiple sample counts across auto configs: {samples_list} (using max: {max(samples_list)})")
 
-    blender_executable = str(args.blender or exes[-1])
-    device = str(args.device or devices[-1])
-    cycles_samples = int(args.samples or max(samples_list))
+        blender_executable = str(args.blender or exes[-1])
+        device = str(args.device or devices[-1])
+        cycles_samples = int(args.samples or max(samples_list))
 
-    # NOTE: The job file includes per-job ROI sizes; render_batch.py reads width/height per job.
-    print(f"\n[render] Running Blender batch for {len(all_jobs)} previews...")
-    render_blender_batch(
-        sim_root=sim_root,
-        jobs_path=jobs_path,
-        output_root=out_root,
-        blender_executable=blender_executable,
-        cycles_samples=cycles_samples,
-        device=device,
-    )
+        print(f"\n[render] Running Blender batch for {len(all_jobs)} previews...")
+        render_blender_batch(
+            sim_root=sim_root,
+            jobs_path=jobs_path,
+            output_root=out_root,
+            blender_executable=blender_executable,
+            cycles_samples=cycles_samples,
+            device=device,
+        )
+
     index_path = (out_root / "index.html").resolve()
     print(f"[render] Done. Open: {index_path}")
     if args.view == "browser":
@@ -1071,7 +1398,7 @@ def main() -> None:
             sim_root=sim_root,
             profiles_dir=profiles_dir,
             configs_dir=configs_dir,
-            all_profiles=discovered,
+            all_profiles=discovered_all,
             render_settings=viewer_render_settings,
         )
 
