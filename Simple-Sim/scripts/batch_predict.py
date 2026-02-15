@@ -53,10 +53,62 @@ class RunInfo:
 
 
 def load_checkpoint_model(model_path: Path, device: torch.device) -> Tuple[torch.nn.Module, List[str], Dict[str, Any]]:
-    checkpoint = torch.load(model_path, map_location=device)
+    # Always load to CPU first to avoid accidentally loading a large ensemble onto GPU.
+    checkpoint = torch.load(model_path, map_location="cpu")
+
+    # Ensemble checkpoint: average logits from multiple sub-models.
+    if isinstance(checkpoint, dict) and checkpoint.get("format") == "simple_sim_ensemble_v1":
+        class_names = list(checkpoint.get("class_names") or [])
+        num_classes = len(class_names)
+        items = checkpoint.get("models") or []
+        if not class_names or not isinstance(items, list) or not items:
+            raise ValueError(f"Invalid ensemble checkpoint (missing class_names/models): {model_path}")
+
+        sub_models: List[torch.nn.Module] = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            ckpt = it.get("checkpoint") or {}
+            if not isinstance(ckpt, dict):
+                continue
+            cn = ckpt.get("class_names")
+            if list(cn or []) != class_names:
+                raise ValueError(
+                    "Ensemble class_names mismatch between sub-models. "
+                    "All merged models must share the same defect class list."
+                )
+            m = models.resnet18(weights=None)
+            num_features = m.fc.in_features
+            m.fc = nn.Linear(num_features, num_classes)
+            m.load_state_dict(ckpt["model_state_dict"])
+            m = m.to(device)
+            m.eval()
+            sub_models.append(m)
+
+        if not sub_models:
+            raise ValueError(f"Invalid ensemble checkpoint (no valid sub-models): {model_path}")
+
+        class EnsembleModel(nn.Module):
+            def __init__(self, parts: List[nn.Module]) -> None:
+                super().__init__()
+                self.parts = nn.ModuleList(parts)
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                # Average logits; softmax is applied by the caller.
+                out = None
+                for m in self.parts:
+                    y = m(x)
+                    out = y if out is None else (out + y)
+                assert out is not None
+                return out / float(len(self.parts))
+
+        model = EnsembleModel(sub_models).to(device)
+        model.eval()
+        return model, class_names, checkpoint
+
+    # Standard single-checkpoint model.
     class_names = checkpoint["class_names"]
     num_classes = len(class_names)
-
     model = models.resnet18(weights=None)
     num_features = model.fc.in_features
     model.fc = nn.Linear(num_features, num_classes)
@@ -267,10 +319,18 @@ def main() -> None:
         dataset_profile_id = manifest["component_profile"]["profile_id"]
         resolved = bundle_checkpoint_path(requested_model_path, dataset_profile_id, kind="best")
         if not resolved.exists():
+            # Help users diagnose what's actually inside the bundle dir.
+            try:
+                avail = sorted([p.name for p in requested_model_path.glob("*.pt")])
+            except Exception:
+                avail = []
             raise FileNotFoundError(
                 f"Multi-model bundle has no checkpoint for profile '{dataset_profile_id}':\n"
                 f"  bundle: {requested_model_path}\n"
-                f"  expected: {resolved}"
+                f"  expected: {resolved}\n"
+                f"  available: {', '.join(avail[:12]) if avail else '(none)'}\n\n"
+                f"To add it, train this dataset into the same bundle:\n"
+                f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {requested_model_path}"
             )
         effective_model_path = resolved
 

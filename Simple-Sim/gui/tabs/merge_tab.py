@@ -131,7 +131,12 @@ class MergeTab(BaseTab):
         )
 
         self.btn_merge = ttk.Button(merge_frame, text="Merge -> Bundle", command=self._do_merge)
-        self.btn_merge.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.btn_merge.grid(row=2, column=0, sticky="w", pady=(8, 0))
+
+        self.btn_merge_ensemble = ttk.Button(
+            merge_frame, text="Merge -> Single .pt (Ensemble)", command=self._do_merge_ensemble
+        )
+        self.btn_merge_ensemble.grid(row=2, column=1, sticky="e", pady=(8, 0))
 
         self.var_status = tk.StringVar(value="Status: idle")
         ttk.Label(merge_frame, textvariable=self.var_status).grid(
@@ -671,6 +676,129 @@ class MergeTab(BaseTab):
                 def on_error() -> None:
                     self.btn_merge.configure(state="normal")
                     self.var_status.set("Status: merge failed")
+
+                try:
+                    self.frame.after(0, on_error)
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _do_merge_ensemble(self) -> None:
+        """Create a single .pt ensemble checkpoint from selected weights (averaging logits at inference)."""
+        if not self._selected_weights:
+            messagebox.showinfo("Info", "Select at least one weight per profile first.")
+            return
+
+        name = self.var_bundle_name.get().strip()
+        if not name:
+            messagebox.showerror("Error", "Name must not be empty.")
+            return
+
+        if self.var_add_timestamp.get():
+            tag = time.strftime("%Y%m%d_%H%M%S")
+            name = f"{name}_{tag}"
+
+        out_path = self._model_root() / f"{name}_ensemble.pt"
+        if out_path.exists():
+            messagebox.showerror("Error", f"Target already exists:\n{out_path}")
+            return
+
+        self.btn_merge.configure(state="disabled")
+        self.btn_merge_ensemble.configure(state="disabled")
+        self.var_status.set("Status: building ensemble...")
+
+        def worker() -> None:
+            try:
+                import torch
+
+                items: List[Dict[str, Any]] = []
+                class_names: Optional[List[str]] = None
+                profiles: List[str] = []
+
+                for profile_id, src_path in sorted(self._selected_weights.items()):
+                    self._log_threadsafe(f"[ensemble] loading {profile_id}: {src_path}\n")
+                    ckpt = torch.load(src_path, map_location="cpu")
+                    cn = list(ckpt.get("class_names") or [])
+                    if not cn:
+                        raise ValueError(f"Checkpoint missing class_names: {src_path}")
+                    if class_names is None:
+                        class_names = cn
+                    elif cn != class_names:
+                        raise ValueError(
+                            "Cannot build ensemble: class_names mismatch.\n"
+                            "All selected models must be trained on the same defect class list."
+                        )
+
+                    comp = ckpt.get("component_profile") or {}
+                    phash = None
+                    try:
+                        phash = comp.get("profile_hash")
+                    except Exception:
+                        phash = None
+
+                    # Keep a compact per-model record; optimizer_state_dict is unnecessary for inference.
+                    slim = {
+                        "model_state_dict": ckpt.get("model_state_dict"),
+                        "class_names": cn,
+                        "config": ckpt.get("config"),
+                        "val_f1": ckpt.get("val_f1"),
+                        "val_accuracy": ckpt.get("val_accuracy"),
+                        "component_profile": ckpt.get("component_profile"),
+                        "trained_on_dataset": ckpt.get("trained_on_dataset"),
+                    }
+                    if slim["model_state_dict"] is None:
+                        raise ValueError(f"Checkpoint missing model_state_dict: {src_path}")
+
+                    items.append(
+                        {
+                            "profile_id": profile_id,
+                            "profile_hash": phash,
+                            "source_path": str(src_path),
+                            "checkpoint": slim,
+                        }
+                    )
+                    profiles.append(profile_id)
+
+                if class_names is None or not items:
+                    raise ValueError("No valid checkpoints selected.")
+
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                obj = {
+                    "format": "simple_sim_ensemble_v1",
+                    "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                    "class_names": class_names,
+                    "models": items,
+                    # Mark as compatible with any dataset profile in the UI.
+                    "component_profile": {
+                        "profile_id": "multi",
+                        "profiles": profiles,
+                    },
+                }
+                self._log_threadsafe(f"[ensemble] writing: {out_path}\n")
+                torch.save(obj, out_path)
+
+                def on_done() -> None:
+                    self.btn_merge.configure(state="normal")
+                    self.btn_merge_ensemble.configure(state="normal")
+                    self.var_status.set(f"Status: ensemble created ({out_path.name})")
+                    self._scan_models()
+                    self._refresh_bundles()
+
+                self.frame.after(0, on_done)
+
+            except Exception as e:
+                self._log_threadsafe(f"\n[error] Ensemble build failed: {e}\n")
+                try:
+                    if out_path.exists():
+                        out_path.unlink()
+                except Exception:
+                    pass
+
+                def on_error() -> None:
+                    self.btn_merge.configure(state="normal")
+                    self.btn_merge_ensemble.configure(state="normal")
+                    self.var_status.set("Status: ensemble failed")
 
                 try:
                     self.frame.after(0, on_error)
