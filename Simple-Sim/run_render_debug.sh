@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs the 3D debug preview renderer with a local venv, installing only the
-# missing Python packages needed for the preview script.
+# Runs the debug preview renderer (2D OpenCV, 3D Blender, or both) with a local venv,
+# installing only the missing Python packages needed for the preview script.
 #
 # Usage examples:
 #   ./run_render_debug.sh
-#   ./run_render_debug.sh --all --non-interactive --dry-run
-#   ./run_render_debug.sh --profiles chip_0603_resistor_3d@1 --non-interactive
+#   ./run_render_debug.sh --backend opencv_2d --all --non-interactive
+#   ./run_render_debug.sh --backend blender_3d --profiles chip_0603_resistor_3d@1 --non-interactive
+#   ./run_render_debug.sh --backend both --all --non-interactive
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
@@ -49,6 +50,9 @@ PY
 python - <<'PY' || missing_mods+=("pil")
 from PIL import Image  # noqa: F401
 PY
+python - <<'PY' || missing_mods+=("cv2")
+import cv2  # noqa: F401
+PY
 
 if (( ${#missing_mods[@]} )); then
   echo "[info] Missing Python modules in venv: ${missing_mods[*]}"
@@ -66,6 +70,9 @@ if (( ${#missing_mods[@]} )); then
         ;;
       pil)
         if req_has "pillow"; then to_install+=("pillow"); fi
+        ;;
+      cv2)
+        if req_has "opencv-python"; then to_install+=("opencv-python"); fi
         ;;
     esac
   done
