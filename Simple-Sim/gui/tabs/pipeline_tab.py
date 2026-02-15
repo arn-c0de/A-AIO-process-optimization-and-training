@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import signal
 import subprocess
 import sys
 import threading
@@ -16,6 +17,7 @@ import shutil
 from datetime import datetime
 import re
 import shlex
+import tempfile
 
 from PIL import Image, ImageTk
 import cv2
@@ -99,6 +101,7 @@ class PipelineControlTab(BaseTab):
 
         # UI components (will be created in build_ui)
         self.btn_start: ttk.Button
+        self.btn_start_generate: ttk.Button
         self.btn_stop: ttk.Button
         self.var_config: tk.StringVar
         self.var_out: tk.StringVar
@@ -138,6 +141,12 @@ class PipelineControlTab(BaseTab):
         self.profile_combo: ttk.Combobox
         self._profile_paths: list[Path] = []
         self.var_render_backend: tk.StringVar
+        self.var_profiles_multi: tk.BooleanVar
+        self.var_profiles_multi_mode: tk.StringVar
+        self.var_profiles_multi_json: tk.StringVar
+        self.var_profiles_multi_summary: tk.StringVar
+        self.entry_profiles_multi: ttk.Entry
+        self.btn_profiles_multi_pick: ttk.Button
         self.var_dataset_profile: tk.StringVar
         self.var_model_profile: tk.StringVar
         self._dataset_milestones: dict[str, int] = {}
@@ -193,6 +202,10 @@ class PipelineControlTab(BaseTab):
 
         self.btn_start = ttk.Button(top, text="▶ Start Pipeline", command=self.start_pipeline, width=15)
         self.btn_start.pack(side="left")
+
+        self.btn_start_generate = ttk.Button(top, text="▶ Generate Only", command=self.start_pipeline_generate_only, width=15)
+        self.btn_start_generate.pack(side="left", padx=(6, 0))
+        ToolTip(self.btn_start_generate, text_func=lambda: "Generate + validate dataset only (no training/eval)")
 
         self.btn_stop = ttk.Button(top, text="⏹ Stop", command=self.stop_pipeline, state="disabled", width=10)
         self.btn_stop.pack(side="left", padx=(8, 0))
@@ -252,6 +265,23 @@ class PipelineControlTab(BaseTab):
         self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
         ttk.Button(top2, text="↻", width=3, command=self._refresh_profiles).pack(side="left", padx=(6, 0))
         ttk.Button(top2, text="ⓘ", width=3, command=self._show_profile_info).pack(side="left", padx=(3, 0))
+
+        # Multi-profile selection (generate all selected profiles).
+        self.var_profiles_multi = tk.BooleanVar(value=False)
+        self.var_profiles_multi_mode = tk.StringVar(value="separate")  # separate|mixed
+        self.var_profiles_multi_json = tk.StringVar(value="[]")        # JSON list[str]
+        self.var_profiles_multi_summary = tk.StringVar(value="")
+
+        ttk.Checkbutton(top2, text="Multi", variable=self.var_profiles_multi, command=self._on_profiles_multi_toggle).pack(side="left", padx=(8, 0))
+        ttk.Label(top2, text="Mode:").pack(side="left", padx=(6, 4))
+        ttk.Combobox(top2, textvariable=self.var_profiles_multi_mode, values=["separate", "mixed"], state="readonly", width=9).pack(side="left")
+
+        self.btn_profiles_multi_pick = ttk.Button(top2, text="Pick", width=5, command=self._pick_profiles_multi, state="disabled")
+        self.btn_profiles_multi_pick.pack(side="left", padx=(6, 0))
+        ToolTip(self.btn_profiles_multi_pick, text_func=lambda: "Select multiple profiles to generate")
+
+        self.entry_profiles_multi = ttk.Entry(top2, textvariable=self.var_profiles_multi_summary, width=26, state="disabled")
+        self.entry_profiles_multi.pack(side="left", padx=(6, 0))
 
         ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
 
@@ -669,10 +699,32 @@ class PipelineControlTab(BaseTab):
         self._run_simple_cmd([cmd_q])
 
     def start_pipeline(self) -> None:
-        """Start the pipeline process with configured run mode."""
+        """Start the full pipeline (generate -> validate -> train -> eval)."""
+        self._start_pipeline(task="full")
+
+    def start_pipeline_generate_only(self) -> None:
+        """Start only dataset generation + validation (no training/eval)."""
+        self._start_pipeline(task="generate_only")
+
+    def _set_run_buttons(self, *, running: bool) -> None:
+        """Enable/disable Start/Stop buttons consistently."""
+        try:
+            self.btn_start.configure(state="disabled" if running else "normal")
+        except Exception:
+            pass
+        try:
+            self.btn_start_generate.configure(state="disabled" if running else "normal")
+        except Exception:
+            pass
+        try:
+            self.btn_stop.configure(state="normal" if running else "disabled")
+        except Exception:
+            pass
+
+    def _start_pipeline(self, *, task: str) -> None:
+        """Start a pipeline task with configured run mode."""
         if self.proc is not None:
             return
-
         # Get run configuration
         run_mode = self.var_run_mode.get()
         dataset_mode = self.var_dataset_mode.get()
@@ -725,22 +777,256 @@ class PipelineControlTab(BaseTab):
 
         self._append_log(f"Run mode: {run_mode}" + (f" ({run_count}x)" if run_count > 0 else " (continuous)") + "\n\n")
 
+        render_backend = self.var_render_backend.get().strip() if hasattr(self, "var_render_backend") else ""
+
+        # Determine which profiles to run (single or multi).
+        multi_enabled = bool(getattr(self, "var_profiles_multi", None).get() if hasattr(self, "var_profiles_multi") else False)
+        multi_mode = (self.var_profiles_multi_mode.get().strip() if hasattr(self, "var_profiles_multi_mode") else "separate") or "separate"
+        if multi_enabled:
+            profile_ids = self._profiles_multi_list(available=list(self.profile_combo["values"]))
+            if not profile_ids:
+                messagebox.showerror("Error", "Multi-profile mode is enabled but no profiles are selected.\n\nClick Pick and select at least 1 profile.")
+                return
+            if dataset_mode == "extend":
+                messagebox.showerror("Error", "Multi-profile generation does not support Extend Existing.\n\nSwitch Dataset mode to 'Create New'.")
+                return
+        else:
+            profile_ids = [self.var_profile.get().strip()]
+            profile_ids = [p for p in profile_ids if p]
+
+        # Best-effort: align config with selected profile/backend right before starting.
+        try:
+            if profile_ids:
+                self._autoselect_config_for_profile(profile_ids[0], prefer_quiet=False)
+        except Exception:
+            pass
+
+        # Build per-profile run specs (config/out/model per run).
+        # Each spec: {profile_id, config, out_dir, model_path}
+        run_specs: list[dict[str, str]] = []
+        effective_task = task
+
+        def _rel_to_sim_root(p: Path) -> str:
+            try:
+                return str(p.resolve().relative_to(self.sim_root.resolve()))
+            except Exception:
+                return str(p)
+
+        if multi_enabled and multi_mode == "mixed":
+            if task != "generate_only":
+                messagebox.showerror("Error", "Multi-profile mode 'mixed' is supported only for Generate Only.")
+                return
+            if render_backend != "opencv_2d":
+                messagebox.showerror("Error", "Multi-profile mode 'mixed' currently supports only Render backend opencv_2d.")
+                return
+            if len(profile_ids) < 2:
+                messagebox.showerror("Error", "Mixed dataset mode requires at least 2 selected profiles.")
+                return
+
+            # Create a temporary profile_classifier config with the selected profiles.
+            cfg_str = self.var_config.get().strip()
+            cfg_path = (self.sim_root / cfg_str) if cfg_str and not Path(cfg_str).is_absolute() else Path(cfg_str) if cfg_str else None
+            if not cfg_path or not cfg_path.exists():
+                messagebox.showerror("Error", f"Config file not found:\n{cfg_str}")
+                return
+            try:
+                base_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to read config:\n{cfg_path}\n\n{e}")
+                return
+
+            run_block = dict(base_cfg.get("run") or {})
+            run_block.pop("component_profile", None)
+            run_block["mode"] = "profile_classifier"
+            run_block["schema_version"] = int(run_block.get("schema_version", 2) or 2)
+            run_block["component_profiles"] = list(profile_ids)
+            if not run_block.get("run_id"):
+                run_block["run_id"] = "run_profile_cls_selected"
+            base_cfg["run"] = run_block
+            base_cfg.setdefault("render", {})
+            base_cfg["render"]["backend"] = "opencv_2d"
+
+            live_dir = (self.sim_root / "outputs" / "live")
+            live_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml", prefix="run_profile_cls_selected_", dir=str(live_dir), delete=False) as tf:
+                    yaml.safe_dump(base_cfg, tf, sort_keys=False)
+                    tmp_cfg_path = Path(tf.name)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to write temporary config under outputs/live:\n\n{e}")
+                return
+
+            run_specs.append({
+                "profile_id": "multi",
+                "config": _rel_to_sim_root(tmp_cfg_path),
+                "out_dir": str(out_dir),
+                "model_path": self.var_model.get().strip(),
+            })
+            effective_task = "generate_mixed"
+        else:
+            # Separate datasets: one dataset per selected profile, using per-profile matching config.
+            base_out = Path(out_dir)
+            base_model = Path(self.var_model.get().strip()) if hasattr(self, "var_model") else Path("")
+            for i, pid in enumerate(profile_ids):
+                want = render_backend or None
+                cfg_info = self._config_for_profile(pid, want_backend=want)
+                if not cfg_info:
+                    messagebox.showerror("Error", f"No matching config found for profile:\n{pid}\n\nPick or create a config with run.component_profile={pid}.")
+                    return
+                cfg_path = Path(cfg_info["path"])
+                cfg_rel = _rel_to_sim_root(cfg_path)
+                run_id = str(cfg_info.get("run_id") or pid)
+
+                if multi_enabled or len(profile_ids) > 1:
+                    # Put per-profile datasets under the same runs folder when possible.
+                    if base_out.name in {"runs", "versions"}:
+                        out_i = base_out / run_id
+                    elif base_out.parent.name in {"runs", "versions"}:
+                        out_i = base_out.parent / run_id
+                    else:
+                        out_i = base_out.with_name(run_id)
+                else:
+                    out_i = base_out
+
+                if base_model.suffix == ".pt":
+                    if base_model.parent.name == "models":
+                        model_i = base_model.parent / f"{run_id}.pt"
+                    else:
+                        model_i = base_model.with_name(f"{run_id}.pt")
+                else:
+                    model_i = (self.sim_root / "outputs" / "models" / f"{run_id}.pt")
+
+                run_specs.append({
+                    "profile_id": pid,
+                    "config": cfg_rel,
+                    "out_dir": str(out_i),
+                    "model_path": str(model_i),
+                })
+
+        # Confirmation popup with a snapshot of the run configuration (prevents "wrong profile/config" surprises).
+        try:
+            if not self._confirm_pipeline_start(
+                task=effective_task,
+                out_dir=str(out_dir),
+                run_mode=run_mode,
+                run_count=run_count,
+                dataset_mode=dataset_mode,
+                profile_ids=profile_ids,
+                multi_enabled=multi_enabled,
+                multi_mode=multi_mode,
+            ):
+                return
+        except Exception:
+            # Never block starting due to UI/formatting issues; the pipeline itself is the source of truth.
+            pass
+
+        # Disable Start immediately (UI thread), so it never stays enabled due to thread scheduling.
+        self._set_run_buttons(running=True)
+        self.stop_evt.clear()
+
         # Start pipeline runner in background thread
         threading.Thread(
             target=self._run_pipeline_loop,
-            args=(out_dir, run_count, dataset_mode),
+            args=(run_specs, run_count, dataset_mode, effective_task),
             daemon=True
         ).start()
 
-    def _run_pipeline_loop(self, out_dir: str, run_count: int, dataset_mode: str) -> None:
+    def _confirm_pipeline_start(
+        self,
+        *,
+        task: str,
+        out_dir: str,
+        run_mode: str,
+        run_count: int,
+        dataset_mode: str,
+        profile_ids: list[str],
+        multi_enabled: bool,
+        multi_mode: str,
+    ) -> bool:
+        """Ask for confirmation with the effective pipeline configuration snapshot."""
+        profile_id = self.var_profile.get().strip() if hasattr(self, "var_profile") else ""
+        render_backend = self.var_render_backend.get().strip() if hasattr(self, "var_render_backend") else ""
+        cfg_str = self.var_config.get().strip()
+        cfg_path = (self.sim_root / cfg_str) if cfg_str and not Path(cfg_str).is_absolute() else Path(cfg_str) if cfg_str else None
+
+        cfg_backend = ""
+        cfg_profile = ""
+        cfg_run_id = ""
+        if cfg_path and cfg_path.exists():
+            try:
+                data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                cfg_backend = str(((data.get("render") or {}).get("backend") or "")).strip()
+                run_block = data.get("run") or {}
+                cfg_profile = str(run_block.get("component_profile") or "").strip()
+                cfg_run_id = str(run_block.get("run_id") or "").strip()
+            except Exception:
+                pass
+
+        selected_ds = self._selected_dataset_dir()
+        ds_profile = self._dataset_profile_id(selected_ds) or ""
+        model_str = self.var_model.get().strip() if hasattr(self, "var_model") else ""
+        prof_model = self.var_profile_model.get().strip() if hasattr(self, "var_profile_model") else ""
+
+        lines: list[str] = []
+        if task == "full":
+            task_label = "Full pipeline (generate -> validate -> train -> eval)"
+        elif task == "generate_only":
+            task_label = "Generate + validate only (no training/eval)"
+        elif task == "generate_mixed":
+            task_label = "Generate + validate mixed multi-profile dataset (no training/eval)"
+        else:
+            task_label = str(task)
+        lines.append(f"Start pipeline?\n\nTask: {task_label}\n")
+        lines.append("Pipeline:")
+        lines.append(f"  Run mode:    {run_mode}" + (f" ({run_count}x)" if run_count > 0 else " (continuous)"))
+        lines.append(f"  Dataset:     {dataset_mode}")
+        if dataset_mode == "extend":
+            lines.append(f"  Extend DS:   {str(selected_ds) if selected_ds else '(none selected)'}")
+        lines.append(f"  Out dir:     {out_dir}")
+        lines.append("")
+        lines.append("Profile/Render:")
+        if multi_enabled:
+            lines.append(f"  Profiles:          {len(profile_ids)} selected (mode={multi_mode})")
+            if profile_ids:
+                show = ", ".join(profile_ids[:5])
+                tail = "" if len(profile_ids) <= 5 else f" (+{len(profile_ids) - 5})"
+                lines.append(f"  Profile list:      {show}{tail}")
+        else:
+            lines.append(f"  Selected profile:  {profile_id or '-'}")
+        lines.append(f"  Render backend:    {render_backend or '-'}")
+        lines.append("")
+        lines.append("Config:")
+        lines.append(f"  Config path:       {cfg_str or '-'}")
+        if cfg_run_id:
+            lines.append(f"  Config run_id:     {cfg_run_id}")
+        if cfg_profile:
+            lines.append(f"  Config profile:    {cfg_profile}")
+        if cfg_backend:
+            lines.append(f"  Config backend:    {cfg_backend}")
+        if cfg_profile and profile_id and cfg_profile != profile_id:
+            lines.append("")
+            lines.append(f"WARNING: Config profile != selected profile ({cfg_profile} != {profile_id})")
+        if cfg_backend and render_backend and cfg_backend != render_backend:
+            lines.append(f"WARNING: Config backend != selected backend ({cfg_backend} != {render_backend})")
+        if ds_profile and profile_id and ds_profile not in {"multi", profile_id}:
+            lines.append(f"WARNING: Dataset profile != selected profile ({ds_profile} != {profile_id})")
+        lines.append("")
+        lines.append("Model:")
+        lines.append(f"  Model out:         {model_str or '-'}")
+        if prof_model:
+            lines.append(f"  Profile model:     {prof_model}")
+
+        msg = "\n".join(lines)
+        return bool(messagebox.askyesno("Confirm Pipeline Start", msg))
+
+    def _run_pipeline_loop(self, run_specs: list[dict[str, str]], run_count: int, dataset_mode: str, task: str) -> None:
         """Run pipeline in a loop (runs in background thread).
 
         Args:
-            out_dir: Output directory
+            run_specs: List of per-profile runs (config/out/model).
             run_count: Number of runs (-1 for infinite)
         """
-        self.btn_start.configure(state="disabled")
-        self.btn_stop.configure(state="normal")
+        # Buttons already set in start_pipeline (UI thread). Keep stop_evt in the loop for safety.
         self.stop_evt.clear()
 
         self.current_run_iteration = 0
@@ -763,30 +1049,62 @@ class PipelineControlTab(BaseTab):
             self._append_log(f"Pipeline Run {self.current_run_iteration}" + (f"/{run_count}" if run_count > 0 else " (continuous)") + "\n")
             self._append_log(f"{'='*60}\n\n")
 
-            # Run single pipeline iteration
-            success = self._run_single_pipeline(out_dir)
+            # Run one iteration for each selected profile/spec.
+            overall_ok = True
+            for spec in run_specs:
+                if self.stop_evt.is_set():
+                    overall_ok = False
+                    break
+                pid = spec.get("profile_id", "")
+                cfg = spec.get("config", "")
+                out_dir = spec.get("out_dir", "")
+                model_path = spec.get("model_path", "")
+
+                self._append_log(f"[profile] {pid}\n")
+                self._append_log(f"[config]  {cfg}\n")
+                self._append_log(f"[out]     {out_dir}\n")
+                if task == "full":
+                    self._append_log(f"[model]   {model_path}\n")
+                self._append_log("\n")
+
+                try:
+                    self.state.dataset_dir = Path(out_dir)
+                except Exception:
+                    pass
+
+                ok = self._run_single_pipeline(
+                    out_dir,
+                    dataset_mode=dataset_mode,
+                    task=task,
+                    config_path=cfg,
+                    model_path=model_path,
+                )
+                overall_ok = overall_ok and bool(ok)
+
+                if task == "full":
+                    # Snapshot the produced model checkpoint for later comparisons (versioning).
+                    try:
+                        mp = self._resolve_model_path(model_path)
+                        if mp.exists():
+                            self._write_model_meta(
+                                mp,
+                                run_i=self.current_run_iteration,
+                                dataset_dir=self.state.dataset_dir,
+                                dataset_mode=dataset_mode,
+                                out_dir=self._resolve_out_dir(out_dir),
+                            )
+                        snap_every = self._snap_every_n()
+                        if self.var_autosnap.get() and mp.exists() and mp.is_file() and self.current_run_iteration % snap_every == 0:
+                            snap = self._snapshot_model_checkpoint(mp, run_i=self.current_run_iteration)
+                            if snap:
+                                self._append_log(f"[model snapshot] {snap}\n")
+                    except Exception:
+                        pass
+
+            success = overall_ok
 
             if not success and run_count > 1:
                 self._append_log(f"\n⚠ Run {self.current_run_iteration} failed, but continuing...\n")
-
-            # Snapshot the produced model checkpoint for later comparisons (versioning).
-            try:
-                mp = self._resolve_model_path(self.var_model.get().strip())
-                if mp.exists():
-                    self._write_model_meta(
-                        mp,
-                        run_i=self.current_run_iteration,
-                        dataset_dir=self.state.dataset_dir,
-                        dataset_mode=dataset_mode,
-                        out_dir=self._resolve_out_dir(out_dir),
-                    )
-                snap_every = self._snap_every_n()
-                if self.var_autosnap.get() and mp.exists() and mp.is_file() and self.current_run_iteration % snap_every == 0:
-                    snap = self._snapshot_model_checkpoint(mp, run_i=self.current_run_iteration)
-                    if snap:
-                        self._append_log(f"[model snapshot] {snap}\n")
-            except Exception:
-                pass
 
             # After each run, refresh dataset list and re-compute selected dataset size.
             def after_run_ui_update() -> None:
@@ -818,15 +1136,24 @@ class PipelineControlTab(BaseTab):
         self._append_log(f"All pipeline runs complete! Total: {self.current_run_iteration}\n")
         self._append_log(f"{'='*60}\n")
 
-        # Reset buttons and status
-        self.btn_start.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
-        self.state.phase = "idle"
-        self.var_run_progress.set("run: -")
-        self.current_run_iteration = 0
-        self.total_run_count = 0
+        # Reset buttons and status (marshal back to UI thread).
+        def _reset_ui() -> None:
+            self._set_run_buttons(running=False)
+            self.state.phase = "idle"
+            self.var_run_progress.set("run: -")
+            self.current_run_iteration = 0
+            self.total_run_count = 0
 
-    def _run_single_pipeline(self, out_dir: str) -> bool:
+        try:
+            self.frame.after(0, _reset_ui)
+        except Exception:
+            # Best-effort fallback
+            try:
+                _reset_ui()
+            except Exception:
+                pass
+
+    def _run_single_pipeline(self, out_dir: str, *, dataset_mode: str, task: str, config_path: str, model_path: str) -> bool:
         """Run a single pipeline iteration.
 
         Args:
@@ -836,8 +1163,8 @@ class PipelineControlTab(BaseTab):
             True if successful, False otherwise
         """
         eventlog = self.event_log_path
-        cfg = self.var_config.get().strip()
-        model_path = self.var_model.get().strip()
+        cfg = str(config_path).strip()
+        model_path = str(model_path).strip()
 
         env = os.environ.copy()
         env["WHEELHOUSE"] = "wheelhouse"
@@ -847,7 +1174,31 @@ class PipelineControlTab(BaseTab):
         env["MODEL_PATH"] = model_path
         env["DATASET_MODE"] = str(self.var_dataset_mode.get()).strip()
 
-        cmd = ["bash", "-lc", "./run_pipeline.sh"]
+        if task == "full":
+            cmd = ["bash", "-lc", "./run_pipeline.sh"]
+        elif task == "generate_only":
+            # Keep as a single bash process so Stop can terminate the whole subtree cleanly.
+            cmd_str = (
+                "./.venv/bin/python scripts/generate.py "
+                "--config \"$CONFIG\" "
+                "--out \"$DATA_DIR\" "
+                "$([[ \"${DATASET_MODE}\" == \"extend\" ]] && echo --extend) "
+                "&& "
+                "./.venv/bin/python tools/validate_dataset.py --data \"$DATA_DIR\""
+            )
+            cmd = ["bash", "-lc", cmd_str]
+        elif task == "generate_mixed":
+            # Mixed multi-profile dataset (profile_classifier mode).
+            cmd_str = (
+                "./.venv/bin/python scripts/generate_profile_dataset.py "
+                "--config \"$CONFIG\" "
+                "--out \"$DATA_DIR\" "
+                "&& "
+                "./.venv/bin/python tools/validate_dataset.py --data \"$DATA_DIR\""
+            )
+            cmd = ["bash", "-lc", cmd_str]
+        else:
+            raise ValueError(f"Unknown task: {task}")
 
         try:
             self.proc = subprocess.Popen(
@@ -858,6 +1209,7 @@ class PipelineControlTab(BaseTab):
                 text=True,
                 bufsize=1,
                 env=env,
+                start_new_session=True,  # allow killing the whole process group on Stop
             )
 
             # Start monitoring threads
@@ -886,7 +1238,27 @@ class PipelineControlTab(BaseTab):
         self.stop_evt.set()
         if self.proc is not None:
             try:
-                self.proc.terminate()
+                # Terminate the whole process group (bash -lc ./run_pipeline.sh spawns children).
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            except Exception:
+                try:
+                    self.proc.terminate()
+                except Exception:
+                    pass
+
+            # Escalate to SIGKILL if still running after a short grace period.
+            def _kill_later() -> None:
+                p = self.proc
+                if p is None:
+                    return
+                try:
+                    if p.poll() is None:
+                        os.killpg(p.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+
+            try:
+                self.frame.after(2000, _kill_later)
             except Exception:
                 pass
 
@@ -913,10 +1285,10 @@ class PipelineControlTab(BaseTab):
             text=True,
             bufsize=1,
             env=env,
+            start_new_session=True,
         )
 
-        self.btn_start.configure(state="disabled")
-        self.btn_stop.configure(state="normal")
+        self._set_run_buttons(running=True)
 
         t = threading.Thread(target=self._read_process_output, daemon=True)
         t.start()
@@ -1149,9 +1521,12 @@ class PipelineControlTab(BaseTab):
             pass
 
         # Reset buttons when process finishes
-        if self.proc is None and self.btn_start["state"] == "disabled":
-            self.btn_start.configure(state="normal")
-            self.btn_stop.configure(state="disabled")
+        if self.proc is None:
+            try:
+                if self.btn_start["state"] == "disabled" or self.btn_start_generate["state"] == "disabled":
+                    self._set_run_buttons(running=False)
+            except Exception:
+                pass
 
         self._maybe_update_stats()
         self.frame.after(120, self._tick_ui)
@@ -2204,7 +2579,128 @@ class PipelineControlTab(BaseTab):
                 self.var_profile.set("chip_0603_resistor@1")
             elif values:
                 self.var_profile.set(values[0])
+
+        # Keep multi-selection consistent with available values.
+        try:
+            if hasattr(self, "var_profiles_multi") and bool(self.var_profiles_multi.get()):
+                self._set_profiles_multi(self._profiles_multi_list(available=values))
+        except Exception:
+            pass
         self._on_profile_selected()
+
+    def _profiles_multi_list(self, *, available: Optional[list[str]] = None) -> list[str]:
+        """Return selected profile ids from the multi field, filtered + de-duped."""
+        available_set = set(available or list(getattr(self.profile_combo, "cget", lambda _k: [])("values") or []))
+        raw = (self.var_profiles_multi_json.get().strip() if hasattr(self, "var_profiles_multi_json") else "[]") or "[]"
+        items: list[str] = []
+        try:
+            v = json.loads(raw)
+            if isinstance(v, list):
+                for x in v:
+                    if isinstance(x, str) and x.strip():
+                        items.append(x.strip())
+        except Exception:
+            # Back-compat: allow comma-separated list.
+            for x in raw.split(","):
+                x = x.strip()
+                if x:
+                    items.append(x)
+
+        out: list[str] = []
+        seen = set()
+        for pid in items:
+            if available_set and pid not in available_set:
+                continue
+            if pid in seen:
+                continue
+            seen.add(pid)
+            out.append(pid)
+        return out
+
+    def _set_profiles_multi(self, pids: list[str]) -> None:
+        pids = [str(x).strip() for x in (pids or []) if str(x).strip()]
+        try:
+            self.var_profiles_multi_json.set(json.dumps(pids, ensure_ascii=True))
+        except Exception:
+            pass
+        if not pids:
+            self.var_profiles_multi_summary.set("")
+        elif len(pids) <= 3:
+            self.var_profiles_multi_summary.set(", ".join(pids))
+        else:
+            self.var_profiles_multi_summary.set(", ".join(pids[:3]) + f" (+{len(pids) - 3})")
+
+    def _on_profiles_multi_toggle(self) -> None:
+        enabled = bool(self.var_profiles_multi.get())
+        try:
+            if enabled:
+                self.profile_combo.configure(state="disabled")
+                self.btn_profiles_multi_pick.configure(state="normal")
+                self.entry_profiles_multi.configure(state="normal")
+                # Seed selection with current profile if empty.
+                cur = self._profiles_multi_list(available=list(self.profile_combo["values"]))
+                if not cur:
+                    pid = self.var_profile.get().strip()
+                    if pid:
+                        cur = [pid]
+                self._set_profiles_multi(cur)
+            else:
+                self.profile_combo.configure(state="readonly")
+                self.btn_profiles_multi_pick.configure(state="disabled")
+                self.entry_profiles_multi.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _pick_profiles_multi(self) -> None:
+        """Open a small dialog to choose multiple profiles."""
+        try:
+            values = list(self.profile_combo["values"])
+        except Exception:
+            values = []
+        if not values:
+            messagebox.showinfo("Profiles", "No profiles available.")
+            return
+
+        cur = set(self._profiles_multi_list(available=values))
+
+        win = tk.Toplevel(self.frame)
+        win.title("Select Profiles")
+        win.geometry("520x420")
+
+        frm = ttk.Frame(win, padding=10)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="Select one or more profiles to generate:").pack(anchor="w")
+
+        lb = tk.Listbox(frm, selectmode="extended", height=16)
+        sb = ttk.Scrollbar(frm, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        lb.pack(side="left", fill="both", expand=True, pady=(8, 0))
+        sb.pack(side="left", fill="y", pady=(8, 0))
+
+        for i, pid in enumerate(values):
+            lb.insert("end", pid)
+            if pid in cur:
+                lb.selection_set(i)
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(10, 0))
+
+        def _apply() -> None:
+            idxs = list(lb.curselection())
+            sel = [values[i] for i in idxs if 0 <= i < len(values)]
+            self._set_profiles_multi(sel)
+            # Keep single-profile var on the first selected for consistency.
+            if sel:
+                self.var_profile.set(sel[0])
+            win.destroy()
+
+        def _select_all() -> None:
+            lb.selection_set(0, "end")
+
+        ttk.Button(btns, text="Select All", command=_select_all).pack(side="left")
+        ttk.Button(btns, text="OK", command=_apply).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right", padx=(0, 8))
 
     def _on_render_backend_changed(self, _event: Optional[object] = None) -> None:
         """Render backend selection affects which profiles are shown."""
@@ -2437,13 +2933,14 @@ class PipelineControlTab(BaseTab):
             return
 
         if prefer_quiet and cur and want_backend:
-            # If current config already matches want_backend, don't override silently.
+            # If current config already matches want_backend AND profile_id, don't override silently.
             try:
                 cur_path = (self.sim_root / cur) if not Path(cur).is_absolute() else Path(cur)
                 if cur_path.exists():
                     data = yaml.safe_load(cur_path.read_text(encoding="utf-8"))
                     cur_backend = ((data.get("render") or {}).get("backend") or "").strip()
-                    if cur_backend == want_backend:
+                    cur_profile = ((data.get("run") or {}).get("component_profile") or "")
+                    if cur_backend == want_backend and str(cur_profile).strip() == str(profile_id).strip():
                         return
             except Exception:
                 return
