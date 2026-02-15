@@ -150,6 +150,23 @@ Simple-Sim supports two ways to "combine" multiple profile-specific checkpoints:
 
 Full documentation: [`docs/guides/MODEL_MERGE_BUNDLES_ENSEMBLES.md`](docs/guides/MODEL_MERGE_BUNDLES_ENSEMBLES.md).
 
+## Production Deployment: Bundles vs Single Models
+
+### Bundled Models (Multi-Profile)
+- Require an additional **object classification model** upstream to identify component type
+- Once component type is known, bundle dispatches to the correct per-profile checkpoint
+- Higher accuracy per component type
+- Larger model footprint (multiple sub-models)
+
+### Single Models (Cross-Profile)
+- **Self-contained**: No external classifier needed
+- Trained on **all datasets combined** (all profiles, all defect types)
+- **Much smaller model size** than bundles
+- Slightly lower per-component accuracy, but **significantly better at randomized mixed-component recognition**
+- Ideal for edge deployment, real-world PCB defect detection where component type is unknown
+
+**Recommendation**: For production, use single models (e.g., `random-datacrawler-v1`) trained on all datasets. They sacrifice per-component peak accuracy for robustness and simplicity.
+
 ## Configuration
 
 Configuration files (`configs/*.yaml`) define all dataset and training parameters. See `configs/run_0001.yaml` for annotated reference.

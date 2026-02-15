@@ -12,6 +12,23 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 
 ![Top Avg Accuracy](Simple-Sim/ARENA_REPORT_assets/top_avg_accuracy.svg)
 
+## Production Notes: Bundled vs Single Models
+
+> **📌 Current Conclusions**
+>
+> **Bundled Models** (multi-profile, per-component-type):
+> - Require an additional **object classification model** upstream to identify component type first
+> - Higher per-component accuracy
+> - Larger model footprint (multiple sub-models stored)
+>
+> **Single Models** (cross-profile, e.g. `random-datacrawler-v1`):
+> - **No external classifier needed** — fully self-contained
+> - Trained on **all datasets** (all profiles, all defect types combined)
+> - **Much smaller model size** than bundles
+> - Slightly lower per-component accuracy, but **significantly better at randomized recognition of mixed/unknown components**
+> - Ideal for edge deployment and real-world PCB inspection where component type is unknown
+>
+> **→ Recommendation**: Use single models trained on all datasets for robustness, simplicity, and smaller footprint.
 
 ## License
 
