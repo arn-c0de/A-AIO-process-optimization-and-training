@@ -1,5 +1,5 @@
 # Model Arena Report
-> Last updated: 2026-02-15 20:50:07
+> Last updated: 2026-02-15 21:01:39
 
 ## Charts
 
@@ -22,11 +22,12 @@
 | 1 | DeepMind-small-v1_20260214_210452.bundle | Bundle | 0.9962 | 0.9962 | 3 | QFN-v1 (1.0000) | Transistor-v1 (0.9938) | 2026-02-14 21:08:59 |
 | 2 | Random-DataCrawler-v1_MultiTrained.pt | Single | 0.8423 | 0.8165 | 7 | Transistor-3D-v1 (0.9962) | QFN-v1 (0.4450) | 2026-02-15 20:49:09 |
 | 3 | Transistor-v1.pt | Single | 0.6254 | 0.5651 | 6 | Transistor-v1 (0.9938) | QFN-3D-v1 (0.3825) | 2026-02-15 20:49:53 |
-| 4 | QFN-v1.pt | Single | 0.5287 | 0.4556 | 5 | QFN-v1 (1.0000) | REFFERENCE_DATA_Transistor (0.1650) | 2026-02-15 20:49:45 |
-| 5 | Resistor-v1.pt | Single | 0.4408 | 0.3291 | 6 | Resistor-v1 (0.9950) | Resistor-3d-v1 (0.2500) | 2026-02-15 20:49:59 |
-| 6 | Seqent-DatasetCrawler-v1_MultiTrained.pt | Single | 0.4296 | 0.3249 | 7 | QFN-v1 (1.0000) | Resistor-3d-v1 (0.2500) | 2026-02-15 20:49:26 |
-| 7 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | Single | 0.4086 | 0.3082 | 7 | Resistor-3d-v1 (0.9350) | QFN-v1 (0.2500) | 2026-02-15 20:49:33 |
-| 8 | Resistor-3d-v1.pt | Single | 0.3948 | 0.2963 | 6 | Resistor-3d-v1 (0.9775) | REFFERENCE_DATA_Transistor (0.2500) | 2026-02-15 20:49:39 |
+| 4 | Transistor-3D-v1.pt | Single | 0.5629 | 0.4773 | 6 | REFFERENCE_DATA_Transistor (1.0000) | Transistor-v1 (0.2500) | 2026-02-15 21:00:33 |
+| 5 | QFN-v1.pt | Single | 0.5287 | 0.4556 | 5 | QFN-v1 (1.0000) | REFFERENCE_DATA_Transistor (0.1650) | 2026-02-15 20:49:45 |
+| 6 | Resistor-v1.pt | Single | 0.4408 | 0.3291 | 6 | Resistor-v1 (0.9950) | Resistor-3d-v1 (0.2500) | 2026-02-15 20:53:25 |
+| 7 | Seqent-DatasetCrawler-v1_MultiTrained.pt | Single | 0.4296 | 0.3249 | 7 | QFN-v1 (1.0000) | Resistor-3d-v1 (0.2500) | 2026-02-15 20:49:26 |
+| 8 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | Single | 0.4086 | 0.3082 | 7 | Resistor-3d-v1 (0.9350) | QFN-v1 (0.2500) | 2026-02-15 20:49:33 |
+| 9 | Resistor-3d-v1.pt | Single | 0.3948 | 0.2963 | 6 | Resistor-3d-v1 (0.9775) | REFFERENCE_DATA_Transistor (0.2500) | 2026-02-15 20:52:44 |
 
 ## Per-Dataset Breakdown
 
@@ -35,11 +36,12 @@
 | Rank | Model | Accuracy | F1 | Split | Samples | Last Run |
 |---:|---|---:|---:|---|---:|---|
 | 1 | Random-DataCrawler-v1_MultiTrained.pt | 0.4975 | 0.3673 | all | 800 | 2026-02-15 14:04:39 |
-| 2 | QFN-v1.pt | 0.4012 | 0.2893 | all | 800 | 2026-02-15 18:26:11 |
-| 3 | Transistor-v1.pt | 0.3825 | 0.2682 | all | 800 | 2026-02-15 13:49:20 |
-| 4 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.3800 | 0.2492 | all | 800 | 2026-02-15 14:04:53 |
-| 5 | Resistor-3d-v1.pt | 0.3713 | 0.2507 | all | 800 | 2026-02-15 13:47:52 |
-| 6 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2650 | 0.1439 | all | 800 | 2026-02-15 13:47:18 |
+| 2 | Transistor-3D-v1.pt | 0.4888 | 0.3648 | all | 800 | 2026-02-15 20:59:49 |
+| 3 | QFN-v1.pt | 0.4012 | 0.2893 | all | 800 | 2026-02-15 18:26:11 |
+| 4 | Transistor-v1.pt | 0.3825 | 0.2682 | all | 800 | 2026-02-15 13:49:20 |
+| 5 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.3800 | 0.2492 | all | 800 | 2026-02-15 14:04:53 |
+| 6 | Resistor-3d-v1.pt | 0.3713 | 0.2507 | all | 800 | 2026-02-15 13:47:52 |
+| 7 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2650 | 0.1439 | all | 800 | 2026-02-15 13:47:18 |
 
 ### Dataset: QFN-v1
 
@@ -50,20 +52,22 @@
 | 3 | QFN-v1.pt | 1.0000 | 1.0000 | all | 800 | 2026-02-14 21:08:11 |
 | 4 | Transistor-v1.pt | 0.4975 | 0.3775 | all | 800 | 2026-02-14 21:07:37 |
 | 5 | Random-DataCrawler-v1_MultiTrained.pt | 0.4450 | 0.3943 | all | 800 | 2026-02-15 14:05:07 |
-| 6 | Resistor-v1.pt | 0.2525 | 0.1052 | all | 800 | 2026-02-15 12:55:29 |
-| 7 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2500 | 0.1200 | all | 800 | 2026-02-15 12:17:19 |
+| 6 | Transistor-3D-v1.pt | 0.2562 | 0.1139 | all | 800 | 2026-02-15 21:00:10 |
+| 7 | Resistor-v1.pt | 0.2525 | 0.1052 | all | 800 | 2026-02-15 12:55:29 |
+| 8 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2500 | 0.1200 | all | 800 | 2026-02-15 12:17:19 |
 
 ### Dataset: REFFERENCE_DATA_Transistor
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Last Run |
 |---:|---|---:|---:|---|---:|---|
-| 1 | Random-DataCrawler-v1_MultiTrained.pt | 0.9862 | 0.9862 | all | 800 | 2026-02-15 20:49:09 |
-| 2 | Transistor-v1.pt | 0.6050 | 0.5410 | all | 800 | 2026-02-15 20:49:53 |
-| 3 | Resistor-v1.pt | 0.4225 | 0.2982 | all | 800 | 2026-02-15 20:49:59 |
-| 4 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2550 | 0.1317 | all | 800 | 2026-02-15 20:49:33 |
-| 5 | Resistor-3d-v1.pt | 0.2500 | 0.1250 | all | 800 | 2026-02-15 20:49:39 |
-| 6 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.2500 | 0.1000 | all | 800 | 2026-02-15 20:49:26 |
-| 7 | QFN-v1.pt | 0.1650 | 0.1117 | all | 800 | 2026-02-15 20:49:45 |
+| 1 | Transistor-3D-v1.pt | 1.0000 | 1.0000 | all | 800 | 2026-02-15 21:00:16 |
+| 2 | Random-DataCrawler-v1_MultiTrained.pt | 0.9862 | 0.9862 | all | 800 | 2026-02-15 20:49:09 |
+| 3 | Transistor-v1.pt | 0.6050 | 0.5410 | all | 800 | 2026-02-15 20:49:53 |
+| 4 | Resistor-v1.pt | 0.4225 | 0.2982 | all | 800 | 2026-02-15 20:53:25 |
+| 5 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2550 | 0.1317 | all | 800 | 2026-02-15 20:49:33 |
+| 6 | Resistor-3d-v1.pt | 0.2500 | 0.1250 | all | 800 | 2026-02-15 20:52:44 |
+| 7 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.2500 | 0.1000 | all | 800 | 2026-02-15 20:49:26 |
+| 8 | QFN-v1.pt | 0.1650 | 0.1117 | all | 800 | 2026-02-15 20:49:45 |
 
 ### Dataset: Resistor-3d-v1
 
@@ -72,8 +76,9 @@
 | 1 | Random-DataCrawler-v1_MultiTrained.pt | 0.9900 | 0.9900 | all | 400 | 2026-02-15 14:05:24 |
 | 2 | Resistor-3d-v1.pt | 0.9775 | 0.9776 | all | 400 | 2026-02-15 11:50:02 |
 | 3 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.9350 | 0.9347 | all | 400 | 2026-02-15 12:15:26 |
-| 4 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.2500 | 0.1000 | all | 400 | 2026-02-15 14:05:28 |
-| 5 | Resistor-v1.pt | 0.2500 | 0.1000 | all | 400 | 2026-02-15 13:49:43 |
+| 4 | Transistor-3D-v1.pt | 0.3825 | 0.2851 | all | 400 | 2026-02-15 21:00:20 |
+| 5 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.2500 | 0.1000 | all | 400 | 2026-02-15 14:05:28 |
+| 6 | Resistor-v1.pt | 0.2500 | 0.1000 | all | 400 | 2026-02-15 13:49:43 |
 
 ### Dataset: Resistor-v1
 
@@ -92,12 +97,13 @@
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Last Run |
 |---:|---|---:|---:|---|---:|---|
-| 1 | Random-DataCrawler-v1_MultiTrained.pt | 0.9962 | 0.9962 | all | 800 | 2026-02-15 14:05:38 |
-| 2 | Transistor-v1.pt | 0.5962 | 0.5354 | all | 800 | 2026-02-15 13:49:28 |
-| 3 | Resistor-v1.pt | 0.4425 | 0.3140 | all | 800 | 2026-02-15 13:49:37 |
-| 4 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2587 | 0.1347 | all | 800 | 2026-02-15 13:47:27 |
-| 5 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.2512 | 0.1026 | all | 800 | 2026-02-15 14:05:42 |
-| 6 | Resistor-3d-v1.pt | 0.2500 | 0.1250 | all | 800 | 2026-02-15 13:47:35 |
+| 1 | Transistor-3D-v1.pt | 1.0000 | 1.0000 | all | 800 | 2026-02-15 21:00:26 |
+| 2 | Random-DataCrawler-v1_MultiTrained.pt | 0.9962 | 0.9962 | all | 800 | 2026-02-15 14:05:38 |
+| 3 | Transistor-v1.pt | 0.5962 | 0.5354 | all | 800 | 2026-02-15 13:49:28 |
+| 4 | Resistor-v1.pt | 0.4425 | 0.3140 | all | 800 | 2026-02-15 13:49:37 |
+| 5 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2587 | 0.1347 | all | 800 | 2026-02-15 13:47:27 |
+| 6 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.2512 | 0.1026 | all | 800 | 2026-02-15 14:05:42 |
+| 7 | Resistor-3d-v1.pt | 0.2500 | 0.1250 | all | 800 | 2026-02-15 13:47:35 |
 
 ### Dataset: Transistor-v1
 
@@ -111,6 +117,7 @@
 | 6 | Resistor-v1.pt | 0.2825 | 0.1624 | all | 800 | 2026-02-14 21:06:52 |
 | 7 | Resistor-3d-v1.pt | 0.2625 | 0.1581 | all | 800 | 2026-02-15 12:34:31 |
 | 8 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2512 | 0.1187 | all | 800 | 2026-02-15 12:34:27 |
+| 9 | Transistor-3D-v1.pt | 0.2500 | 0.1000 | all | 800 | 2026-02-15 21:00:33 |
 
 ## Bundle Details
 
@@ -152,6 +159,17 @@
 | Transistor-3D-v1 | all | 0.5962 | 0.5354 | MISALIGNED:0.5650 MISSING:0.0500 TOMBSTONE:0.0000 | 800 | 6 | 0.9917 | 589.1 img/s |
 | Transistor-v1 | all | 0.9938 | 0.9937 | MISALIGNED:0.0250 MISSING:0.0000 TOMBSTONE:0.0000 | 800 | 6 | 0.9917 | 479.4 img/s |
 
+### Transistor-3D-v1.pt (Single)
+
+| Dataset | Split | Accuracy | F1 | Critical FN | Samples | Epoch | Val Acc | Speed |
+|---|---|---:|---:|---|---:|---:|---:|---:|
+| QFN-3D-v1 | all | 0.4888 | 0.3648 | MISALIGNED:0.0450 MISSING:1.0000 TOMBSTONE:0.0000 | 800 | 11 | 1.0000 | 73.7 img/s |
+| QFN-v1 | all | 0.2562 | 0.1139 | MISALIGNED:1.0000 MISSING:0.9750 TOMBSTONE:0.0000 | 800 | 11 | 1.0000 | 56.3 img/s |
+| REFFERENCE_DATA_Transistor | all | 1.0000 | 1.0000 | MISALIGNED:0.0000 MISSING:0.0000 TOMBSTONE:0.0000 | 800 | 11 | 1.0000 | 552.3 img/s |
+| Resistor-3d-v1 | all | 0.3825 | 0.2851 | MISALIGNED:0.0000 MISSING:0.4700 TOMBSTONE:1.0000 | 400 | 11 | 1.0000 | 465.1 img/s |
+| Transistor-3D-v1 | all | 1.0000 | 1.0000 | MISALIGNED:0.0000 MISSING:0.0000 TOMBSTONE:0.0000 | 800 | 11 | 1.0000 | 600.9 img/s |
+| Transistor-v1 | all | 0.2500 | 0.1000 | MISALIGNED:1.0000 MISSING:1.0000 TOMBSTONE:0.0000 | 800 | 11 | 1.0000 | 458.1 img/s |
+
 ### QFN-v1.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Epoch | Val Acc | Speed |
@@ -167,7 +185,7 @@
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Epoch | Val Acc | Speed |
 |---|---|---:|---:|---|---:|---:|---:|---:|
 | QFN-v1 | all | 0.2525 | 0.1052 | MISALIGNED:0.0000 MISSING:0.9900 TOMBSTONE:1.0000 | 800 | 8 | 0.9833 | 59.7 img/s |
-| REFFERENCE_DATA_Transistor | all | 0.4225 | 0.2982 | MISALIGNED:0.1050 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 8 | 0.9833 | 610.8 img/s |
+| REFFERENCE_DATA_Transistor | all | 0.4225 | 0.2982 | MISALIGNED:0.1050 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 8 | 0.9833 | 606.0 img/s |
 | Resistor-3d-v1 | all | 0.2500 | 0.1000 | MISALIGNED:0.0000 MISSING:1.0000 TOMBSTONE:1.0000 | 400 | 8 | 0.9833 | 519.1 img/s |
 | Resistor-v1 | all | 0.9950 | 0.9950 | MISALIGNED:0.0200 MISSING:0.0000 TOMBSTONE:0.0000 | 400 | 8 | 0.9833 | 478.7 img/s |
 | Transistor-3D-v1 | all | 0.4425 | 0.3140 | MISALIGNED:0.0600 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 8 | 0.9833 | 598.0 img/s |
@@ -202,7 +220,7 @@
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Epoch | Val Acc | Speed |
 |---|---|---:|---:|---|---:|---:|---:|---:|
 | QFN-3D-v1 | all | 0.3713 | 0.2507 | MISALIGNED:0.5150 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 9 | 0.9667 | 74.3 img/s |
-| REFFERENCE_DATA_Transistor | all | 0.2500 | 0.1250 | MISALIGNED:0.0000 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 9 | 0.9667 | 599.2 img/s |
+| REFFERENCE_DATA_Transistor | all | 0.2500 | 0.1250 | MISALIGNED:0.0000 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 9 | 0.9667 | 602.8 img/s |
 | Resistor-3d-v1 | all | 0.9775 | 0.9776 | MISALIGNED:0.0800 MISSING:0.0000 TOMBSTONE:0.0100 | 400 | 9 | 0.9667 | 563.1 img/s |
 | Resistor-v1 | all | 0.2575 | 0.1416 | MISALIGNED:0.0300 MISSING:1.0000 TOMBSTONE:1.0000 | 400 | 9 | 0.9667 | 481.5 img/s |
 | Transistor-3D-v1 | all | 0.2500 | 0.1250 | MISALIGNED:0.0000 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 9 | 0.9667 | 599.5 img/s |
@@ -210,4 +228,4 @@
 
 ## History
 
-- 2026-02-15: Report generated (8 models, 7 datasets)
+- 2026-02-15: Report generated (9 models, 7 datasets)
