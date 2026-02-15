@@ -175,6 +175,14 @@ def main():
     parser.add_argument('--data', type=str, required=True, help='Path to dataset directory')
     parser.add_argument('--out', type=str, required=True, help='Output path for trained model')
     parser.add_argument('--resume', type=str, default=None, help='Optional: checkpoint to resume from (.pt)')
+    parser.add_argument(
+        '--allow-profile-mismatch',
+        action='store_true',
+        help=(
+            "DANGEROUS: allow resuming from a checkpoint trained on a different component profile. "
+            "This disables the hard profile_id mismatch guard and continues with a warning."
+        ),
+    )
     parser.add_argument('--extra-epochs', type=int, default=None,
                        help='Optional: train N additional epochs beyond the resumed epoch (default: use dataset config epochs)')
     parser.add_argument('--out-mode', choices=['best', 'last'], default='best',
@@ -324,14 +332,19 @@ def main():
             ckpt_profile_id = ckpt_profile.get('profile_id')
             ckpt_profile_hash = ckpt_profile.get('profile_hash')
 
-            # HARD FAIL: Profile ID mismatch
+            # HARD FAIL by default: Profile ID mismatch
             if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
-                raise ValueError(
-                    f"Component profile mismatch for --resume:\n"
-                    f"  Checkpoint profile: {ckpt_profile_id}\n"
-                    f"  Dataset profile:    {dataset_profile_id}\n"
-                    f"Cannot resume training with different component type."
-                )
+                if not args.allow_profile_mismatch:
+                    raise ValueError(
+                        f"Component profile mismatch for --resume:\n"
+                        f"  Checkpoint profile: {ckpt_profile_id}\n"
+                        f"  Dataset profile:    {dataset_profile_id}\n"
+                        f"Cannot resume training with different component type.\n\n"
+                        f"To override (NOT recommended): pass --allow-profile-mismatch"
+                    )
+                print("WARNING: Resuming with component profile mismatch (--allow-profile-mismatch).")
+                print(f"  Checkpoint profile: {ckpt_profile_id}")
+                print(f"  Dataset profile:    {dataset_profile_id}")
 
             # WARNING: Profile hash mismatch
             if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:

@@ -97,6 +97,14 @@ def main():
     parser = argparse.ArgumentParser(description='Evaluate trained model on test set')
     parser.add_argument('--data', type=str, required=True, help='Path to dataset directory')
     parser.add_argument('--model', type=str, required=True, help='Path to trained model checkpoint')
+    parser.add_argument(
+        '--allow-profile-mismatch',
+        action='store_true',
+        help=(
+            "DANGEROUS: allow evaluating a checkpoint on a dataset with a different component profile. "
+            "This disables the hard profile_id mismatch guard and continues with a warning."
+        ),
+    )
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                        help='Device (cuda/cpu)')
 
@@ -154,14 +162,19 @@ def main():
         ckpt_profile_id = ckpt_profile.get('profile_id')
         ckpt_profile_hash = ckpt_profile.get('profile_hash')
 
-        # HARD FAIL: Profile ID mismatch
+        # HARD FAIL by default: Profile ID mismatch
         if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
-            raise ValueError(
-                f"Component profile mismatch:\n"
-                f"  Model trained on: {ckpt_profile_id}\n"
-                f"  Dataset profile:  {dataset_profile_id}\n"
-                f"Cannot evaluate model on different component type."
-            )
+            if not args.allow_profile_mismatch:
+                raise ValueError(
+                    f"Component profile mismatch:\n"
+                    f"  Model trained on: {ckpt_profile_id}\n"
+                    f"  Dataset profile:  {dataset_profile_id}\n"
+                    f"Cannot evaluate model on different component type.\n\n"
+                    f"To override (NOT recommended): pass --allow-profile-mismatch"
+                )
+            print("WARNING: Evaluating with component profile mismatch (--allow-profile-mismatch).")
+            print(f"  Model trained on: {ckpt_profile_id}")
+            print(f"  Dataset profile:  {dataset_profile_id}")
 
         # WARNING: Profile hash mismatch
         if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:

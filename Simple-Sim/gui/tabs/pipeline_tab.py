@@ -3091,14 +3091,18 @@ class PipelineControlTab(BaseTab):
 
         # Multi-dataset training = sequential train runs into the same output checkpoint.
         # First dataset trains from scratch; subsequent datasets resume for +epochs.
+        allow_mixed_profiles = False
         if self._datasets_require_bundle(dss) and not self._is_model_bundle_target(model_out):
-            messagebox.showerror(
-                "Multi-dataset training requires bundle",
+            allow_mixed_profiles = messagebox.askyesno(
+                "Allow mixed-profile training into a single model?",
                 "You selected datasets with different component profiles.\n\n"
-                "Train output must be a multi-model bundle directory (ends with .bundle).\n\n"
-                "Tip: enable 'Multi-Model (.bundle)' and click 'Apply to Out+Model', or set Model to outputs/models/<name>.bundle."
+                "Recommended: train into a multi-model bundle (.bundle) so each profile gets its own checkpoint.\n\n"
+                "If you continue anyway, the training will resume across different profiles by passing "
+                "--allow-profile-mismatch (warm-start). This is not guaranteed to work and can degrade accuracy.\n\n"
+                "Continue?",
             )
-            return
+            if not allow_mixed_profiles:
+                return
 
         extra_s = self.var_continue_epochs.get().strip() if hasattr(self, "var_continue_epochs") else "10"
         try:
@@ -3145,6 +3149,11 @@ class PipelineControlTab(BaseTab):
                         "--data", str(ds),
                         "--out", str(model_out),
                         "--resume", str(model_out),
+                        *(
+                            ["--allow-profile-mismatch"]
+                            if allow_mixed_profiles and self._datasets_require_bundle(dss) and not is_bundle
+                            else []
+                        ),
                         "--extra-epochs", str(extra),
                         "--out-mode", out_mode,
                     ]
@@ -3175,9 +3184,31 @@ class PipelineControlTab(BaseTab):
             self._run_simple_cmd(["./.venv/bin/python", "scripts/eval.py", "--data", str(dss[0]), "--model", str(model_in)])
             return
 
+        allow_mixed_profiles = False
+        if self._datasets_require_bundle(dss) and not self._is_model_bundle_target(model_in):
+            allow_mixed_profiles = messagebox.askyesno(
+                "Allow mixed-profile eval on a single model?",
+                "You selected datasets with different component profiles.\n\n"
+                "Recommended: evaluate a multi-model bundle (.bundle) so each dataset uses its matching checkpoint.\n\n"
+                "If you continue anyway, eval will pass --allow-profile-mismatch. Results may be meaningless.\n\n"
+                "Continue?",
+            )
+            if not allow_mixed_profiles:
+                return
+
         parts: list[str] = []
         for ds in dss:
-            argv = ["./.venv/bin/python", "scripts/eval.py", "--data", str(ds), "--model", str(model_in)]
+            argv = [
+                "./.venv/bin/python",
+                "scripts/eval.py",
+                "--data", str(ds),
+                "--model", str(model_in),
+                *(
+                    ["--allow-profile-mismatch"]
+                    if allow_mixed_profiles and self._datasets_require_bundle(dss) and not self._is_model_bundle_target(model_in)
+                    else []
+                ),
+            ]
             parts.append(" ".join(shlex.quote(x) for x in argv))
         self._append_log(f"\n=== Eval on {len(dss)} datasets ===\n")
         self._run_simple_cmd([" && ".join(parts)])
@@ -3212,13 +3243,17 @@ class PipelineControlTab(BaseTab):
         if out_mode not in ("last", "best"):
             out_mode = "last"
 
+        allow_mixed_profiles = False
         if len(dss) > 1 and self._datasets_require_bundle(dss) and not self._is_model_bundle_target(model_path):
-            messagebox.showerror(
-                "Multi-dataset resume requires bundle",
+            allow_mixed_profiles = messagebox.askyesno(
+                "Allow mixed-profile resume into a single model?",
                 "You selected datasets with different component profiles.\n\n"
-                "Resume target must be a multi-model bundle directory (ends with .bundle)."
+                "Recommended: resume into a multi-model bundle (.bundle).\n\n"
+                "If you continue anyway, the resume will pass --allow-profile-mismatch. This is not guaranteed to work.\n\n"
+                "Continue?",
             )
-            return
+            if not allow_mixed_profiles:
+                return
 
         # If resuming into a bundle, ensure each selected dataset's profile has a checkpoint present.
         if len(dss) > 1 and self._is_model_bundle_target(model_path):
@@ -3268,6 +3303,11 @@ class PipelineControlTab(BaseTab):
                 "--data", str(ds),
                 "--out", str(model_path),
                 "--resume", str(model_path),
+                *(
+                    ["--allow-profile-mismatch"]
+                    if allow_mixed_profiles and self._datasets_require_bundle(dss) and not self._is_model_bundle_target(model_path)
+                    else []
+                ),
                 "--extra-epochs", str(extra),
                 "--out-mode", out_mode,
             ]
