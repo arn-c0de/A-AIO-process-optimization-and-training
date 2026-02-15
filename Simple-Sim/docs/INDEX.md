@@ -66,13 +66,4 @@ Performance benchmarks, accuracy metrics, and model comparison statistics.
 #### Third-Party Licenses
 Attribution and license information for all dependencies.
 
-## Contributing
 
-When adding new documentation:
-1. Place guides in `docs/guides/` for practical how-to content
-2. Place technical references in `docs/technical/` for in-depth technical documentation
-3. Use clear section headers and table of contents
-4. Include practical examples where applicable
-5. Keep language professional and technical
-6. Link to related documentation
-7. Update this INDEX.md with new entries
