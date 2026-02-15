@@ -1,0 +1,61 @@
+# Simple-Sim SOT-23 3D reference configuration (Blender batch)
+
+run:
+  run_id: "run_sot23_v1_3d"
+  seed: 2026
+  schema_version: 2
+  component_profile: "sot23_transistor_3d@1"
+
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.012
+
+classes:
+  OK: 200
+  MISSING: 200
+  MISALIGNED: 200
+  TOMBSTONE: 200
+
+domains:
+  domain_A:
+    lighting_brightness: [1.0, 1.0]
+    blur_sigma: [0.0, 0.0]
+    noise_stddev: [0.0, 0.0]
+
+splits:
+  train_domains: ['domain_A']
+  val_domains: ['domain_A']
+  test_domains: ['domain_A']
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+
+render:
+  backend: 'blender_3d'
+  blender:
+    executable: "blender"
+    engine: "CYCLES"
+    samples: 96
+    device: "CPU"
+
+augment:
+  rotation_deg_range: [-3, 3]
+  brightness_factor_range: [1.0, 1.0]
+  contrast_factor_range: [1.0, 1.0]
+
+train:
+  model: 'resnet18'
+  pretrained: true
+  epochs: 12
+  batch_size: 32
+  num_workers: 0
+  lr: 0.0008
+  optimizer: 'adam'
+  weight_decay: 0.0001
+
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics: ['accuracy', 'precision', 'recall', 'f1', 'confusion_matrix']
+  critical_classes: ['MISSING', 'MISALIGNED', 'TOMBSTONE']

@@ -1,7 +1,12 @@
-"""Data contract schemas for JSONL metadata and labels."""
+"""Data contract schemas for JSONL metadata and labels.
+
+Schema notes:
+- meta.jsonl schema_version 1: original fields only
+- meta.jsonl schema_version 2: adds render_meta (backend-specific render details)
+"""
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any, Dict, List, Type, TypeVar
 from simple_sim.config import VALID_CLASSES
@@ -24,10 +29,12 @@ class MetaRow:
     nominal: Dict[str, float]
     defect: Dict[str, Any]
     augment: Dict[str, float]
+    # Backend-specific info (camera pose, lighting, renderer version, etc.).
+    render_meta: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate required fields."""
-        if self.schema_version != 1:
+        if self.schema_version not in (1, 2):
             raise ValueError(f"Unsupported schema version: {self.schema_version}")
         if not self.id:
             raise ValueError("id cannot be empty")
@@ -46,6 +53,10 @@ class MetaRow:
             raise ValueError("render_backend cannot be empty")
         if not self.footprint:
             raise ValueError("footprint cannot be empty")
+        if self.render_meta is None:
+            raise ValueError("render_meta cannot be null")
+        if not isinstance(self.render_meta, dict):
+            raise ValueError("render_meta must be a dict")
 
         # Validate nominal geometry (must contain at least these keys; extras like pad_spacing_y are allowed)
         required_nominal = {'pad_width', 'pad_height', 'pad_spacing', 'component_length', 'component_width'}
@@ -144,7 +155,8 @@ def read_jsonl(path: Path, schema_cls: Type[T]) -> List[T]:
             # Check for unknown fields
             if schema_cls == MetaRow:
                 expected_fields = {'schema_version', 'id', 'run_id', 'domain', 'split', 'seed',
-                                 'image_path', 'render_backend', 'footprint', 'nominal', 'defect', 'augment'}
+                                 'image_path', 'render_backend', 'footprint', 'nominal', 'defect', 'augment',
+                                 'render_meta'}
             elif schema_cls == LabelRow:
                 expected_fields = {'schema_version', 'id', 'class_name', 'profile_id'}
             else:
@@ -157,6 +169,9 @@ def read_jsonl(path: Path, schema_cls: Type[T]) -> List[T]:
             # Backward compat: default profile_id for v1 LabelRows
             if schema_cls == LabelRow and 'profile_id' not in data:
                 data['profile_id'] = ""
+            # Backward compat: meta.jsonl v1 doesn't have render_meta
+            if schema_cls == MetaRow and 'render_meta' not in data:
+                data['render_meta'] = {}
 
             try:
                 row = schema_cls(**data)
