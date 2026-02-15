@@ -106,7 +106,13 @@ class PipelineControlTab(BaseTab):
         self.var_ips: tk.StringVar
         self.var_last: tk.StringVar
         self.var_dataset: tk.StringVar
+        self.var_dataset_multi: tk.BooleanVar
+        self.var_dataset_multi_paths: tk.StringVar  # JSON list[str] of dataset paths (rel to sim_root when possible)
+        self.var_dataset_multi_summary: tk.StringVar
         self.dataset_combo: ttk.Combobox
+        self.dataset_multi_entry: ttk.Entry
+        self.btn_dataset_multi_pick: ttk.Button
+        self.chk_dataset_multi: ttk.Checkbutton
         self.model_combo: ttk.Combobox
         self._model_paths: list[Path] = []
         self._all_model_combo_values: list[str] = []
@@ -331,10 +337,29 @@ class PipelineControlTab(BaseTab):
         dsbar.pack(fill="x", pady=(6, 0))
 
         self.var_dataset = tk.StringVar(value="")
-        self.dataset_combo = ttk.Combobox(dsbar, textvariable=self.var_dataset, state="readonly", width=38)
+        self.var_dataset_multi = tk.BooleanVar(value=False)
+        self.var_dataset_multi_paths = tk.StringVar(value="[]")
+        self.var_dataset_multi_summary = tk.StringVar(value="")
+
+        # Keep the selection widgets in their own frame so toggling between
+        # single/multi does not reorder the surrounding buttons.
+        ds_sel = ttk.Frame(dsbar)
+        ds_sel.pack(side="left", fill="x", expand=True)
+
+        self.dataset_combo = ttk.Combobox(ds_sel, textvariable=self.var_dataset, state="readonly", width=38)
         self.dataset_combo.pack(side="left", fill="x", expand=True)
         self.dataset_combo.bind("<<ComboboxSelected>>", self._on_dataset_selected)
         ToolTip(self.dataset_combo, text_func=lambda: self.var_dataset.get())
+
+        # Multi-select: off by default (keeps current UX). When enabled we swap the combobox
+        # for a readonly summary + picker dialog.
+        self.dataset_multi_entry = ttk.Entry(ds_sel, textvariable=self.var_dataset_multi_summary, state="readonly", width=38)
+        ToolTip(self.dataset_multi_entry, text_func=self._dataset_multi_tooltip_text)
+        self.btn_dataset_multi_pick = ttk.Button(ds_sel, text="Select...", command=self._open_dataset_multi_picker)
+        self.chk_dataset_multi = ttk.Checkbutton(
+            dsbar, text="Multi", variable=self.var_dataset_multi, command=self._on_dataset_multi_toggle
+        )
+        self.chk_dataset_multi.pack(side="left", padx=(8, 0))
 
         ttk.Button(dsbar, text="Refresh", command=self._refresh_datasets).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Snapshot", command=self._snapshot_dataset_selected).pack(side="left", padx=(8, 0))
@@ -469,6 +494,8 @@ class PipelineControlTab(BaseTab):
         set_if(self.var_name, "pipeline.name")
         set_if(self.var_name_ts, "pipeline.name_ts")
         set_if(self.var_dataset, "pipeline.dataset_selection")
+        set_if(self.var_dataset_multi, "pipeline.dataset_multi_enabled")
+        set_if(self.var_dataset_multi_paths, "pipeline.dataset_multi_paths")
         set_if(self.var_profile_model, "pipeline.profile_model")
         set_if(self.var_profile_model_lock, "pipeline.profile_model_locked")
         set_if(self.var_profile_build_preset, "pipeline.profile_build_preset")
@@ -477,6 +504,7 @@ class PipelineControlTab(BaseTab):
         # Ensure dropdowns reflect loaded values.
         try:
             self._refresh_datasets()
+            self._on_dataset_multi_toggle()
             self._on_dataset_selected()
         except Exception:
             pass
@@ -520,6 +548,8 @@ class PipelineControlTab(BaseTab):
         bind(self.var_name, "pipeline.name")
         bind(self.var_name_ts, "pipeline.name_ts")
         bind(self.var_dataset, "pipeline.dataset_selection")
+        bind(self.var_dataset_multi, "pipeline.dataset_multi_enabled")
+        bind(self.var_dataset_multi_paths, "pipeline.dataset_multi_paths")
         bind(self.var_profile_model, "pipeline.profile_model")
         bind(self.var_profile_model_lock, "pipeline.profile_model_locked")
         bind(self.var_profile_build_preset, "pipeline.profile_build_preset")
@@ -1710,6 +1740,7 @@ class PipelineControlTab(BaseTab):
             self._dataset_by_label[label] = p
 
         self.dataset_combo["values"] = self._dataset_labels
+        self._sync_multi_selection_after_dataset_refresh()
 
         # Keep current selection if it still maps.
         cur = self.var_dataset.get().strip()
@@ -1730,6 +1761,290 @@ class PipelineControlTab(BaseTab):
         if self._dataset_labels:
             self.var_dataset.set(self._dataset_labels[0])
             self._on_dataset_selected()
+
+    def _dataset_multi_tooltip_text(self) -> str:
+        labels = self._selected_dataset_labels()
+        if not labels:
+            return "(no datasets selected)"
+        if len(labels) <= 12:
+            return "\n".join(labels)
+        head = labels[:12]
+        return "\n".join(head) + f"\n... (+{len(labels) - len(head)} more)"
+
+    def _on_dataset_multi_toggle(self) -> None:
+        """Switch between single dataset combobox and multi-selection picker."""
+        enabled = bool(self.var_dataset_multi.get()) if hasattr(self, "var_dataset_multi") else False
+
+        # Seed multi-selection from current single selection when turning on.
+        if enabled:
+            paths = self._decode_dataset_paths_json(self.var_dataset_multi_paths.get())
+            if not paths:
+                ds = self._selected_dataset_dir_single()
+                if ds is not None:
+                    self.var_dataset_multi_paths.set(self._encode_dataset_paths_json([ds]))
+
+        # Swap widgets.
+        try:
+            if enabled:
+                try:
+                    self.dataset_combo.pack_forget()
+                except Exception:
+                    pass
+                self.dataset_multi_entry.pack(side="left", fill="x", expand=True)
+                self.btn_dataset_multi_pick.pack(side="left", padx=(8, 0))
+            else:
+                try:
+                    self.dataset_multi_entry.pack_forget()
+                    self.btn_dataset_multi_pick.pack_forget()
+                except Exception:
+                    pass
+                self.dataset_combo.pack(side="left", fill="x", expand=True)
+        except Exception:
+            pass
+
+        self._sync_multi_summary()
+
+        # Keep primary dataset selection consistent for previews/stats.
+        if enabled:
+            ds0 = self._selected_dataset_dir()
+            if ds0 is not None:
+                label0 = self._dataset_label_for_path(ds0)
+                if label0:
+                    try:
+                        self.var_dataset.set(label0)
+                    except Exception:
+                        pass
+        try:
+            self._on_dataset_selected()
+        except Exception:
+            pass
+
+    def _open_dataset_multi_picker(self) -> None:
+        if not self._dataset_labels:
+            messagebox.showinfo("Datasets", "No datasets found. Click Refresh after generating datasets.")
+            return
+
+        top = tk.Toplevel(self.frame.winfo_toplevel())
+        top.title("Select datasets")
+        top.transient(self.frame.winfo_toplevel())
+        top.grab_set()
+
+        frm = ttk.Frame(top, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Select one or more datasets (Ctrl/Shift for multi-select):").pack(anchor="w")
+
+        lb = tk.Listbox(frm, selectmode="extended", height=min(18, max(6, len(self._dataset_labels))))
+        lb.pack(fill="both", expand=True, pady=(6, 8))
+        for s in self._dataset_labels:
+            lb.insert("end", s)
+
+        selected_paths = set()
+        for p in self._decode_dataset_paths_json(self.var_dataset_multi_paths.get()):
+            try:
+                selected_paths.add(str(p.resolve()))
+            except Exception:
+                selected_paths.add(str(p))
+
+        # Pre-select current multi selection (or fall back to current single selection).
+        if not selected_paths:
+            ds = self._selected_dataset_dir_single()
+            if ds is not None:
+                try:
+                    selected_paths.add(str(ds.resolve()))
+                except Exception:
+                    selected_paths.add(str(ds))
+
+        for i, label in enumerate(self._dataset_labels):
+            p = self._dataset_by_label.get(label)
+            if p is None:
+                continue
+            try:
+                key = str(p.resolve())
+            except Exception:
+                key = str(p)
+            if key in selected_paths:
+                lb.selection_set(i)
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+
+        def clear_sel() -> None:
+            lb.selection_clear(0, "end")
+
+        def select_all() -> None:
+            lb.selection_set(0, "end")
+
+        def on_ok() -> None:
+            idxs = list(lb.curselection())
+            paths: list[Path] = []
+            for i in idxs:
+                try:
+                    label = self._dataset_labels[int(i)]
+                except Exception:
+                    continue
+                p = self._dataset_by_label.get(label)
+                if p is not None:
+                    paths.append(p)
+
+            if not paths:
+                ds = self._selected_dataset_dir_single()
+                if ds is not None:
+                    paths = [ds]
+
+            self.var_dataset_multi_paths.set(self._encode_dataset_paths_json(paths))
+            self._sync_multi_summary()
+
+            if paths:
+                label0 = self._dataset_label_for_path(paths[0])
+                if label0:
+                    self.var_dataset.set(label0)
+            try:
+                self._on_dataset_selected()
+            except Exception:
+                pass
+
+            try:
+                top.grab_release()
+            except Exception:
+                pass
+            top.destroy()
+
+        def on_cancel() -> None:
+            try:
+                top.grab_release()
+            except Exception:
+                pass
+            top.destroy()
+
+        ttk.Button(btns, text="Select all", command=select_all).pack(side="left")
+        ttk.Button(btns, text="Clear", command=clear_sel).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="Cancel", command=on_cancel).pack(side="right")
+        ttk.Button(btns, text="OK", command=on_ok).pack(side="right", padx=(0, 8))
+
+        lb.bind("<Double-Button-1>", lambda _e: on_ok())
+
+        try:
+            top.minsize(640, 320)
+        except Exception:
+            pass
+
+    def _decode_dataset_paths_json(self, s: str) -> list[Path]:
+        try:
+            arr = json.loads(s or "[]")
+        except Exception:
+            return []
+        if not isinstance(arr, list):
+            return []
+        out: list[Path] = []
+        for it in arr:
+            if not isinstance(it, str):
+                continue
+            p = Path(it)
+            if not p.is_absolute():
+                p = (self.sim_root / p).resolve()
+            out.append(p)
+        # Dedup while preserving order.
+        seen: set[str] = set()
+        uniq: list[Path] = []
+        for p in out:
+            try:
+                key = str(p.resolve())
+            except Exception:
+                key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(p)
+        return uniq
+
+    def _encode_dataset_paths_json(self, paths: list[Path]) -> str:
+        vals: list[str] = []
+        for p in paths:
+            try:
+                rp = p.resolve()
+            except Exception:
+                rp = p
+            try:
+                vals.append(str(rp.relative_to(self.sim_root.resolve())))
+            except Exception:
+                vals.append(str(rp))
+        return json.dumps(vals)
+
+    def _dataset_label_for_path(self, p: Path) -> Optional[str]:
+        try:
+            rp = p.resolve()
+        except Exception:
+            rp = p
+        for label, pp in self._dataset_by_label.items():
+            try:
+                if pp.resolve() == rp:
+                    return label
+            except Exception:
+                if pp == p:
+                    return label
+        for label, pp in self._dataset_by_label.items():
+            if pp.name == p.name:
+                return label
+        return None
+
+    def _selected_dataset_labels(self) -> list[str]:
+        labels: list[str] = []
+        for ds in self._selected_dataset_dirs():
+            label = self._dataset_label_for_path(ds)
+            if label:
+                labels.append(label)
+        return labels
+
+    def _sync_multi_summary(self) -> None:
+        labels = self._selected_dataset_labels()
+        if not labels:
+            self.var_dataset_multi_summary.set("(none)")
+            return
+        if len(labels) == 1:
+            self.var_dataset_multi_summary.set(labels[0])
+            return
+        self.var_dataset_multi_summary.set(f"{labels[0]} (+{len(labels) - 1})")
+
+    def _sync_multi_selection_after_dataset_refresh(self) -> None:
+        # Drop any stored paths that no longer exist / are no longer in dropdown candidates.
+        if not hasattr(self, "var_dataset_multi_paths"):
+            return
+        paths = self._decode_dataset_paths_json(self.var_dataset_multi_paths.get())
+        if not paths:
+            self._sync_multi_summary()
+            return
+
+        valid: set[str] = set()
+        for p in self._dataset_dirs:
+            try:
+                valid.add(str(p.resolve()))
+            except Exception:
+                valid.add(str(p))
+
+        filtered: list[Path] = []
+        for p in paths:
+            try:
+                key = str(p.resolve())
+            except Exception:
+                key = str(p)
+            if key in valid:
+                filtered.append(p)
+
+        if filtered != paths:
+            try:
+                self.var_dataset_multi_paths.set(self._encode_dataset_paths_json(filtered))
+            except Exception:
+                pass
+
+        if hasattr(self, "var_dataset_multi") and bool(self.var_dataset_multi.get()) and filtered:
+            label0 = self._dataset_label_for_path(filtered[0])
+            if label0:
+                try:
+                    self.var_dataset.set(label0)
+                except Exception:
+                    pass
+
+        self._sync_multi_summary()
 
     def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
         """Compact label for datasets in dropdown."""
@@ -2323,6 +2638,11 @@ class PipelineControlTab(BaseTab):
 
     def _selected_dataset_dir(self) -> Optional[Path]:
         """Get currently selected dataset directory."""
+        dss = self._selected_dataset_dirs()
+        return dss[0] if dss else None
+
+    def _selected_dataset_dir_single(self) -> Optional[Path]:
+        """Get selected dataset directory from the single combobox selection."""
         label = self.var_dataset.get().strip()
         if not label:
             return None
@@ -2333,6 +2653,22 @@ class PipelineControlTab(BaseTab):
             if p.name == label:
                 return p
         return None
+
+    def _selected_dataset_dirs(self) -> list[Path]:
+        """Get selected dataset directories (multi-select aware)."""
+        if hasattr(self, "var_dataset_multi") and bool(self.var_dataset_multi.get()):
+            paths = self._decode_dataset_paths_json(self.var_dataset_multi_paths.get())
+            out: list[Path] = []
+            for p in paths:
+                try:
+                    if p.exists() and p.is_dir():
+                        out.append(p)
+                except Exception:
+                    continue
+            if out:
+                return out
+        ds = self._selected_dataset_dir_single()
+        return [ds] if ds is not None else []
 
     def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
         """Handle dataset selection change."""
@@ -2703,52 +3039,160 @@ class PipelineControlTab(BaseTab):
             except Exception as e:
                 print(f"Failed to rename versioned models {old_dir} -> {new_dir}: {e}")
 
+    def _is_model_bundle_target(self, model_path: Path) -> bool:
+        """Return True if train/eval should treat this as a multi-model bundle target."""
+        try:
+            if model_path.exists() and model_path.is_dir():
+                return True
+        except Exception:
+            pass
+        return str(model_path).endswith(".bundle")
+
+    def _datasets_require_bundle(self, dss: list[Path]) -> bool:
+        """Return True when multiple selected datasets span multiple component profiles."""
+        pids: set[str] = set()
+        for ds in dss:
+            pid = self._dataset_profile_id(ds)
+            if pid:
+                pids.add(pid)
+        return len(pids) > 1
+
     def _validate_selected(self) -> None:
         """Validate selected dataset."""
-        ds = self._selected_dataset_dir()
-        if not ds:
+        dss = self._selected_dataset_dirs()
+        if not dss:
             return
-        self._run_simple_cmd(["./.venv/bin/python", "tools/validate_dataset.py", "--data", str(ds)])
+        if len(dss) == 1:
+            self._run_simple_cmd(["./.venv/bin/python", "tools/validate_dataset.py", "--data", str(dss[0])])
+            return
+
+        parts: list[str] = []
+        for ds in dss:
+            argv = ["./.venv/bin/python", "tools/validate_dataset.py", "--data", str(ds)]
+            parts.append(" ".join(shlex.quote(x) for x in argv))
+        self._append_log(f"\n=== Validate {len(dss)} datasets ===\n")
+        self._run_simple_cmd([" && ".join(parts)])
 
     def _train_selected(self) -> None:
         """Train model on selected dataset."""
-        ds = self._selected_dataset_dir()
-        if not ds:
+        dss = self._selected_dataset_dirs()
+        if not dss:
             return
         # Respect the Model: field when present; fall back to outputs/models/<dataset>.pt
         model_s = self.var_model.get().strip() if hasattr(self, "var_model") else ""
         if model_s:
             model_out = self._resolve_model_path(model_s)
         else:
-            model_out = (self.sim_root / "outputs" / "models" / f"{ds.name}.pt").resolve()
-        self._run_simple_cmd(["./.venv/bin/python", "scripts/train.py", "--data", str(ds), "--out", str(model_out)])
+            model_out = (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
+
+        if len(dss) == 1:
+            self._run_simple_cmd(["./.venv/bin/python", "scripts/train.py", "--data", str(dss[0]), "--out", str(model_out)])
+            return
+
+        # Multi-dataset training = sequential train runs into the same output checkpoint.
+        # First dataset trains from scratch; subsequent datasets resume for +epochs.
+        if self._datasets_require_bundle(dss) and not self._is_model_bundle_target(model_out):
+            messagebox.showerror(
+                "Multi-dataset training requires bundle",
+                "You selected datasets with different component profiles.\n\n"
+                "Train output must be a multi-model bundle directory (ends with .bundle).\n\n"
+                "Tip: enable 'Multi-Model (.bundle)' and click 'Apply to Out+Model', or set Model to outputs/models/<name>.bundle."
+            )
+            return
+
+        extra_s = self.var_continue_epochs.get().strip() if hasattr(self, "var_continue_epochs") else "10"
+        try:
+            extra = int(extra_s)
+        except Exception:
+            messagebox.showerror("Error", "+epochs must be an integer.")
+            return
+        if extra < 0:
+            messagebox.showerror("Error", "+epochs must be >= 0.")
+            return
+
+        out_mode = (self.var_continue_out_mode.get().strip() if hasattr(self, "var_continue_out_mode") else "best") or "best"
+        if out_mode not in ("last", "best"):
+            out_mode = "best"
+
+        parts: list[str] = []
+        is_bundle = self._is_model_bundle_target(model_out)
+        seen_pids: set[str] = set()
+        for i, ds in enumerate(dss):
+            pid = self._dataset_profile_id(ds) or f"__no_profile__:{ds}"
+            if is_bundle:
+                # Bundle semantics:
+                # - For a profile we haven't trained yet: run from scratch (no --resume).
+                # - For repeats of the same profile: resume + extra epochs.
+                if pid in seen_pids:
+                    argv = [
+                        "./.venv/bin/python", "scripts/train.py",
+                        "--data", str(ds),
+                        "--out", str(model_out),
+                        "--resume", str(model_out),
+                        "--extra-epochs", str(extra),
+                        "--out-mode", out_mode,
+                    ]
+                else:
+                    argv = ["./.venv/bin/python", "scripts/train.py", "--data", str(ds), "--out", str(model_out)]
+                    seen_pids.add(pid)
+            else:
+                # Single-checkpoint semantics: always resume after the first dataset.
+                if i == 0:
+                    argv = ["./.venv/bin/python", "scripts/train.py", "--data", str(ds), "--out", str(model_out)]
+                else:
+                    argv = [
+                        "./.venv/bin/python", "scripts/train.py",
+                        "--data", str(ds),
+                        "--out", str(model_out),
+                        "--resume", str(model_out),
+                        "--extra-epochs", str(extra),
+                        "--out-mode", out_mode,
+                    ]
+            parts.append(" ".join(shlex.quote(x) for x in argv))
+
+        self._append_log(f"\n=== Multi-dataset train: {len(dss)} datasets ===\n")
+        for ds in dss:
+            self._append_log(f"  - {ds}\n")
+        self._append_log(f"out: {model_out}\n")
+        self._append_log(f"+epochs per subsequent dataset: {extra} (out-mode={out_mode})\n\n")
+
+        self._run_simple_cmd([" && ".join(parts)])
 
     def _eval_selected(self) -> None:
         """Evaluate model on selected dataset."""
-        ds = self._selected_dataset_dir()
-        if not ds:
+        dss = self._selected_dataset_dirs()
+        if not dss:
             return
         model_s = self.var_model.get().strip() if hasattr(self, "var_model") else ""
         if model_s:
             model_in = self._resolve_model_path(model_s)
         else:
-            model_in = (self.sim_root / "outputs" / "models" / f"{ds.name}.pt").resolve()
+            model_in = (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
         if not model_in.exists():
             messagebox.showerror("Missing model", f"Model not found:\n{model_in}\n\nRun Train first.")
             return
-        self._run_simple_cmd(["./.venv/bin/python", "scripts/eval.py", "--data", str(ds), "--model", str(model_in)])
+        if len(dss) == 1:
+            self._run_simple_cmd(["./.venv/bin/python", "scripts/eval.py", "--data", str(dss[0]), "--model", str(model_in)])
+            return
+
+        parts: list[str] = []
+        for ds in dss:
+            argv = ["./.venv/bin/python", "scripts/eval.py", "--data", str(ds), "--model", str(model_in)]
+            parts.append(" ".join(shlex.quote(x) for x in argv))
+        self._append_log(f"\n=== Eval on {len(dss)} datasets ===\n")
+        self._run_simple_cmd([" && ".join(parts)])
 
     def _continue_train_selected(self) -> None:
         """Continue training (resume) on a fixed dataset using an existing checkpoint."""
-        ds = self._selected_dataset_dir()
-        if not ds:
+        dss = self._selected_dataset_dirs()
+        if not dss:
             return
 
         model_s = self.var_model.get().strip() if hasattr(self, "var_model") else ""
         if model_s:
             model_path = self._resolve_model_path(model_s)
         else:
-            model_path = (self.sim_root / "outputs" / "models" / f"{ds.name}.pt").resolve()
+            model_path = (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
 
         if not model_path.exists():
             messagebox.showerror("Missing model", f"Model not found to resume from:\n{model_path}\n\nRun Train first.")
@@ -2768,17 +3212,73 @@ class PipelineControlTab(BaseTab):
         if out_mode not in ("last", "best"):
             out_mode = "last"
 
+        if len(dss) > 1 and self._datasets_require_bundle(dss) and not self._is_model_bundle_target(model_path):
+            messagebox.showerror(
+                "Multi-dataset resume requires bundle",
+                "You selected datasets with different component profiles.\n\n"
+                "Resume target must be a multi-model bundle directory (ends with .bundle)."
+            )
+            return
+
+        # If resuming into a bundle, ensure each selected dataset's profile has a checkpoint present.
+        if len(dss) > 1 and self._is_model_bundle_target(model_path):
+            missing: list[str] = []
+            for ds in dss:
+                pid = self._dataset_profile_id(ds)
+                if not pid:
+                    missing.append(f"{ds} (missing profile metadata)")
+                    continue
+                try:
+                    ckpt = bundle_checkpoint_path(model_path, pid, kind="best")
+                    if not ckpt.exists():
+                        missing.append(f"{pid} (no checkpoint in bundle)")
+                except Exception:
+                    missing.append(f"{pid} (bundle lookup failed)")
+            if missing:
+                messagebox.showerror(
+                    "Missing bundle checkpoints",
+                    "The selected model bundle does not have checkpoints for all selected datasets.\n\n"
+                    + "\n".join(missing)
+                )
+                return
+
+        if len(dss) == 1:
+            ds = dss[0]
+            self._append_log(
+                f"\n=== Continue training: +{extra} epochs (out={out_mode}) ===\n"
+                f"data:  {ds}\n"
+                f"model: {model_path}\n\n"
+            )
+            self._run_simple_cmd([
+                "./.venv/bin/python",
+                "scripts/train.py",
+                "--data", str(ds),
+                "--out", str(model_path),
+                "--resume", str(model_path),
+                "--extra-epochs", str(extra),
+                "--out-mode", out_mode,
+            ])
+            return
+
+        parts: list[str] = []
+        for ds in dss:
+            argv = [
+                "./.venv/bin/python",
+                "scripts/train.py",
+                "--data", str(ds),
+                "--out", str(model_path),
+                "--resume", str(model_path),
+                "--extra-epochs", str(extra),
+                "--out-mode", out_mode,
+            ]
+            parts.append(" ".join(shlex.quote(x) for x in argv))
+
         self._append_log(
-            f"\n=== Continue training: +{extra} epochs (out={out_mode}) ===\n"
-            f"data:  {ds}\n"
-            f"model: {model_path}\n\n"
+            f"\n=== Continue training on {len(dss)} datasets: +{extra} epochs each (out={out_mode}) ===\n"
+            f"model: {model_path}\n"
         )
-        self._run_simple_cmd([
-            "./.venv/bin/python",
-            "scripts/train.py",
-            "--data", str(ds),
-            "--out", str(model_path),
-            "--resume", str(model_path),
-            "--extra-epochs", str(extra),
-            "--out-mode", out_mode,
-        ])
+        for ds in dss:
+            self._append_log(f"data:  {ds}\n")
+        self._append_log("\n")
+
+        self._run_simple_cmd([" && ".join(parts)])
