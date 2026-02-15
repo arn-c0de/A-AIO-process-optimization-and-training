@@ -9,8 +9,8 @@
 <text x="896" y="80" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.9962</text>
 <line x1="260" y1="115" x2="890" y2="115" stroke="#30363d" stroke-width="1" opacity="0.35"/>
 <text x="250" y="106" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Random-DataCrawler-v1_MultiTrained.pt</text>
-<rect x="260" y="96.0" width="551.0" height="14" rx="3" fill="#79c0ff"/>
-<text x="896" y="106" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.8713</text>
+<rect x="260" y="96.0" width="511.6" height="14" rx="3" fill="#79c0ff"/>
+<text x="896" y="106" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.8090</text>
 <line x1="260" y1="141" x2="890" y2="141" stroke="#30363d" stroke-width="1" opacity="0.35"/>
 <text x="250" y="132" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN-v1.pt</text>
 <rect x="260" y="122.0" width="437.9" height="14" rx="3" fill="#2f81f7"/>

@@ -1,5 +1,5 @@
 # Model Arena Report
-> Last updated: 2026-02-15 13:49:53
+> Last updated: 2026-02-15 13:51:32
 
 ## Charts
 
@@ -20,7 +20,7 @@
 | Rank | Model | Type | Avg Accuracy | Avg F1 | Datasets Tested | Best Dataset | Worst Dataset | Last Run |
 |---:|---|---|---:|---:|---:|---|---|---|
 | 1 | DeepMind-small-v1_20260214_210452.bundle | Bundle | 0.9962 | 0.9962 | 3 | QFN-v1 (1.0000) | Transistor-v1 (0.9938) | 2026-02-14 21:08:59 |
-| 2 | Random-DataCrawler-v1_MultiTrained.pt | Single | 0.8713 | 0.8512 | 5 | Transistor-3D-v1 (0.9962) | QFN-v1 (0.3887) | 2026-02-15 13:46:14 |
+| 2 | Random-DataCrawler-v1_MultiTrained.pt | Single | 0.8090 | 0.7706 | 6 | Transistor-3D-v1 (0.9962) | QFN-v1 (0.3887) | 2026-02-15 13:51:02 |
 | 3 | QFN-v1.pt | Single | 0.6925 | 0.6257 | 3 | QFN-v1 (1.0000) | Transistor-v1 (0.5000) | 2026-02-14 21:08:23 |
 | 4 | Transistor-v1.pt | Single | 0.6295 | 0.5700 | 5 | Transistor-v1 (0.9938) | QFN-3D-v1 (0.3825) | 2026-02-15 13:49:28 |
 | 5 | Seqent-DatasetCrawler-v1_MultiTrained.pt | Single | 0.4596 | 0.3624 | 6 | QFN-v1 (1.0000) | Resistor-3d-v1 (0.2500) | 2026-02-15 13:46:57 |
@@ -34,10 +34,11 @@
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Last Run |
 |---:|---|---:|---:|---|---:|---|
-| 1 | Transistor-v1.pt | 0.3825 | 0.2682 | all | 800 | 2026-02-15 13:49:20 |
-| 2 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.3800 | 0.2492 | all | 800 | 2026-02-15 13:46:57 |
-| 3 | Resistor-3d-v1.pt | 0.3713 | 0.2507 | all | 800 | 2026-02-15 13:47:52 |
-| 4 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2650 | 0.1439 | all | 800 | 2026-02-15 13:47:18 |
+| 1 | Random-DataCrawler-v1_MultiTrained.pt | 0.4975 | 0.3673 | all | 800 | 2026-02-15 13:51:02 |
+| 2 | Transistor-v1.pt | 0.3825 | 0.2682 | all | 800 | 2026-02-15 13:49:20 |
+| 3 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.3800 | 0.2492 | all | 800 | 2026-02-15 13:46:57 |
+| 4 | Resistor-3d-v1.pt | 0.3713 | 0.2507 | all | 800 | 2026-02-15 13:47:52 |
+| 5 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2650 | 0.1439 | all | 800 | 2026-02-15 13:47:18 |
 
 ### Dataset: QFN-v1
 
@@ -119,6 +120,7 @@
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Epoch | Val Acc | Speed |
 |---|---|---:|---:|---|---:|---:|---:|---:|
+| QFN-3D-v1 | all | 0.4975 | 0.3673 | MISALIGNED:0.0050 MISSING:0.0050 TOMBSTONE:1.0000 | 800 | 9 | 0.9769 | 79.3 img/s |
 | QFN-v1 | all | 0.3887 | 0.2887 | MISALIGNED:0.4500 MISSING:0.0000 TOMBSTONE:1.0000 | 800 | 14 | 0.9833 | 68.8 img/s |
 | Resistor-3d-v1 | all | 0.9900 | 0.9900 | MISALIGNED:0.0400 MISSING:0.0000 TOMBSTONE:0.0000 | 400 | 9 | 0.9769 | 531.6 img/s |
 | Resistor-v1 | all | 0.9850 | 0.9850 | MISALIGNED:0.0600 MISSING:0.0000 TOMBSTONE:0.0000 | 400 | 14 | 0.9833 | 491.3 img/s |
