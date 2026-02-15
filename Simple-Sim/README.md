@@ -15,6 +15,13 @@ See [`Sample Gallery`](SAMPLE_GALLERY.md) for auto-generated reference images wi
 
 See Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 
+## Documentation
+
+For comprehensive guides and references, see [`Documentation Index`](docs/INDEX.md). Quick links:
+- [Command Cheatsheet](docs/guides/CHEATSHEET.md) - Common operations and workflows
+- [3D Rendering Quickstart](docs/guides/3D_RENDERING_QUICKSTART.md) - Blender 3D rendering guide
+- [Profile System Implementation](PROFILE_SYSTEM_IMPLEMENTATION.md) - Component profile design
+
 
 ## Overview
 
