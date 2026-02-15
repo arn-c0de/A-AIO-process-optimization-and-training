@@ -249,94 +249,103 @@ class PipelineControlTab(BaseTab):
         ttk.Radiobutton(top, text="Extend Existing", variable=self.var_dataset_mode,
                        value="extend").pack(side="left", padx=(5, 0))
 
-        # Top controls - Row 2: Config paths
+        # Top controls - Row 2: Config + Out
         top2 = ttk.Frame(self.frame)
         top2.pack(fill="x", pady=(0, 5))
 
         ttk.Label(top2, text="Config:").pack(side="left", padx=(0, 6))
         self.var_config = tk.StringVar(value="configs/run_0001.yaml")
-        ttk.Entry(top2, textvariable=self.var_config, width=30).pack(side="left")
+        ttk.Entry(top2, textvariable=self.var_config, width=24).pack(side="left")
 
-        ttk.Label(top2, text="Profile:").pack(side="left", padx=(10, 6))
-        self.var_profile = tk.StringVar(value="chip_0603_resistor@1")
-        self.profile_combo = ttk.Combobox(top2, textvariable=self.var_profile, state="readonly", width=20)
-        self.profile_combo.pack(side="left")
-        ToolTip(self.profile_combo, text_func=lambda: self.var_profile.get())
-        self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
-        ttk.Button(top2, text="↻", width=3, command=self._refresh_profiles).pack(side="left", padx=(6, 0))
-        ttk.Button(top2, text="ⓘ", width=3, command=self._show_profile_info).pack(side="left", padx=(3, 0))
-
-        # Multi-profile selection (generate all selected profiles).
+        # Multi-profile selection variables (UI controls in top2a)
         self.var_profiles_multi = tk.BooleanVar(value=False)
         self.var_profiles_multi_mode = tk.StringVar(value="separate")  # separate|mixed
         self.var_profiles_multi_json = tk.StringVar(value="[]")        # JSON list[str]
         self.var_profiles_multi_summary = tk.StringVar(value="")
 
-        ttk.Checkbutton(top2, text="Multi", variable=self.var_profiles_multi, command=self._on_profiles_multi_toggle).pack(side="left", padx=(8, 0))
-        ttk.Label(top2, text="Mode:").pack(side="left", padx=(6, 4))
-        ttk.Combobox(top2, textvariable=self.var_profiles_multi_mode, values=["separate", "mixed"], state="readonly", width=9).pack(side="left")
-
-        self.btn_profiles_multi_pick = ttk.Button(top2, text="Pick", width=5, command=self._pick_profiles_multi, state="disabled")
-        self.btn_profiles_multi_pick.pack(side="left", padx=(6, 0))
-        ToolTip(self.btn_profiles_multi_pick, text_func=lambda: "Select multiple profiles to generate")
-
-        self.entry_profiles_multi = ttk.Entry(top2, textvariable=self.var_profiles_multi_summary, width=26, state="disabled")
-        self.entry_profiles_multi.pack(side="left", padx=(6, 0))
-
         ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        ttk.Label(top2, text="Render:").pack(side="left", padx=(0, 6))
+        ttk.Label(top2, text="Out:").pack(side="left", padx=(0, 6))
+        self.var_out = tk.StringVar(value="outputs/sim_data/runs/run_0001")
+        ttk.Entry(top2, textvariable=self.var_out, width=32).pack(side="left")
+
+        # Top controls - Row 2b: Model + Auto-snapshot
+        top2b = ttk.Frame(self.frame)
+        top2b.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(top2b, text="Model:").pack(side="left", padx=(0, 6))
+        self.var_model = tk.StringVar(value="outputs/models/run_0001.pt")
+        self.model_combo = ttk.Combobox(top2b, textvariable=self.var_model, state="readonly", width=36)
+        self.model_combo.pack(side="left")
+        ToolTip(self.model_combo, text_func=lambda: self.var_model.get())
+        ttk.Button(top2b, text="↻", width=3, command=self._refresh_models).pack(side="left", padx=(6, 0))
+        ttk.Button(top2b, text="+", width=3, command=self._add_new_model).pack(side="left", padx=(2, 0))
+
+        ttk.Separator(top2b, orient="vertical").pack(side="left", fill="y", padx=10)
+
+        self.var_autosnap = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top2b, text="Auto-snap", variable=self.var_autosnap).pack(side="left")
+        ttk.Label(top2b, text="Every:").pack(side="left", padx=(8, 4))
+        self.var_snap_every = tk.StringVar(value="5")
+        ttk.Combobox(top2b, textvariable=self.var_snap_every, values=["1", "5", "10", "30", "50"], state="readonly", width=5).pack(
+            side="left"
+        )
+        ttk.Label(top2b, text="Keep:").pack(side="left", padx=(8, 4))
+        self.var_snap_keep = tk.StringVar(value="30")
+        ttk.Entry(top2b, textvariable=self.var_snap_keep, width=4).pack(side="left")
+
+        # Top controls - Row 2a: Name (moved up)
+        top2a = ttk.Frame(self.frame)
+        top2a.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(top2a, text="Name:").pack(side="left", padx=(0, 6))
+        self.var_name = tk.StringVar(value="pcb_0603_resistor_v1")
+        ttk.Entry(top2a, textvariable=self.var_name, width=20).pack(side="left")
+        self.var_name_ts = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top2a, text="Timestamp", variable=self.var_name_ts).pack(side="left", padx=(8, 0))
+        self.var_model_bundle = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top2a, text="Bundle", variable=self.var_model_bundle).pack(side="left", padx=(8, 0))
+        ttk.Button(top2a, text="Apply", command=self._apply_name_to_out_and_model, width=8).pack(side="left", padx=(8, 0))
+
+        # Top controls - Row 3: Profile + Render + Multi-Profile (moved down)
+        top3 = ttk.Frame(self.frame)
+        top3.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(top3, text="Profile:").pack(side="left", padx=(0, 6))
+        self.var_profile = tk.StringVar(value="chip_0603_resistor@1")
+        self.profile_combo = ttk.Combobox(top3, textvariable=self.var_profile, state="readonly", width=16)
+        self.profile_combo.pack(side="left")
+        ToolTip(self.profile_combo, text_func=lambda: self.var_profile.get())
+        self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
+        ttk.Button(top3, text="↻", width=3, command=self._refresh_profiles).pack(side="left", padx=(6, 0))
+        ttk.Button(top3, text="ⓘ", width=3, command=self._show_profile_info).pack(side="left", padx=(3, 0))
+
+        ttk.Separator(top3, orient="vertical").pack(side="left", fill="y", padx=10)
+
+        ttk.Label(top3, text="Render:").pack(side="left", padx=(0, 6))
         self.var_render_backend = tk.StringVar(value="opencv_2d")
         self.render_combo = ttk.Combobox(
-            top2,
+            top3,
             textvariable=self.var_render_backend,
             values=["opencv_2d", "blender_3d"],
             state="readonly",
-            width=12,
+            width=10,
         )
         self.render_combo.pack(side="left")
         ToolTip(self.render_combo, text_func=lambda: self.var_render_backend.get())
         self.render_combo.bind("<<ComboboxSelected>>", self._on_render_backend_changed)
 
-        ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Separator(top3, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        ttk.Label(top2, text="Out:").pack(side="left", padx=(0, 6))
-        self.var_out = tk.StringVar(value="outputs/sim_data/runs/run_0001")
-        ttk.Entry(top2, textvariable=self.var_out, width=35).pack(side="left")
-
-        ttk.Label(top2, text="Model:").pack(side="left", padx=(10, 6))
-        self.var_model = tk.StringVar(value="outputs/models/run_0001.pt")
-        self.model_combo = ttk.Combobox(top2, textvariable=self.var_model, state="readonly", width=42)
-        self.model_combo.pack(side="left")
-        ToolTip(self.model_combo, text_func=lambda: self.var_model.get())
-        ttk.Button(top2, text="↻", width=3, command=self._refresh_models).pack(side="left", padx=(6, 0))
-        ttk.Button(top2, text="+", width=3, command=self._add_new_model).pack(side="left", padx=(2, 0))
-
-        ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
-
-        self.var_autosnap = tk.BooleanVar(value=True)
-        ttk.Checkbutton(top2, text="Auto-snapshot model", variable=self.var_autosnap).pack(side="left")
-        ttk.Label(top2, text="Every:").pack(side="left", padx=(10, 6))
-        self.var_snap_every = tk.StringVar(value="5")
-        ttk.Combobox(top2, textvariable=self.var_snap_every, values=["1", "5", "10", "30", "50"], state="readonly", width=5).pack(
-            side="left"
-        )
-        ttk.Label(top2, text="Keep:").pack(side="left", padx=(10, 6))
-        self.var_snap_keep = tk.StringVar(value="30")
-        ttk.Entry(top2, textvariable=self.var_snap_keep, width=5).pack(side="left")
-
-        # Top controls - Row 3: Naming helpers (professional naming for datasets/models)
-        top3 = ttk.Frame(self.frame)
-        top3.pack(fill="x", pady=(0, 5))
-
-        ttk.Label(top3, text="Name:").pack(side="left", padx=(0, 6))
-        self.var_name = tk.StringVar(value="pcb_0603_resistor_v1")
-        ttk.Entry(top3, textvariable=self.var_name, width=36).pack(side="left")
-        self.var_name_ts = tk.BooleanVar(value=True)
-        ttk.Checkbutton(top3, text="Timestamp", variable=self.var_name_ts).pack(side="left", padx=(10, 0))
-        self.var_model_bundle = tk.BooleanVar(value=False)
-        ttk.Checkbutton(top3, text="Multi-Model (.bundle)", variable=self.var_model_bundle).pack(side="left", padx=(10, 0))
-        ttk.Button(top3, text="Apply to Out+Model", command=self._apply_name_to_out_and_model).pack(side="left", padx=(10, 0))
+        ttk.Label(top3, text="Multi-Profile:").pack(side="left", padx=(0, 6))
+        ttk.Checkbutton(top3, text="Enable", variable=self.var_profiles_multi, command=self._on_profiles_multi_toggle).pack(side="left", padx=(0, 0))
+        ttk.Label(top3, text="Mode:").pack(side="left", padx=(8, 4))
+        ttk.Combobox(top3, textvariable=self.var_profiles_multi_mode, values=["separate", "mixed"], state="readonly", width=9).pack(side="left")
+        self.btn_profiles_multi_pick = ttk.Button(top3, text="Select", width=6, command=self._pick_profiles_multi, state="disabled")
+        self.btn_profiles_multi_pick.pack(side="left", padx=(6, 0))
+        ToolTip(self.btn_profiles_multi_pick, text_func=lambda: "Select multiple profiles to generate")
+        self.entry_profiles_multi = ttk.Entry(top3, textvariable=self.var_profiles_multi_summary, width=18, state="disabled")
+        self.entry_profiles_multi.pack(side="left", padx=(6, 0))
 
         # Status line
         status = ttk.Frame(self.frame)
