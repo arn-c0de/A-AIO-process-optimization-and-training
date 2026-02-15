@@ -17,6 +17,23 @@ Training writes checkpoints that include the profile metadata in the checkpoint 
 
 The standard (single) checkpoint is a single `.pt` file.
 
+## Key Concept: "Single .pt" vs "Bundle" vs "General Model"
+
+It is easy to mix up these terms:
+
+- A **single `.pt`** is just one trained model. By default it does not "scan" or "select" a profile.
+  You can run it on any image, but if the image is out-of-distribution (OOD) (for example a component
+  type it never saw during training), the prediction can be unreliable or overly confident.
+
+- A **bundle** is a directory that contains multiple `.pt` files (one per profile). A bundle can be
+  *better* than a single profile-specific `.pt` when the component profile is known, because you can
+  dispatch to the correct specialist model. A bundle is not automatically better for unknown images
+  unless you also have a component-type classifier (or another resolver) in front of it.
+
+- A **general model** (one model that handles many component types well) is not created by "merging"
+  checkpoints. It requires training on mixed data (multiple profiles) and usually needs an explicit
+  UNKNOWN/OOD strategy if you expect truly unseen component types in production.
+
 ## Option A: Multi-Profile Bundle Directory (`*.bundle/`)
 
 A bundle is a directory containing one checkpoint per profile. Convention:
@@ -36,6 +53,16 @@ matching checkpoint inside the bundle:
 
 If the bundle does not contain `<dataset_profile_id>.pt`, prediction/eval fails because there is
 no weights file to load for that dataset profile.
+
+### Bundles and "unknown images"
+
+Bundles do not magically solve unknown component types. A bundle still needs a way to decide which
+profile checkpoint to use:
+
+- **Dataset scoring**: the profile comes from `dataset_manifest.json`, so dispatch is deterministic.
+- **Free images (no dataset/manifest)**: you must add a component-type resolver (for example a
+  profile classifier + optional OOD/UNKNOWN detection), then dispatch to the corresponding bundle
+  checkpoint.
 
 ### How training works with a bundle
 
@@ -112,4 +139,3 @@ This option is only meaningful for bundle directories. It is not used for single
    - Ensemble for experimentation.
 3. Use Merge tab to create the chosen artifact.
 4. Run `predict.sh` / `scripts/batch_predict.py` against any dataset you want to score.
-
