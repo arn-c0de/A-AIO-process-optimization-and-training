@@ -45,6 +45,8 @@ class PipelineControlTab(BaseTab):
         # Process management
         self.proc: Optional[subprocess.Popen[str]] = None
         self.stop_evt = threading.Event()
+        # If set, delete this dataset dir after the current _run_simple_cmd finishes successfully.
+        self._temp_merge_cleanup_dir: Optional[Path] = None
 
         # Queues for thread communication
         self.log_q: queue.Queue[str] = queue.Queue()
@@ -936,6 +938,23 @@ class PipelineControlTab(BaseTab):
             rc = self.proc.wait(timeout=1.0)
         except Exception:
             rc = None
+
+        # Post-run cleanup hook (used by "merge temporarily" training).
+        cleanup = self._temp_merge_cleanup_dir
+        self._temp_merge_cleanup_dir = None
+        if cleanup is not None:
+            try:
+                if rc == 0:
+                    shutil.rmtree(cleanup)
+                    self.log_q.put(f"[merge] cleaned up temp dataset: {cleanup}\n")
+                else:
+                    self.log_q.put(f"[merge] keeping temp dataset (rc={rc}): {cleanup}\n")
+            except Exception as e:
+                self.log_q.put(f"[merge] cleanup failed: {cleanup} ({e})\n")
+            try:
+                self.frame.after(0, self._refresh_datasets)
+            except Exception:
+                pass
 
         self.log_q.put(f"\n[process exited rc={rc}]\n")
         self.proc = None
@@ -3461,12 +3480,8 @@ class PipelineControlTab(BaseTab):
                             argv = ["./.venv/bin/python", "scripts/train.py", "--data", str(out_ds), "--out", str(model_out)]
                             cmd = " ".join(shlex.quote(x) for x in argv)
                             if delete_after:
-                                py = (
-                                    "import shutil, pathlib; "
-                                    f"p=pathlib.Path({out_ds.as_posix()!r}); "
-                                    "shutil.rmtree(p) if p.exists() else None"
-                                )
-                                cmd = cmd + " && " + " ".join(shlex.quote(x) for x in ["./.venv/bin/python", "-c", py])
+                                # Cleanup is handled in _read_process_output after rc==0.
+                                self._temp_merge_cleanup_dir = out_ds
                             self._run_simple_cmd([cmd])
 
                         self.frame.after(0, kick_off_train)
