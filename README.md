@@ -14,7 +14,7 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 
 ## Production Notes: Bundled vs Single Models
 
-> **📌 Current Conclusions**
+> **📌 Current Conclusions 2026-02**
 >
 > **Bundled Models** (multi-profile, per-component-type):
 > - Require an additional **object classification model** upstream to identify component type first
