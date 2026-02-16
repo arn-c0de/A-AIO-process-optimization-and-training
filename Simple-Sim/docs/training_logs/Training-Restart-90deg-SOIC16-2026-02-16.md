@@ -1,45 +1,58 @@
-# Training Report
+# Model Arena Report – Final Conclusion (February 16, 2026)
 
-**Report ID:** TR-2026-02-16-90ROT-SOIC16
-**Date:** 2026-02-16
-**Model:** Full pipeline restart (same datasets)
-**Status:** ☑ In Progress
+**New Dataset Regime**  
+- 1200–1600 samples per dataset (balanced)  
+- Random 90° base rotations (0/90/180/270) per image  
+- Full pipeline restart from scratch
 
----
+## Overall Performance Summary
 
-## Metrics
-| Metric | Value |
-|--------|-------|
-| Accuracy | TBD |
-| Loss | TBD |
-| Precision | TBD |
-| Recall | TBD |
-| F1-Score | TBD |
+Top models:  
+1. **RandomCrawler-5X.pt** → **0.7170** avg acc  
+2. **RandomCrawler-1X_MultiTrained.pt** → **0.7154** avg acc  
 
----
+**Key new insight:**  
+The 5X variant was trained **5× longer** (5 full passes / ~5× more epochs) than the 1X and all other specialist models.  
+→ Result: **almost no improvement** (+0.0016 avg acc only).  
 
-## Config
-- **Architecture:** Same as previous baseline run
-- **Dataset:** Same datasets as before, regenerated with 
- - random 90° base rotations per image
- - 1200 - 1600 samples each
- - each Model 1 training Round ~ 14 Epochs
+This proves **diminishing returns** from extra training epochs in the current setup.
 
-- **Epochs:** TBD
-- **Batch Size:** TBD
-- **Learning Rate:** TBD
+## What Changed vs. Previous Run
 
----
+- Absolute scores dropped (expected & desired) due to forced orientation randomization.  
+- Generalization became harder → many cross-profile accuracies now hover at 0.25–0.44.  
+- **RandomCrawler family still dominates**, but the gap between 5X and 1X is negligible.
 
-## Results
-- **Key Finding:** Training is restarted from scratch with identical dataset setup, now including 0/90/180/270 orientation randomization for stronger 3D-side invariance.
-- **Improvement vs Baseline:** TBD after first full run.
+## Critical Takeaways (Feb 2026)
 
----
+| Observation                                      | Implication                                                                 |
+|--------------------------------------------------|-----------------------------------------------------------------------------|
+| 5X vs 1X: only +0.0016 avg acc despite 5× training | More epochs = almost no gain → training is saturated                        |
+| Forced 90° rotations make task much harder       | Numbers look worse, but realism is now production-grade                     |
+| RandomCrawler-5X & 1X still best overall         | Mixed training + broad data remains the winning strategy                    |
+| Specialists collapse even more on cross tests    | Single-purpose models are increasingly obsolete under real variability     |
+| Biggest remaining gaps: IC-16-3D & QFN-3D        | Tombstone / missing errors dominate failures                                |
 
-## Next Steps
-1. Run full training end-to-end with 90° rotation enabled.
-2. Compare results directly against the previous baseline.
-3. Validate and document the new SOIC16 profile behavior.
+## Realistic Verdict & Recommendation
 
----
+**RandomCrawler-1X_MultiTrained.pt is now the preferred checkpoint.**  
+It achieves **almost identical performance** to the 5X version while using **5× less training time / compute**.
+
+**Extra training epochs are no longer a high-leverage lever.**
+
+### Next High-Value Actions (priority order)
+
+1. **Stop increasing epochs** – focus on data & augmentation instead  
+2. Stronger domain augmentation (perspective warp, lighting jitter, synthetic tombstone/missing)  
+3. Targeted data collection for IC-16-3D + QFN-3D (these are the only real blockers)  
+4. Optional: fine-tune the 1X model only on the two weak profiles (cheap & effective)  
+5. Re-run arena after above changes → expect 0.80–0.85+ avg acc with same realism level
+
+**One-Liner Final Verdict**
+
+The 5× longer trained model brings **zero meaningful gain** → we have reached the point of saturation.  
+The **RandomCrawler-1X** (single pass) is the smartest, fastest, and equally strong model to take into production.  
+
+More epochs won’t save us.  
+Better data + smarter augmentation will.
+
