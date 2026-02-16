@@ -444,28 +444,6 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
             # Chip resistor/capacitor with realistic rounded shape
             comp_obj = _mk_chip_resistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
 
-            # Add metallic end caps (solder terminals)
-            end_cap_material = _new_material("mat_endcap", base_color=(0.7, 0.7, 0.75), roughness=0.2, metallic=0.95)
-            end_cap_width = comp_l * 0.15  # 15% of length for each end cap
-
-            for i, x_pos in enumerate([-(comp_l - end_cap_width) / 2.0, (comp_l - end_cap_width) / 2.0]):
-                end_cap = _mk_box(f"endcap_{i}", size_xyz=(end_cap_width, comp_w, comp_h * 0.9), loc_xyz=(x_pos, 0.0, comp_z))
-                _apply_material(end_cap, end_cap_material)
-
-                # Add solder fillets at PAD positions (where component meets pad)
-                solder_size = min(pad_w, pad_h) * 0.3
-                solder_z = pad_th  # At pad surface level
-
-                # Position solder at the PAD location (not component end!)
-                # Pads are at ±pad_spacing/2
-                pad_x = -pad_spacing / 2.0 if i == 0 else pad_spacing / 2.0
-
-                # Add solder fillets at corners of the pad
-                for j, y_sign in enumerate([1, -1]):
-                    y_offset = y_sign * pad_h * 0.35  # Near pad edges
-                    solder_name = f"solder_pad{i}_{j}"
-                    _add_solder_joint(solder_name, pos_xyz=(pad_x, y_offset, solder_z), size=solder_size, material=m_solder)
-
         elif footprint == "sot23":
             # SOT-23 transistor package
             comp_obj = _mk_sot23_transistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
