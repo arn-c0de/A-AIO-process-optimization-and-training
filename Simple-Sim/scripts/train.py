@@ -5,6 +5,7 @@ import argparse
 import sys
 import os
 from pathlib import Path
+from typing import Optional
 import yaml
 import time
 import torch
@@ -25,7 +26,7 @@ from simple_sim.manifest import read_dataset_manifest, hash_file
 from simple_sim.model_bundle import bundle_checkpoint_path, upsert_bundle_meta
 
 
-def train_epoch(model, loader, criterion, optimizer, device):
+def train_epoch(model, loader, criterion, optimizer, device, *, use_amp: bool = False, scaler: Optional[torch.cuda.amp.GradScaler] = None):
     """Train for one epoch.
 
     Args:
@@ -63,14 +64,22 @@ def train_epoch(model, loader, criterion, optimizer, device):
         images = images.to(device, non_blocking=non_blocking)
         labels = labels.to(device, non_blocking=non_blocking)
 
-        # Forward pass
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        # Forward/backward pass (AMP on CUDA can reduce VRAM usage).
+        optimizer.zero_grad(set_to_none=True)
+        if use_amp:
+            if scaler is None:
+                raise RuntimeError("AMP enabled but GradScaler is missing")
+            with torch.cuda.amp.autocast(enabled=True):
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
         dt = max(1e-9, time.perf_counter() - t0)
         bs = int(images.shape[0])
@@ -100,7 +109,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
     return total_loss / max(1, num_batches), num_samples
 
 
-def validate(model, loader, criterion, device, class_names, critical_classes=None):
+def validate(model, loader, criterion, device, class_names, critical_classes=None, *, use_amp: bool = False):
     """Validate model.
 
     Args:
@@ -137,8 +146,13 @@ def validate(model, loader, criterion, device, class_names, critical_classes=Non
             images = images.to(device, non_blocking=non_blocking)
             labels = labels.to(device, non_blocking=non_blocking)
 
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+            if use_amp:
+                with torch.cuda.amp.autocast(enabled=True):
+                    outputs = model(images)
+                    loss = criterion(outputs, labels)
+            else:
+                outputs = model(images)
+                loss = criterion(outputs, labels)
 
             dt = max(1e-9, time.perf_counter() - t0)
             bs = int(images.shape[0])
@@ -192,6 +206,10 @@ def main():
                        help="Whether --out points to the best checkpoint ('best') or the latest epoch ('last'). Default: best")
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                        help='Device (cuda/cpu)')
+    amp_group = parser.add_mutually_exclusive_group()
+    amp_group.add_argument('--amp', dest='amp', action='store_true', help='Enable mixed precision on CUDA (default).')
+    amp_group.add_argument('--no-amp', dest='amp', action='store_false', help='Disable mixed precision.')
+    parser.set_defaults(amp=True)
 
     args = parser.parse_args()
 
@@ -199,6 +217,7 @@ def main():
     output_path_arg = Path(args.out)
     resume_path_arg = Path(args.resume) if args.resume else None
     device = torch.device(args.device)
+    use_amp = bool(args.amp and device.type == "cuda")
 
     # Load config from dataset
     config_path = data_dir / 'config.yaml'
@@ -286,6 +305,7 @@ def main():
     print(f"  Learning rate: {lr}")
     print(f"  Pretrained: {pretrained}")
     print(f"  Device: {device}")
+    print(f"  AMP: {use_amp}")
     if resume_path:
         print(f"  Resume: {resume_path}")
         print(f"  Out mode: {args.out_mode}")
@@ -340,6 +360,7 @@ def main():
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     start_epoch = 0
     best_val_f1 = 0.0
@@ -427,12 +448,14 @@ def main():
 
         # Train
         t_epoch = time.perf_counter()
-        train_loss, train_seen = train_epoch(model, train_loader, criterion, optimizer, device)
+        train_loss, train_seen = train_epoch(
+            model, train_loader, criterion, optimizer, device, use_amp=use_amp, scaler=scaler
+        )
 
         # Validate
         critical_classes = config.get('eval', {}).get('critical_classes')
         val_loss, val_metrics, val_seen = validate(
-            model, val_loader, criterion, device, class_names, critical_classes=critical_classes
+            model, val_loader, criterion, device, class_names, critical_classes=critical_classes, use_amp=use_amp
         )
 
         val_acc = val_metrics['accuracy']

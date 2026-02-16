@@ -34,11 +34,16 @@ def main():
     parser.add_argument('--out', type=str, required=True, help='Output path for trained model (.pt)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                        help='Device (cuda/cpu)')
+    amp_group = parser.add_mutually_exclusive_group()
+    amp_group.add_argument('--amp', dest='amp', action='store_true', help='Enable mixed precision on CUDA (default).')
+    amp_group.add_argument('--no-amp', dest='amp', action='store_false', help='Disable mixed precision.')
+    parser.set_defaults(amp=True)
     args = parser.parse_args()
 
     data_dir = Path(args.data)
     output_path = Path(args.out)
     device = torch.device(args.device)
+    use_amp = bool(args.amp and device.type == "cuda")
 
     # Load config from dataset
     config_path = data_dir / 'config.yaml'
@@ -68,6 +73,7 @@ def main():
     print(f"  Dataset: {data_dir}")
     print(f"  Profiles ({num_classes}): {profile_names}")
     print(f"  Device: {device}")
+    print(f"  AMP: {use_amp}")
 
     # Extract training parameters
     train_config = config['train']
@@ -132,6 +138,7 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     best_val_f1 = 0.0
     best_epoch = 0
@@ -146,8 +153,12 @@ def main():
         print(f"\nEpoch {epoch + 1}/{epochs}")
 
         t_epoch = time.perf_counter()
-        train_loss, train_seen = train_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, val_metrics, val_seen = validate(model, val_loader, criterion, device, profile_names)
+        train_loss, train_seen = train_epoch(
+            model, train_loader, criterion, optimizer, device, use_amp=use_amp, scaler=scaler
+        )
+        val_loss, val_metrics, val_seen = validate(
+            model, val_loader, criterion, device, profile_names, use_amp=use_amp
+        )
 
         val_acc = val_metrics['accuracy']
         val_f1 = val_metrics['macro_f1']
