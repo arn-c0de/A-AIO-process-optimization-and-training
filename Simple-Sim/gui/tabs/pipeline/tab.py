@@ -367,14 +367,20 @@ class PipelineControlTab(BaseTab):
                 cfg_rel = _rel_to_sim_root(cfg_path)
                 run_id = str(cfg_info.get("run_id") or pid)
 
-                out_i = base_out.with_name(run_id) if multi_enabled or len(profile_ids) > 1 else base_out
-                if base_out.name in {"runs", "versions"}: out_i = base_out / run_id
-                elif base_out.parent.name in {"runs", "versions"}: out_i = base_out.parent / run_id
+                out_i = base_out.with_name(run_id) if len(profile_ids) > 1 else base_out
+                if len(profile_ids) > 1:
+                    if base_out.name in {"runs", "versions"}: out_i = base_out / run_id
+                    elif base_out.parent.name in {"runs", "versions"}: out_i = base_out.parent / run_id
 
-                model_i = (self.sim_root / "outputs" / "models" / f"{run_id}.pt")
-                if base_model.suffix == ".pt":
-                    if base_model.parent.name == "models": model_i = base_model.parent / f"{run_id}.pt"
-                    else: model_i = base_model.with_name(f"{run_id}.pt")
+                # Keep the user-selected model path for a single-profile run.
+                # Only auto-derive per-profile model names when running multiple profiles.
+                if len(profile_ids) > 1:
+                    model_i = (self.sim_root / "outputs" / "models" / f"{run_id}.pt")
+                    if base_model.suffix == ".pt":
+                        if base_model.parent.name == "models": model_i = base_model.parent / f"{run_id}.pt"
+                        else: model_i = base_model.with_name(f"{run_id}.pt")
+                else:
+                    model_i = base_model if str(base_model).strip() else (self.sim_root / "outputs" / "models" / f"{run_id}.pt")
 
                 run_specs.append({
                     "profile_id": pid, "config": cfg_rel, "out_dir": str(out_i), "model_path": str(model_i),
