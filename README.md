@@ -26,8 +26,8 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 
 > **📌 Current Conclusions 2026-02**
 >
-> ![Final Verdict](Simple-Sim/docs/training_logs/Final-Conclusion-Training-Phase1.png)
-> ![Training Conclusions](Simple-Sim/docs/guides/knowledge/ModelTrainingConclusions-2D-3D.png)
+> [Final Verdict](Simple-Sim/docs/training_logs/Final-Conclusion-Training-Phase1.md)
+> [Training Conclusions](Simple-Sim/docs/guides/knowledge/ModelTrainingConclusions-2D-3D%20Mixed-vs.-Staged-Approach.md)
 > 
 > **Bundled Models** (multi-profile, per-component-type):
 > - Require an additional **object classification model** upstream to identify component type first
