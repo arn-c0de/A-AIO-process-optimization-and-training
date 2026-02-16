@@ -165,6 +165,7 @@ class PipelineLogic:
         env["DATA_DIR"] = out_dir
         env["MODEL_PATH"] = model_path
         env["DATASET_MODE"] = dataset_mode
+        env["PYTHONUNBUFFERED"] = "1"
 
         if task == "full": cmd = ["bash", "-lc", "./run_pipeline.sh"]
         elif task == "generate_only":
@@ -241,13 +242,63 @@ class PipelineLogic:
     def _read_process_output_thread(self, proc: subprocess.Popen[str], log_callback: Callable[[str], None]) -> None:
         fp = proc.stdout
         assert fp is not None
-        for line in fp:
-            log_callback(line)
-            if self.stop_evt.is_set(): break
+
+        # Read in chunks and flush on both LF and CR so tqdm/progress output
+        # becomes visible live instead of showing only at the end.
+        buf: list[str] = []
+        last_transient_emit_ts = 0.0
+
+        def _is_transient_progress_line(s: str) -> bool:
+            t = s.strip()
+            if not t:
+                return False
+            return t.startswith("Training:") or t.startswith("Validation:") or t.startswith("Evaluating:")
+
+        def _emit_buffer(delim: str) -> None:
+            nonlocal last_transient_emit_ts
+            if not buf:
+                if delim == "\n":
+                    log_callback("\n")
+                return
+
+            line = "".join(buf)
+            buf.clear()
+
+            # Carriage-return progress updates can arrive very frequently.
+            # Throttle transient progress lines to keep Tk responsive.
+            if delim == "\r" and _is_transient_progress_line(line):
+                now = time.time()
+                if now - last_transient_emit_ts < 0.35:
+                    return
+                last_transient_emit_ts = now
+            log_callback(line + "\n")
+
+        while True:
+            try:
+                chunk = fp.read(256)
+            except Exception:
+                break
+            if chunk == "":
+                break
+
+            for ch in chunk:
+                if ch in ("\n", "\r"):
+                    _emit_buffer(ch)
+                else:
+                    buf.append(ch)
+
+            if self.stop_evt.is_set():
+                break
+
+        if buf:
+            log_callback("".join(buf) + "\n")
+
         rc = proc.poll()
         if rc is None:
-            try: rc = proc.wait(timeout=0.2)
-            except Exception: pass
+            try:
+                rc = proc.wait(timeout=0.2)
+            except Exception:
+                pass
         self.log_q.put(f"\n[process exited rc={rc}]\n")
 
     def _safe_set_var(self, tk_var: Any, value: str) -> None:
