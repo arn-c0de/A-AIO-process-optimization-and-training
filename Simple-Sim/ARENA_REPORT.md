@@ -1,11 +1,15 @@
 # Model Arena Report
-> Last updated: 2026-02-16 17:29:25
+> Last updated: 2026-02-16 17:30:19
 
 ## Quick Navigation
 
 - [Charts](#charts)
 - [Overall Ranking](#overall-ranking)
 - [Per-Dataset Breakdown](#per-dataset-breakdown)
+- [Bundle Details](#bundle-details)
+- [Per-Model Detail Cards](#per-model-detail-cards)
+- [History](#history)
+
 <details>
 <summary>Datasets</summary>
 
@@ -19,8 +23,7 @@
 - [Transistor-v1](#dataset-transistor-v1)
 
 </details>
-- [Bundle Details](#bundle-details)
-- [Per-Model Detail Cards](#per-model-detail-cards)
+
 <details>
 <summary>Models</summary>
 
@@ -36,7 +39,7 @@
 - [QFN-3D-v1.pt](#model-qfn-3d-v1-pt)
 
 </details>
-- [History](#history)
+
 
 <a id="charts"></a>
 ## Charts
