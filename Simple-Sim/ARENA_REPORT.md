@@ -1,6 +1,36 @@
 # Model Arena Report
-> Last updated: 2026-02-16 17:22:16
+> Last updated: 2026-02-16 17:27:58
 
+## Quick Navigation
+
+- [Charts](#charts)
+- [Overall Ranking](#overall-ranking)
+- [Per-Dataset Breakdown](#per-dataset-breakdown)
+  - Datasets:
+    - [FullMergedDataset-allProfiles](#dataset-fullmergeddataset-allprofiles)
+    - [QFN-3D-v1](#dataset-qfn-3d-v1)
+    - [QFN-v1](#dataset-qfn-v1)
+    - [REFFERENCE_DATA_Transistor](#dataset-refference-data-transistor)
+    - [Resistor-3d-v1](#dataset-resistor-3d-v1)
+    - [Resistor-v1](#dataset-resistor-v1)
+    - [Transistor-3D-v1](#dataset-transistor-3d-v1)
+    - [Transistor-v1](#dataset-transistor-v1)
+- [Bundle Details](#bundle-details)
+- [Per-Model Detail Cards](#per-model-detail-cards)
+  - Models:
+    - [DeepMindSmall-v2_20260216_171226.bundle](#model-deepmindsmall-v2-20260216-171226-bundle)
+    - [RandomDataCrawler-v3.pt](#model-randomdatacrawler-v3-pt)
+    - [Transistor-v1.pt](#model-transistor-v1-pt)
+    - [Transistor-3D-v1.pt](#model-transistor-3d-v1-pt)
+    - [Seqent-DatasetCrawler-v1_MultiTrained.pt](#model-seqent-datasetcrawler-v1-multitrained-pt)
+    - [QFN-v1.pt](#model-qfn-v1-pt)
+    - [Resistor-v1.pt](#model-resistor-v1-pt)
+    - [Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt](#model-resistor-ensemble-multi-v1-20260215-121430-ensemble-pt)
+    - [Resistor-3d-v1.pt](#model-resistor-3d-v1-pt)
+    - [QFN-3D-v1.pt](#model-qfn-3d-v1-pt)
+- [History](#history)
+
+<a id="charts"></a>
 ## Charts
 
 ### Top Avg Accuracy
@@ -19,6 +49,7 @@
 
 ![Dataset Storage Breakdown](ARENA_REPORT_assets/dataset_size_pie.svg)
 
+<a id="overall-ranking"></a>
 ## Overall Ranking
 
 | Rank | Model | Type | Avg Accuracy | Avg F1 | Datasets Tested | Best Dataset | Worst Dataset | Last Run |
@@ -34,8 +65,10 @@
 | 9 | Resistor-3d-v1.pt | Single | 0.3755 | 0.2820 | 8 | Resistor-3d-v1 (0.9775) | REFFERENCE_DATA_Transistor (0.2500) | 2026-02-16 16:53:11 |
 | 10 | QFN-3D-v1.pt | Single | 0.3573 | 0.2528 | 8 | QFN-3D-v1 (0.9975) | FullMergedDataset-allProfiles (0.2432) | 2026-02-16 16:50:27 |
 
+<a id="per-dataset-breakdown"></a>
 ## Per-Dataset Breakdown
 
+<a id="dataset-fullmergeddataset-allprofiles"></a>
 ### Dataset: FullMergedDataset-allProfiles
 - Size on disk: 418.31 MB
 - Total samples: 6800
@@ -52,6 +85,7 @@
 | 8 | QFN-v1.pt | 0.3428 | 0.3096 | all | 6800 | 418.31 MB | 2026-02-16 16:53:45 |
 | 9 | QFN-3D-v1.pt | 0.2432 | 0.1648 | all | 6800 | 418.31 MB | 2026-02-16 16:50:27 |
 
+<a id="dataset-qfn-3d-v1"></a>
 ### Dataset: QFN-3D-v1
 - Size on disk: 616.25 MB
 - Total samples: 800
@@ -69,6 +103,7 @@
 | 9 | RandomDataCrawler-v3.pt | 0.2500 | 0.1000 | all | 800 | 616.25 MB | 2026-02-16 16:49:11 |
 | 10 | Resistor-v1.pt | 0.2500 | 0.1000 | all | 800 | 616.25 MB | 2026-02-15 21:38:13 |
 
+<a id="dataset-qfn-v1"></a>
 ### Dataset: QFN-v1
 - Size on disk: 664.60 MB
 - Total samples: 800
@@ -86,6 +121,7 @@
 | 9 | Resistor-v1.pt | 0.2525 | 0.1052 | all | 800 | 664.60 MB | 2026-02-15 21:38:27 |
 | 10 | Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt | 0.2500 | 0.1200 | all | 800 | 664.60 MB | 2026-02-15 21:34:59 |
 
+<a id="dataset-refference-data-transistor"></a>
 ### Dataset: REFFERENCE_DATA_Transistor
 - Size on disk: 83.80 MB
 - Total samples: 800
@@ -103,6 +139,7 @@
 | 9 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.2500 | 0.1000 | all | 800 | 83.80 MB | 2026-02-15 21:34:06 |
 | 10 | QFN-v1.pt | 0.1650 | 0.1117 | all | 800 | 83.80 MB | 2026-02-15 21:36:50 |
 
+<a id="dataset-resistor-3d-v1"></a>
 ### Dataset: Resistor-3d-v1
 - Size on disk: 41.10 MB
 - Total samples: 400
@@ -120,6 +157,7 @@
 | 9 | Seqent-DatasetCrawler-v1_MultiTrained.pt | 0.2500 | 0.1000 | all | 400 | 41.10 MB | 2026-02-15 21:34:09 |
 | 10 | QFN-v1.pt | 0.2050 | 0.0854 | all | 400 | 41.10 MB | 2026-02-15 21:36:54 |
 
+<a id="dataset-resistor-v1"></a>
 ### Dataset: Resistor-v1
 - Size on disk: 43.84 MB
 - Total samples: 400
@@ -137,6 +175,7 @@
 | 9 | QFN-3D-v1.pt | 0.2500 | 0.1000 | all | 400 | 43.84 MB | 2026-02-15 21:32:03 |
 | 10 | Transistor-3D-v1.pt | 0.0975 | 0.1195 | all | 400 | 43.84 MB | 2026-02-15 21:33:18 |
 
+<a id="dataset-transistor-3d-v1"></a>
 ### Dataset: Transistor-3D-v1
 - Size on disk: 83.44 MB
 - Total samples: 800
@@ -154,6 +193,7 @@
 | 9 | Resistor-3d-v1.pt | 0.2500 | 0.1250 | all | 800 | 83.44 MB | 2026-02-15 21:36:07 |
 | 10 | QFN-v1.pt | 0.1650 | 0.1117 | all | 800 | 83.44 MB | 2026-02-15 21:37:01 |
 
+<a id="dataset-transistor-v1"></a>
 ### Dataset: Transistor-v1
 - Size on disk: 177.10 MB
 - Total samples: 800
@@ -171,6 +211,7 @@
 | 9 | Transistor-3D-v1.pt | 0.2500 | 0.1000 | all | 800 | 177.10 MB | 2026-02-15 21:33:27 |
 | 10 | QFN-3D-v1.pt | 0.2500 | 0.1000 | all | 800 | 177.10 MB | 2026-02-15 21:32:11 |
 
+<a id="bundle-details"></a>
 ## Bundle Details
 
 ### DeepMindSmall-v2_20260216_171226.bundle
@@ -178,8 +219,10 @@
 - **Checkpoints:** 6
 - **Created:** 2026-02-16T16:12:26Z
 
+<a id="per-model-detail-cards"></a>
 ## Per-Model Detail Cards
 
+<a id="model-deepmindsmall-v2-20260216-171226-bundle"></a>
 ### DeepMindSmall-v2_20260216_171226.bundle (Bundle)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -192,6 +235,7 @@
 | Transistor-3D-v1 | all | 1.0000 | 1.0000 | MISALIGNED:0.0000 MISSING:0.0000 TOMBSTONE:0.0000 | 800 | 83.44 MB | 11 | 1.0000 | 600.6 img/s |
 | Transistor-v1 | all | 0.9938 | 0.9937 | MISALIGNED:0.0250 MISSING:0.0000 TOMBSTONE:0.0000 | 800 | 177.10 MB | 6 | 0.9917 | 527.6 img/s |
 
+<a id="model-randomdatacrawler-v3-pt"></a>
 ### RandomDataCrawler-v3.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -205,6 +249,7 @@
 | Transistor-3D-v1 | all | 1.0000 | 1.0000 | MISALIGNED:0.0000 MISSING:0.0000 TOMBSTONE:0.0000 | 800 | 83.44 MB | 14 | 0.9853 | 589.9 img/s |
 | Transistor-v1 | all | 0.9888 | 0.9887 | MISALIGNED:0.0150 MISSING:0.0000 TOMBSTONE:0.0000 | 800 | 177.10 MB | 14 | 0.9853 | 488.4 img/s |
 
+<a id="model-transistor-v1-pt"></a>
 ### Transistor-v1.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -218,6 +263,7 @@
 | Transistor-3D-v1 | all | 0.6050 | 0.5410 | MISALIGNED:0.5550 MISSING:0.0250 TOMBSTONE:0.0000 | 800 | 83.44 MB | 6 | 0.9917 | 584.1 img/s |
 | Transistor-v1 | all | 0.9938 | 0.9937 | MISALIGNED:0.0250 MISSING:0.0000 TOMBSTONE:0.0000 | 800 | 177.10 MB | 6 | 0.9917 | 515.7 img/s |
 
+<a id="model-transistor-3d-v1-pt"></a>
 ### Transistor-3D-v1.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -231,6 +277,7 @@
 | Transistor-3D-v1 | all | 1.0000 | 1.0000 | MISALIGNED:0.0000 MISSING:0.0000 TOMBSTONE:0.0000 | 800 | 83.44 MB | 11 | 1.0000 | 540.1 img/s |
 | Transistor-v1 | all | 0.2500 | 0.1000 | MISALIGNED:1.0000 MISSING:1.0000 TOMBSTONE:0.0000 | 800 | 177.10 MB | 11 | 1.0000 | 499.4 img/s |
 
+<a id="model-seqent-datasetcrawler-v1-multitrained-pt"></a>
 ### Seqent-DatasetCrawler-v1_MultiTrained.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -244,6 +291,7 @@
 | Transistor-3D-v1 | all | 0.2512 | 0.1026 | MISALIGNED:0.9950 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 83.44 MB | 9 | 1.0000 | 599.3 img/s |
 | Transistor-v1 | all | 0.4863 | 0.3955 | MISALIGNED:0.7600 MISSING:0.1200 TOMBSTONE:1.0000 | 800 | 177.10 MB | 9 | 1.0000 | 503.9 img/s |
 
+<a id="model-qfn-v1-pt"></a>
 ### QFN-v1.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -257,6 +305,7 @@
 | Transistor-3D-v1 | all | 0.1650 | 0.1117 | MISALIGNED:1.0000 MISSING:0.6450 TOMBSTONE:1.0000 | 800 | 83.44 MB | 12 | 1.0000 | 583.2 img/s |
 | Transistor-v1 | all | 0.5000 | 0.3644 | MISALIGNED:0.9150 MISSING:0.0500 TOMBSTONE:1.0000 | 800 | 177.10 MB | 12 | 1.0000 | 502.8 img/s |
 
+<a id="model-resistor-v1-pt"></a>
 ### Resistor-v1.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -270,6 +319,7 @@
 | Transistor-3D-v1 | all | 0.4425 | 0.3140 | MISALIGNED:0.0600 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 83.44 MB | 8 | 0.9833 | 598.0 img/s |
 | Transistor-v1 | all | 0.2825 | 0.1624 | MISALIGNED:0.0000 MISSING:0.9850 TOMBSTONE:0.8900 | 800 | 177.10 MB | 8 | 0.9833 | 512.1 img/s |
 
+<a id="model-resistor-ensemble-multi-v1-20260215-121430-ensemble-pt"></a>
 ### Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -283,6 +333,7 @@
 | Transistor-3D-v1 | all | 0.2587 | 0.1347 | MISALIGNED:0.0000 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 83.44 MB | - | - | 505.3 img/s |
 | Transistor-v1 | all | 0.2512 | 0.1187 | MISALIGNED:0.0000 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 177.10 MB | - | - | 438.6 img/s |
 
+<a id="model-resistor-3d-v1-pt"></a>
 ### Resistor-3d-v1.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -296,6 +347,7 @@
 | Transistor-3D-v1 | all | 0.2500 | 0.1250 | MISALIGNED:0.0000 MISSING:1.0000 TOMBSTONE:1.0000 | 800 | 83.44 MB | 9 | 0.9667 | 582.8 img/s |
 | Transistor-v1 | all | 0.2625 | 0.1581 | MISALIGNED:0.1300 MISSING:1.0000 TOMBSTONE:0.9950 | 800 | 177.10 MB | 9 | 0.9667 | 497.3 img/s |
 
+<a id="model-qfn-3d-v1-pt"></a>
 ### QFN-3D-v1.pt (Single)
 
 | Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |
@@ -309,6 +361,7 @@
 | Transistor-3D-v1 | all | 0.3075 | 0.2264 | MISALIGNED:0.0050 MISSING:1.0000 TOMBSTONE:0.7650 | 800 | 83.44 MB | 7 | 1.0000 | 557.3 img/s |
 | Transistor-v1 | all | 0.2500 | 0.1000 | MISALIGNED:1.0000 MISSING:1.0000 TOMBSTONE:0.0000 | 800 | 177.10 MB | 7 | 1.0000 | 503.6 img/s |
 
+<a id="history"></a>
 ## History
 
 - 2026-02-16: Report generated (10 models, 8 datasets)
