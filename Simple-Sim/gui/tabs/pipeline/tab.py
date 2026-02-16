@@ -70,6 +70,9 @@ class PipelineControlTab(BaseTab):
         self._dataset_size_job_id: int = 0
         self._dataset_size_q: queue.Queue[tuple[int, int, str]] = queue.Queue()
         self._milestone_thresholds = [1000, 5000, 10000]
+        self._last_thumb_refresh_ts: float = 0.0
+        self._thumb_refresh_min_interval_s: float = 0.35
+        self._thumb_refresh_pending: bool = False
 
         self._model_paths: list[Path] = []
         self._all_model_combo_values: list[str] = []
@@ -429,6 +432,7 @@ class PipelineControlTab(BaseTab):
         env = os.environ.copy()
         env["EVENT_LOG"] = str(self.event_log_path)
         env["SIMPLE_SIM_EVENT_LOG"] = str(self.event_log_path)
+        env["PYTHONUNBUFFERED"] = "1"
         if extra_env: env.update(extra_env)
 
         cmd = ["bash", "-lc", " ".join(args)]
@@ -491,6 +495,17 @@ class PipelineControlTab(BaseTab):
         if self._recent_imgs and self._recent_imgs[-1] == name: return
         self._recent_imgs.append(name)
         self._recent_imgs = self._recent_imgs[-12:]
+        # Rendering 12 thumbnails can be expensive; schedule refresh on UI tick.
+        self._thumb_refresh_pending = True
+
+    def _maybe_refresh_thumbnails(self) -> None:
+        if not self._thumb_refresh_pending:
+            return
+        now = time.time()
+        if now - self._last_thumb_refresh_ts < self._thumb_refresh_min_interval_s:
+            return
+        self._last_thumb_refresh_ts = now
+        self._thumb_refresh_pending = False
         self._refresh_thumbnails()
 
     def _refresh_thumbnails(self) -> None:
@@ -498,12 +513,22 @@ class PipelineControlTab(BaseTab):
                                    self._image_to_sample, self._meta_by_sample, self._meta_by_image_rel, draw_defect_overlay)
 
     def _tick_ui(self) -> None:
-        try:
-            while True: self._append_log(self.log_q.get_nowait())
-        except queue.Empty: pass
-        try:
-            while True: self._handle_event(self.event_q.get_nowait())
-        except queue.Empty: pass
+        # Keep UI responsive even under heavy log/event throughput.
+        log_batch: list[str] = []
+        for _ in range(200):
+            try:
+                log_batch.append(self.log_q.get_nowait())
+            except queue.Empty:
+                break
+        if log_batch:
+            self._append_log("".join(log_batch))
+
+        for _ in range(120):
+            try:
+                self._handle_event(self.event_q.get_nowait())
+            except queue.Empty:
+                break
+
         try:
             while True:
                 job_id, size_b, ds_name = self._dataset_size_q.get_nowait()
@@ -515,6 +540,7 @@ class PipelineControlTab(BaseTab):
         if not self.logic.is_process_running():
             if self.ui.btn_start["state"] == "disabled" or self.ui.btn_start_generate["state"] == "disabled": self.ui.set_run_buttons_state(False)
 
+        self._maybe_refresh_thumbnails()
         self._maybe_update_stats()
         self.frame.after(120, self._tick_ui)
 
