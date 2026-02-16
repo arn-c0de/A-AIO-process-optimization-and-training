@@ -44,6 +44,9 @@ class PredictionsUI:
         self.var_profile_model: tk.StringVar
         self.var_multi_sel: tk.StringVar
         self.var_multi_datasets: tk.BooleanVar
+        self.var_cpu: tk.StringVar
+        self.var_gpu: tk.StringVar
+        self.var_ram: tk.StringVar
 
         self.tree: ttk.Treeview
         self.tree_ds: ttk.Treeview
@@ -89,6 +92,17 @@ class PredictionsUI:
         self.btn_run.grid(row=0, column=6, sticky="e")
         self.btn_stop = ttk.Button(top, text="Stop", command=self.tab._stop_predictions, state="disabled", width=8)
         self.btn_stop.grid(row=0, column=7, sticky="e", padx=(8, 0))
+
+        stats = ttk.Frame(top)
+        stats.place(relx=1.0, rely=0.0, anchor="ne")
+
+        self.var_cpu = tk.StringVar(value="CPU: -")
+        self.var_gpu = tk.StringVar(value="GPU: -")
+        self.var_ram = tk.StringVar(value="RAM: -")
+
+        ttk.Label(stats, textvariable=self.var_cpu, width=9).pack(side="left")
+        ttk.Label(stats, textvariable=self.var_gpu, width=9).pack(side="left", padx=(4, 0))
+        ttk.Label(stats, textvariable=self.var_ram, width=9).pack(side="left", padx=(4, 0))
 
         opts = ttk.Frame(self.frame)
         opts.pack(fill="x", pady=(0, 8))
@@ -240,6 +254,19 @@ class PredictionsUI:
         self.txt_logs.insert("end", s)
         self.txt_logs.see("end")
         self.txt_logs.configure(state="disabled")
+
+    def update_stats_bar(self, cpu_pct: Optional[float], ram_info: Optional[tuple[float, int, int]], gpu_pct: Optional[float]) -> None:
+        if cpu_pct is not None:
+            self.var_cpu.set(f"CPU: {cpu_pct:3.0f}%")
+
+        if ram_info is None:
+            self.var_ram.set("RAM: n/a")
+        else:
+            ram_pct, _used_b, _total_b = ram_info
+            self.var_ram.set(f"RAM: {ram_pct:3.0f}%")
+
+        if gpu_pct is not None:
+            self.var_gpu.set(f"GPU: {gpu_pct:3.0f}%")
 
     def clear_confusion_matrix(self) -> None:
         for w in list(self._cm_parent.winfo_children()):

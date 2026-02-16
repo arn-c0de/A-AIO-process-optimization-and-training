@@ -41,25 +41,6 @@
 </details>
 
 
-<a id="charts"></a>
-## Charts
-
-### Top Avg Accuracy
-
-![Top Avg Accuracy](ARENA_REPORT_assets/top_avg_accuracy.svg)
-
-### Top Avg F1
-
-![Top Avg F1](ARENA_REPORT_assets/top_avg_f1.svg)
-
-### Model Storage Breakdown
-
-![Model Storage Breakdown](ARENA_REPORT_assets/model_size_pie.svg)
-
-### Dataset Storage Breakdown
-
-![Dataset Storage Breakdown](ARENA_REPORT_assets/dataset_size_pie.svg)
-
 <a id="overall-ranking"></a>
 ## Overall Ranking
 
