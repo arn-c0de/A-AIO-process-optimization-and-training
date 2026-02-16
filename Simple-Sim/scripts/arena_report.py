@@ -284,6 +284,23 @@ def _md_escape(s: str) -> str:
     return (s or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
+def _anchor_slug(s: str) -> str:
+    """Create a URL-safe anchor slug for markdown links."""
+    text = (s or "").strip().lower()
+    out: List[str] = []
+    prev_dash = False
+    for ch in text:
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        else:
+            if not prev_dash:
+                out.append("-")
+                prev_dash = True
+    slug = "".join(out).strip("-")
+    return slug or "section"
+
+
 def _xml_escape(s: str) -> str:
     # Minimal escaping for SVG/XML text nodes/attributes.
     return (
@@ -760,12 +777,65 @@ def _render(
         dataset_sizes=dataset_chart_items,
     )
 
+    dataset_order = sorted(dataset_to_models.keys())
+    model_order = [str(it["model_abs"]) for it in overall]
+
+    used_anchor_ids: set[str] = set()
+
+    def _unique_anchor_id(base: str) -> str:
+        base = _anchor_slug(base)
+        cand = base
+        idx = 2
+        while cand in used_anchor_ids:
+            cand = f"{base}-{idx}"
+            idx += 1
+        used_anchor_ids.add(cand)
+        return cand
+
+    aid_warnings = _unique_anchor_id("warnings")
+    aid_charts = _unique_anchor_id("charts")
+    aid_overall = _unique_anchor_id("overall-ranking")
+    aid_per_dataset = _unique_anchor_id("per-dataset-breakdown")
+    aid_bundle = _unique_anchor_id("bundle-details")
+    aid_per_model = _unique_anchor_id("per-model-detail-cards")
+    aid_history = _unique_anchor_id("history")
+
+    dataset_anchor: Dict[str, str] = {}
+    for ds_name in dataset_order:
+        dataset_anchor[ds_name] = _unique_anchor_id(f"dataset-{ds_name}")
+
+    model_anchor: Dict[str, str] = {}
+    for model_abs in model_order:
+        model_anchor[model_abs] = _unique_anchor_id(f"model-{Path(model_abs).name}")
+
     lines: List[str] = []
     lines.append("# Model Arena Report")
     lines.append(f"> Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
+    lines.append("## Quick Navigation")
+    lines.append("")
+    if missing:
+        lines.append(f"- [Warnings](#{aid_warnings})")
+    if charts:
+        lines.append(f"- [Charts](#{aid_charts})")
+    lines.append(f"- [Overall Ranking](#{aid_overall})")
+    lines.append(f"- [Per-Dataset Breakdown](#{aid_per_dataset})")
+    if dataset_order:
+        lines.append("  - Datasets:")
+        for ds_name in dataset_order:
+            lines.append(f"    - [{_md_escape(ds_name)}](#{dataset_anchor[ds_name]})")
+    lines.append(f"- [Bundle Details](#{aid_bundle})")
+    lines.append(f"- [Per-Model Detail Cards](#{aid_per_model})")
+    if model_order:
+        lines.append("  - Models:")
+        for model_abs in model_order:
+            model_name = Path(model_abs).name
+            lines.append(f"    - [{_md_escape(model_name)}](#{model_anchor[model_abs]})")
+    lines.append(f"- [History](#{aid_history})")
+    lines.append("")
 
     if missing:
+        lines.append(f'<a id="{aid_warnings}"></a>')
         lines.append("## Warnings")
         lines.append("")
         lines.append("Tracked paths missing on disk:")
@@ -776,6 +846,7 @@ def _render(
         lines.append("")
 
     if charts:
+        lines.append(f'<a id="{aid_charts}"></a>')
         lines.append("## Charts")
         lines.append("")
         for title, rel_path in charts:
@@ -784,6 +855,7 @@ def _render(
             lines.append(f"![{_md_escape(title)}]({rel_path})")
             lines.append("")
 
+    lines.append(f'<a id="{aid_overall}"></a>')
     lines.append("## Overall Ranking")
     lines.append("")
     lines.append("| Rank | Model | Type | Avg Accuracy | Avg F1 | Datasets Tested | Best Dataset | Worst Dataset | Last Run |")
@@ -812,9 +884,10 @@ def _render(
         lines.append("| - | - | - | - | - | - | - | - | - |")
     lines.append("")
 
+    lines.append(f'<a id="{aid_per_dataset}"></a>')
     lines.append("## Per-Dataset Breakdown")
     lines.append("")
-    for ds_name in sorted(dataset_to_models.keys()):
+    for ds_name in dataset_order:
         rows = dataset_to_models[ds_name]
         rows.sort(
             key=lambda t: (-(t[1].accuracy or -1.0), -(t[1].f1 or -1.0), -t[1].last_ts, Path(t[0]).name)
@@ -823,6 +896,7 @@ def _render(
         ds_samples_n = max((int(r.seen) for _m, r in rows if r.seen is not None), default=0)
         ds_size_s = _format_bytes(ds_size_b) if ds_size_b > 0 else "-"
         ds_samples_s = str(ds_samples_n) if ds_samples_n > 0 else "-"
+        lines.append(f'<a id="{dataset_anchor[ds_name]}"></a>')
         lines.append(f"### Dataset: {ds_name}")
         lines.append(f"- Size on disk: {ds_size_s}")
         lines.append(f"- Total samples: {ds_samples_s}")
@@ -852,6 +926,7 @@ def _render(
             )
         lines.append("")
 
+    lines.append(f'<a id="{aid_bundle}"></a>')
     lines.append("## Bundle Details")
     lines.append("")
     any_bundle = False
@@ -870,12 +945,14 @@ def _render(
         lines.append("- (No bundle models tracked)")
         lines.append("")
 
+    lines.append(f'<a id="{aid_per_model}"></a>')
     lines.append("## Per-Model Detail Cards")
     lines.append("")
     for it in overall:
         model_abs = it["model_abs"]
         rows = model_to_rows.get(model_abs, [])
         rows.sort(key=lambda r: r.dataset_name)
+        lines.append(f'<a id="{model_anchor[model_abs]}"></a>')
         lines.append(f"### {_md_escape(Path(model_abs).name)} ({it['type']})")
         lines.append("")
         lines.append("| Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |")
@@ -926,6 +1003,7 @@ def _render(
             lines.append("| - | - | - | - | - | - | - | - | - | - |")
         lines.append("")
 
+    lines.append(f'<a id="{aid_history}"></a>')
     lines.append("## History")
     lines.append("")
     lines.append(
