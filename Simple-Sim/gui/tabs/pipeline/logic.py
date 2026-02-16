@@ -558,7 +558,8 @@ class PipelineLogic:
         out_dir = Path(out_dir)
         if out_dir.exists(): raise FileExistsError(f"Output directory already exists: {out_dir}")
         out_dir.mkdir(parents=True, exist_ok=False)
-        (out_dir / "images").mkdir(parents=True, exist_ok=False)
+        images_dir = out_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=False)
         (out_dir / "splits").mkdir(parents=True, exist_ok=False)
 
         if not sources: raise ValueError("No sources provided")
