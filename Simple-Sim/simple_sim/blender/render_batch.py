@@ -444,6 +444,18 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
             # Chip resistor/capacitor with realistic rounded shape
             comp_obj = _mk_chip_resistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
 
+            # Add one solder fillet per pad, centered on the copper pads.
+            # This keeps solder visible without creating floating corner artifacts.
+            solder_size = min(pad_w, pad_h, comp_h) * 0.28
+            solder_z = pad_th + solder_size * 0.10
+            for i, (cx, cy, _pw, _ph) in enumerate(pad_positions[:2], 1):
+                _add_solder_joint(
+                    f"solder_pad{i}",
+                    pos_xyz=(cx, cy, solder_z),
+                    size=solder_size,
+                    material=m_solder,
+                )
+
         elif footprint == "sot23":
             # SOT-23 transistor package
             comp_obj = _mk_sot23_transistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
