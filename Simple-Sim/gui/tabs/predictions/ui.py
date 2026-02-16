@@ -93,17 +93,6 @@ class PredictionsUI:
         self.btn_stop = ttk.Button(top, text="Stop", command=self.tab._stop_predictions, state="disabled", width=8)
         self.btn_stop.grid(row=0, column=7, sticky="e", padx=(8, 0))
 
-        stats = ttk.Frame(top)
-        stats.place(relx=1.0, rely=0.0, anchor="ne")
-
-        self.var_cpu = tk.StringVar(value="CPU: -")
-        self.var_gpu = tk.StringVar(value="GPU: -")
-        self.var_ram = tk.StringVar(value="RAM: -")
-
-        ttk.Label(stats, textvariable=self.var_cpu, width=9).pack(side="left")
-        ttk.Label(stats, textvariable=self.var_gpu, width=9).pack(side="left", padx=(4, 0))
-        ttk.Label(stats, textvariable=self.var_ram, width=9).pack(side="left", padx=(4, 0))
-
         opts = ttk.Frame(self.frame)
         opts.pack(fill="x", pady=(0, 8))
 
@@ -136,6 +125,17 @@ class PredictionsUI:
         status.pack(fill="x", pady=(0, 8))
         self.var_status = tk.StringVar(value="status: idle")
         ttk.Label(status, textvariable=self.var_status).pack(side="left")
+
+        stats = ttk.Frame(status)
+        stats.pack(side="right")
+
+        self.var_cpu = tk.StringVar(value="CPU: -")
+        self.var_gpu = tk.StringVar(value="GPU: -")
+        self.var_ram = tk.StringVar(value="RAM: -")
+
+        ttk.Label(stats, textvariable=self.var_cpu, width=9).pack(side="left")
+        ttk.Label(stats, textvariable=self.var_gpu, width=9).pack(side="left", padx=(4, 0))
+        ttk.Label(stats, textvariable=self.var_ram, width=9).pack(side="left", padx=(4, 0))
 
         paths = ttk.Frame(self.frame)
         paths.pack(fill="x", pady=(0, 10))
