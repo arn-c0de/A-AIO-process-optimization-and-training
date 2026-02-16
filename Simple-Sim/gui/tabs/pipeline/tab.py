@@ -118,6 +118,7 @@ class PipelineControlTab(BaseTab):
         profile_ids: list[str],
         multi_enabled: bool,
         multi_mode: str,
+        enable_cardinal_rotation_90: bool,
     ) -> bool:
         task_label = {
             "full": "Full Pipeline",
@@ -136,6 +137,7 @@ class PipelineControlTab(BaseTab):
             f"Output: {out_dir}\n"
             f"Profiles: {profile_label}\n"
             f"Multi-profile: {'on' if multi_enabled else 'off'} ({multi_mode})\n\n"
+            f"90° rotation: {'on' if enable_cardinal_rotation_90 else 'off'}\n\n"
             "Start now?"
         )
         return self.ui.ask_yes_no("Start pipeline", msg)
@@ -167,6 +169,7 @@ class PipelineControlTab(BaseTab):
             ("pipeline.dataset_multi_enabled", self.ui.var_dataset_multi), ("pipeline.dataset_multi_paths", self.ui.var_dataset_multi_paths),
             ("pipeline.profile_model", self.ui.var_profile_model), ("pipeline.profile_model_locked", self.ui.var_profile_model_lock),
             ("pipeline.profile_build_preset", self.ui.var_profile_build_preset), ("pipeline.render_backend", self.ui.var_render_backend),
+            ("pipeline.cardinal_rotation_90", self.ui.var_cardinal_rotation_90),
         ]:
             if v := st.get(key):
                 try: var.set(v)
@@ -192,6 +195,7 @@ class PipelineControlTab(BaseTab):
             (self.ui.var_dataset_multi, "pipeline.dataset_multi_enabled"), (self.ui.var_dataset_multi_paths, "pipeline.dataset_multi_paths"),
             (self.ui.var_profile_model, "pipeline.profile_model"), (self.ui.var_profile_model_lock, "pipeline.profile_model_locked"),
             (self.ui.var_profile_build_preset, "pipeline.profile_build_preset"), (self.ui.var_render_backend, "pipeline.render_backend"),
+            (self.ui.var_cardinal_rotation_90, "pipeline.cardinal_rotation_90"),
         ]:
             var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
 
@@ -379,6 +383,7 @@ class PipelineControlTab(BaseTab):
         if not self._confirm_pipeline_start(
             task=effective_task, out_dir=out_dir, run_mode=run_mode, run_count=run_count,
             dataset_mode=dataset_mode, profile_ids=profile_ids, multi_enabled=multi_enabled, multi_mode=multi_mode,
+            enable_cardinal_rotation_90=bool(self.ui.var_cardinal_rotation_90.get()),
         ): return
 
         self.ui.set_run_buttons_state(True)
@@ -392,6 +397,7 @@ class PipelineControlTab(BaseTab):
         }
         self.logic.start_pipeline(
             run_specs=run_specs, run_count=run_count, dataset_mode=dataset_mode, task=effective_task,
+            enable_cardinal_rotation_90=bool(self.ui.var_cardinal_rotation_90.get()),
             event_callback=self._handle_event, log_callback=self._append_log,
             ui_update_callback=lambda: self.frame.after(0, self._after_pipeline_run_ui_update),
             ui_reset_callback=lambda: self.frame.after(0, self._reset_ui_on_pipeline_end),

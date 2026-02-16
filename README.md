@@ -18,6 +18,9 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 - [`Simple-Sim`](Simple-Sim/README.md): A sandbox environment for pre-training and specializing models on synthetic datasets before passing them to main simulation and production training. Includes an arena system to evaluate and select the best-performing models for further training iterations.
 - Sample images: [`Simple-Sim/SAMPLE_GALLERY.md`](Simple-Sim/SAMPLE_GALLERY.md)
 
+### Upcoming Testing Research (Preview)
+- Training restart log (same datasets, now with random 90° orientation per image + new SOIC16 profile testing): [`Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md`](Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md)
+
   
 ### Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 ![Top Avg Accuracy](Simple-Sim/ARENA_REPORT_assets/top_avg_accuracy.svg)

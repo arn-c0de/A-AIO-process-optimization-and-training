@@ -31,7 +31,12 @@ from simple_sim.profile_hash import load_profile, hash_profile
 from simple_sim.manifest import write_multi_profile_manifest
 
 
-def generate_profile_dataset(config_path: Path, output_dir: Path):
+def generate_profile_dataset(
+    config_path: Path,
+    output_dir: Path,
+    *,
+    enable_cardinal_rotation_90: bool = True,
+):
     """Generate mixed-profile dataset from configuration."""
     print(f"Loading configuration from {config_path}")
     config = load_config(config_path)
@@ -103,7 +108,12 @@ def generate_profile_dataset(config_path: Path, output_dir: Path):
                 derived_label = classify_defect(nominal, defect_params, tolerances)
                 actual_class = derived_label if derived_label != class_name else class_name
 
-                augment = sample_augment_params(config['augment'], domain_config, rng)
+                augment = sample_augment_params(
+                    config['augment'],
+                    domain_config,
+                    rng,
+                    enable_cardinal_rotation_90=enable_cardinal_rotation_90,
+                )
 
                 img = render_roi(
                     nominal=nominal,
@@ -246,9 +256,18 @@ def main():
     parser = argparse.ArgumentParser(description='Generate mixed-profile dataset for profile classifier')
     parser.add_argument('--config', type=str, required=True, help='Path to YAML configuration file')
     parser.add_argument('--out', type=str, required=True, help='Output directory for dataset')
+    parser.add_argument(
+        '--disable-cardinal-rotation-90',
+        action='store_true',
+        help='Disable 0/90/180/270 base orientation randomization (keep only augment.rotation_deg_range jitter)',
+    )
     args = parser.parse_args()
 
-    generate_profile_dataset(Path(args.config), Path(args.out))
+    generate_profile_dataset(
+        Path(args.config),
+        Path(args.out),
+        enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
+    )
 
 
 if __name__ == '__main__':

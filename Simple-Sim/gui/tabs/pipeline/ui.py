@@ -78,6 +78,7 @@ class PipelineUI:
         self.var_profiles_multi_mode: tk.StringVar = tk.StringVar(value="separate")
         self.var_profiles_multi_json: tk.StringVar = tk.StringVar(value="[]")
         self.var_profiles_multi_summary: tk.StringVar = tk.StringVar(value="")
+        self.var_cardinal_rotation_90: tk.BooleanVar = tk.BooleanVar(value=True)
         self.entry_profiles_multi: ttk.Entry
         self.btn_profiles_multi_pick: ttk.Button
         self.var_dataset_profile: tk.StringVar = tk.StringVar(value="Profile: -")
@@ -132,6 +133,10 @@ class PipelineUI:
         self.btn_start_generate = ttk.Button(top, text="▶ Generate Only", command=self.tab.start_pipeline_generate_only, width=15)
         self.btn_start_generate.pack(side="left", padx=(6, 0))
         ToolTip(self.btn_start_generate, text_func=lambda: "Generate + validate dataset only (no training/eval)")
+
+        chk_cardinal = ttk.Checkbutton(top, text="90° Rotation", variable=self.var_cardinal_rotation_90)
+        chk_cardinal.pack(side="left", padx=(8, 0))
+        ToolTip(chk_cardinal, text_func=lambda: "Enable random base orientation 0/90/180/270 during dataset generation")
 
         self.btn_stop = ttk.Button(top, text="⏹ Stop", command=self.tab.stop_pipeline, state="disabled", width=10)
         self.btn_stop.pack(side="left", padx=(8, 0))

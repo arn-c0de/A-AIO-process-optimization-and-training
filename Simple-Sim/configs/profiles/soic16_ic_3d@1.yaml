@@ -19,7 +19,7 @@ component:
 geometry_ranges:
   pad_width: [55.0, 65.0]
   pad_height: [140.0, 160.0]
-  pad_spacing: [500.0, 520.0]
+  pad_spacing: [190.0, 200.0]
   pad_spacing_y: [125.0, 129.0]
   component_length: [980.0, 1000.0]
   component_width: [385.0, 395.0]
