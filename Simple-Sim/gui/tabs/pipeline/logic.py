@@ -44,6 +44,18 @@ class PipelineLogic:
         
         self._profile_config_cache: Dict[str, Dict[str, Any]] = {}
 
+    def is_process_running(self) -> bool:
+        p = self.proc
+        if p is None:
+            return False
+        try:
+            if p.poll() is None:
+                return True
+        except Exception:
+            return True
+        self.proc = None
+        return False
+
     def _model_root(self) -> Path:
         return self.sim_root / "outputs" / "models"
 
@@ -178,7 +190,8 @@ class PipelineLogic:
 
         try:
             self.proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env, start_new_session=True)
-            t_stdout = threading.Thread(target=self._read_process_output_thread, args=(log_callback,), daemon=True)
+            p = self.proc
+            t_stdout = threading.Thread(target=self._read_process_output_thread, args=(p, log_callback), daemon=True)
             t_events = threading.Thread(target=self._tail_events_thread, args=(event_callback,), daemon=True)
             t_stdout.start()
             t_events.start()
@@ -205,10 +218,14 @@ class PipelineLogic:
 
     def stop_pipeline(self) -> None:
         self.stop_evt.set()
-        if self.proc is not None:
-            try: os.killpg(self.proc.pid, signal.SIGTERM)
+        p = self.proc
+        if p is not None:
+            if p.poll() is not None:
+                self.proc = None
+                return
+            try: os.killpg(p.pid, signal.SIGTERM)
             except Exception:
-                try: self.proc.terminate()
+                try: p.terminate()
                 except Exception: pass
             
             # Escalate to SIGKILL after a grace period.
@@ -221,14 +238,17 @@ class PipelineLogic:
             
             threading.Timer(2.0, _kill_later).start()
 
-    def _read_process_output_thread(self, log_callback: Callable[[str], None]) -> None:
-        assert self.proc is not None
-        fp = self.proc.stdout
+    def _read_process_output_thread(self, proc: subprocess.Popen[str], log_callback: Callable[[str], None]) -> None:
+        fp = proc.stdout
         assert fp is not None
         for line in fp:
             log_callback(line)
             if self.stop_evt.is_set(): break
-        self.log_q.put(f"\n[process exited rc={self.proc.returncode}]\n")
+        rc = proc.poll()
+        if rc is None:
+            try: rc = proc.wait(timeout=0.2)
+            except Exception: pass
+        self.log_q.put(f"\n[process exited rc={rc}]\n")
 
     def _safe_set_var(self, tk_var: Any, value: str) -> None:
         try:

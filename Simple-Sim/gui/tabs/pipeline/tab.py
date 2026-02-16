@@ -207,7 +207,7 @@ class PipelineControlTab(BaseTab):
         self.ui.set_profile_model_combo_state("disabled" if locked else "readonly")
 
     def _build_profile_model(self) -> None:
-        if self.logic.proc is not None:
+        if self.logic.is_process_running():
             self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first.")
             return
 
@@ -243,7 +243,7 @@ class PipelineControlTab(BaseTab):
     def start_pipeline_generate_only(self) -> None: self._start_pipeline(task="generate_only")
     
     def _start_pipeline(self, *, task: str) -> None:
-        if self.logic.proc is not None: return
+        if self.logic.is_process_running(): return
         
         run_mode, dataset_mode = self.ui.var_run_mode.get(), self.ui.var_dataset_mode.get()
         out_dir = ""
@@ -419,7 +419,7 @@ class PipelineControlTab(BaseTab):
         self.logic.stop_pipeline()
 
     def _run_simple_cmd(self, args: list[str], extra_env: Optional[Dict[str, str]] = None) -> None:
-        if self.logic.proc is not None:
+        if self.logic.is_process_running():
             self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first.")
             return
 
@@ -434,8 +434,9 @@ class PipelineControlTab(BaseTab):
         cmd = ["bash", "-lc", " ".join(args)]
 
         self.logic.proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env, start_new_session=True)
+        p = self.logic.proc
         
-        threading.Thread(target=self.logic._read_process_output_thread, args=(self._append_log,), daemon=True).start()
+        threading.Thread(target=self.logic._read_process_output_thread, args=(p, self._append_log), daemon=True).start()
         threading.Thread(target=self.logic._tail_events_thread, args=(self._handle_event,), daemon=True).start()
         self.ui.var_phase.set("running cmd")
 
@@ -511,7 +512,7 @@ class PipelineControlTab(BaseTab):
         except queue.Empty:
             pass
         
-        if self.logic.proc is None:
+        if not self.logic.is_process_running():
             if self.ui.btn_start["state"] == "disabled" or self.ui.btn_start_generate["state"] == "disabled": self.ui.set_run_buttons_state(False)
 
         self._maybe_update_stats()
@@ -525,7 +526,7 @@ class PipelineControlTab(BaseTab):
         cpu_pct, ram_info, gpu_pct = self.logic.get_system_stats()
         self.ui.update_stats_bar(cpu_pct, ram_info, gpu_pct)
 
-        proc_running = self.logic.proc is not None
+        proc_running = self.logic.is_process_running()
         if self._prev_proc_running and not proc_running:
             if self.state.dataset_dir: self._start_dataset_size_calc(self.state.dataset_dir)
             self._last_ds_size_ts = now
@@ -1173,14 +1174,14 @@ class PipelineControlTab(BaseTab):
 
     def _delete_dataset(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
-        if self.logic.proc is not None: self.ui.show_messagebox("warning", "Busy", "Stop the running process before deleting datasets."); return
+        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before deleting datasets."); return
         if not self.ui.ask_yes_no("Delete dataset", f"Delete dataset folder?\\n\\n{ds}"): return
         try: shutil.rmtree(ds); self._append_log(f"\n[deleted dataset {ds}]\n")
         except Exception as e: self.ui.show_messagebox("error", "Delete failed", str(e))
         self._refresh_datasets()
 
     def _create_new_dataset(self) -> None:
-        if self.logic.proc is not None: self.ui.show_messagebox("warning", "Busy", "Stop the running process before creating datasets."); return
+        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before creating datasets."); return
 
         initial = self.logic.slugify_name(self.ui.var_name.get())
         if not (new_name := self.ui.ask_string("Create dataset", "New dataset folder name (will be created under outputs/sim_data/runs):", initialvalue=initial)): return
@@ -1204,7 +1205,7 @@ class PipelineControlTab(BaseTab):
 
     def _snapshot_dataset_selected(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
-        if self.logic.proc is not None: self.ui.show_messagebox("warning", "Busy", "Stop the running process before snapshotting datasets."); return
+        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before snapshotting datasets."); return
 
         sim_data, versions_root = self.sim_root / "outputs" / "sim_data", self.sim_root / "outputs" / "sim_data" / "versions"
         versions_root.mkdir(parents=True, exist_ok=True)
@@ -1231,7 +1232,7 @@ class PipelineControlTab(BaseTab):
 
     def _rename_dataset_selected(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
-        if self.logic.proc is not None: self.ui.show_messagebox("warning", "Busy", "Stop the running process before renaming datasets."); return
+        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before renaming datasets."); return
 
         sim_data = (self.sim_root / "outputs" / "sim_data").resolve()
         runs = (sim_data / "runs").resolve()
@@ -1310,7 +1311,7 @@ class PipelineControlTab(BaseTab):
         if len(dss) > 1:
             if not (strat := self._ask_multi_dataset_train_strategy(dss)): return
             if strat in ("merge_keep", "merge_temp"):
-                if self.logic.proc is not None: self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first."); return
+                if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first."); return
                 
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 name = ""
