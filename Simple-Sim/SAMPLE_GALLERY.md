@@ -1,6 +1,6 @@
 # Sample Gallery
 
-Auto-generated reference images for all component profiles (2D and 3D). Last updated: 2026-02-15 14:52:27
+Auto-generated reference images for all component profiles (2D and 3D). Last updated: 2026-02-16 22:45:03
 
 Re-generate by running:
 ```bash
@@ -42,6 +42,15 @@ Re-generate by running:
 | MISSING | ![MISSING](images/samples/qfn32_ic_3d@1/MISSING.png) |
 | OK | ![OK](images/samples/qfn32_ic_3d@1/OK.png) |
 | TOMBSTONE | ![TOMBSTONE](images/samples/qfn32_ic_3d@1/TOMBSTONE.png) |
+
+## soic16_ic_3d@1
+
+| Class | Sample |
+|-------|--------|
+| MISALIGNED | ![MISALIGNED](images/samples/soic16_ic_3d@1/MISALIGNED.png) |
+| MISSING | ![MISSING](images/samples/soic16_ic_3d@1/MISSING.png) |
+| OK | ![OK](images/samples/soic16_ic_3d@1/OK.png) |
+| TOMBSTONE | ![TOMBSTONE](images/samples/soic16_ic_3d@1/TOMBSTONE.png) |
 
 ## sot23_transistor@1
 
