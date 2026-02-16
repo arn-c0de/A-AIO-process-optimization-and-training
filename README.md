@@ -27,6 +27,7 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 > **📌 Current Conclusions 2026-02**
 >
 > ![Comprehensive Final Verdict – Model Arena Report (February 16, 2026)](Simple-Sim/docs/training_logs/Final-Conclusion-Training-Phase1.md)
+> 
 > **Bundled Models** (multi-profile, per-component-type):
 > - Require an additional **object classification model** upstream to identify component type first
 > - Higher per-component accuracy
