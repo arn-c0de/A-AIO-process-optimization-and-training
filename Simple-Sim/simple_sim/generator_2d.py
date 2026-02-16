@@ -84,9 +84,13 @@ def sample_augment_params(augment_config: Dict[str, Any], domain_config: Dict[st
     contrast_min, contrast_max = augment_config['contrast_factor_range']
     contrast_factor = rng.uniform(contrast_min, contrast_max)
 
-    # Global rotation augmentation
+    # Global rotation augmentation:
+    # sample a coarse orientation in 90-degree steps so models see all sides,
+    # then add the configured fine jitter range.
     rot_min, rot_max = augment_config['rotation_deg_range']
-    rotation_deg = rng.uniform(rot_min, rot_max)
+    base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0]))
+    rotation_jitter_deg = float(rng.uniform(rot_min, rot_max))
+    rotation_deg = base_orientation_deg + rotation_jitter_deg
 
     return {
         'blur_sigma': float(blur_sigma),
@@ -182,6 +186,24 @@ def _compute_pad_positions(
             {'x': top_x,   'y': top_y,   'w': pad_height,  'h': pad_width},
             {'x': bot_x,   'y': bot_y,   'w': pad_height,  'h': pad_width},
         ]
+    elif footprint == 'soic_16':
+        # SOIC-16: 8 pads on left + 8 pads on right.
+        comp_w = int(nominal.get('component_width', 0))
+        pad_spacing_y = int(nominal.get('pad_spacing_y', 0))
+        y_span = max(pad_width * 7, pad_spacing_y if pad_spacing_y > 0 else int(comp_w * 0.72))
+        pitch = y_span / 7.0
+        y0 = center_y - (y_span / 2.0)
+
+        left_x = center_x - pad_spacing // 2 - pad_height // 2
+        right_x = center_x + pad_spacing // 2 - pad_height // 2
+
+        pads: List[Dict[str, int]] = []
+        for i in range(8):
+            cy = int(round(y0 + (i * pitch)))
+            y = cy - pad_width // 2
+            pads.append({'x': left_x, 'y': y, 'w': pad_height, 'h': pad_width})
+            pads.append({'x': right_x, 'y': y, 'w': pad_height, 'h': pad_width})
+        return pads
     else:
         # Default: chip_2pad — two symmetric pads (left/right)
         left_x = center_x - pad_spacing // 2 - pad_width // 2

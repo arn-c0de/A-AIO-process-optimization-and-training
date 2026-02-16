@@ -10,10 +10,11 @@ Jobs file format (JSONL), one per line:
   "mm_per_px": 0.01,
   "roi_width_px": 256,
   "roi_height_px": 256,
-  "footprint": "chip_2pad|sot23|qfn_32",
+  "footprint": "chip_2pad|sot23|qfn_32|soic_16",
   "component_height_mm": 0.45,
   "nominal": {...},
   "defect": {...},
+  "augment": {...},     # optional (uses augment.rotation_deg for global orientation)
   "render_3d": {...}   # optional profile defaults (camera/lighting/materials)
 }
 """
@@ -191,6 +192,21 @@ def _pad_positions_mm(footprint: str, nominal: Dict[str, float], *, mm_per_px: f
             (0.0, -pad_spacing_y / 2.0, pad_w, pad_h),
             (0.0, +pad_spacing_y / 2.0, pad_w, pad_h),
         ]
+    if footprint == "soic_16":
+        # SOIC-16: 8 pads on the left and 8 pads on the right side.
+        comp_w = float(nominal.get("component_width", 0.0)) * mm_per_px
+        pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
+        # Keep lead rows compact using pad width as reference.
+        y_span = pad_w * 7.0
+        pitch = y_span / 7.0
+        y0 = -y_span / 2.0
+        pads: List[Tuple[float, float, float, float]] = []
+        for i in range(8):
+            cy = y0 + (i * pitch)
+            # Left/right pads: radial along X, tangential along Y.
+            pads.append((-pad_spacing / 2.0, cy, pad_h, pad_w))
+            pads.append((+pad_spacing / 2.0, cy, pad_h, pad_w))
+        return pads
     # chip_2pad default
     return [
         (-pad_spacing / 2.0, 0.0, pad_w, pad_h),
@@ -275,6 +291,7 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
     footprint = str(job.get("footprint", "chip_2pad"))
     nominal = job["nominal"]
     defect = job["defect"]
+    augment = job.get("augment") or {}
     render_3d = job.get("render_3d") or {}
 
     _configure_cycles(width_px=width_px, height_px=height_px, samples=samples, seed=seed, device=device)
@@ -370,8 +387,8 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
 
     # Component sizing rules:
     # - 2-pad parts need generous overlap so they read as soldered.
-    # - QFN should NOT be stretched to cover the pads; keep nominal body size.
-    if footprint.startswith("qfn"):
+    # - QFN and SOIC should NOT be stretched to cover the pads; keep nominal body size.
+    if footprint.startswith("qfn") or footprint == "soic_16":
         comp_l = comp_l_raw
         comp_w = comp_w_raw
     else:
@@ -418,11 +435,13 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
 
     sub = _mk_plane("substrate", size_xy=(board_w_mm, board_h_mm), loc_xyz=(0.0, 0.0, 0.0))
     _apply_material(sub, m_sub)
+    rotate_group: List[bpy.types.Object] = [sub]
 
     # Pads (thin boxes)
     for i, (cx, cy, pw, ph) in enumerate(pad_positions, 1):
         pad = _mk_box(f"pad_{i}", size_xyz=(pw, ph, pad_th), loc_xyz=(cx, cy, pad_th / 2.0))
         _apply_material(pad, m_cu)
+        rotate_group.append(pad)
 
     # Component body
     comp_type = str(defect.get("type", "OK"))
@@ -455,12 +474,13 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
             solder_size = min(pad_w, pad_h, comp_h) * 0.28
             solder_z = pad_th + solder_size * 0.10
             for i, (cx, cy, _pw, _ph) in enumerate(pad_positions[:2], 1):
-                _add_solder_joint(
+                solder_obj = _add_solder_joint(
                     f"solder_pad{i}",
                     pos_xyz=(cx, cy, solder_z),
                     size=solder_size,
                     material=m_solder,
                 )
+                rotate_group.append(solder_obj)
 
         elif footprint == "sot23":
             # SOT-23 transistor package
@@ -477,10 +497,12 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
 
             # Left side: 2 pins
             for y_pos in [-pad_spacing_y / 2.0, pad_spacing_y / 2.0]:
-                _add_solder_joint(f"solder_L_{y_pos}", pos_xyz=(-pad_spacing_val / 2.0, y_pos, solder_z), size=solder_size, material=m_solder)
+                solder_obj = _add_solder_joint(f"solder_L_{y_pos}", pos_xyz=(-pad_spacing_val / 2.0, y_pos, solder_z), size=solder_size, material=m_solder)
+                rotate_group.append(solder_obj)
 
             # Right side: 1 pin (center)
-            _add_solder_joint("solder_R", pos_xyz=(pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
+            solder_obj = _add_solder_joint("solder_R", pos_xyz=(pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
+            rotate_group.append(solder_obj)
         elif footprint.startswith("qfn"):
             # QFN IC package
             comp_obj = _mk_qfn_package("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
@@ -494,17 +516,36 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
             solder_z = pad_th + solder_size * 0.3
 
             # Left and right pads (along X axis)
-            _add_solder_joint("solder_L", pos_xyz=(-pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
-            _add_solder_joint("solder_R", pos_xyz=(pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
+            solder_obj = _add_solder_joint("solder_L", pos_xyz=(-pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
+            rotate_group.append(solder_obj)
+            solder_obj = _add_solder_joint("solder_R", pos_xyz=(pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
+            rotate_group.append(solder_obj)
 
             # Top and bottom pads (along Y axis)
-            _add_solder_joint("solder_T", pos_xyz=(0.0, -pad_spacing_y / 2.0, solder_z), size=solder_size, material=m_solder)
-            _add_solder_joint("solder_B", pos_xyz=(0.0, pad_spacing_y / 2.0, solder_z), size=solder_size, material=m_solder)
+            solder_obj = _add_solder_joint("solder_T", pos_xyz=(0.0, -pad_spacing_y / 2.0, solder_z), size=solder_size, material=m_solder)
+            rotate_group.append(solder_obj)
+            solder_obj = _add_solder_joint("solder_B", pos_xyz=(0.0, pad_spacing_y / 2.0, solder_z), size=solder_size, material=m_solder)
+            rotate_group.append(solder_obj)
+        elif footprint == "soic_16":
+            # SOIC-16: swap length/width because pads run along Y-axis
+            comp_obj = _mk_qfn_package("component", length=comp_w, width=comp_l, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
+
+            solder_size = min(pad_w, comp_h) * 0.22
+            solder_z = pad_th + solder_size * 0.3
+            for i, (cx, cy, _pw, _ph) in enumerate(pad_positions, 1):
+                solder_obj = _add_solder_joint(
+                    f"solder_{i}",
+                    pos_xyz=(cx, cy, solder_z),
+                    size=solder_size,
+                    material=m_solder,
+                )
+                rotate_group.append(solder_obj)
         else:
             # Fallback: simple box
             comp_obj = _mk_box("component", size_xyz=(comp_l, comp_w, comp_h), loc_xyz=(base_x, base_y, comp_z))
 
         _apply_material(comp_obj, m_body)
+        rotate_group.append(comp_obj)
 
         # Apply misalignment / rotation
         sx = float(defect.get("shift_x", 0.0)) * mm_per_px
@@ -518,6 +559,16 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
         tilt = float(defect.get("tilt_deg", 0.0))
         if tilt != 0.0:
             comp_obj.rotation_euler[0] = math.radians(tilt)
+
+    # Apply global in-plane orientation from augment params (matches 2D global rotation intent).
+    global_rot_deg = float(augment.get("rotation_deg", 0.0))
+    if abs(global_rot_deg) > 1e-6 and rotate_group:
+        bpy.ops.object.empty_add(type="PLAIN_AXES", location=(0.0, 0.0, 0.0))
+        root = bpy.context.active_object
+        root.name = "global_rotation_root"
+        for obj in rotate_group:
+            obj.parent = root
+        root.rotation_euler[2] = math.radians(global_rot_deg)
 
     # Lights - boost power for small-scale scenes
     light_cfg = (render_3d.get("lighting") or {})

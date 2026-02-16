@@ -384,6 +384,7 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
                     "component_height_mm": float(component_height_mm),
                     "nominal": r["nominal"],
                     "defect": r["defect"],
+                    "augment": r["augment"],
                     "render_3d": profile_render_3d,
                 })
             jobs_path = output_dir / "blender_jobs_extend.jsonl"
@@ -469,6 +470,7 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
                         "component_height_mm": float(component_height_mm),
                         "nominal": r["nominal"],
                         "defect": r["defect"],
+                        "augment": r["augment"],
                         "render_3d": profile_render_3d,
                     })
 
