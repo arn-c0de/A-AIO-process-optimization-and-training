@@ -1,4 +1,5 @@
-## Preferred Strategy (Most Cases)
+## Preferred Strategy (Most Cases) (February 16, 2026)
+
 
 **Direct joint / fully mixed training from scratch**  
 → Train **one single model** on **all 2D + 3D profiles together** right from epoch 1.
