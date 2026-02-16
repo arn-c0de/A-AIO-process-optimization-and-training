@@ -156,14 +156,6 @@ class MergeUI:
                      model_meta_cache: Dict, selected_weights: Dict[str, Path], favorites: Dict[str, Any],
                      group_for_path: Callable[[Path], str], available_groups: List[str]) -> None:
         
-        prev_open: set = set()
-        for child in self.tree.get_children():
-            if self.tree.item(child, "open"):
-                prev_open.add(child)
-            for sub in self.tree.get_children(child):
-                if self.tree.item(sub, "open"):
-                    prev_open.add(sub)
-
         self.tree.delete(*self.tree.get_children())
         iid_to_model.clear()
 
@@ -175,10 +167,9 @@ class MergeUI:
             count = len(models)
             sel_marker = " [SELECTED]" if selected else ""
             profile_iid = f"profile::{profile_id}"
-            was_open = profile_iid in prev_open
             self.tree.insert(
                 "", "end", iid=profile_iid, text=f"{profile_id} ({count} weights){sel_marker}",
-                values=("", "", "", "", ""), tags=("profile_header",), open=was_open,
+                values=("", "", "", "", ""), tags=("profile_header",), open=True,
             )
 
             grouped: Dict[str, List[Tuple[str, Path]]] = {g: [] for g in available_groups}
@@ -192,10 +183,9 @@ class MergeUI:
                 if not members: continue
 
                 group_iid = f"group::{profile_id}::{group}"
-                was_group_open = group_iid in prev_open
                 self.tree.insert(
                     profile_iid, "end", iid=group_iid, text=f"{group} ({len(members)})",
-                    values=("", "", "", "", ""), tags=("group_header",), open=was_group_open,
+                    values=("", "", "", "", ""), tags=("group_header",), open=True,
                 )
 
                 for disp, p in members:
