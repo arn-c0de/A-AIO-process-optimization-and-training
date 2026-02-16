@@ -70,6 +70,7 @@ class PipelineLogic:
         return (self.sim_root / p).resolve()
 
     def start_pipeline(self, run_specs: list[dict[str, str]], run_count: int, dataset_mode: str, task: str,
+                       enable_cardinal_rotation_90: bool,
                        event_callback: Callable[[Dict[str, Any]], None], log_callback: Callable[[str], None],
                        ui_update_callback: Callable[[], None], ui_reset_callback: Callable[[], None],
                        status_vars: dict) -> None:
@@ -116,6 +117,7 @@ class PipelineLogic:
 
                     ok = self._run_single_pipeline(
                         out_dir, dataset_mode=dataset_mode, task=task, config_path=cfg, model_path=model_path,
+                        enable_cardinal_rotation_90=enable_cardinal_rotation_90,
                         status_vars=status_vars, log_callback=log_callback, event_callback=event_callback
                     )
                     overall_ok = overall_ok and bool(ok)
@@ -153,6 +155,7 @@ class PipelineLogic:
         threading.Thread(target=_run_pipeline_loop_thread, daemon=True).start()
 
     def _run_single_pipeline(self, out_dir: str, *, dataset_mode: str, task: str, config_path: str, model_path: str,
+                             enable_cardinal_rotation_90: bool,
                              status_vars: dict, log_callback: Callable[[str], None], event_callback: Callable[[Dict[str, Any]], None]) -> bool:
         eventlog = self.event_log_path
         cfg = str(config_path).strip()
@@ -165,6 +168,7 @@ class PipelineLogic:
         env["DATA_DIR"] = out_dir
         env["MODEL_PATH"] = model_path
         env["DATASET_MODE"] = dataset_mode
+        env["CARDINAL_ROTATION_90"] = "1" if enable_cardinal_rotation_90 else "0"
         env["PYTHONUNBUFFERED"] = "1"
 
         if task == "full": cmd = ["bash", "-lc", "./run_pipeline.sh"]
@@ -174,6 +178,7 @@ class PipelineLogic:
                 "--config \"$CONFIG\" "
                 "--out \"$DATA_DIR\" "
                 "$([[ \"${DATASET_MODE}\" == \"extend\" ]] && echo --extend) "
+                "$([[ \"${CARDINAL_ROTATION_90}\" == \"0\" ]] && echo --disable-cardinal-rotation-90) "
                 "&& "
                 "./.venv/bin/python tools/validate_dataset.py --data \"$DATA_DIR\""
             )
@@ -183,6 +188,7 @@ class PipelineLogic:
                 "./.venv/bin/python scripts/generate_profile_dataset.py "
                 "--config \"$CONFIG\" "
                 "--out \"$DATA_DIR\" "
+                "$([[ \"${CARDINAL_ROTATION_90}\" == \"0\" ]] && echo --disable-cardinal-rotation-90) "
                 "&& "
                 "./.venv/bin/python tools/validate_dataset.py --data \"$DATA_DIR\""
             )

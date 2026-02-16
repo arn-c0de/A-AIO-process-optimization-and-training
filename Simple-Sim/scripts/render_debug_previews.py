@@ -115,9 +115,14 @@ def _get_rotation_jitter_range(cfg: Optional[Dict[str, Any]]) -> Tuple[float, fl
     return (lo, hi)
 
 
-def _sample_preview_augment(rng: np.random.Generator, *, rotation_jitter_range: Tuple[float, float]) -> Dict[str, float]:
+def _sample_preview_augment(
+    rng: np.random.Generator,
+    *,
+    rotation_jitter_range: Tuple[float, float],
+    enable_cardinal_rotation_90: bool = True,
+) -> Dict[str, float]:
     """Preview augment: keep image clean but randomize global orientation like dataset generation."""
-    base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0]))
+    base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0])) if enable_cardinal_rotation_90 else 0.0
     rot_min, rot_max = rotation_jitter_range
     rotation_jitter_deg = float(rng.uniform(rot_min, rot_max))
     return {
@@ -517,6 +522,10 @@ def _open_tk_viewer(
         variable_seeds_check = ttk.Checkbutton(controls, text="Variable", variable=variable_seeds_var)
         variable_seeds_check.pack(side="left", padx=(0, 15))
 
+        cardinal_rotation_90_var = tk.BooleanVar(value=bool(render_settings.get("enable_cardinal_rotation_90", True)))
+        cardinal_rotation_90_check = ttk.Checkbutton(controls, text="90° Rotation", variable=cardinal_rotation_90_var)
+        cardinal_rotation_90_check.pack(side="left", padx=(0, 15))
+
         status_label = ttk.Label(controls, text="Ready", foreground="#060")
         status_label.pack(side="left", padx=(10, 10))
 
@@ -647,6 +656,7 @@ def _open_tk_viewer(
                                 run_id=run_id,
                                 backend=backend,
                                 rotation_jitter_range=_get_rotation_jitter_range(cfg),
+                                enable_cardinal_rotation_90=bool(cardinal_rotation_90_var.get()),
                             )
 
                             jobs_path = out_root / "blender_jobs_previews.jsonl"
@@ -693,7 +703,11 @@ def _open_tk_viewer(
                                 hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
                                 seed = int(hh[:12], 16)
                                 rng = np.random.default_rng(seed)
-                                augment = _sample_preview_augment(rng, rotation_jitter_range=rotation_jitter_range)
+                                augment = _sample_preview_augment(
+                                    rng,
+                                    rotation_jitter_range=rotation_jitter_range,
+                                    enable_cardinal_rotation_90=bool(cardinal_rotation_90_var.get()),
+                                )
 
                                 nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
                                 defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
@@ -864,6 +878,7 @@ def _open_tk_viewer(
                                     run_id=run_id,
                                     backend=backend,
                                     rotation_jitter_range=_get_rotation_jitter_range(cfg),
+                                    enable_cardinal_rotation_90=bool(cardinal_rotation_90_var.get()),
                                 )
 
                                 jobs_path = out_root / f"blender_jobs_previews_{_sanitize_dir_name(pid)}.jsonl"
@@ -908,7 +923,11 @@ def _open_tk_viewer(
                                     hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
                                     seed = int(hh[:12], 16)
                                     rng = np.random.default_rng(seed)
-                                    augment = _sample_preview_augment(rng, rotation_jitter_range=rotation_jitter_range)
+                                    augment = _sample_preview_augment(
+                                        rng,
+                                        rotation_jitter_range=rotation_jitter_range,
+                                        enable_cardinal_rotation_90=bool(cardinal_rotation_90_var.get()),
+                                    )
                                     nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
                                     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
                                     img = render_roi(
@@ -1073,6 +1092,7 @@ def _build_preview_jobs(
     run_id: Optional[int] = None,
     backend: str = BACKEND_3D,
     rotation_jitter_range: Tuple[float, float] = (0.0, 0.0),
+    enable_cardinal_rotation_90: bool = True,
 ) -> Tuple[List[Dict[str, Any]], List[PreviewRec]]:
     """Return (jobs, preview_records). preview_records is for index.html.
 
@@ -1107,7 +1127,11 @@ def _build_preview_jobs(
 
         nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
         defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
-        augment = _sample_preview_augment(rng, rotation_jitter_range=rotation_jitter_range)
+        augment = _sample_preview_augment(
+            rng,
+            rotation_jitter_range=rotation_jitter_range,
+            enable_cardinal_rotation_90=enable_cardinal_rotation_90,
+        )
 
         rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
         job = {
@@ -1143,6 +1167,11 @@ def main() -> None:
     parser.add_argument("--config", default="", help="Optional run config YAML to use for ALL selected profiles (must match backend unless --backend=both)")
     parser.add_argument("--seed", type=int, default=2026, help="Base seed for deterministic previews")
     parser.add_argument("--variable-seeds", action="store_true", help="Generate different images on each run (like real pipeline)")
+    parser.add_argument(
+        "--disable-cardinal-rotation-90",
+        action="store_true",
+        help="Disable random 0/90/180/270 base orientation in previews (keep only rotation_deg_range jitter)",
+    )
     parser.add_argument("--states", default="", help="Comma-separated defect states to render (default: from profile.defect_set)")
 
     parser.add_argument("--blender", default="", help="(3D) Override blender executable (else from config)")
@@ -1270,6 +1299,7 @@ def main() -> None:
                         "forced_cfg": forced_cfg,
                         "seed_base": int(args.seed),
                         "states": args.states,
+                        "enable_cardinal_rotation_90": not bool(args.disable_cardinal_rotation_90),
                         "blender": args.blender,
                         "samples": args.samples,
                         "device": args.device,
@@ -1391,7 +1421,11 @@ def main() -> None:
                     hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
                     seed = int(hh[:12], 16)
                     rng = np.random.default_rng(seed)
-                    augment = _sample_preview_augment(rng, rotation_jitter_range=rotation_jitter_range)
+                    augment = _sample_preview_augment(
+                        rng,
+                        rotation_jitter_range=rotation_jitter_range,
+                        enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
+                    )
                     nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
                     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
                     img = render_roi(
@@ -1468,6 +1502,7 @@ def main() -> None:
                     run_id=run_id,
                     backend=backend,
                     rotation_jitter_range=_get_rotation_jitter_range(cfg),
+                    enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
                 )
                 all_jobs.extend(jobs)
                 previews_for_index.extend(previews)
@@ -1481,6 +1516,7 @@ def main() -> None:
         "forced_cfg": forced_cfg,
         "seed_base": int(args.seed),
         "states": args.states,
+        "enable_cardinal_rotation_90": not bool(args.disable_cardinal_rotation_90),
         "blender": args.blender,
         "samples": args.samples,
         "device": args.device,

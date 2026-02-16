@@ -69,7 +69,13 @@ def _assign_splits_for_new_samples(tmp_meta_rows: list[MetaRow], tmp_label_rows:
     return generate_splits(tmp_meta_rows, tmp_label_rows, config, seed)
 
 
-def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = False):
+def generate_dataset(
+    config_path: Path,
+    output_dir: Path,
+    *,
+    extend: bool = False,
+    enable_cardinal_rotation_90: bool = True,
+):
     """Generate complete dataset from configuration.
 
     Args:
@@ -238,7 +244,12 @@ def generate_dataset(config_path: Path, output_dir: Path, *, extend: bool = Fals
                 actual_class = class_name
 
             # Sample augmentation
-            augment = sample_augment_params(config['augment'], domain_config, rng)
+            augment = sample_augment_params(
+                config['augment'],
+                domain_config,
+                rng,
+                enable_cardinal_rotation_90=enable_cardinal_rotation_90,
+            )
 
             image_path = f"images/{sample_index:06d}.png"
 
@@ -589,13 +600,23 @@ def main():
     parser.add_argument('--config', type=str, required=True, help='Path to YAML configuration file')
     parser.add_argument('--out', type=str, required=True, help='Output directory for dataset')
     parser.add_argument('--extend', action='store_true', help='Append new samples to an existing dataset directory instead of overwriting')
+    parser.add_argument(
+        '--disable-cardinal-rotation-90',
+        action='store_true',
+        help='Disable 0/90/180/270 base orientation randomization (keep only augment.rotation_deg_range jitter)',
+    )
 
     args = parser.parse_args()
 
     config_path = Path(args.config)
     output_dir = Path(args.out)
 
-    generate_dataset(config_path, output_dir, extend=bool(args.extend))
+    generate_dataset(
+        config_path,
+        output_dir,
+        extend=bool(args.extend),
+        enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
+    )
 
 
 if __name__ == '__main__':

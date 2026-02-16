@@ -58,7 +58,13 @@ def sample_nominal_geometry(
     return result
 
 
-def sample_augment_params(augment_config: Dict[str, Any], domain_config: Dict[str, Any], rng: np.random.Generator) -> Dict[str, float]:
+def sample_augment_params(
+    augment_config: Dict[str, Any],
+    domain_config: Dict[str, Any],
+    rng: np.random.Generator,
+    *,
+    enable_cardinal_rotation_90: bool = True,
+) -> Dict[str, float]:
     """Sample augmentation parameters.
 
     Args:
@@ -85,10 +91,10 @@ def sample_augment_params(augment_config: Dict[str, Any], domain_config: Dict[st
     contrast_factor = rng.uniform(contrast_min, contrast_max)
 
     # Global rotation augmentation:
-    # sample a coarse orientation in 90-degree steps so models see all sides,
+    # Optionally sample a coarse orientation in 90-degree steps so models see all sides,
     # then add the configured fine jitter range.
     rot_min, rot_max = augment_config['rotation_deg_range']
-    base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0]))
+    base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0])) if enable_cardinal_rotation_90 else 0.0
     rotation_jitter_deg = float(rng.uniform(rot_min, rot_max))
     rotation_deg = base_orientation_deg + rotation_jitter_deg
 
