@@ -41,12 +41,13 @@ component:
     height: 1.0
 
 geometry_ranges:
-  pad_width: [60.0, 80.0]
-  pad_height: [90.0, 110.0]
-  pad_spacing: [130.0, 160.0]       # horizontal (X) distance between pad sides
-  pad_spacing_y: [80.0, 110.0]      # vertical (Y) distance between Pin1 and Pin2
-  component_length: [80.0, 90.0]
-  component_width: [35.0, 45.0]
+  # Keep SOT-23 visual footprint close to other components (e.g. 0603) in 256x256 ROI.
+  pad_width: [24.0, 32.0]
+  pad_height: [30.0, 40.0]
+  pad_spacing: [52.0, 64.0]         # horizontal (X) distance between left/right pads
+  pad_spacing_y: [36.0, 50.0]       # vertical (Y) distance between Pin1 and Pin2
+  component_length: [56.0, 66.0]
+  component_width: [26.0, 34.0]
 
 tolerances:
   ok_shift_px: 4.0

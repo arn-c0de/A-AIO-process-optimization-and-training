@@ -7,7 +7,7 @@ run:
 roi:
   width_px: 256
   height_px: 256
-  mm_per_px: 0.012
+  mm_per_px: 0.01
 
 classes:
   OK: 200
