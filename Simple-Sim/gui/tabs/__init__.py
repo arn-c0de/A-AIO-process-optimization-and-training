@@ -1,12 +1,21 @@
 """GUI tabs for the multi-tab monitor interface."""
 
-from .base_tab import BaseTab
-from .pipeline_tab import PipelineControlTab
-from .analysis_tab import AnalysisTab
-from .weights_tab import WeightsTab
-from .validation_tab import ValidationTab
-from .predictions_tab import PredictionsTab
-from .merge_tab import MergeTab
-from .board_detection_tab import BoardDetectionTab
+from .core.base import BaseTab
+from .predictions.tab import PredictionsTab
+from .validation.tab import ValidationTab
+from .analysis.tab import AnalysisTab
+from .board_detection.tab import BoardDetectionTab
+from .weights.tab import WeightsTab
+from .merge.tab import MergeTab
+from .pipeline.tab import PipelineControlTab
 
-__all__ = ['BaseTab', 'PipelineControlTab', 'AnalysisTab', 'PredictionsTab', 'WeightsTab', 'ValidationTab', 'MergeTab', 'BoardDetectionTab']
+__all__ = [
+    'BaseTab',
+    'PipelineControlTab',
+    'AnalysisTab',
+    'PredictionsTab',
+    'WeightsTab',
+    'ValidationTab',
+    'MergeTab',
+    'BoardDetectionTab',
+]
