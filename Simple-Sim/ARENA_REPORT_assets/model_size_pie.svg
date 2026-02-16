@@ -16,9 +16,9 @@
 <rect x="520.0" y="82.0" width="12" height="12" rx="2" fill="#0969da"/>
 <text x="538.0" y="92.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">DeepMind-small-v2_20260215_212646.bundle  768.34 MB  (40.9%)</text>
 <rect x="520.0" y="104.0" width="12" height="12" rx="2" fill="#1f883d"/>
-<text x="538.0" y="114.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Random-DataCrawler-v2_MultiTrained.pt  128.06 MB  (6.8%)</text>
+<text x="538.0" y="114.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Seqent-DatasetCrawler-v1_MultiTrained.pt  128.06 MB  (6.8%)</text>
 <rect x="520.0" y="126.0" width="12" height="12" rx="2" fill="#bf8700"/>
-<text x="538.0" y="136.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Seqent-DatasetCrawler-v1_MultiTrained.pt  128.06 MB  (6.8%)</text>
+<text x="538.0" y="136.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">RandomDataCrawler-v3.pt  128.06 MB  (6.8%)</text>
 <rect x="520.0" y="148.0" width="12" height="12" rx="2" fill="#cf222e"/>
 <text x="538.0" y="158.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-3D-v1.pt  128.06 MB  (6.8%)</text>
 <rect x="520.0" y="170.0" width="12" height="12" rx="2" fill="#8250df"/>
