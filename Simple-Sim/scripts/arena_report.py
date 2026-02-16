@@ -739,15 +739,25 @@ def _render(
             dataset_to_models.setdefault(r.dataset_name, []).append((model_abs, r))
 
     dataset_sizes_map: Dict[str, int] = {}
+    dataset_samples_map: Dict[str, int] = {}
     for ds_name, rows in dataset_to_models.items():
         best_size = max((int(r.dataset_size_bytes) for _m, r in rows if r.dataset_size_bytes is not None), default=0)
+        best_samples = max((int(r.seen) for _m, r in rows if r.seen is not None), default=0)
         if best_size > 0:
             dataset_sizes_map[ds_name] = best_size
+        if best_samples > 0:
+            dataset_samples_map[ds_name] = best_samples
+
+    dataset_chart_items: List[Tuple[str, int]] = []
+    for ds_name, size_b in sorted(dataset_sizes_map.items(), key=lambda t: -int(t[1])):
+        samples = dataset_samples_map.get(ds_name, 0)
+        label = f"{ds_name} ({samples} samples)" if samples > 0 else ds_name
+        dataset_chart_items.append((label, int(size_b)))
 
     charts = _write_charts(
         sim_root,
         overall,
-        dataset_sizes=sorted(dataset_sizes_map.items(), key=lambda t: -int(t[1])),
+        dataset_sizes=dataset_chart_items,
     )
 
     lines: List[str] = []
@@ -810,9 +820,12 @@ def _render(
             key=lambda t: (-(t[1].accuracy or -1.0), -(t[1].f1 or -1.0), -t[1].last_ts, Path(t[0]).name)
         )
         ds_size_b = max((int(r.dataset_size_bytes) for _m, r in rows if r.dataset_size_bytes is not None), default=0)
+        ds_samples_n = max((int(r.seen) for _m, r in rows if r.seen is not None), default=0)
         ds_size_s = _format_bytes(ds_size_b) if ds_size_b > 0 else "-"
+        ds_samples_s = str(ds_samples_n) if ds_samples_n > 0 else "-"
         lines.append(f"### Dataset: {ds_name}")
         lines.append(f"- Size on disk: {ds_size_s}")
+        lines.append(f"- Total samples: {ds_samples_s}")
         lines.append("")
         lines.append("| Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |")
         lines.append("|---:|---|---:|---:|---|---:|---:|---|")
