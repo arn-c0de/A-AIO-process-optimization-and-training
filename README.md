@@ -2,6 +2,9 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-lightblue)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)
 ![Status](https://img.shields.io/badge/status-Active-success)
+![PyTorch](https://img.shields.io/badge/framework-PyTorch-red)
+![ResNet18](https://img.shields.io/badge/model-ResNet18-blue)
+
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/arn-c0de/A-AIO-process-optimization-and-training)
 
 # A-AIO-process-optimization-and-training
