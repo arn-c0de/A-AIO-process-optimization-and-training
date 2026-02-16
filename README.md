@@ -1,3 +1,9 @@
+![Python Version](https://img.shields.io/badge/python-3.11%2B-blue)
+![Platform](https://img.shields.io/badge/platform-Windows-lightblue)
+![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)
+![Status](https://img.shields.io/badge/status-Active-success)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/arn-c0de/A-AIO-process-optimization-and-training)
+
 # A-AIO-process-optimization-and-training
 
 This is a **testing / prototyping repository** for experimenting with AOI/AI concepts and implementing them as clean, reproducible building blocks.
