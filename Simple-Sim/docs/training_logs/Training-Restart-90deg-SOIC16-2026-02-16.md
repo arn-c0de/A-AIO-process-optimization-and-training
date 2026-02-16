@@ -20,7 +20,7 @@
 
 ## Config
 - **Architecture:** Same as previous baseline run
-- **Dataset:** Same datasets as before, regenerated with random 90° base rotations per image
+- **Dataset:** Same datasets as before, regenerated with random 90° base rotations per image and 1200 - 1600 samples each
 - **Epochs:** TBD
 - **Batch Size:** TBD
 - **Learning Rate:** TBD
@@ -39,5 +39,3 @@
 3. Validate and document the new SOIC16 profile behavior.
 
 ---
-
-*Prepared by: Arn + Codex*
