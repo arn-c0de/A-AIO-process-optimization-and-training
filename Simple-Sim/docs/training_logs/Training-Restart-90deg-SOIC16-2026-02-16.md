@@ -20,7 +20,11 @@
 
 ## Config
 - **Architecture:** Same as previous baseline run
-- **Dataset:** Same datasets as before, regenerated with random 90° base rotations per image and 1200 - 1600 samples each
+- **Dataset:** Same datasets as before, regenerated with 
+ - random 90° base rotations per image
+ - 1200 - 1600 samples each
+ - each Model 1 training Round ~ 14 Epochs
+
 - **Epochs:** TBD
 - **Batch Size:** TBD
 - **Learning Rate:** TBD

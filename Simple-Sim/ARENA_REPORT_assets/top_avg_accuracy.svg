@@ -1,46 +1,38 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="980" height="352" viewBox="0 0 980 352">
-<rect x="0" y="0" width="980" height="352" fill="#0b0f14"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="300" viewBox="0 0 980 300">
+<rect x="0" y="0" width="980" height="300" fill="#0b0f14"/>
 <text x="260" y="34" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="20" font-weight="700" fill="#f0f6fc">Top Avg Accuracy (Top 15)</text>
 <line x1="260" y1="56" x2="890" y2="56" stroke="#30363d" stroke-width="1"/>
 <line x1="260" y1="89" x2="890" y2="89" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="80" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">DeepMindSmall-v2_20260216_171226.bundle</text>
+<text x="250" y="80" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">RandomCrawler-1X_MultiTrained.pt</text>
 <rect x="260" y="70.0" width="630.0" height="14" rx="3" fill="#2f81f7"/>
-<text x="896" y="80" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.9950</text>
+<text x="896" y="80" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.7154</text>
 <line x1="260" y1="115" x2="890" y2="115" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="106" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">RandomDataCrawler-v3.pt</text>
-<rect x="260" y="96.0" width="534.0" height="14" rx="3" fill="#79c0ff"/>
-<text x="896" y="106" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.8434</text>
+<text x="250" y="106" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-2D.pt</text>
+<rect x="260" y="96.0" width="518.8" height="14" rx="3" fill="#79c0ff"/>
+<text x="896" y="106" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.5891</text>
 <line x1="260" y1="141" x2="890" y2="141" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="132" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-v1.pt</text>
-<rect x="260" y="122.0" width="368.8" height="14" rx="3" fill="#2f81f7"/>
-<text x="896" y="132" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.5825</text>
+<text x="250" y="132" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">IC-16-3D.pt</text>
+<rect x="260" y="122.0" width="430.4" height="14" rx="3" fill="#2f81f7"/>
+<text x="896" y="132" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.4888</text>
 <line x1="260" y1="167" x2="890" y2="167" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="158" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-3D-v1.pt</text>
-<rect x="260" y="148.0" width="319.0" height="14" rx="3" fill="#79c0ff"/>
-<text x="896" y="158" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.5039</text>
+<text x="250" y="158" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-3D.pt</text>
+<rect x="260" y="148.0" width="401.7" height="14" rx="3" fill="#79c0ff"/>
+<text x="896" y="158" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.4561</text>
 <line x1="260" y1="193" x2="890" y2="193" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="184" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Seqent-DatasetCrawler-v1_MultiTrained.pt</text>
-<rect x="260" y="174.0" width="268.9" height="14" rx="3" fill="#2f81f7"/>
-<text x="896" y="184" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.4247</text>
+<text x="250" y="184" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-2D.pt</text>
+<rect x="260" y="174.0" width="381.4" height="14" rx="3" fill="#2f81f7"/>
+<text x="896" y="184" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.4330</text>
 <line x1="260" y1="219" x2="890" y2="219" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="210" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN-v1.pt</text>
-<rect x="260" y="200.0" width="267.3" height="14" rx="3" fill="#79c0ff"/>
-<text x="896" y="210" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.4222</text>
+<text x="250" y="210" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN32-2D.pt</text>
+<rect x="260" y="200.0" width="377.0" height="14" rx="3" fill="#79c0ff"/>
+<text x="896" y="210" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.4280</text>
 <line x1="260" y1="245" x2="890" y2="245" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="236" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-v1.pt</text>
-<rect x="260" y="226.0" width="258.1" height="14" rx="3" fill="#2f81f7"/>
-<text x="896" y="236" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.4076</text>
+<text x="250" y="236" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-3D.pt</text>
+<rect x="260" y="226.0" width="354.9" height="14" rx="3" fill="#2f81f7"/>
+<text x="896" y="236" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.4030</text>
 <line x1="260" y1="271" x2="890" y2="271" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="262" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt</text>
-<rect x="260" y="252.0" width="255.8" height="14" rx="3" fill="#79c0ff"/>
-<text x="896" y="262" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.4040</text>
-<line x1="260" y1="297" x2="890" y2="297" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="288" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-3d-v1.pt</text>
-<rect x="260" y="278.0" width="237.8" height="14" rx="3" fill="#2f81f7"/>
-<text x="896" y="288" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.3755</text>
-<line x1="260" y1="323" x2="890" y2="323" stroke="#30363d" stroke-width="1" opacity="0.35"/>
-<text x="250" y="314" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN-3D-v1.pt</text>
-<rect x="260" y="304.0" width="226.2" height="14" rx="3" fill="#79c0ff"/>
-<text x="896" y="314" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.3573</text>
+<text x="250" y="262" text-anchor="end" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN-3D.pt</text>
+<rect x="260" y="252.0" width="349.4" height="14" rx="3" fill="#79c0ff"/>
+<text x="896" y="262" text-anchor="start" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">0.3968</text>
 </svg>
