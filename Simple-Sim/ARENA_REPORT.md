@@ -1,33 +1,41 @@
 # Model Arena Report
-> Last updated: 2026-02-16 17:27:58
+> Last updated: 2026-02-16 17:29:25
 
 ## Quick Navigation
 
 - [Charts](#charts)
 - [Overall Ranking](#overall-ranking)
 - [Per-Dataset Breakdown](#per-dataset-breakdown)
-  - Datasets:
-    - [FullMergedDataset-allProfiles](#dataset-fullmergeddataset-allprofiles)
-    - [QFN-3D-v1](#dataset-qfn-3d-v1)
-    - [QFN-v1](#dataset-qfn-v1)
-    - [REFFERENCE_DATA_Transistor](#dataset-refference-data-transistor)
-    - [Resistor-3d-v1](#dataset-resistor-3d-v1)
-    - [Resistor-v1](#dataset-resistor-v1)
-    - [Transistor-3D-v1](#dataset-transistor-3d-v1)
-    - [Transistor-v1](#dataset-transistor-v1)
+<details>
+<summary>Datasets</summary>
+
+- [FullMergedDataset-allProfiles](#dataset-fullmergeddataset-allprofiles)
+- [QFN-3D-v1](#dataset-qfn-3d-v1)
+- [QFN-v1](#dataset-qfn-v1)
+- [REFFERENCE_DATA_Transistor](#dataset-refference-data-transistor)
+- [Resistor-3d-v1](#dataset-resistor-3d-v1)
+- [Resistor-v1](#dataset-resistor-v1)
+- [Transistor-3D-v1](#dataset-transistor-3d-v1)
+- [Transistor-v1](#dataset-transistor-v1)
+
+</details>
 - [Bundle Details](#bundle-details)
 - [Per-Model Detail Cards](#per-model-detail-cards)
-  - Models:
-    - [DeepMindSmall-v2_20260216_171226.bundle](#model-deepmindsmall-v2-20260216-171226-bundle)
-    - [RandomDataCrawler-v3.pt](#model-randomdatacrawler-v3-pt)
-    - [Transistor-v1.pt](#model-transistor-v1-pt)
-    - [Transistor-3D-v1.pt](#model-transistor-3d-v1-pt)
-    - [Seqent-DatasetCrawler-v1_MultiTrained.pt](#model-seqent-datasetcrawler-v1-multitrained-pt)
-    - [QFN-v1.pt](#model-qfn-v1-pt)
-    - [Resistor-v1.pt](#model-resistor-v1-pt)
-    - [Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt](#model-resistor-ensemble-multi-v1-20260215-121430-ensemble-pt)
-    - [Resistor-3d-v1.pt](#model-resistor-3d-v1-pt)
-    - [QFN-3D-v1.pt](#model-qfn-3d-v1-pt)
+<details>
+<summary>Models</summary>
+
+- [DeepMindSmall-v2_20260216_171226.bundle](#model-deepmindsmall-v2-20260216-171226-bundle)
+- [RandomDataCrawler-v3.pt](#model-randomdatacrawler-v3-pt)
+- [Transistor-v1.pt](#model-transistor-v1-pt)
+- [Transistor-3D-v1.pt](#model-transistor-3d-v1-pt)
+- [Seqent-DatasetCrawler-v1_MultiTrained.pt](#model-seqent-datasetcrawler-v1-multitrained-pt)
+- [QFN-v1.pt](#model-qfn-v1-pt)
+- [Resistor-v1.pt](#model-resistor-v1-pt)
+- [Resistor-ensemble-multi-v1_20260215_121430_ensemble.pt](#model-resistor-ensemble-multi-v1-20260215-121430-ensemble-pt)
+- [Resistor-3d-v1.pt](#model-resistor-3d-v1-pt)
+- [QFN-3D-v1.pt](#model-qfn-3d-v1-pt)
+
+</details>
 - [History](#history)
 
 <a id="charts"></a>

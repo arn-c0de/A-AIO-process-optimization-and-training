@@ -821,16 +821,24 @@ def _render(
     lines.append(f"- [Overall Ranking](#{aid_overall})")
     lines.append(f"- [Per-Dataset Breakdown](#{aid_per_dataset})")
     if dataset_order:
-        lines.append("  - Datasets:")
+        lines.append("<details>")
+        lines.append("<summary>Datasets</summary>")
+        lines.append("")
         for ds_name in dataset_order:
-            lines.append(f"    - [{_md_escape(ds_name)}](#{dataset_anchor[ds_name]})")
+            lines.append(f"- [{_md_escape(ds_name)}](#{dataset_anchor[ds_name]})")
+        lines.append("")
+        lines.append("</details>")
     lines.append(f"- [Bundle Details](#{aid_bundle})")
     lines.append(f"- [Per-Model Detail Cards](#{aid_per_model})")
     if model_order:
-        lines.append("  - Models:")
+        lines.append("<details>")
+        lines.append("<summary>Models</summary>")
+        lines.append("")
         for model_abs in model_order:
             model_name = Path(model_abs).name
-            lines.append(f"    - [{_md_escape(model_name)}](#{model_anchor[model_abs]})")
+            lines.append(f"- [{_md_escape(model_name)}](#{model_anchor[model_abs]})")
+        lines.append("")
+        lines.append("</details>")
     lines.append(f"- [History](#{aid_history})")
     lines.append("")
 
