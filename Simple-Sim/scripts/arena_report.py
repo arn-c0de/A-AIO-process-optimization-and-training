@@ -820,6 +820,11 @@ def _render(
         lines.append(f"- [Charts](#{aid_charts})")
     lines.append(f"- [Overall Ranking](#{aid_overall})")
     lines.append(f"- [Per-Dataset Breakdown](#{aid_per_dataset})")
+    lines.append(f"- [Bundle Details](#{aid_bundle})")
+    lines.append(f"- [Per-Model Detail Cards](#{aid_per_model})")
+    lines.append(f"- [History](#{aid_history})")
+    lines.append("")
+
     if dataset_order:
         lines.append("<details>")
         lines.append("<summary>Datasets</summary>")
@@ -828,8 +833,7 @@ def _render(
             lines.append(f"- [{_md_escape(ds_name)}](#{dataset_anchor[ds_name]})")
         lines.append("")
         lines.append("</details>")
-    lines.append(f"- [Bundle Details](#{aid_bundle})")
-    lines.append(f"- [Per-Model Detail Cards](#{aid_per_model})")
+        lines.append("")
     if model_order:
         lines.append("<details>")
         lines.append("<summary>Models</summary>")
@@ -839,7 +843,7 @@ def _render(
             lines.append(f"- [{_md_escape(model_name)}](#{model_anchor[model_abs]})")
         lines.append("")
         lines.append("</details>")
-    lines.append(f"- [History](#{aid_history})")
+        lines.append("")
     lines.append("")
 
     if missing:
