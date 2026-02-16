@@ -150,6 +150,18 @@ def _resolve_model_path(sim_root: Path, model_path: str) -> Optional[Path]:
         return p
 
 
+def _resolve_dataset_path(sim_root: Path, dataset_path: str) -> Optional[Path]:
+    if not dataset_path:
+        return None
+    p = Path(dataset_path)
+    if not p.is_absolute():
+        p = sim_root / p
+    try:
+        return p.resolve()
+    except Exception:
+        return p
+
+
 def _rel(sim_root: Path, p: Path) -> str:
     try:
         return str(p.resolve().relative_to(sim_root.resolve()))
@@ -196,6 +208,7 @@ class BestByDataset:
     accuracy: Optional[float]
     f1: Optional[float]
     seen: Optional[int]
+    dataset_size_bytes: Optional[int]
     last_ts: float
     report_path: str
     extra: Dict[str, Any]
@@ -526,7 +539,12 @@ def _write_svg_pie_with_legend(
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _write_charts(sim_root: Path, overall: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
+def _write_charts(
+    sim_root: Path,
+    overall: List[Dict[str, Any]],
+    *,
+    dataset_sizes: Optional[List[Tuple[str, int]]] = None,
+) -> List[Tuple[str, str]]:
     """Write SVG charts and return markdown-relative paths to embed."""
     assets_dir = sim_root / "ARENA_REPORT_assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -578,6 +596,19 @@ def _write_charts(sim_root: Path, overall: List[Dict[str, Any]]) -> List[Tuple[s
         _write_svg_pie_with_legend(p, title="Model Storage Breakdown", items=size_items)
         charts.append(("Model Storage Breakdown", "ARENA_REPORT_assets/model_size_pie.svg"))
 
+    # Dataset storage breakdown (pie chart).
+    ds_items = list(dataset_sizes or [])
+    ds_items = [(str(n), int(v)) for (n, v) in ds_items if v is not None and int(v) > 0]
+    ds_items.sort(key=lambda t: -int(t[1]))
+    if len(ds_items) > 9:
+        top = ds_items[:8]
+        other = sum(v for _n, v in ds_items[8:])
+        ds_items = top + [("Other", int(other))]
+    if ds_items:
+        p = assets_dir / "dataset_size_pie.svg"
+        _write_svg_pie_with_legend(p, title="Dataset Storage Breakdown", items=ds_items)
+        charts.append(("Dataset Storage Breakdown", "ARENA_REPORT_assets/dataset_size_pie.svg"))
+
     return charts
 
 
@@ -589,6 +620,7 @@ def _render(
     missing: List[str],
 ) -> str:
     per_model_dataset: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    ds_size_cache: Dict[str, int] = {}
 
     for r in reports:
         mp = str(r.get("model_path") or "").strip()
@@ -634,13 +666,22 @@ def _render(
 
         rr_best = max(rs, key=key)
         last_ts = max(_ts(rr) for rr in rs) if rs else 0.0
+        ds_path_s = str(rr_best.get("dataset_path") or "")
+        ds_size_b: Optional[int] = None
+        ds_abs = _resolve_dataset_path(sim_root, ds_path_s)
+        if ds_abs is not None:
+            ds_key = str(ds_abs)
+            if ds_key not in ds_size_cache:
+                ds_size_cache[ds_key] = _path_size_bytes(ds_abs)
+            ds_size_b = ds_size_cache.get(ds_key)
         best_rows[(model_abs, ds_name)] = BestByDataset(
             dataset_name=ds_name,
-            dataset_path=str(rr_best.get("dataset_path") or ""),
+            dataset_path=ds_path_s,
             split=str(rr_best.get("split") or "test"),
             accuracy=_metric(rr_best, "accuracy"),
             f1=_metric(rr_best, "macro_f1"),
             seen=_intish(rr_best.get("seen_samples") or rr_best.get("test_size")),
+            dataset_size_bytes=ds_size_b,
             last_ts=last_ts,
             report_path=str(rr_best.get("_path") or ""),
             extra={
@@ -697,7 +738,17 @@ def _render(
         for r in rows:
             dataset_to_models.setdefault(r.dataset_name, []).append((model_abs, r))
 
-    charts = _write_charts(sim_root, overall)
+    dataset_sizes_map: Dict[str, int] = {}
+    for ds_name, rows in dataset_to_models.items():
+        best_size = max((int(r.dataset_size_bytes) for _m, r in rows if r.dataset_size_bytes is not None), default=0)
+        if best_size > 0:
+            dataset_sizes_map[ds_name] = best_size
+
+    charts = _write_charts(
+        sim_root,
+        overall,
+        dataset_sizes=sorted(dataset_sizes_map.items(), key=lambda t: -int(t[1])),
+    )
 
     lines: List[str] = []
     lines.append("# Model Arena Report")
@@ -758,14 +809,18 @@ def _render(
         rows.sort(
             key=lambda t: (-(t[1].accuracy or -1.0), -(t[1].f1 or -1.0), -t[1].last_ts, Path(t[0]).name)
         )
+        ds_size_b = max((int(r.dataset_size_bytes) for _m, r in rows if r.dataset_size_bytes is not None), default=0)
+        ds_size_s = _format_bytes(ds_size_b) if ds_size_b > 0 else "-"
         lines.append(f"### Dataset: {ds_name}")
+        lines.append(f"- Size on disk: {ds_size_s}")
         lines.append("")
-        lines.append("| Rank | Model | Accuracy | F1 | Split | Samples | Last Run |")
-        lines.append("|---:|---|---:|---:|---|---:|---|")
+        lines.append("| Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |")
+        lines.append("|---:|---|---:|---:|---|---:|---:|---|")
         for i, (model_abs, r) in enumerate(rows, start=1):
             acc_s = f"{r.accuracy:.4f}" if r.accuracy is not None else "-"
             f1_s = f"{r.f1:.4f}" if r.f1 is not None else "-"
             seen_s = str(r.seen) if r.seen is not None else "-"
+            ds_size_row_s = _format_bytes(int(r.dataset_size_bytes)) if r.dataset_size_bytes is not None else "-"
             lines.append(
                 "| "
                 + " | ".join(
@@ -776,6 +831,7 @@ def _render(
                         f1_s,
                         _md_escape(r.split),
                         seen_s,
+                        _md_escape(ds_size_row_s),
                         _md_escape(_fmt_ts(r.last_ts)),
                     ]
                 )
@@ -809,12 +865,13 @@ def _render(
         rows.sort(key=lambda r: r.dataset_name)
         lines.append(f"### {_md_escape(Path(model_abs).name)} ({it['type']})")
         lines.append("")
-        lines.append("| Dataset | Split | Accuracy | F1 | Critical FN | Samples | Epoch | Val Acc | Speed |")
-        lines.append("|---|---|---:|---:|---|---:|---:|---:|---:|")
+        lines.append("| Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |")
+        lines.append("|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
         for r in rows:
             acc_s = f"{r.accuracy:.4f}" if r.accuracy is not None else "-"
             f1_s = f"{r.f1:.4f}" if r.f1 is not None else "-"
             seen_s = str(r.seen) if r.seen is not None else "-"
+            ds_size_s = _format_bytes(int(r.dataset_size_bytes)) if r.dataset_size_bytes is not None else "-"
 
             epoch = r.extra.get("epoch")
             val_acc = r.extra.get("val_acc")
@@ -844,6 +901,7 @@ def _render(
                         f1_s,
                         _md_escape(str(r.extra.get("critical_fn") or "-")),
                         seen_s,
+                        _md_escape(ds_size_s),
                         _md_escape(epoch_s),
                         val_acc_s,
                         _md_escape(img_s_s),
@@ -852,7 +910,7 @@ def _render(
                 + " |"
             )
         if not rows:
-            lines.append("| - | - | - | - | - | - | - | - | - |")
+            lines.append("| - | - | - | - | - | - | - | - | - | - |")
         lines.append("")
 
     lines.append("## History")
