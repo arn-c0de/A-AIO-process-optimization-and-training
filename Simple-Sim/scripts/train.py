@@ -3,6 +3,7 @@
 
 import argparse
 import sys
+import os
 from pathlib import Path
 import yaml
 import time
@@ -58,8 +59,9 @@ def train_epoch(model, loader, criterion, optimizer, device):
             images, labels = batch
 
         t0 = time.perf_counter()
-        images = images.to(device)
-        labels = labels.to(device)
+        non_blocking = (getattr(device, "type", "") == "cuda")
+        images = images.to(device, non_blocking=non_blocking)
+        labels = labels.to(device, non_blocking=non_blocking)
 
         # Forward pass
         outputs = model(images)
@@ -131,8 +133,9 @@ def validate(model, loader, criterion, device, class_names, critical_classes=Non
                 images, labels = batch
 
             t0 = time.perf_counter()
-            images = images.to(device)
-            labels = labels.to(device)
+            non_blocking = (getattr(device, "type", "") == "cuda")
+            images = images.to(device, non_blocking=non_blocking)
+            labels = labels.to(device, non_blocking=non_blocking)
 
             outputs = model(images)
             loss = criterion(outputs, labels)
@@ -261,7 +264,15 @@ def main():
     lr = train_config['lr']
     weight_decay = train_config['weight_decay']
     pretrained = train_config.get('pretrained', True)
-    num_workers = train_config.get('num_workers', 0)
+    num_workers = int(train_config.get('num_workers', 0) or 0)
+    effective_num_workers = num_workers
+    if device.type == "cuda" and effective_num_workers <= 0:
+        cpu_count = max(1, int(os.cpu_count() or 1))
+        # Auto-tune worker count for GPU runs when config leaves it at 0.
+        effective_num_workers = max(2, min(8, cpu_count - 1 if cpu_count > 1 else 1))
+        print(f"  Num workers: {num_workers} (auto-tuned to {effective_num_workers} for CUDA)")
+    else:
+        print(f"  Num workers: {effective_num_workers}")
 
     # Class names (sorted for consistency)
     class_names = sorted(config['classes'].keys())
@@ -274,7 +285,6 @@ def main():
     print(f"  Batch size: {batch_size}")
     print(f"  Learning rate: {lr}")
     print(f"  Pretrained: {pretrained}")
-    print(f"  Num workers: {num_workers}")
     print(f"  Device: {device}")
     if resume_path:
         print(f"  Resume: {resume_path}")
@@ -297,8 +307,15 @@ def main():
 
     # Create data loaders
     # num_workers>0 can fail in restricted environments (semaphores / shared memory perms).
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    loader_kwargs = {
+        "num_workers": effective_num_workers,
+        "pin_memory": (device.type == "cuda"),
+    }
+    if effective_num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 2
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
     # Create model
     print("\nInitializing ResNet18...")
@@ -311,6 +328,8 @@ def main():
             model = models.resnet18(weights=None)
     else:
         model = models.resnet18(weights=None)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
 
     # Modify final layer for our number of classes
     num_features = model.fc.in_features

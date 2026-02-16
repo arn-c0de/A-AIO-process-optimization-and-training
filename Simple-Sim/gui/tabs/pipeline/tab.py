@@ -95,6 +95,10 @@ class PipelineControlTab(BaseTab):
         return self.state.settings_store
 
     def _append_log(self, text: str) -> None:
+        # Tk widgets must only be touched on the main thread.
+        if threading.current_thread() is not threading.main_thread():
+            self.log_q.put(text)
+            return
         try:
             self.ui.append_log(text)
         except Exception:
@@ -436,6 +440,10 @@ class PipelineControlTab(BaseTab):
         self.ui.var_phase.set("running cmd")
 
     def _handle_event(self, evt: Dict[str, Any]) -> None:
+        # Event tailing runs in a worker thread; marshal to the Tk thread.
+        if threading.current_thread() is not threading.main_thread():
+            self.event_q.put(evt)
+            return
         et = evt.get("event")
         if et == "gen_start":
             self.ui.var_phase.set("phase: generating")

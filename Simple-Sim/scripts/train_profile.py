@@ -7,6 +7,7 @@ Usage:
 
 import argparse
 import sys
+import os
 from pathlib import Path
 import yaml
 import time
@@ -75,7 +76,14 @@ def main():
     lr = train_config['lr']
     weight_decay = train_config['weight_decay']
     pretrained = train_config.get('pretrained', True)
-    num_workers = train_config.get('num_workers', 0)
+    num_workers = int(train_config.get('num_workers', 0) or 0)
+    effective_num_workers = num_workers
+    if device.type == "cuda" and effective_num_workers <= 0:
+        cpu_count = max(1, int(os.cpu_count() or 1))
+        effective_num_workers = max(2, min(8, cpu_count - 1 if cpu_count > 1 else 1))
+        print(f"  Num workers: {num_workers} (auto-tuned to {effective_num_workers} for CUDA)")
+    else:
+        print(f"  Num workers: {effective_num_workers}")
 
     # Create datasets
     print("\nLoading datasets...")
@@ -95,8 +103,15 @@ def main():
         if count == 0:
             raise ValueError(f"Profile '{name}' has 0 training samples. Check dataset generation.")
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    loader_kwargs = {
+        "num_workers": effective_num_workers,
+        "pin_memory": (device.type == "cuda"),
+    }
+    if effective_num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 2
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
     # Create model
     print("\nInitializing ResNet18...")
@@ -108,6 +123,8 @@ def main():
             model = models.resnet18(weights=None)
     else:
         model = models.resnet18(weights=None)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
 
     num_features = model.fc.in_features
     model.fc = nn.Linear(num_features, num_classes)
