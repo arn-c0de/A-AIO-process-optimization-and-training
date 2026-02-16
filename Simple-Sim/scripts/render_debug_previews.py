@@ -214,6 +214,58 @@ def _find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: s
     return hits
 
 
+def _auto_select_profiles_with_missing_previews(
+    discovered: List[Tuple[str, Dict[str, Any], set[str]]],
+    *,
+    profiles_dir: Path,
+    out_root: Path,
+    backend_mode: str,
+    states_override: str,
+) -> List[str]:
+    """Return profile IDs that are new/incomplete in preview output.
+
+    A profile is selected when at least one expected preview image is missing for
+    the requested backend mode and defect states.
+    """
+    selected: List[str] = []
+    for pid, prof, backends in discovered:
+        defect_types = _parse_csv_list(states_override) or list(prof.get("defect_set") or [])
+        if not defect_types:
+            defect_types = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+
+        if backend_mode == "both":
+            backends_to_check = [b for b in [BACKEND_2D, BACKEND_3D] if b in backends]
+        elif backend_mode in backends:
+            backends_to_check = [backend_mode]
+        else:
+            backends_to_check = []
+
+        if not backends_to_check:
+            continue
+
+        profile_dir = _sanitize_dir_name(pid)
+        profile_path = (Path(profiles_dir) / f"{pid}.yaml").resolve()
+        profile_mtime = profile_path.stat().st_mtime if profile_path.exists() else 0.0
+        needs_render = False
+        for backend in backends_to_check:
+            for defect_type in defect_types:
+                img_path = (out_root / f"previews/{profile_dir}/{backend}/{str(defect_type)}.png").resolve()
+                if not img_path.exists():
+                    needs_render = True
+                    break
+                # Re-render when profile changed after the preview image.
+                if profile_mtime > img_path.stat().st_mtime:
+                    needs_render = True
+                    break
+            if needs_render:
+                break
+
+        if needs_render:
+            selected.append(pid)
+
+    return selected
+
+
 def _settings_from_config(cfg: Dict[str, Any]) -> RenderSettings:
     validate_config(cfg)
     roi = cfg["roi"]
@@ -288,6 +340,26 @@ def _write_index_html(out_root: Path, previews: List[PreviewRec]) -> None:
     index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _collect_existing_previews(out_root: Path) -> List[PreviewRec]:
+    """Scan existing preview PNG files and return preview records."""
+    out_root = Path(out_root)
+    recs: List[PreviewRec] = []
+    for img_path in sorted((out_root / "previews").glob("*/*/*.png")):
+        try:
+            rel = img_path.relative_to(out_root)
+        except Exception:
+            continue
+        parts = rel.parts
+        # Expected: previews/<profile_id>/<backend>/<defect>.png
+        if len(parts) != 4 or parts[0] != "previews":
+            continue
+        pid = str(parts[1])
+        backend = str(parts[2])
+        defect = str(Path(parts[3]).stem)
+        recs.append((pid, backend, defect, str(rel.as_posix())))
+    return recs
+
+
 def _open_tk_viewer(
     out_root: Path,
     previews: List[PreviewRec],
@@ -297,6 +369,7 @@ def _open_tk_viewer(
     configs_dir: Optional[Path] = None,
     all_profiles: Optional[List[Tuple[str, Dict[str, Any], set[str]]]] = None,
     render_settings: Optional[Dict[str, Any]] = None,
+    selected_profile_ids: Optional[List[str]] = None,
 ) -> None:
     """Open an interactive Tkinter viewer for rendered previews with rerun capabilities."""
     # Import lazily so the script can still run on systems without Tk installed.
@@ -384,7 +457,17 @@ def _open_tk_viewer(
         profile_ids = _profiles_for_backend(state.backend_filter)
         profile_combo = ttk.Combobox(controls, textvariable=profile_var, values=profile_ids, width=35, state="readonly")
         if profile_ids:
-            profile_combo.current(0)
+            # Pre-select the first selected profile if it was explicitly chosen
+            initial_profile = None
+            if selected_profile_ids and len(selected_profile_ids) > 0:
+                for pid in selected_profile_ids:
+                    if pid in profile_ids:
+                        initial_profile = pid
+                        break
+            if initial_profile:
+                profile_var.set(initial_profile)
+            else:
+                profile_combo.current(0)
         profile_combo.pack(side="left", padx=(0, 15))
 
         def _on_backend_change(_evt=None):
@@ -419,25 +502,18 @@ def _open_tk_viewer(
                 status_label.config(text="No profile selected", foreground="#b00")
                 return
 
-            # Find the profile + supported backends
-            selected_prof: Optional[Dict[str, Any]] = None
-            selected_backends: set[str] = set()
-            for pid, prof, backends in all_profiles:
-                if pid == selected_pid:
-                    selected_prof = prof
-                    selected_backends = set(backends)
-                    break
-
-            if selected_prof is None:
-                status_label.config(text="Profile not found", foreground="#b00")
-                return
-
             state.is_rendering = True
             render_btn.config(state="disabled")
             status_label.config(text="Rendering...", foreground="#c60")
 
             def _render_thread():
                 try:
+                    # Always reload profile from disk so edits are picked up without restart.
+                    selected_prof = load_profile(selected_pid, profiles_dir)
+                    selected_backends = _profile_backends(selected_prof)
+                    if not selected_backends:
+                        raise RuntimeError(f"Profile {selected_pid!r} has no supported backends")
+
                     # Extract render settings from the passed config and UI controls
                     forced_cfg = render_settings.get("forced_cfg")
 
@@ -675,7 +751,11 @@ def _open_tk_viewer(
                     mode = backend_var.get()
                     all_new_previews: List[PreviewRec] = []
 
-                    for idx, (pid, prof, backends) in enumerate(all_profiles, 1):
+                    for idx, (pid, _prof_cached, _backends_cached) in enumerate(all_profiles, 1):
+                        # Always reload profile from disk so edits are picked up without restart.
+                        prof = load_profile(pid, profiles_dir)
+                        backends = _profile_backends(prof)
+
                         # Skip profiles not in the current backend filter.
                         if mode != "both" and mode not in backends:
                             continue
@@ -1037,7 +1117,7 @@ def main() -> None:
     parser.add_argument("--backend", choices=BACKEND_CHOICES, default="auto", help="Render backend: opencv_2d|blender_3d|both|auto")
     parser.add_argument("--profiles", default="", help="Comma-separated profile IDs to render")
     parser.add_argument("--all", action="store_true", help="Render all discovered profiles (within backend selection)")
-    parser.add_argument("--non-interactive", action="store_true", help="Do not prompt; requires --profiles or --all (or --backend != auto)")
+    parser.add_argument("--non-interactive", action="store_true", help="Do not prompt; auto-renders new/incomplete profiles when --profiles/--all is omitted")
 
     parser.add_argument("--config", default="", help="Optional run config YAML to use for ALL selected profiles (must match backend unless --backend=both)")
     parser.add_argument("--seed", type=int, default=2026, help="Base seed for deterministic previews")
@@ -1094,8 +1174,11 @@ def main() -> None:
         print("\nSelect backend mode:\n")
         print(f"  1. 3D ({BACKEND_3D})")
         print(f"  2. 2D ({BACKEND_2D})")
-        print("  3. Both")
+        print("  3. Both (default)")
+        print("\nPress Enter for default, or enter your choice:")
         sel = input("> ").strip().lower()
+        if not sel:
+            return "both"
         if sel in {"1", "3d", BACKEND_3D}:
             return BACKEND_3D
         if sel in {"2", "2d", BACKEND_2D}:
@@ -1125,19 +1208,67 @@ def main() -> None:
     else:
         selected_ids = _parse_csv_list(args.profiles)
 
+    # Auto mode: if nothing explicitly selected, render profiles with missing previews.
+    if not selected_ids:
+        selected_ids = _auto_select_profiles_with_missing_previews(
+            discovered,
+            profiles_dir=profiles_dir,
+            out_root=out_root,
+            backend_mode=backend_mode,
+            states_override=str(args.states or ""),
+        )
+        if selected_ids:
+            print(f"[auto] Rendering {len(selected_ids)} new/incomplete profile(s): {', '.join(selected_ids)}")
+
     if not selected_ids and not args.non_interactive:
         print("\nAvailable profiles:\n")
         for i, (pid, prof, b) in enumerate(discovered, 1):
             desc = str((prof.get("profile") or {}).get("description", "") or "")
             b_str = "/".join(sorted(b))
             print(f"{i:2d}. {pid}  [{b_str}]" + (f"  ({desc})" if desc else ""))
-        print("\nSelect profiles by number (e.g. 1,3-4) or 'all':")
+        print("\nSelect profiles by number (e.g. 1,3-4) or 'all' (default):")
+        print("Press Enter for all profiles, or enter your selection:")
         sel = input("> ").strip()
+        if not sel:
+            sel = "all"
         idxs = _parse_selection(sel, len(discovered))
         selected_ids = [discovered[i][0] for i in idxs]
 
     if not selected_ids:
-        raise SystemExit("No profiles selected. Use interactive mode or pass --profiles/--all.")
+        if args.non_interactive:
+            # Keep index/view in sync even when nothing new needs rendering.
+            existing = _collect_existing_previews(out_root)
+            if existing:
+                _write_index_html(out_root, existing)
+                print(f"[auto] No new/incomplete profiles found. Reusing {len(existing)} existing preview(s).")
+                if args.view == "browser":
+                    import webbrowser
+                    webbrowser.open((out_root / "index.html").resolve().as_uri())
+                elif args.view == "tk":
+                    viewer_render_settings = {
+                        "forced_cfg": forced_cfg,
+                        "seed_base": int(args.seed),
+                        "states": args.states,
+                        "blender": args.blender,
+                        "samples": args.samples,
+                        "device": args.device,
+                        "roi_override": roi_override,
+                        "backend_mode": backend_mode,
+                    }
+                    _open_tk_viewer(
+                        out_root,
+                        existing,
+                        sim_root=sim_root,
+                        profiles_dir=profiles_dir,
+                        configs_dir=configs_dir,
+                        all_profiles=discovered_all,
+                        render_settings=viewer_render_settings,
+                        selected_profile_ids=None,  # Auto mode, no explicit selection
+                    )
+            else:
+                print("[auto] No new/incomplete profiles found and no existing previews available.")
+            return
+        raise SystemExit("No profiles selected and no new/incomplete profiles found.")
 
     pid_to_entry: Dict[str, Tuple[str, Dict[str, Any], set[str]]] = {pid: (pid, prof, b) for pid, prof, b in discovered_all}
     missing = [pid for pid in selected_ids if pid not in pid_to_entry]
@@ -1356,6 +1487,7 @@ def main() -> None:
                 configs_dir=configs_dir,
                 all_profiles=discovered_all,
                 render_settings=viewer_render_settings,
+                selected_profile_ids=selected_ids,
             )
         return
 
@@ -1400,6 +1532,7 @@ def main() -> None:
             configs_dir=configs_dir,
             all_profiles=discovered_all,
             render_settings=viewer_render_settings,
+            selected_profile_ids=selected_ids,
         )
 
 
