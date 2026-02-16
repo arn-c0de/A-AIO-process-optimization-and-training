@@ -432,13 +432,19 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
         # Create realistic 3D component based on footprint type
         comp_z = pad_th + comp_h / 2.0
 
-        # Place the body centered over the pad cluster. For SOT-23 the pad cluster
-        # centroid is not at (0,0) because there are 2 pads on one side and 1 on the other.
+        # Place the body over the pad cluster.
         base_x, base_y = 0.0, 0.0
         if footprint == "sot23":
             if pad_positions:
-                base_x = sum(p[0] for p in pad_positions) / float(len(pad_positions))
-                base_y = sum(p[1] for p in pad_positions) / float(len(pad_positions))
+                # Use bounding-box center instead of centroid.
+                # SOT-23 has 2 pads on the left and 1 on the right; centroid shifts left
+                # and can make the body miss the right pad in OK samples.
+                min_cx = min(p[0] for p in pad_positions)
+                max_cx = max(p[0] for p in pad_positions)
+                min_cy = min(p[1] for p in pad_positions)
+                max_cy = max(p[1] for p in pad_positions)
+                base_x = (min_cx + max_cx) / 2.0
+                base_y = (min_cy + max_cy) / 2.0
 
         if footprint == "chip_2pad":
             # Chip resistor/capacitor with realistic rounded shape
