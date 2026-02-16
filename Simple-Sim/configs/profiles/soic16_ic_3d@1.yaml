@@ -1,0 +1,68 @@
+# Component Profile (Schema v1, 3D)
+
+profile:
+  profile_id: "soic16_ic_3d@1"
+  schema_version: 1
+  supported_render_backends: ["blender_3d"]
+  description: "SOIC-16 3D (8 pads left, 8 pads right), black package"
+  created_at: "2026-02-16T00:00:00Z"
+
+component:
+  type: "soic_ic"
+  footprint: "soic_16"
+  package: "SOIC-16"
+  nominal_dims_mm:
+    length: 9.9
+    width: 3.9
+    height: 1.5
+
+geometry_ranges:
+  pad_width: [55.0, 65.0]
+  pad_height: [140.0, 160.0]
+  pad_spacing: [500.0, 520.0]
+  pad_spacing_y: [125.0, 129.0]
+  component_length: [980.0, 1000.0]
+  component_width: [385.0, 395.0]
+
+tolerances:
+  ok_shift_px: 5.0
+  ok_rotation_deg: 3.0
+  tombstone_tilt_deg: 70.0
+
+defect_set:
+  - "OK"
+  - "MISSING"
+  - "MISALIGNED"
+  - "TOMBSTONE"
+
+render_3d:
+  camera:
+    location_mm: [0.0, -30.0, 38.0]
+    look_at_mm: [0.0, 0.0, 0.0]
+    focal_length_mm: 55.0
+  lighting:
+    key_light:
+      location_mm: [12.0, -14.0, 26.0]
+      power_w: 1150.0
+      size_mm: 30.0
+    fill_light:
+      location_mm: [-12.0, 14.0, 22.0]
+      power_w: 460.0
+      size_mm: 34.0
+  materials:
+    substrate:
+      base_color: [0.05, 0.20, 0.05]
+      roughness: 0.85
+      metallic: 0.0
+    copper:
+      base_color: [0.80, 0.45, 0.10]
+      roughness: 0.25
+      metallic: 1.0
+    body:
+      base_color: [0.00, 0.00, 0.00]
+      roughness: 0.62
+      metallic: 0.0
+    solder:
+      base_color: [0.70, 0.70, 0.72]
+      roughness: 0.18
+      metallic: 1.0

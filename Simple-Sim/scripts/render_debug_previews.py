@@ -102,6 +102,33 @@ def _sample_nominal_geometry(
     return result
 
 
+def _get_rotation_jitter_range(cfg: Optional[Dict[str, Any]]) -> Tuple[float, float]:
+    """Read augment.rotation_deg_range from config, fallback to [0, 0]."""
+    augment_cfg = (cfg or {}).get("augment") or {}
+    rr = augment_cfg.get("rotation_deg_range", [0.0, 0.0])
+    if not isinstance(rr, (list, tuple)) or len(rr) != 2:
+        return (0.0, 0.0)
+    lo = float(rr[0])
+    hi = float(rr[1])
+    if lo > hi:
+        lo, hi = hi, lo
+    return (lo, hi)
+
+
+def _sample_preview_augment(rng: np.random.Generator, *, rotation_jitter_range: Tuple[float, float]) -> Dict[str, float]:
+    """Preview augment: keep image clean but randomize global orientation like dataset generation."""
+    base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0]))
+    rot_min, rot_max = rotation_jitter_range
+    rotation_jitter_deg = float(rng.uniform(rot_min, rot_max))
+    return {
+        "blur_sigma": 0.0,
+        "noise_stddev": 0.0,
+        "brightness_factor": 1.0,
+        "contrast_factor": 1.0,
+        "rotation_deg": float(base_orientation_deg + rotation_jitter_deg),
+    }
+
+
 def _sanitize_dir_name(s: str) -> str:
     # Keep stable and filesystem friendly.
     return re.sub(r"[^a-zA-Z0-9._@+-]+", "_", s).strip("_") or "profile"
@@ -619,6 +646,7 @@ def _open_tk_viewer(
                                 defect_types=defect_types,
                                 run_id=run_id,
                                 backend=backend,
+                                rotation_jitter_range=_get_rotation_jitter_range(cfg),
                             )
 
                             jobs_path = out_root / "blender_jobs_previews.jsonl"
@@ -654,14 +682,7 @@ def _open_tk_viewer(
                             footprint = str((selected_prof.get("component") or {}).get("footprint", "chip_2pad"))
                             geometry_ranges = selected_prof.get("geometry_ranges") or {}
                             tolerances = selected_prof.get("tolerances")
-
-                            augment = {
-                                "blur_sigma": 0.0,
-                                "noise_stddev": 0.0,
-                                "brightness_factor": 1.0,
-                                "contrast_factor": 1.0,
-                                "rotation_deg": 0.0,
-                            }
+                            rotation_jitter_range = _get_rotation_jitter_range(cfg)
 
                             profile_dir = _sanitize_dir_name(selected_pid)
                             for defect_type in defect_types:
@@ -672,6 +693,7 @@ def _open_tk_viewer(
                                 hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
                                 seed = int(hh[:12], 16)
                                 rng = np.random.default_rng(seed)
+                                augment = _sample_preview_augment(rng, rotation_jitter_range=rotation_jitter_range)
 
                                 nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
                                 defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
@@ -841,6 +863,7 @@ def _open_tk_viewer(
                                     defect_types=defect_types,
                                     run_id=run_id,
                                     backend=backend,
+                                    rotation_jitter_range=_get_rotation_jitter_range(cfg),
                                 )
 
                                 jobs_path = out_root / f"blender_jobs_previews_{_sanitize_dir_name(pid)}.jsonl"
@@ -874,13 +897,7 @@ def _open_tk_viewer(
                                 footprint = str((prof.get("component") or {}).get("footprint", "chip_2pad"))
                                 geometry_ranges = prof.get("geometry_ranges") or {}
                                 tolerances = prof.get("tolerances")
-                                augment = {
-                                    "blur_sigma": 0.0,
-                                    "noise_stddev": 0.0,
-                                    "brightness_factor": 1.0,
-                                    "contrast_factor": 1.0,
-                                    "rotation_deg": 0.0,
-                                }
+                                rotation_jitter_range = _get_rotation_jitter_range(cfg)
 
                                 profile_dir = _sanitize_dir_name(pid)
                                 for defect_type in defect_types:
@@ -891,6 +908,7 @@ def _open_tk_viewer(
                                     hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
                                     seed = int(hh[:12], 16)
                                     rng = np.random.default_rng(seed)
+                                    augment = _sample_preview_augment(rng, rotation_jitter_range=rotation_jitter_range)
                                     nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
                                     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
                                     img = render_roi(
@@ -1054,6 +1072,7 @@ def _build_preview_jobs(
     defect_types: Sequence[str],
     run_id: Optional[int] = None,
     backend: str = BACKEND_3D,
+    rotation_jitter_range: Tuple[float, float] = (0.0, 0.0),
 ) -> Tuple[List[Dict[str, Any]], List[PreviewRec]]:
     """Return (jobs, preview_records). preview_records is for index.html.
 
@@ -1088,6 +1107,7 @@ def _build_preview_jobs(
 
         nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
         defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
+        augment = _sample_preview_augment(rng, rotation_jitter_range=rotation_jitter_range)
 
         rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
         job = {
@@ -1100,6 +1120,7 @@ def _build_preview_jobs(
             "component_height_mm": float(component_height_mm),
             "nominal": nominal,
             "defect": defect,
+            "augment": augment,
             "render_3d": render_3d,
         }
         jobs.append(job)
@@ -1359,13 +1380,7 @@ def main() -> None:
                 footprint = str((prof.get("component") or {}).get("footprint", "chip_2pad"))
                 geometry_ranges = prof.get("geometry_ranges") or {}
                 tolerances = prof.get("tolerances")
-                augment = {
-                    "blur_sigma": 0.0,
-                    "noise_stddev": 0.0,
-                    "brightness_factor": 1.0,
-                    "contrast_factor": 1.0,
-                    "rotation_deg": 0.0,
-                }
+                rotation_jitter_range = _get_rotation_jitter_range(cfg)
 
                 out_root.mkdir(parents=True, exist_ok=True)
                 for defect_type in defect_types:
@@ -1376,6 +1391,7 @@ def main() -> None:
                     hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
                     seed = int(hh[:12], 16)
                     rng = np.random.default_rng(seed)
+                    augment = _sample_preview_augment(rng, rotation_jitter_range=rotation_jitter_range)
                     nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
                     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
                     img = render_roi(
@@ -1451,6 +1467,7 @@ def main() -> None:
                     defect_types=defect_types,
                     run_id=run_id,
                     backend=backend,
+                    rotation_jitter_range=_get_rotation_jitter_range(cfg),
                 )
                 all_jobs.extend(jobs)
                 previews_for_index.extend(previews)

@@ -55,6 +55,21 @@ Defines the dataset generation parameters.
 - `render.blender`: Blender executable and render settings
 - `classes`: Number of samples per defect type
 
+### Rotation Strategy (2D + 3D)
+
+Dataset generation now uses:
+- **Coarse orientation**: random `0° / 90° / 180° / 270°`
+- **Fine jitter**: `augment.rotation_deg_range` (e.g. `[-3, 3]`)
+
+So each sample gets:
+
+```
+rotation_deg = cardinal_orientation + jitter
+```
+
+In 2D, this is applied as global image rotation.
+In 3D, the same `augment.rotation_deg` is applied as a global in-plane scene rotation (pads + component + solder).
+
 ---
 
 ## Modifying Pad Positions
