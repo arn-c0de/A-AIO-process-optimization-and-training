@@ -25,6 +25,9 @@ class PredictionsUI:
 
         self._cm_canvas = None
         self._photo: Optional[ImageTk.PhotoImage] = None
+        self._right_paned: Optional[ttk.Panedwindow] = None
+        self._min_logs_pane_px: int = 180
+        self._pane_adjust_scheduled: bool = False
 
         # UI components
         self.var_dataset: tk.StringVar
@@ -195,6 +198,8 @@ class PredictionsUI:
         
         top_right = ttk.Panedwindow(right, orient="vertical")
         top_right.pack(fill="both", expand=True)
+        self._right_paned = top_right
+        top_right.bind("<Configure>", lambda _e: self._schedule_enforce_log_pane_min_height())
 
         metrics_box = ttk.Frame(top_right, padding=5)
         top_right.add(metrics_box, weight=2)
@@ -215,12 +220,14 @@ class PredictionsUI:
         self.canvas = tk.Canvas(viewer_box, bg="gray20", width=520, height=520)
         self.canvas.pack(fill="both", expand=True, pady=(6, 0))
 
-        logs_box = ttk.Frame(top_right, padding=5)
-        top_right.add(logs_box, weight=1)
+        logs_box = ttk.Frame(top_right, padding=5, height=220)
+        logs_box.pack_propagate(False)
+        top_right.add(logs_box, weight=2)
         ttk.Label(logs_box, text="Logs").pack(anchor="w")
         self.txt_logs = tk.Text(logs_box, height=10, wrap="none")
         self.txt_logs.pack(fill="both", expand=True, pady=(6, 0))
         self.txt_logs.configure(state="disabled")
+        self._schedule_enforce_log_pane_min_height()
 
     def set_metrics_text(self, s: str) -> None:
         self.txt_metrics.configure(state="normal")
@@ -241,6 +248,7 @@ class PredictionsUI:
             except Exception:
                 pass
         self._cm_canvas = None
+        self._schedule_enforce_log_pane_min_height()
 
     def render_confusion_matrix(self, cm: List[List[int]], class_names: List[str]) -> None:
         self.clear_confusion_matrix()
@@ -249,8 +257,37 @@ class PredictionsUI:
                 cm_np = np.array(cm, dtype=np.int64)
                 self._cm_canvas = create_confusion_matrix_widget(self._cm_parent, cm_np, class_names)
                 self._cm_canvas.get_tk_widget().pack(fill="both", expand=True)
+                self._schedule_enforce_log_pane_min_height()
         except Exception as e:
             self.append_log(f"[warn] failed to render confusion matrix: {e}\\n")
+
+    def _schedule_enforce_log_pane_min_height(self) -> None:
+        if self._pane_adjust_scheduled:
+            return
+        self._pane_adjust_scheduled = True
+        try:
+            self.frame.after_idle(self._enforce_log_pane_min_height)
+        except Exception:
+            self._pane_adjust_scheduled = False
+
+    def _enforce_log_pane_min_height(self) -> None:
+        self._pane_adjust_scheduled = False
+        if self._right_paned is None:
+            return
+        try:
+            pane_count = len(self._right_paned.panes())
+            if pane_count < 2:
+                return
+            total_h = self._right_paned.winfo_height()
+            if total_h <= 0:
+                return
+            sash_idx = pane_count - 2
+            max_sash_pos = max(0, total_h - self._min_logs_pane_px)
+            cur = self._right_paned.sashpos(sash_idx)
+            if cur > max_sash_pos:
+                self._right_paned.sashpos(sash_idx, max_sash_pos)
+        except Exception:
+            pass
 
     def refresh_tree(self, pred_rows: List[Dict[str, Any]], filter_mode: str) -> None:
         if not hasattr(self, "tree"):
