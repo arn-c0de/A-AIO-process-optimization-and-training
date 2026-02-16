@@ -1,5 +1,5 @@
 # Model Arena Report
-> Last updated: 2026-02-16 17:20:28
+> Last updated: 2026-02-16 17:21:40
 
 ## Charts
 
@@ -38,6 +38,7 @@
 
 ### Dataset: FullMergedDataset-allProfiles
 - Size on disk: 418.31 MB
+- Total samples: 6800
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
@@ -53,6 +54,7 @@
 
 ### Dataset: QFN-3D-v1
 - Size on disk: 616.25 MB
+- Total samples: 800
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
@@ -69,6 +71,7 @@
 
 ### Dataset: QFN-v1
 - Size on disk: 664.60 MB
+- Total samples: 800
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
@@ -85,6 +88,7 @@
 
 ### Dataset: REFFERENCE_DATA_Transistor
 - Size on disk: 83.80 MB
+- Total samples: 800
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
@@ -101,6 +105,7 @@
 
 ### Dataset: Resistor-3d-v1
 - Size on disk: 41.10 MB
+- Total samples: 400
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
@@ -117,6 +122,7 @@
 
 ### Dataset: Resistor-v1
 - Size on disk: 43.84 MB
+- Total samples: 400
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
@@ -133,6 +139,7 @@
 
 ### Dataset: Transistor-3D-v1
 - Size on disk: 83.44 MB
+- Total samples: 800
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
@@ -149,6 +156,7 @@
 
 ### Dataset: Transistor-v1
 - Size on disk: 177.10 MB
+- Total samples: 800
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|

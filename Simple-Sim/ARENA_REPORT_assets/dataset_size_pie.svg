@@ -13,20 +13,20 @@
 <circle cx="250.0" cy="230.0" r="140.0" fill="none" stroke="#30363d" stroke-width="1"/>
 <text x="520.0" y="68.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" font-weight="700" fill="#f0f6fc">Legend (size, %)</text>
 <rect x="520.0" y="82.0" width="12" height="12" rx="2" fill="#0969da"/>
-<text x="538.0" y="92.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN-v1  664.60 MB  (31.2%)</text>
+<text x="538.0" y="92.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN-v1 (800 samples)  664.60 MB  (31.2%)</text>
 <rect x="520.0" y="104.0" width="12" height="12" rx="2" fill="#1f883d"/>
-<text x="538.0" y="114.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN-3D-v1  616.25 MB  (29.0%)</text>
+<text x="538.0" y="114.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">QFN-3D-v1 (800 samples)  616.25 MB  (29.0%)</text>
 <rect x="520.0" y="126.0" width="12" height="12" rx="2" fill="#bf8700"/>
-<text x="538.0" y="136.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">FullMergedDataset-allProfiles  418.31 MB  (19.7%)</text>
+<text x="538.0" y="136.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">FullMergedDataset-allProfiles (6800 samples)  418.31 MB  (19.7%)</text>
 <rect x="520.0" y="148.0" width="12" height="12" rx="2" fill="#cf222e"/>
-<text x="538.0" y="158.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-v1  177.10 MB  (8.3%)</text>
+<text x="538.0" y="158.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-v1 (800 samples)  177.10 MB  (8.3%)</text>
 <rect x="520.0" y="170.0" width="12" height="12" rx="2" fill="#8250df"/>
-<text x="538.0" y="180.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">REFFERENCE_DATA_Transistor  83.80 MB  (3.9%)</text>
+<text x="538.0" y="180.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">REFFERENCE_DATA_Transistor (800 samples)  83.80 MB  (3.9%)</text>
 <rect x="520.0" y="192.0" width="12" height="12" rx="2" fill="#d4a72c"/>
-<text x="538.0" y="202.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-3D-v1  83.44 MB  (3.9%)</text>
+<text x="538.0" y="202.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Transistor-3D-v1 (800 samples)  83.44 MB  (3.9%)</text>
 <rect x="520.0" y="214.0" width="12" height="12" rx="2" fill="#0f766e"/>
-<text x="538.0" y="224.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-v1  43.84 MB  (2.1%)</text>
+<text x="538.0" y="224.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-v1 (400 samples)  43.84 MB  (2.1%)</text>
 <rect x="520.0" y="236.0" width="12" height="12" rx="2" fill="#fb7185"/>
-<text x="538.0" y="246.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-3d-v1  41.10 MB  (1.9%)</text>
+<text x="538.0" y="246.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Resistor-3d-v1 (400 samples)  41.10 MB  (1.9%)</text>
 <text x="520.0" y="398" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Total: 2.08 GB</text>
 </svg>
