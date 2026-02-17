@@ -105,6 +105,7 @@ def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return max(lo, min(hi, x))
 
     return {
+        # Existing filters
         "cardinal_rotation_90": _bool("cardinal_rotation_90", True),
         "enable_rotation": _bool("enable_rotation", True),
         "enable_blur": _bool("enable_blur", True),
@@ -116,12 +117,41 @@ def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, 
         "grain_strength": _f("grain_strength", 1.0),
         "brightness_strength": _f("brightness_strength", 1.0),
         "contrast_strength": _f("contrast_strength", 1.0),
+        # High priority new filters
+        "enable_perspective": _bool("enable_perspective", True),
+        "perspective_strength": _f("perspective_strength", 1.0, 0.0, 2.0),
+        "enable_motion_blur": _bool("enable_motion_blur", True),
+        "motion_blur_strength": _f("motion_blur_strength", 1.0, 0.0, 3.0),
+        "enable_saturation": _bool("enable_saturation", True),
+        "saturation_factor": _f("saturation_factor", 1.0, 0.5, 1.5),
+        "enable_hue_shift": _bool("enable_hue_shift", True),
+        "hue_shift_deg": _f("hue_shift_deg", 0.0, -30.0, 30.0),
+        "enable_shadow": _bool("enable_shadow", True),
+        "shadow_strength": _f("shadow_strength", 0.3, 0.0, 0.8),
+        "enable_reflection": _bool("enable_reflection", True),
+        "reflection_strength": _f("reflection_strength", 0.5, 0.0, 1.0),
+        # Medium/Low priority new filters
+        "enable_vignetting": _bool("enable_vignetting", False),
+        "vignetting_strength": _f("vignetting_strength", 1.0, 0.0, 2.0),
+        "enable_chromatic_aberration": _bool("enable_chromatic_aberration", False),
+        "chromatic_strength": _f("chromatic_strength", 1.0, 0.0, 2.0),
+        "enable_jpeg_compression": _bool("enable_jpeg_compression", False),
+        "jpeg_quality": int(_f("jpeg_quality", 85, 50, 95)),
+        "enable_color_temperature": _bool("enable_color_temperature", False),
+        "color_temperature_kelvin": int(_f("color_temperature_kelvin", 5500, 2500, 7500)),
+        "enable_lens_distortion": _bool("enable_lens_distortion", False),
+        "distortion_k1": _f("distortion_k1", 0.0, -0.3, 0.3),
+        "enable_dust": _bool("enable_dust", False),
+        "dust_density": _f("dust_density", 0.3, 0.0, 1.0),
+        "enable_sharpen": _bool("enable_sharpen", False),
+        "sharpen_strength": _f("sharpen_strength", 1.0, 0.0, 2.0),
     }
 
 
 def _filter_settings_to_profile_store(d: Dict[str, Any]) -> Dict[str, Any]:
     n = _normalize_filter_settings(d)
     return {
+        # Existing filters
         "cardinal_rotation_90": bool(n["cardinal_rotation_90"]),
         "enable_rotation": bool(n["enable_rotation"]),
         "enable_blur": bool(n["enable_blur"]),
@@ -133,6 +163,34 @@ def _filter_settings_to_profile_store(d: Dict[str, Any]) -> Dict[str, Any]:
         "grain_strength": f"{float(n['grain_strength']):.2f}",
         "brightness_strength": f"{float(n['brightness_strength']):.2f}",
         "contrast_strength": f"{float(n['contrast_strength']):.2f}",
+        # High priority new filters
+        "enable_perspective": bool(n["enable_perspective"]),
+        "perspective_strength": f"{float(n['perspective_strength']):.2f}",
+        "enable_motion_blur": bool(n["enable_motion_blur"]),
+        "motion_blur_strength": f"{float(n['motion_blur_strength']):.2f}",
+        "enable_saturation": bool(n["enable_saturation"]),
+        "saturation_factor": f"{float(n['saturation_factor']):.2f}",
+        "enable_hue_shift": bool(n["enable_hue_shift"]),
+        "hue_shift_deg": f"{float(n['hue_shift_deg']):.2f}",
+        "enable_shadow": bool(n["enable_shadow"]),
+        "shadow_strength": f"{float(n['shadow_strength']):.2f}",
+        "enable_reflection": bool(n["enable_reflection"]),
+        "reflection_strength": f"{float(n['reflection_strength']):.2f}",
+        # Medium/Low priority new filters
+        "enable_vignetting": bool(n["enable_vignetting"]),
+        "vignetting_strength": f"{float(n['vignetting_strength']):.2f}",
+        "enable_chromatic_aberration": bool(n["enable_chromatic_aberration"]),
+        "chromatic_strength": f"{float(n['chromatic_strength']):.2f}",
+        "enable_jpeg_compression": bool(n["enable_jpeg_compression"]),
+        "jpeg_quality": str(int(n["jpeg_quality"])),
+        "enable_color_temperature": bool(n["enable_color_temperature"]),
+        "color_temperature_kelvin": str(int(n["color_temperature_kelvin"])),
+        "enable_lens_distortion": bool(n["enable_lens_distortion"]),
+        "distortion_k1": f"{float(n['distortion_k1']):.2f}",
+        "enable_dust": bool(n["enable_dust"]),
+        "dust_density": f"{float(n['dust_density']):.2f}",
+        "enable_sharpen": bool(n["enable_sharpen"]),
+        "sharpen_strength": f"{float(n['sharpen_strength']):.2f}",
     }
 
 
@@ -153,6 +211,7 @@ def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[st
 
     current = _normalize_filter_settings(
         {
+            # Existing filters
             "cardinal_rotation_90": data.get("pipeline.filter.cardinal_rotation_90", True),
             "enable_rotation": data.get("pipeline.filter.enable_rotation", True),
             "enable_blur": data.get("pipeline.filter.enable_blur", True),
@@ -164,6 +223,34 @@ def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[st
             "grain_strength": data.get("pipeline.filter.grain_strength", 1.0),
             "brightness_strength": data.get("pipeline.filter.brightness_strength", 1.0),
             "contrast_strength": data.get("pipeline.filter.contrast_strength", 1.0),
+            # High priority new filters
+            "enable_perspective": data.get("pipeline.filter.enable_perspective", True),
+            "perspective_strength": data.get("pipeline.filter.perspective_strength", 1.0),
+            "enable_motion_blur": data.get("pipeline.filter.enable_motion_blur", True),
+            "motion_blur_strength": data.get("pipeline.filter.motion_blur_strength", 1.0),
+            "enable_saturation": data.get("pipeline.filter.enable_saturation", True),
+            "saturation_factor": data.get("pipeline.filter.saturation_factor", 1.0),
+            "enable_hue_shift": data.get("pipeline.filter.enable_hue_shift", True),
+            "hue_shift_deg": data.get("pipeline.filter.hue_shift_deg", 0.0),
+            "enable_shadow": data.get("pipeline.filter.enable_shadow", True),
+            "shadow_strength": data.get("pipeline.filter.shadow_strength", 0.3),
+            "enable_reflection": data.get("pipeline.filter.enable_reflection", True),
+            "reflection_strength": data.get("pipeline.filter.reflection_strength", 0.5),
+            # Medium/Low priority new filters
+            "enable_vignetting": data.get("pipeline.filter.enable_vignetting", False),
+            "vignetting_strength": data.get("pipeline.filter.vignetting_strength", 1.0),
+            "enable_chromatic_aberration": data.get("pipeline.filter.enable_chromatic_aberration", False),
+            "chromatic_strength": data.get("pipeline.filter.chromatic_strength", 1.0),
+            "enable_jpeg_compression": data.get("pipeline.filter.enable_jpeg_compression", False),
+            "jpeg_quality": data.get("pipeline.filter.jpeg_quality", 85),
+            "enable_color_temperature": data.get("pipeline.filter.enable_color_temperature", False),
+            "color_temperature_kelvin": data.get("pipeline.filter.color_temperature_kelvin", 5500),
+            "enable_lens_distortion": data.get("pipeline.filter.enable_lens_distortion", False),
+            "distortion_k1": data.get("pipeline.filter.distortion_k1", 0.0),
+            "enable_dust": data.get("pipeline.filter.enable_dust", False),
+            "dust_density": data.get("pipeline.filter.dust_density", 0.3),
+            "enable_sharpen": data.get("pipeline.filter.enable_sharpen", False),
+            "sharpen_strength": data.get("pipeline.filter.sharpen_strength", 1.0),
         }
     )
     if not profiles:

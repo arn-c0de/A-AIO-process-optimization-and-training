@@ -57,7 +57,7 @@ class FilterPopup:
         self.top = tk.Toplevel(parent)
         self.top.title("Image Filters")
         self.top.transient(parent.winfo_toplevel())
-        self.top.grab_set()
+        # Don't grab_set() so user can interact with main window
         self.top.resizable(False, False)
 
         # Build UI
@@ -251,7 +251,23 @@ class FilterPopup:
     def _persist_active_profile(self) -> None:
         """Save current filter values to active profile."""
         if self.active_profile in self.profiles:
+            # First sync internal popup vars to external vars
+            self._sync_to_external_vars()
+            # Then get the values and save to profile
             self.profiles[self.active_profile] = self.get_current_values()
+
+    def _sync_to_external_vars(self) -> None:
+        """Sync internal popup variables to external variables via set_current_values."""
+        current_popup_values = {}
+        for key, var in self.filter_vars.items():
+            if isinstance(var, tk.BooleanVar):
+                current_popup_values[key] = var.get()
+            elif isinstance(var, tk.DoubleVar):
+                current_popup_values[key] = f"{var.get():.2f}"
+            elif isinstance(var, tk.StringVar):
+                current_popup_values[key] = var.get()
+        # Push to external variables
+        self.set_current_values(current_popup_values)
 
     def _update_internal_vars(self, data: Dict[str, Any]) -> None:
         """Update internal popup variables from profile data."""
@@ -294,9 +310,10 @@ class FilterPopup:
         if name in self.profiles:
             self.show_messagebox("warning", "Exists", f"Profile '{name}' already exists.")
             return
+        # Sync popup values to external vars first
+        self._sync_to_external_vars()
         self.profiles[name] = self.get_current_values()
         self.active_profile = name
-        self._persist_active_profile()
         self._refresh_profile_list(select_name=name)
 
     def _save_profile(self) -> None:
@@ -305,9 +322,10 @@ class FilterPopup:
         if not name:
             self.show_messagebox("warning", "No selection", "Select a profile first.")
             return
+        # Sync popup values to external vars first
+        self._sync_to_external_vars()
         self.profiles[name] = self.get_current_values()
         self.active_profile = name
-        self._persist_active_profile()
 
     def _rename_profile(self) -> None:
         """Rename selected profile."""
