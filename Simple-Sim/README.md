@@ -19,6 +19,7 @@ See Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.
 - Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md`](docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md)
 - Current research: renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md`](docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md)  
   Filter configuration and implementation reference: [`docs/guides/FILTER_SETTINGS.md`](docs/guides/FILTER_SETTINGS.md)
+- Training logs index: [`docs/training_logs/INDEX.md`](docs/training_logs/INDEX.md)
 
 ## Documentation
 
