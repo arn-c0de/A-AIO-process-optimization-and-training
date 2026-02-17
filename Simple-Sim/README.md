@@ -15,6 +15,11 @@ See [`Sample Gallery`](SAMPLE_GALLERY.md) for auto-generated reference images wi
 
 See Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 
+### Completed Testing Research
+- Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md`](docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md)
+- Current research: renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md`](docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md)  
+  Filter configuration and implementation reference: [`docs/guides/FILTER_SETTINGS.md`](docs/guides/FILTER_SETTINGS.md)
+
 ## Documentation
 
 For comprehensive guides and references, see [`Documentation Index`](docs/INDEX.md). Quick links:
@@ -57,6 +62,34 @@ Defect classes are **component-dependent**; common classes include:
 - **Multi-profile bundles**: Merge per-profile checkpoints into a single `.bundle` directory. A bundle is a *container* of per-profile checkpoints named `<profile_id>.pt`. Training into a bundle adds/updates the checkpoint for the dataset profile. Prediction/eval with a bundle resolves the dataset's `component_profile.profile_id` and loads that checkpoint.
 - **Single-file ensemble models (new)**: Merge multiple profile checkpoints into one `.pt` that contains an ensemble (multiple sub-models). At inference time, logits are averaged across sub-models. This is useful for quick cross-profile scoring without bundle dispatch, but it is not a replacement for true multi-profile training.
 - **Bundle metadata**: Each bundle stores `bundle_details.json` with per-model source info (accuracy, F1, profile hash, source path, size)
+- **Extended image filters (new research track)**: Advanced filter pipeline with GUI/profile persistence and randomized per-filter ranges for robust synthetic-domain variation
+
+## Extended Image Filters (Current Research)
+
+Simple-Sim now supports an extended filter set for synthetic image robustness testing and training restarts.
+
+New filter families include:
+- Perspective transform / skew
+- Motion blur
+- Saturation / hue shift
+- Shadow / occlusion
+- Reflection / glare
+- Vignetting
+- Chromatic aberration
+- JPEG compression artifacts
+- Color temperature variation
+- Lens distortion
+- Dust / dirt particles
+- Sharpen
+
+Each filter supports:
+- Enable/disable toggles
+- Strength/value parameters
+- Optional randomized min/max ranges per filter key in filter profiles
+
+Reference:
+- Filter keys, parameter ranges, priority, and integration notes: [`docs/guides/FILTER_SETTINGS.md`](docs/guides/FILTER_SETTINGS.md)
+- Current restart research log using these filters: [`docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md`](docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md)
 
 ## Quick Start
 
