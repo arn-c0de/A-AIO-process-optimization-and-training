@@ -33,7 +33,7 @@ def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str
             v = int(default)
         return max(lo, min(hi, v))
 
-    return {
+    out = {
         # Core toggles
         "enable": _bool("enable", True),
         "cardinal_rotation_90": _bool("cardinal_rotation_90", True),
@@ -100,117 +100,188 @@ def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str
         "sharpen_strength": _float("sharpen_strength", 1.0, 0.0, 2.0),
     }
 
+    randomizable_float_ranges = {
+        "rotation_strength": (0.0, 4.0),
+        "blur_strength": (0.0, 4.0),
+        "grain_strength": (0.0, 4.0),
+        "brightness_strength": (0.0, 4.0),
+        "contrast_strength": (0.0, 4.0),
+        "perspective_strength": (0.0, 2.0),
+        "motion_blur_strength": (0.0, 3.0),
+        "saturation_factor": (0.5, 1.5),
+        "hue_shift_deg": (-30.0, 30.0),
+        "shadow_strength": (0.0, 0.8),
+        "reflection_strength": (0.0, 1.0),
+        "vignetting_strength": (0.0, 2.0),
+        "chromatic_strength": (0.0, 2.0),
+        "distortion_k1": (-0.3, 0.3),
+        "dust_density": (0.0, 1.0),
+        "sharpen_strength": (0.0, 2.0),
+    }
+    randomizable_int_ranges = {
+        "jpeg_quality": (50, 95),
+        "color_temperature_kelvin": (2500, 7500),
+    }
+
+    for key, (lo, hi) in randomizable_float_ranges.items():
+        base = float(out[key])
+        out[f"{key}_randomize"] = _bool(f"{key}_randomize", False)
+        out[f"{key}_min"] = _float(f"{key}_min", base, lo, hi)
+        out[f"{key}_max"] = _float(f"{key}_max", base, lo, hi)
+
+    for key, (lo, hi) in randomizable_int_ranges.items():
+        base = int(out[key])
+        out[f"{key}_randomize"] = _bool(f"{key}_randomize", False)
+        out[f"{key}_min"] = _int(f"{key}_min", base, lo, hi)
+        out[f"{key}_max"] = _int(f"{key}_max", base, lo, hi)
+
+    return out
+
 
 def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optional[Dict[str, Any]]) -> Dict[str, float]:
     """Apply toggle + strength overrides to sampled augment params."""
     aug = dict(augment or {})
-    filt = normalize_image_filters(image_filters)
-    if not filt.get("enable", True):
+    filt_base = normalize_image_filters(image_filters)
+    if not filt_base.get("enable", True):
         return aug
+    filt = dict(filt_base)
+
+    def _rand_float(base_key: str, default_value: float) -> float:
+        base = float(filt.get(base_key, default_value))
+        if not bool(filt.get(f"{base_key}_randomize", False)):
+            return base
+        lo = float(filt.get(f"{base_key}_min", base))
+        hi = float(filt.get(f"{base_key}_max", base))
+        return float(np.random.uniform(min(lo, hi), max(lo, hi)))
+
+    def _rand_int(base_key: str, default_value: int) -> int:
+        base = int(filt.get(base_key, default_value))
+        if not bool(filt.get(f"{base_key}_randomize", False)):
+            return base
+        lo = int(filt.get(f"{base_key}_min", base))
+        hi = int(filt.get(f"{base_key}_max", base))
+        return int(np.random.randint(min(lo, hi), max(lo, hi) + 1))
+
+    rotation_strength = _rand_float("rotation_strength", 1.0)
+    blur_strength = _rand_float("blur_strength", 1.0)
+    grain_strength = _rand_float("grain_strength", 1.0)
+    brightness_strength = _rand_float("brightness_strength", 1.0)
+    contrast_strength = _rand_float("contrast_strength", 1.0)
+    perspective_strength = _rand_float("perspective_strength", 1.0)
+    motion_blur_strength = _rand_float("motion_blur_strength", 1.0)
+    saturation_factor = _rand_float("saturation_factor", 1.0)
+    hue_shift_deg = _rand_float("hue_shift_deg", 0.0)
+    shadow_strength = _rand_float("shadow_strength", 0.3)
+    reflection_strength = _rand_float("reflection_strength", 0.5)
+    vignetting_strength = _rand_float("vignetting_strength", 1.0)
+    chromatic_strength = _rand_float("chromatic_strength", 1.0)
+    jpeg_quality = _rand_int("jpeg_quality", 85)
+    color_temperature_kelvin = _rand_int("color_temperature_kelvin", 5500)
+    distortion_k1 = _rand_float("distortion_k1", 0.0)
+    dust_density = _rand_float("dust_density", 0.3)
+    sharpen_strength = _rand_float("sharpen_strength", 1.0)
 
     if not filt.get("enable_blur", True):
         aug["blur_sigma"] = 0.0
     else:
-        aug["blur_sigma"] = float(aug.get("blur_sigma", 0.0)) * float(filt.get("blur_strength", 1.0))
+        aug["blur_sigma"] = float(aug.get("blur_sigma", 0.0)) * blur_strength
 
     if not filt.get("enable_grain", True):
         aug["noise_stddev"] = 0.0
     else:
-        aug["noise_stddev"] = float(aug.get("noise_stddev", 0.0)) * float(filt.get("grain_strength", 1.0))
+        aug["noise_stddev"] = float(aug.get("noise_stddev", 0.0)) * grain_strength
 
     if not filt.get("enable_brightness", True):
         aug["brightness_factor"] = 1.0
     else:
         bf = float(aug.get("brightness_factor", 1.0))
-        bs = float(filt.get("brightness_strength", 1.0))
-        aug["brightness_factor"] = 1.0 + ((bf - 1.0) * bs)
+        aug["brightness_factor"] = 1.0 + ((bf - 1.0) * brightness_strength)
 
     if not filt.get("enable_contrast", True):
         aug["contrast_factor"] = 1.0
     else:
         cf = float(aug.get("contrast_factor", 1.0))
-        cs = float(filt.get("contrast_strength", 1.0))
-        aug["contrast_factor"] = 1.0 + ((cf - 1.0) * cs)
+        aug["contrast_factor"] = 1.0 + ((cf - 1.0) * contrast_strength)
 
     if not filt.get("enable_rotation", True):
         aug["rotation_deg"] = 0.0
     else:
-        aug["rotation_deg"] = float(aug.get("rotation_deg", 0.0)) * float(filt.get("rotation_strength", 1.0))
+        aug["rotation_deg"] = float(aug.get("rotation_deg", 0.0)) * rotation_strength
 
     # New filters - apply overrides
     if not filt.get("enable_perspective", True):
         aug["perspective_strength"] = 0.0
     else:
-        aug["perspective_strength"] = float(filt.get("perspective_strength", 1.0))
+        aug["perspective_strength"] = perspective_strength
         aug["perspective_angle_x"] = float(aug.get("perspective_angle_x", 0.0))
         aug["perspective_angle_y"] = float(aug.get("perspective_angle_y", 0.0))
 
     if not filt.get("enable_motion_blur", True):
         aug["motion_blur_strength"] = 0.0
     else:
-        aug["motion_blur_strength"] = float(filt.get("motion_blur_strength", 1.0))
+        aug["motion_blur_strength"] = motion_blur_strength
         aug["motion_blur_angle"] = float(aug.get("motion_blur_angle", 0.0))
 
     if not filt.get("enable_chromatic_aberration", True):
         aug["chromatic_strength"] = 0.0
     else:
-        aug["chromatic_strength"] = float(filt.get("chromatic_strength", 1.0))
+        aug["chromatic_strength"] = chromatic_strength
 
     if not filt.get("enable_vignetting", True):
         aug["vignetting_strength"] = 0.0
     else:
-        aug["vignetting_strength"] = float(filt.get("vignetting_strength", 1.0))
+        aug["vignetting_strength"] = vignetting_strength
 
     if not filt.get("enable_saturation", True):
         aug["saturation_factor"] = 1.0
     else:
         sf = float(aug.get("saturation_factor", 1.0))
-        aug["saturation_factor"] = sf * float(filt.get("saturation_factor", 1.0))
+        aug["saturation_factor"] = sf * saturation_factor
 
     if not filt.get("enable_hue_shift", True):
         aug["hue_shift_deg"] = 0.0
     else:
-        aug["hue_shift_deg"] = float(aug.get("hue_shift_deg", 0.0))
+        aug["hue_shift_deg"] = float(aug.get("hue_shift_deg", 0.0)) + hue_shift_deg
 
     if not filt.get("enable_sharpen", True):
         aug["sharpen_strength"] = 0.0
     else:
-        aug["sharpen_strength"] = float(filt.get("sharpen_strength", 1.0))
+        aug["sharpen_strength"] = sharpen_strength
 
     if not filt.get("enable_lens_distortion", True):
         aug["distortion_k1"] = 0.0
         aug["distortion_k2"] = 0.0
     else:
-        aug["distortion_k1"] = float(filt.get("distortion_k1", 0.0))
+        aug["distortion_k1"] = distortion_k1
         aug["distortion_k2"] = float(filt.get("distortion_k2", 0.0))
 
     if not filt.get("enable_jpeg_compression", True):
         aug["jpeg_quality"] = 100
     else:
-        aug["jpeg_quality"] = int(filt.get("jpeg_quality", 85))
+        aug["jpeg_quality"] = jpeg_quality
 
     if not filt.get("enable_shadow", True):
         aug["shadow_strength"] = 0.0
     else:
-        aug["shadow_strength"] = float(filt.get("shadow_strength", 0.3))
+        aug["shadow_strength"] = shadow_strength
         aug["shadow_size"] = float(filt.get("shadow_size", 0.2))
 
     if not filt.get("enable_reflection", True):
         aug["reflection_strength"] = 0.0
     else:
-        aug["reflection_strength"] = float(filt.get("reflection_strength", 0.5))
+        aug["reflection_strength"] = reflection_strength
         aug["reflection_size"] = float(filt.get("reflection_size", 0.15))
 
     if not filt.get("enable_dust", True):
         aug["dust_density"] = 0.0
     else:
-        aug["dust_density"] = float(filt.get("dust_density", 0.3))
+        aug["dust_density"] = dust_density
         aug["dust_size"] = float(filt.get("dust_size", 2.0))
 
     if not filt.get("enable_color_temperature", True):
         aug["color_temperature_kelvin"] = 5500
     else:
-        aug["color_temperature_kelvin"] = int(filt.get("color_temperature_kelvin", 5500))
+        aug["color_temperature_kelvin"] = color_temperature_kelvin
 
     return aug
 

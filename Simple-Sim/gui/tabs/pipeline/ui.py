@@ -91,7 +91,6 @@ class PipelineUI:
         self.var_filter_grain_strength: tk.StringVar = tk.StringVar(value="1.0")
         self.var_filter_brightness_strength: tk.StringVar = tk.StringVar(value="1.0")
         self.var_filter_contrast_strength: tk.StringVar = tk.StringVar(value="1.0")
-
         # High priority new filters (enabled by default)
         self.var_filter_enable_perspective: tk.BooleanVar = tk.BooleanVar(value=True)
         self.var_filter_perspective_strength: tk.StringVar = tk.StringVar(value="1.0")

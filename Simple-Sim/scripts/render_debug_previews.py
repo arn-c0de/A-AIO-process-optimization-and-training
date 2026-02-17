@@ -150,7 +150,7 @@ def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, 
 
 def _filter_settings_to_profile_store(d: Dict[str, Any]) -> Dict[str, Any]:
     n = _normalize_filter_settings(d)
-    return {
+    out = {
         # Existing filters
         "cardinal_rotation_90": bool(n["cardinal_rotation_90"]),
         "enable_rotation": bool(n["enable_rotation"]),
@@ -192,6 +192,17 @@ def _filter_settings_to_profile_store(d: Dict[str, Any]) -> Dict[str, Any]:
         "enable_sharpen": bool(n["enable_sharpen"]),
         "sharpen_strength": f"{float(n['sharpen_strength']):.2f}",
     }
+    for k, v in d.items():
+        if not isinstance(k, str):
+            continue
+        if k.endswith("_randomize"):
+            out[k] = bool(v) if isinstance(v, bool) else str(v).strip().lower() in {"1", "true", "yes", "on"}
+        elif k.endswith("_min") or k.endswith("_max"):
+            try:
+                out[k] = f"{float(v):.2f}"
+            except Exception:
+                pass
+    return out
 
 
 def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[str, Any]], str, Dict[str, Any]]:
@@ -258,7 +269,13 @@ def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[st
         active = "Default"
     if active not in profiles:
         active = sorted(profiles.keys(), key=lambda s: s.lower())[0]
-    return profiles, active, _normalize_filter_settings(profiles.get(active, {}))
+    active_profile = profiles.get(active, {})
+    current = _normalize_filter_settings(active_profile)
+    if isinstance(active_profile, dict):
+        for k, v in active_profile.items():
+            if isinstance(k, str) and (k.endswith("_randomize") or k.endswith("_min") or k.endswith("_max")):
+                current[k] = v
+    return profiles, active, current
 
 
 def _save_shared_filter_profiles(settings_path: Path, profiles: Dict[str, Dict[str, Any]], active: str, current: Dict[str, Any]) -> None:
@@ -828,6 +845,10 @@ def _open_tk_viewer(
 
         shared_profiles, shared_active_profile, shared_current_filter = _load_shared_filter_profiles(settings_file)
         current_image_filters = dict(shared_current_filter)
+        extra_filter_values: Dict[str, Any] = {
+            k: v for k, v in current_image_filters.items()
+            if isinstance(k, str) and (k.endswith("_randomize") or k.endswith("_min") or k.endswith("_max"))
+        }
 
         filter_cardinal_rotation_90_var = tk.BooleanVar(value=bool(current_image_filters.get("cardinal_rotation_90", True)))
         filter_enable_rotation_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_rotation", True)))
@@ -870,7 +891,7 @@ def _open_tk_viewer(
         filter_sharpen_strength_var = tk.DoubleVar(value=float(current_image_filters.get("sharpen_strength", 1.0)))
 
         def _current_filters_from_vars() -> Dict[str, Any]:
-            return _normalize_filter_settings(
+            base = _normalize_filter_settings(
                 {
                     "cardinal_rotation_90": bool(filter_cardinal_rotation_90_var.get()),
                     "enable_rotation": bool(filter_enable_rotation_var.get()),
@@ -913,9 +934,15 @@ def _open_tk_viewer(
                     "sharpen_strength": float(filter_sharpen_strength_var.get()),
                 }
             )
+            base.update(extra_filter_values)
+            return base
 
         def _apply_filters_to_vars(d: Dict[str, Any]) -> None:
             x = _normalize_filter_settings(d)
+            extra_filter_values.clear()
+            for k, v in d.items():
+                if isinstance(k, str) and (k.endswith("_randomize") or k.endswith("_min") or k.endswith("_max")):
+                    extra_filter_values[k] = v
             filter_cardinal_rotation_90_var.set(bool(x["cardinal_rotation_90"]))
             filter_enable_rotation_var.set(bool(x["enable_rotation"]))
             filter_enable_blur_var.set(bool(x["enable_blur"]))

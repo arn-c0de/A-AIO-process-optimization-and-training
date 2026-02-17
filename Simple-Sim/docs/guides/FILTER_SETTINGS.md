@@ -33,9 +33,14 @@
   - `pipeline.filter.enable_chromatic_aberration`, `pipeline.filter.chromatic_strength`
   - `pipeline.filter.enable_jpeg_compression`, `pipeline.filter.jpeg_quality`
   - `pipeline.filter.enable_color_temperature`, `pipeline.filter.color_temperature_kelvin`
-  - `pipeline.filter.enable_lens_distortion`, `pipeline.filter.distortion_k1`
-  - `pipeline.filter.enable_dust`, `pipeline.filter.dust_density`
-  - `pipeline.filter.enable_sharpen`, `pipeline.filter.sharpen_strength`
+- `pipeline.filter.enable_lens_distortion`, `pipeline.filter.distortion_k1`
+- `pipeline.filter.enable_dust`, `pipeline.filter.dust_density`
+- `pipeline.filter.enable_sharpen`, `pipeline.filter.sharpen_strength`
+- Per-filter random controls (stored in profile JSON):
+  - `<filter_key>_randomize` (bool)
+  - `<filter_key>_min` (float/int)
+  - `<filter_key>_max` (float/int)
+  - Example: `blur_strength_randomize`, `blur_strength_min`, `blur_strength_max`
 
 ## Which filters exist
 - `90° base rotation` (cardinal: 0/90/180/270)
