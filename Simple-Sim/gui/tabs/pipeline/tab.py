@@ -341,6 +341,7 @@ class PipelineControlTab(BaseTab):
                 except Exception:
                     pass
             current_live = {
+                # Existing filters
                 "cardinal_rotation_90": bool(st.get("pipeline.filter.cardinal_rotation_90", True)),
                 "enable_rotation": bool(st.get("pipeline.filter.enable_rotation", True)),
                 "enable_blur": bool(st.get("pipeline.filter.enable_blur", True)),
@@ -352,6 +353,34 @@ class PipelineControlTab(BaseTab):
                 "grain_strength": str(st.get("pipeline.filter.grain_strength", "1.00")),
                 "brightness_strength": str(st.get("pipeline.filter.brightness_strength", "1.00")),
                 "contrast_strength": str(st.get("pipeline.filter.contrast_strength", "1.00")),
+                # High priority new filters
+                "enable_perspective": bool(st.get("pipeline.filter.enable_perspective", True)),
+                "perspective_strength": str(st.get("pipeline.filter.perspective_strength", "1.00")),
+                "enable_motion_blur": bool(st.get("pipeline.filter.enable_motion_blur", True)),
+                "motion_blur_strength": str(st.get("pipeline.filter.motion_blur_strength", "1.00")),
+                "enable_saturation": bool(st.get("pipeline.filter.enable_saturation", True)),
+                "saturation_factor": str(st.get("pipeline.filter.saturation_factor", "1.00")),
+                "enable_hue_shift": bool(st.get("pipeline.filter.enable_hue_shift", True)),
+                "hue_shift_deg": str(st.get("pipeline.filter.hue_shift_deg", "0.00")),
+                "enable_shadow": bool(st.get("pipeline.filter.enable_shadow", True)),
+                "shadow_strength": str(st.get("pipeline.filter.shadow_strength", "0.30")),
+                "enable_reflection": bool(st.get("pipeline.filter.enable_reflection", True)),
+                "reflection_strength": str(st.get("pipeline.filter.reflection_strength", "0.50")),
+                # Medium/Low priority new filters
+                "enable_vignetting": bool(st.get("pipeline.filter.enable_vignetting", False)),
+                "vignetting_strength": str(st.get("pipeline.filter.vignetting_strength", "1.00")),
+                "enable_chromatic_aberration": bool(st.get("pipeline.filter.enable_chromatic_aberration", False)),
+                "chromatic_strength": str(st.get("pipeline.filter.chromatic_strength", "1.00")),
+                "enable_jpeg_compression": bool(st.get("pipeline.filter.enable_jpeg_compression", False)),
+                "jpeg_quality": str(st.get("pipeline.filter.jpeg_quality", "85")),
+                "enable_color_temperature": bool(st.get("pipeline.filter.enable_color_temperature", False)),
+                "color_temperature_kelvin": str(st.get("pipeline.filter.color_temperature_kelvin", "5500")),
+                "enable_lens_distortion": bool(st.get("pipeline.filter.enable_lens_distortion", False)),
+                "distortion_k1": str(st.get("pipeline.filter.distortion_k1", "0.00")),
+                "enable_dust": bool(st.get("pipeline.filter.enable_dust", False)),
+                "dust_density": str(st.get("pipeline.filter.dust_density", "0.30")),
+                "enable_sharpen": bool(st.get("pipeline.filter.enable_sharpen", False)),
+                "sharpen_strength": str(st.get("pipeline.filter.sharpen_strength", "1.00")),
             }
         if not profiles:
             profiles = {"Default": current_live or self._current_filter_settings_dict()}
