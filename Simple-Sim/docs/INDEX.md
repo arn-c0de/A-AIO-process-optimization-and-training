@@ -1,6 +1,7 @@
 # Documentation Index
 
 Simple-Sim comprehensive documentation organized by topic and use case.
+Last updated: February 17, 2026
 
 ## Guides
 

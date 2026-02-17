@@ -1,5 +1,7 @@
 # Arena Reports History Index
 
+Last updated: February 17, 2026
+
 Historical arena reports (older snapshots and milestones):
 
 - Pre-90-degree baseline report (February 2026): [`2026-02-ARENA_REPORT.md`](2026-02-ARENA_REPORT.md)
