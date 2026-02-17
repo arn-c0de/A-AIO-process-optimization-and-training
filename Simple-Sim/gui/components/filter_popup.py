@@ -58,7 +58,8 @@ class FilterPopup:
         self.top.title("Image Filters")
         self.top.transient(parent.winfo_toplevel())
         # Don't grab_set() so user can interact with main window
-        self.top.resizable(False, False)
+        self.top.resizable(True, True)
+        self.top.minsize(980, 620)
 
         # Build UI
         self._build_ui()
@@ -146,6 +147,8 @@ class FilterPopup:
 
         # Add filter rows
         self._add_filter_sections(controls_frame, current)
+        self.var_cardinal.trace_add("write", lambda *_args: self._update_rotation_row_state())
+        self._update_rotation_row_state()
 
         # Bottom buttons
         btns = ttk.Frame(parent)
@@ -157,6 +160,7 @@ class FilterPopup:
 
     def _add_filter_sections(self, parent: ttk.Frame, current: Dict[str, Any]) -> None:
         """Add all filter sections with controls."""
+        self._rotation_row_state_cb: Optional[Callable[[], None]] = None
 
         def add_section(title: str) -> None:
             ttk.Label(parent, text=title, font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(6, 3))
@@ -173,6 +177,10 @@ class FilterPopup:
         ) -> None:
             row = ttk.Frame(parent)
             row.pack(fill="x", pady=(3, 0))
+            row_main = ttk.Frame(row)
+            row_main.pack(fill="x")
+            row_rand = ttk.Frame(row)
+            row_rand.pack(fill="x", pady=(2, 0))
 
             var_enable = enable_var if enable_var is not None else tk.BooleanVar(value=current.get(key_enable, default_enable))
             var_strength = tk.DoubleVar(
@@ -182,13 +190,14 @@ class FilterPopup:
                 )
             )
 
-            ttk.Checkbutton(row, text=label, variable=var_enable).pack(side="left")
+            chk_enable = ttk.Checkbutton(row_main, text=label, variable=var_enable)
+            chk_enable.pack(side="left")
 
-            scale = ttk.Scale(row, from_=min_v, to=max_v, orient="horizontal",
-                            variable=var_strength, length=210)
+            scale = ttk.Scale(row_main, from_=min_v, to=max_v, orient="horizontal",
+                            variable=var_strength, length=170)
             scale.pack(side="left", padx=(10, 6))
 
-            lbl = ttk.Label(row, width=5, anchor="e")
+            lbl = ttk.Label(row_main, width=5, anchor="e")
             lbl.pack(side="left")
 
             def update_label(*args):
@@ -212,15 +221,32 @@ class FilterPopup:
                 value=self.float_or_default(str(current.get(key_max, base_val)), default=base_val)
             )
 
-            chk_random = ttk.Checkbutton(row, text="Rnd", variable=var_randomize)
-            chk_random.pack(side="left", padx=(8, 4))
-            ent_min = ttk.Entry(row, textvariable=var_min, width=6)
-            ent_min.pack(side="left")
-            ttk.Label(row, text="-").pack(side="left", padx=(2, 2))
-            ent_max = ttk.Entry(row, textvariable=var_max, width=6)
-            ent_max.pack(side="left")
+            ttk.Label(row_rand, text="Random").pack(side="left")
+            chk_random = ttk.Checkbutton(row_rand, text="Rnd", variable=var_randomize)
+            chk_random.pack(side="left", padx=(6, 6))
+            ttk.Label(row_rand, text="Min").pack(side="left")
+            ent_min = ttk.Entry(row_rand, textvariable=var_min, width=7)
+            ent_min.pack(side="left", padx=(4, 8))
+            ttk.Label(row_rand, text="Max").pack(side="left")
+            ent_max = ttk.Entry(row_rand, textvariable=var_max, width=7)
+            ent_max.pack(side="left", padx=(4, 0))
+
+            is_rotation_row = (key_strength == "rotation_strength")
 
             def _update_random_mode(*_args: Any) -> None:
+                cardinal_only = bool(self.var_cardinal.get()) if is_rotation_row else False
+                if cardinal_only:
+                    var_enable.set(False)
+                    if bool(var_randomize.get()):
+                        var_randomize.set(False)
+                    chk_enable.state(["disabled"])
+                    chk_random.state(["disabled"])
+                    scale.state(["disabled"])
+                    ent_min.state(["disabled"])
+                    ent_max.state(["disabled"])
+                    return
+                chk_enable.state(["!disabled"])
+                chk_random.state(["!disabled"])
                 if bool(var_randomize.get()):
                     scale.state(["disabled"])
                     ent_min.state(["!disabled"])
@@ -232,6 +258,8 @@ class FilterPopup:
 
             var_randomize.trace_add("write", _update_random_mode)
             _update_random_mode()
+            if is_rotation_row:
+                self._rotation_row_state_cb = _update_random_mode
 
             self.filter_vars[key_enable] = var_enable
             self.filter_vars[key_strength] = var_strength
@@ -248,13 +276,13 @@ class FilterPopup:
         add_filter_row("Rotation", "enable_rotation", "rotation_strength", True, 1.0, max_v=2.0, enable_var=self.var_rotation)
 
         # High priority
-        add_section("━━━ High Priority (enabled) ━━━")
-        add_filter_row("Perspective Transform", "enable_perspective", "perspective_strength", True, 1.0, max_v=2.0)
+        add_section("━━━ High Priority ━━━")
+        add_filter_row("Perspective Transform", "enable_perspective", "perspective_strength", False, 1.0, max_v=2.0)
         add_filter_row("Motion Blur", "enable_motion_blur", "motion_blur_strength", True, 1.0, max_v=3.0)
         add_filter_row("Saturation", "enable_saturation", "saturation_factor", True, 1.0, min_v=0.5, max_v=1.5)
         add_filter_row("Hue Shift", "enable_hue_shift", "hue_shift_deg", True, 0.0, min_v=-30.0, max_v=30.0)
         add_filter_row("Shadow", "enable_shadow", "shadow_strength", True, 0.3, min_v=0.0, max_v=0.8)
-        add_filter_row("Reflection/Glare", "enable_reflection", "reflection_strength", True, 0.5, min_v=0.0, max_v=1.0)
+        add_filter_row("Reflection/Glare", "enable_reflection", "reflection_strength", False, 0.5, min_v=0.0, max_v=1.0)
 
         # Medium priority
         add_section("━━━ Medium Priority (disabled) ━━━")
@@ -451,7 +479,7 @@ class FilterPopup:
             "brightness_strength": "1.00",
             "contrast_strength": "1.00",
             # High priority (enabled)
-            "enable_perspective": True,
+            "enable_perspective": False,
             "perspective_strength": "1.00",
             "enable_motion_blur": True,
             "motion_blur_strength": "1.00",
@@ -461,7 +489,7 @@ class FilterPopup:
             "hue_shift_deg": "0.00",
             "enable_shadow": True,
             "shadow_strength": "0.30",
-            "enable_reflection": True,
+            "enable_reflection": False,
             "reflection_strength": "0.50",
             # Medium/Low priority (disabled)
             "enable_vignetting": False,
@@ -504,6 +532,11 @@ class FilterPopup:
             defaults[f"{key}_min"] = value
             defaults[f"{key}_max"] = value
         return defaults
+
+    def _update_rotation_row_state(self) -> None:
+        """Enforce 90-degree-only mode when cardinal rotation is enabled."""
+        if self._rotation_row_state_cb is not None:
+            self._rotation_row_state_cb()
 
     def _handle_close(self) -> None:
         """Handle popup close."""

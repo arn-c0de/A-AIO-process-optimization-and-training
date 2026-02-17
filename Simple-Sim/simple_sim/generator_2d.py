@@ -51,7 +51,7 @@ def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str
         "contrast_strength": _float("contrast_strength", 1.0, 0.0, 4.0),
 
         # High priority new filters (active by default)
-        "enable_perspective": _bool("enable_perspective", True),
+        "enable_perspective": _bool("enable_perspective", False),
         "perspective_strength": _float("perspective_strength", 1.0, 0.0, 2.0),
         "perspective_angle_x": _float("perspective_angle_x", 0.0, -15.0, 15.0),
         "perspective_angle_y": _float("perspective_angle_y", 0.0, -15.0, 15.0),
@@ -70,7 +70,7 @@ def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str
         "shadow_strength": _float("shadow_strength", 0.3, 0.0, 0.8),
         "shadow_size": _float("shadow_size", 0.2, 0.1, 0.5),
 
-        "enable_reflection": _bool("enable_reflection", True),
+        "enable_reflection": _bool("enable_reflection", False),
         "reflection_strength": _float("reflection_strength", 0.5, 0.0, 1.0),
         "reflection_size": _float("reflection_size", 0.15, 0.05, 0.3),
 
