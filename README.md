@@ -22,7 +22,7 @@ A sandbox environment for pre-training and specializing models on synthetic data
 ---
 
 ## Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
->  Old Arena stats before 90° implementation : [`Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md`](Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md)
+>  Older Arena stats history index: [`Simple-Sim/docs/arena-reports-historie/INDEX.md`](Simple-Sim/docs/arena-reports-historie/INDEX.md)
 
 ![Top Avg Accuracy](Simple-Sim/ARENA_REPORT_assets/top_avg_accuracy.svg)
 
