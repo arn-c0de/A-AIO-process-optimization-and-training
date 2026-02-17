@@ -92,7 +92,7 @@ class PipelineUI:
         self.var_filter_brightness_strength: tk.StringVar = tk.StringVar(value="1.0")
         self.var_filter_contrast_strength: tk.StringVar = tk.StringVar(value="1.0")
         # High priority new filters (enabled by default)
-        self.var_filter_enable_perspective: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_enable_perspective: tk.BooleanVar = tk.BooleanVar(value=False)
         self.var_filter_perspective_strength: tk.StringVar = tk.StringVar(value="1.0")
         self.var_filter_perspective_angle_x: tk.StringVar = tk.StringVar(value="0.0")
         self.var_filter_perspective_angle_y: tk.StringVar = tk.StringVar(value="0.0")
@@ -111,7 +111,7 @@ class PipelineUI:
         self.var_filter_shadow_strength: tk.StringVar = tk.StringVar(value="0.3")
         self.var_filter_shadow_size: tk.StringVar = tk.StringVar(value="0.2")
 
-        self.var_filter_enable_reflection: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_enable_reflection: tk.BooleanVar = tk.BooleanVar(value=False)
         self.var_filter_reflection_strength: tk.StringVar = tk.StringVar(value="0.5")
         self.var_filter_reflection_size: tk.StringVar = tk.StringVar(value="0.15")
 

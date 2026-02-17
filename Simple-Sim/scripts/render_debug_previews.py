@@ -118,7 +118,7 @@ def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, 
         "brightness_strength": _f("brightness_strength", 1.0),
         "contrast_strength": _f("contrast_strength", 1.0),
         # High priority new filters
-        "enable_perspective": _bool("enable_perspective", True),
+        "enable_perspective": _bool("enable_perspective", False),
         "perspective_strength": _f("perspective_strength", 1.0, 0.0, 2.0),
         "enable_motion_blur": _bool("enable_motion_blur", True),
         "motion_blur_strength": _f("motion_blur_strength", 1.0, 0.0, 3.0),
@@ -128,7 +128,7 @@ def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, 
         "hue_shift_deg": _f("hue_shift_deg", 0.0, -30.0, 30.0),
         "enable_shadow": _bool("enable_shadow", True),
         "shadow_strength": _f("shadow_strength", 0.3, 0.0, 0.8),
-        "enable_reflection": _bool("enable_reflection", True),
+        "enable_reflection": _bool("enable_reflection", False),
         "reflection_strength": _f("reflection_strength", 0.5, 0.0, 1.0),
         # Medium/Low priority new filters
         "enable_vignetting": _bool("enable_vignetting", False),
@@ -235,7 +235,7 @@ def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[st
             "brightness_strength": data.get("pipeline.filter.brightness_strength", 1.0),
             "contrast_strength": data.get("pipeline.filter.contrast_strength", 1.0),
             # High priority new filters
-            "enable_perspective": data.get("pipeline.filter.enable_perspective", True),
+            "enable_perspective": data.get("pipeline.filter.enable_perspective", False),
             "perspective_strength": data.get("pipeline.filter.perspective_strength", 1.0),
             "enable_motion_blur": data.get("pipeline.filter.enable_motion_blur", True),
             "motion_blur_strength": data.get("pipeline.filter.motion_blur_strength", 1.0),
@@ -245,7 +245,7 @@ def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[st
             "hue_shift_deg": data.get("pipeline.filter.hue_shift_deg", 0.0),
             "enable_shadow": data.get("pipeline.filter.enable_shadow", True),
             "shadow_strength": data.get("pipeline.filter.shadow_strength", 0.3),
-            "enable_reflection": data.get("pipeline.filter.enable_reflection", True),
+            "enable_reflection": data.get("pipeline.filter.enable_reflection", False),
             "reflection_strength": data.get("pipeline.filter.reflection_strength", 0.5),
             # Medium/Low priority new filters
             "enable_vignetting": data.get("pipeline.filter.enable_vignetting", False),
@@ -934,7 +934,7 @@ def _open_tk_viewer(
         filter_brightness_strength_var = tk.DoubleVar(value=float(current_image_filters.get("brightness_strength", 1.0)))
         filter_contrast_strength_var = tk.DoubleVar(value=float(current_image_filters.get("contrast_strength", 1.0)))
         # High priority new filters
-        filter_enable_perspective_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_perspective", True)))
+        filter_enable_perspective_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_perspective", False)))
         filter_perspective_strength_var = tk.DoubleVar(value=float(current_image_filters.get("perspective_strength", 1.0)))
         filter_enable_motion_blur_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_motion_blur", True)))
         filter_motion_blur_strength_var = tk.DoubleVar(value=float(current_image_filters.get("motion_blur_strength", 1.0)))
@@ -944,7 +944,7 @@ def _open_tk_viewer(
         filter_hue_shift_deg_var = tk.DoubleVar(value=float(current_image_filters.get("hue_shift_deg", 0.0)))
         filter_enable_shadow_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_shadow", True)))
         filter_shadow_strength_var = tk.DoubleVar(value=float(current_image_filters.get("shadow_strength", 0.3)))
-        filter_enable_reflection_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_reflection", True)))
+        filter_enable_reflection_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_reflection", False)))
         filter_reflection_strength_var = tk.DoubleVar(value=float(current_image_filters.get("reflection_strength", 0.5)))
         # Medium/Low priority new filters
         filter_enable_vignetting_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_vignetting", False)))

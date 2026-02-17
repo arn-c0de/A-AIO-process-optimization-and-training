@@ -389,7 +389,7 @@ class PipelineControlTab(BaseTab):
         self.ui.var_filter_brightness_strength.set(str(data.get("brightness_strength", "1.00")))
         self.ui.var_filter_contrast_strength.set(str(data.get("contrast_strength", "1.00")))
         # High priority new filters (enabled by default)
-        self.ui.var_filter_enable_perspective.set(bool(data.get("enable_perspective", True)))
+        self.ui.var_filter_enable_perspective.set(bool(data.get("enable_perspective", False)))
         self.ui.var_filter_perspective_strength.set(str(data.get("perspective_strength", "1.00")))
         self.ui.var_filter_enable_motion_blur.set(bool(data.get("enable_motion_blur", True)))
         self.ui.var_filter_motion_blur_strength.set(str(data.get("motion_blur_strength", "1.00")))
@@ -399,7 +399,7 @@ class PipelineControlTab(BaseTab):
         self.ui.var_filter_hue_shift_deg.set(str(data.get("hue_shift_deg", "0.00")))
         self.ui.var_filter_enable_shadow.set(bool(data.get("enable_shadow", True)))
         self.ui.var_filter_shadow_strength.set(str(data.get("shadow_strength", "0.30")))
-        self.ui.var_filter_enable_reflection.set(bool(data.get("enable_reflection", True)))
+        self.ui.var_filter_enable_reflection.set(bool(data.get("enable_reflection", False)))
         self.ui.var_filter_reflection_strength.set(str(data.get("reflection_strength", "0.50")))
         # Medium/Low priority new filters (disabled by default)
         self.ui.var_filter_enable_vignetting.set(bool(data.get("enable_vignetting", False)))
@@ -450,7 +450,7 @@ class PipelineControlTab(BaseTab):
                 "brightness_strength": str(st.get("pipeline.filter.brightness_strength", "1.00")),
                 "contrast_strength": str(st.get("pipeline.filter.contrast_strength", "1.00")),
                 # High priority new filters
-                "enable_perspective": bool(st.get("pipeline.filter.enable_perspective", True)),
+                "enable_perspective": bool(st.get("pipeline.filter.enable_perspective", False)),
                 "perspective_strength": str(st.get("pipeline.filter.perspective_strength", "1.00")),
                 "enable_motion_blur": bool(st.get("pipeline.filter.enable_motion_blur", True)),
                 "motion_blur_strength": str(st.get("pipeline.filter.motion_blur_strength", "1.00")),
@@ -460,7 +460,7 @@ class PipelineControlTab(BaseTab):
                 "hue_shift_deg": str(st.get("pipeline.filter.hue_shift_deg", "0.00")),
                 "enable_shadow": bool(st.get("pipeline.filter.enable_shadow", True)),
                 "shadow_strength": str(st.get("pipeline.filter.shadow_strength", "0.30")),
-                "enable_reflection": bool(st.get("pipeline.filter.enable_reflection", True)),
+                "enable_reflection": bool(st.get("pipeline.filter.enable_reflection", False)),
                 "reflection_strength": str(st.get("pipeline.filter.reflection_strength", "0.50")),
                 # Medium/Low priority new filters
                 "enable_vignetting": bool(st.get("pipeline.filter.enable_vignetting", False)),
