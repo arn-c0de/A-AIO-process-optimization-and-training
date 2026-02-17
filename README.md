@@ -25,7 +25,7 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 ![Top Avg Accuracy](Simple-Sim/ARENA_REPORT_assets/top_avg_accuracy.svg)
 ---
 
-## Current research
+## Current Research 2026-02-17
 ### Renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`Simple-Sim/docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md`](Simple-Sim/docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md)  
 >  Filter configuration and implementation reference: [`Simple-Sim/docs/guides/FILTER_SETTINGS.md`](Simple-Sim/docs/guides/FILTER_SETTINGS.md)
 
