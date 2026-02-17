@@ -18,16 +18,22 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 - [`Simple-Sim`](Simple-Sim/README.md): A sandbox environment for pre-training and specializing models on synthetic datasets before passing them to main simulation and production training. Includes an arena system to evaluate and select the best-performing models for further training iterations.
 - Sample images: [`Simple-Sim/SAMPLE_GALLERY.md`](Simple-Sim/SAMPLE_GALLERY.md)
 
-### Completed Testing Research
+---
+
+### Current research: renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`Simple-Sim/docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md`](Simple-Sim/docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md)  
+  Filter configuration and implementation reference: [`Simple-Sim/docs/guides/FILTER_SETTINGS.md`](Simple-Sim/docs/guides/FILTER_SETTINGS.md)
+
+## Completed Testing Research
 - Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md`](Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md)
 
-  
+---
+
 ## Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 >  Old Arena stats before 90° implementation : [`Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md`](Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md)
 
 ![Top Avg Accuracy](Simple-Sim/ARENA_REPORT_assets/top_avg_accuracy.svg)
 
-
+---
 ## Production Notes: Bundled vs Single Models
 
 > **📌 Current Conclusions 2026-02**
