@@ -22,7 +22,7 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 - Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md`](Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md)
 
   
-### Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
+## Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 ![Top Avg Accuracy](Simple-Sim/ARENA_REPORT_assets/top_avg_accuracy.svg)
 
 > ### Old Arena stats before 90° implementation : [`Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md`](Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md)
