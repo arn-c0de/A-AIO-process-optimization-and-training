@@ -3,6 +3,7 @@
 
 import argparse
 import sys
+import os
 from pathlib import Path
 from tqdm import tqdm
 import numpy as np
@@ -21,6 +22,12 @@ from simple_sim.defects import sample_defect_params, classify_defect
 from simple_sim.generator_2d import (
     sample_nominal_geometry,
     sample_augment_params,
+    apply_image_filter_overrides,
+    normalize_image_filters,
+    apply_blur,
+    apply_noise,
+    apply_brightness,
+    apply_contrast,
     render_roi,
 )
 from simple_sim.dataset_store import write_dataset
@@ -69,6 +76,50 @@ def _assign_splits_for_new_samples(tmp_meta_rows: list[MetaRow], tmp_label_rows:
     return generate_splits(tmp_meta_rows, tmp_label_rows, config, seed)
 
 
+def _load_image_filters_env() -> dict:
+    raw = os.environ.get("IMAGE_FILTERS", "").strip()
+    if not raw:
+        return normalize_image_filters(None)
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        print("[warn] Invalid IMAGE_FILTERS JSON, using defaults.")
+        return normalize_image_filters(None)
+    return normalize_image_filters(parsed if isinstance(parsed, dict) else None)
+
+
+def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
+    import cv2
+
+    for r in records:
+        aug = r.get("augment", {})
+        blur_sigma = float(aug.get("blur_sigma", 0.0) or 0.0)
+        noise_stddev = float(aug.get("noise_stddev", 0.0) or 0.0)
+        brightness_factor = float(aug.get("brightness_factor", 1.0) or 1.0)
+        contrast_factor = float(aug.get("contrast_factor", 1.0) or 1.0)
+
+        needs_filter = (
+            blur_sigma > 1e-6
+            or noise_stddev > 1e-6
+            or abs(brightness_factor - 1.0) > 1e-6
+            or abs(contrast_factor - 1.0) > 1e-6
+        )
+        if not needs_filter:
+            continue
+
+        path = output_root / str(r["image_path"])
+        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if img is None:
+            raise IOError(f"Failed to read Blender output image for filter postprocess: {path}")
+        rng = np.random.default_rng(int(r["seed"]))
+        img = apply_blur(img, blur_sigma)
+        img = apply_noise(img, noise_stddev, rng)
+        img = apply_brightness(img, brightness_factor)
+        img = apply_contrast(img, contrast_factor)
+        if not cv2.imwrite(str(path), img):
+            raise IOError(f"Failed to write filtered Blender image: {path}")
+
+
 def generate_dataset(
     config_path: Path,
     output_dir: Path,
@@ -86,6 +137,8 @@ def generate_dataset(
     print(f"Loading configuration from {config_path}")
     config = load_config(config_path)
     validate_config(config)
+
+    image_filters = _load_image_filters_env()
 
     run_id = config['run']['run_id']
     run_seed = config['run']['seed']
@@ -195,6 +248,7 @@ def generate_dataset(
                 existing_splits[s] = read_split(p)
 
     print(f"\nGenerating dataset: {run_id}")
+    print(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
     print(f"Classes: {classes}")
     total_target = sum(classes.values())
     print(f"Total samples: {total_target}")
@@ -248,8 +302,9 @@ def generate_dataset(
                 config['augment'],
                 domain_config,
                 rng,
-                enable_cardinal_rotation_90=enable_cardinal_rotation_90,
+                enable_cardinal_rotation_90=(enable_cardinal_rotation_90 and bool(image_filters.get("cardinal_rotation_90", True))),
             )
+            augment = apply_image_filter_overrides(augment, image_filters)
 
             image_path = f"images/{sample_index:06d}.png"
 
@@ -408,6 +463,7 @@ def generate_dataset(
                 cycles_samples=samples,
                 device=device,
             )
+            _postprocess_blender_images(records, output_dir)
             # Sanity check: ensure Blender produced the expected images.
             try:
                 img_count = len(list((output_dir / "images").glob("*.png")))
@@ -495,6 +551,7 @@ def generate_dataset(
                     cycles_samples=samples,
                     device=device,
                 )
+                _postprocess_blender_images(records, temp_dir)
 
                 # Sanity check: ensure Blender produced the expected images.
                 try:

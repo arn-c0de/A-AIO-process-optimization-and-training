@@ -11,6 +11,8 @@ Usage:
 import argparse
 import sys
 import time
+import os
+import json
 from pathlib import Path
 from dataclasses import asdict
 
@@ -23,7 +25,13 @@ from simple_sim.config import load_config, validate_config
 from simple_sim.schema import MetaRow, LabelRow
 from simple_sim.rng import derive_sample_seed, make_sample_id
 from simple_sim.defects import sample_defect_params, classify_defect
-from simple_sim.generator_2d import sample_nominal_geometry, sample_augment_params, render_roi
+from simple_sim.generator_2d import (
+    sample_nominal_geometry,
+    sample_augment_params,
+    apply_image_filter_overrides,
+    normalize_image_filters,
+    render_roi,
+)
 from simple_sim.dataset_store import write_dataset
 from simple_sim.splits import generate_splits, assert_no_overlap, write_splits, check_class_coverage
 from simple_sim.telemetry import emit
@@ -41,6 +49,16 @@ def generate_profile_dataset(
     print(f"Loading configuration from {config_path}")
     config = load_config(config_path)
     validate_config(config)
+
+    image_filters_raw = os.environ.get("IMAGE_FILTERS", "").strip()
+    image_filters = normalize_image_filters(None)
+    if image_filters_raw:
+        try:
+            parsed = json.loads(image_filters_raw)
+            if isinstance(parsed, dict):
+                image_filters = normalize_image_filters(parsed)
+        except Exception:
+            print("[warn] Invalid IMAGE_FILTERS JSON, using defaults.")
 
     run_id = config['run']['run_id']
     run_seed = config['run']['seed']
@@ -77,6 +95,7 @@ def generate_profile_dataset(
     print(f"\nProfiles: {profile_ids}")
     print(f"Samples per profile: {total_per_class}")
     print(f"Total samples: {total_samples}")
+    print(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
 
     all_images = {}
     records = []
@@ -112,8 +131,9 @@ def generate_profile_dataset(
                     config['augment'],
                     domain_config,
                     rng,
-                    enable_cardinal_rotation_90=enable_cardinal_rotation_90,
+                    enable_cardinal_rotation_90=(enable_cardinal_rotation_90 and bool(image_filters.get("cardinal_rotation_90", True))),
                 )
+                augment = apply_image_filter_overrides(augment, image_filters)
 
                 img = render_roi(
                     nominal=nominal,

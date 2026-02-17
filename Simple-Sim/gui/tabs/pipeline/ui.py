@@ -34,6 +34,7 @@ class PipelineUI:
         self.btn_start: ttk.Button
         self.btn_start_generate: ttk.Button
         self.btn_stop: ttk.Button
+        self.btn_filters: ttk.Button
         self.var_run_mode: tk.StringVar = tk.StringVar(value="single")
         self.var_run_count: tk.StringVar = tk.StringVar(value="10")
         self.run_count_entry: ttk.Entry
@@ -78,7 +79,17 @@ class PipelineUI:
         self.var_profiles_multi_mode: tk.StringVar = tk.StringVar(value="separate")
         self.var_profiles_multi_json: tk.StringVar = tk.StringVar(value="[]")
         self.var_profiles_multi_summary: tk.StringVar = tk.StringVar(value="")
-        self.var_cardinal_rotation_90: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_cardinal_rotation_90: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_enable_rotation: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_enable_blur: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_enable_grain: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_enable_brightness: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_enable_contrast: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_rotation_strength: tk.StringVar = tk.StringVar(value="1.0")
+        self.var_filter_blur_strength: tk.StringVar = tk.StringVar(value="1.0")
+        self.var_filter_grain_strength: tk.StringVar = tk.StringVar(value="1.0")
+        self.var_filter_brightness_strength: tk.StringVar = tk.StringVar(value="1.0")
+        self.var_filter_contrast_strength: tk.StringVar = tk.StringVar(value="1.0")
         self.entry_profiles_multi: ttk.Entry
         self.btn_profiles_multi_pick: ttk.Button
         self.var_dataset_profile: tk.StringVar = tk.StringVar(value="Profile: -")
@@ -134,12 +145,14 @@ class PipelineUI:
         self.btn_start_generate.pack(side="left", padx=(6, 0))
         ToolTip(self.btn_start_generate, text_func=lambda: "Generate + validate dataset only (no training/eval)")
 
-        chk_cardinal = ttk.Checkbutton(top, text="90° Rotation", variable=self.var_cardinal_rotation_90)
-        chk_cardinal.pack(side="left", padx=(8, 0))
-        ToolTip(chk_cardinal, text_func=lambda: "Enable random base orientation 0/90/180/270 during dataset generation")
-
         self.btn_stop = ttk.Button(top, text="⏹ Stop", command=self.tab.stop_pipeline, state="disabled", width=10)
         self.btn_stop.pack(side="left", padx=(8, 0))
+        self.btn_filters = ttk.Button(top, text="Image Filters", command=self.tab._open_image_filters_popup, width=12)
+        self.btn_filters.pack(side="left", padx=(6, 0))
+        ToolTip(
+            self.btn_filters,
+            text_func=lambda: "Configure active image filters (90° rotation, grain, blur, brightness, contrast)",
+        )
 
         ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
 
@@ -360,6 +373,7 @@ class PipelineUI:
         self.btn_start.configure(state="disabled" if running else "normal")
         self.btn_start_generate.configure(state="disabled" if running else "normal")
         self.btn_stop.configure(state="normal" if running else "disabled")
+        self.btn_filters.configure(state="disabled" if running else "normal")
 
     def update_stats_bar(self, cpu_pct: Optional[float], ram_info: Optional[Tuple[float, int, int]], gpu_pct: Optional[float]):
         if cpu_pct is not None:

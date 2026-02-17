@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -56,6 +57,192 @@ class RenderSettings:
     blender_executable: str
     cycles_samples: int
     device: str
+
+
+def _shared_settings_path(sim_root: Path, explicit_path: Optional[str] = None) -> Path:
+    if explicit_path:
+        return Path(explicit_path).expanduser().resolve()
+    return (Path(sim_root) / "outputs" / "gui" / "settings.json").resolve()
+
+
+def _read_settings_json(path: Path) -> Dict[str, Any]:
+    try:
+        if not path.exists():
+            return {}
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_settings_json(path: Path, data: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    src = d or {}
+
+    def _bool(name: str, default: bool) -> bool:
+        v = src.get(name, default)
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            return v.strip().lower() in {"1", "true", "yes", "on"}
+        return default
+
+    def _f(name: str, default: float, lo: float = 0.0, hi: float = 4.0) -> float:
+        try:
+            x = float(src.get(name, default))
+        except Exception:
+            x = float(default)
+        return max(lo, min(hi, x))
+
+    return {
+        "cardinal_rotation_90": _bool("cardinal_rotation_90", True),
+        "enable_rotation": _bool("enable_rotation", True),
+        "enable_blur": _bool("enable_blur", True),
+        "enable_grain": _bool("enable_grain", True),
+        "enable_brightness": _bool("enable_brightness", True),
+        "enable_contrast": _bool("enable_contrast", True),
+        "rotation_strength": _f("rotation_strength", 1.0),
+        "blur_strength": _f("blur_strength", 1.0),
+        "grain_strength": _f("grain_strength", 1.0),
+        "brightness_strength": _f("brightness_strength", 1.0),
+        "contrast_strength": _f("contrast_strength", 1.0),
+    }
+
+
+def _filter_settings_to_profile_store(d: Dict[str, Any]) -> Dict[str, Any]:
+    n = _normalize_filter_settings(d)
+    return {
+        "cardinal_rotation_90": bool(n["cardinal_rotation_90"]),
+        "enable_rotation": bool(n["enable_rotation"]),
+        "enable_blur": bool(n["enable_blur"]),
+        "enable_grain": bool(n["enable_grain"]),
+        "enable_brightness": bool(n["enable_brightness"]),
+        "enable_contrast": bool(n["enable_contrast"]),
+        "rotation_strength": f"{float(n['rotation_strength']):.2f}",
+        "blur_strength": f"{float(n['blur_strength']):.2f}",
+        "grain_strength": f"{float(n['grain_strength']):.2f}",
+        "brightness_strength": f"{float(n['brightness_strength']):.2f}",
+        "contrast_strength": f"{float(n['contrast_strength']):.2f}",
+    }
+
+
+def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[str, Any]], str, Dict[str, Any]]:
+    data = _read_settings_json(settings_path)
+    raw_profiles = str(data.get("pipeline.filter_profiles_json", "") or "").strip()
+    active = str(data.get("pipeline.filter_profile_active", "") or "").strip() or "Default"
+    profiles: Dict[str, Dict[str, Any]] = {}
+    if raw_profiles:
+        try:
+            obj = json.loads(raw_profiles)
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(k, str) and isinstance(v, dict):
+                        profiles[k] = _filter_settings_to_profile_store(v)
+        except Exception:
+            profiles = {}
+
+    current = _normalize_filter_settings(
+        {
+            "cardinal_rotation_90": data.get("pipeline.filter.cardinal_rotation_90", True),
+            "enable_rotation": data.get("pipeline.filter.enable_rotation", True),
+            "enable_blur": data.get("pipeline.filter.enable_blur", True),
+            "enable_grain": data.get("pipeline.filter.enable_grain", True),
+            "enable_brightness": data.get("pipeline.filter.enable_brightness", True),
+            "enable_contrast": data.get("pipeline.filter.enable_contrast", True),
+            "rotation_strength": data.get("pipeline.filter.rotation_strength", 1.0),
+            "blur_strength": data.get("pipeline.filter.blur_strength", 1.0),
+            "grain_strength": data.get("pipeline.filter.grain_strength", 1.0),
+            "brightness_strength": data.get("pipeline.filter.brightness_strength", 1.0),
+            "contrast_strength": data.get("pipeline.filter.contrast_strength", 1.0),
+        }
+    )
+    if not profiles:
+        profiles = {"Default": _filter_settings_to_profile_store(current)}
+        active = "Default"
+    if active not in profiles:
+        active = sorted(profiles.keys(), key=lambda s: s.lower())[0]
+    profiles[active] = _filter_settings_to_profile_store(current)
+    return profiles, active, _normalize_filter_settings(profiles.get(active, {}))
+
+
+def _save_shared_filter_profiles(settings_path: Path, profiles: Dict[str, Dict[str, Any]], active: str, current: Dict[str, Any]) -> None:
+    data = _read_settings_json(settings_path)
+    data["pipeline.filter_profiles_json"] = json.dumps(profiles, ensure_ascii=True)
+    data["pipeline.filter_profile_active"] = str(active)
+
+    cur = _normalize_filter_settings(current)
+    data["pipeline.filter.cardinal_rotation_90"] = bool(cur["cardinal_rotation_90"])
+    data["pipeline.filter.enable_rotation"] = bool(cur["enable_rotation"])
+    data["pipeline.filter.enable_blur"] = bool(cur["enable_blur"])
+    data["pipeline.filter.enable_grain"] = bool(cur["enable_grain"])
+    data["pipeline.filter.enable_brightness"] = bool(cur["enable_brightness"])
+    data["pipeline.filter.enable_contrast"] = bool(cur["enable_contrast"])
+    data["pipeline.filter.rotation_strength"] = f"{float(cur['rotation_strength']):.2f}"
+    data["pipeline.filter.blur_strength"] = f"{float(cur['blur_strength']):.2f}"
+    data["pipeline.filter.grain_strength"] = f"{float(cur['grain_strength']):.2f}"
+    data["pipeline.filter.brightness_strength"] = f"{float(cur['brightness_strength']):.2f}"
+    data["pipeline.filter.contrast_strength"] = f"{float(cur['contrast_strength']):.2f}"
+    _write_settings_json(settings_path, data)
+
+
+def _apply_filter_overrides_to_augment(augment: Dict[str, float], image_filters: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    from simple_sim.generator_2d import apply_image_filter_overrides  # type: ignore
+
+    # Debug preview uses clean base augment values (blur/noise=0, brightness/contrast=1).
+    # To make filter toggles visibly testable, inject a small baseline when a filter
+    # is enabled but the sampled value is neutral.
+    f = _normalize_filter_settings(image_filters or {})
+    a = dict(augment or {})
+
+    if bool(f.get("enable_blur", True)) and float(a.get("blur_sigma", 0.0) or 0.0) <= 1e-6:
+        a["blur_sigma"] = 1.0
+    if bool(f.get("enable_grain", True)) and float(a.get("noise_stddev", 0.0) or 0.0) <= 1e-6:
+        a["noise_stddev"] = 8.0
+    if bool(f.get("enable_brightness", True)) and abs(float(a.get("brightness_factor", 1.0) or 1.0) - 1.0) <= 1e-6:
+        a["brightness_factor"] = 1.15
+    if bool(f.get("enable_contrast", True)) and abs(float(a.get("contrast_factor", 1.0) or 1.0) - 1.0) <= 1e-6:
+        a["contrast_factor"] = 1.20
+    if bool(f.get("enable_rotation", True)) and abs(float(a.get("rotation_deg", 0.0) or 0.0)) <= 1e-6:
+        a["rotation_deg"] = 15.0
+
+    return apply_image_filter_overrides(a, f)
+
+
+def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[Dict[str, Any]]) -> None:
+    import cv2  # type: ignore
+    from simple_sim.generator_2d import apply_blur, apply_noise, apply_brightness, apply_contrast  # type: ignore
+
+    for j in jobs:
+        aug = (j.get("augment") or {})
+        blur_sigma = float(aug.get("blur_sigma", 0.0) or 0.0)
+        noise_stddev = float(aug.get("noise_stddev", 0.0) or 0.0)
+        brightness_factor = float(aug.get("brightness_factor", 1.0) or 1.0)
+        contrast_factor = float(aug.get("contrast_factor", 1.0) or 1.0)
+        if (
+            blur_sigma <= 1e-6
+            and noise_stddev <= 1e-6
+            and abs(brightness_factor - 1.0) <= 1e-6
+            and abs(contrast_factor - 1.0) <= 1e-6
+        ):
+            continue
+        p = (Path(out_root) / str(j.get("image_path", ""))).resolve()
+        img = cv2.imread(str(p), cv2.IMREAD_COLOR)
+        if img is None:
+            continue
+        rng = np.random.default_rng(int(j.get("seed", 0)))
+        img = apply_blur(img, blur_sigma)
+        img = apply_noise(img, noise_stddev, rng)
+        img = apply_brightness(img, brightness_factor)
+        img = apply_contrast(img, contrast_factor)
+        cv2.imwrite(str(p), img)
 
 
 def _sample_nominal_geometry(
@@ -407,7 +594,7 @@ def _open_tk_viewer(
     # Import lazily so the script can still run on systems without Tk installed.
     try:
         import tkinter as tk
-        from tkinter import ttk
+        from tkinter import ttk, simpledialog
     except Exception as exc:
         raise RuntimeError(f"Tkinter not available: {exc}") from exc
 
@@ -419,6 +606,7 @@ def _open_tk_viewer(
     import threading
 
     out_root = Path(out_root)
+    settings_file = _shared_settings_path(Path(sim_root) if sim_root is not None else Path(__file__).parent.parent, str((render_settings or {}).get("settings_file", "") or ""))
 
     # State for interactive mode
     class ViewerState:
@@ -522,9 +710,201 @@ def _open_tk_viewer(
         variable_seeds_check = ttk.Checkbutton(controls, text="Variable", variable=variable_seeds_var)
         variable_seeds_check.pack(side="left", padx=(0, 15))
 
-        cardinal_rotation_90_var = tk.BooleanVar(value=bool(render_settings.get("enable_cardinal_rotation_90", True)))
+        shared_profiles, shared_active_profile, shared_current_filter = _load_shared_filter_profiles(settings_file)
+        current_image_filters = dict(shared_current_filter)
+
+        filter_cardinal_rotation_90_var = tk.BooleanVar(value=bool(current_image_filters.get("cardinal_rotation_90", True)))
+        filter_enable_rotation_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_rotation", True)))
+        filter_enable_blur_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_blur", True)))
+        filter_enable_grain_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_grain", True)))
+        filter_enable_brightness_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_brightness", True)))
+        filter_enable_contrast_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_contrast", True)))
+        filter_rotation_strength_var = tk.DoubleVar(value=float(current_image_filters.get("rotation_strength", 1.0)))
+        filter_blur_strength_var = tk.DoubleVar(value=float(current_image_filters.get("blur_strength", 1.0)))
+        filter_grain_strength_var = tk.DoubleVar(value=float(current_image_filters.get("grain_strength", 1.0)))
+        filter_brightness_strength_var = tk.DoubleVar(value=float(current_image_filters.get("brightness_strength", 1.0)))
+        filter_contrast_strength_var = tk.DoubleVar(value=float(current_image_filters.get("contrast_strength", 1.0)))
+
+        def _current_filters_from_vars() -> Dict[str, Any]:
+            return _normalize_filter_settings(
+                {
+                    "cardinal_rotation_90": bool(filter_cardinal_rotation_90_var.get()),
+                    "enable_rotation": bool(filter_enable_rotation_var.get()),
+                    "enable_blur": bool(filter_enable_blur_var.get()),
+                    "enable_grain": bool(filter_enable_grain_var.get()),
+                    "enable_brightness": bool(filter_enable_brightness_var.get()),
+                    "enable_contrast": bool(filter_enable_contrast_var.get()),
+                    "rotation_strength": float(filter_rotation_strength_var.get()),
+                    "blur_strength": float(filter_blur_strength_var.get()),
+                    "grain_strength": float(filter_grain_strength_var.get()),
+                    "brightness_strength": float(filter_brightness_strength_var.get()),
+                    "contrast_strength": float(filter_contrast_strength_var.get()),
+                }
+            )
+
+        def _apply_filters_to_vars(d: Dict[str, Any]) -> None:
+            x = _normalize_filter_settings(d)
+            filter_cardinal_rotation_90_var.set(bool(x["cardinal_rotation_90"]))
+            filter_enable_rotation_var.set(bool(x["enable_rotation"]))
+            filter_enable_blur_var.set(bool(x["enable_blur"]))
+            filter_enable_grain_var.set(bool(x["enable_grain"]))
+            filter_enable_brightness_var.set(bool(x["enable_brightness"]))
+            filter_enable_contrast_var.set(bool(x["enable_contrast"]))
+            filter_rotation_strength_var.set(float(x["rotation_strength"]))
+            filter_blur_strength_var.set(float(x["blur_strength"]))
+            filter_grain_strength_var.set(float(x["grain_strength"]))
+            filter_brightness_strength_var.set(float(x["brightness_strength"]))
+            filter_contrast_strength_var.set(float(x["contrast_strength"]))
+
+        def _persist_filters(active_name: Optional[str] = None) -> None:
+            nonlocal shared_active_profile
+            cur = _current_filters_from_vars()
+            if active_name:
+                shared_active_profile = active_name
+            shared_profiles[shared_active_profile] = _filter_settings_to_profile_store(cur)
+            _save_shared_filter_profiles(
+                settings_file,
+                shared_profiles,
+                shared_active_profile,
+                cur,
+            )
+
+        def _open_filter_popup() -> None:
+            win = tk.Toplevel(root)
+            win.title("Image Filters")
+            win.transient(root)
+            win.grab_set()
+            win.resizable(False, False)
+
+            outer = ttk.Frame(win, padding=10)
+            outer.pack(fill="both", expand=True)
+            outer.columnconfigure(1, weight=1)
+
+            left = ttk.Frame(outer)
+            left.grid(row=0, column=0, sticky="nsw", padx=(0, 10))
+            right = ttk.Frame(outer)
+            right.grid(row=0, column=1, sticky="nsew")
+
+            ttk.Label(left, text="Filter Profiles", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+            lb = tk.Listbox(left, height=10, width=22, exportselection=False)
+            lb.pack(fill="y", pady=(6, 6))
+            pf_btns = ttk.Frame(left)
+            pf_btns.pack(fill="x")
+
+            def _refresh_pf_list(select_name: Optional[str] = None) -> None:
+                names = sorted(shared_profiles.keys(), key=lambda s: s.lower())
+                lb.delete(0, "end")
+                for n in names:
+                    lb.insert("end", n)
+                tgt = select_name or shared_active_profile
+                if tgt in names:
+                    i = names.index(tgt)
+                    lb.selection_clear(0, "end")
+                    lb.selection_set(i)
+                    lb.activate(i)
+
+            def _sel_name() -> Optional[str]:
+                sel = lb.curselection()
+                if not sel:
+                    return None
+                return str(lb.get(sel[0]))
+
+            def _on_select(_evt=None) -> None:
+                nonlocal shared_active_profile
+                n = _sel_name()
+                if not n:
+                    return
+                shared_active_profile = n
+                _apply_filters_to_vars(shared_profiles.get(n, {}))
+                _persist_filters(n)
+
+            def _new_profile() -> None:
+                n = (simpledialog.askstring("New Filter Profile", "Profile name:", parent=win) or "").strip()
+                if not n:
+                    return
+                if n in shared_profiles:
+                    return
+                shared_profiles[n] = _filter_settings_to_profile_store(_current_filters_from_vars())
+                _persist_filters(n)
+                _refresh_pf_list(select_name=n)
+
+            def _save_profile() -> None:
+                n = _sel_name()
+                if not n:
+                    return
+                shared_profiles[n] = _filter_settings_to_profile_store(_current_filters_from_vars())
+                _persist_filters(n)
+
+            def _rename_profile() -> None:
+                nonlocal shared_active_profile
+                old = _sel_name()
+                if not old:
+                    return
+                new = (simpledialog.askstring("Rename Filter Profile", "New name:", initialvalue=old, parent=win) or "").strip()
+                if not new or new == old or new in shared_profiles:
+                    return
+                shared_profiles[new] = shared_profiles.pop(old)
+                if shared_active_profile == old:
+                    shared_active_profile = new
+                _persist_filters(shared_active_profile)
+                _refresh_pf_list(select_name=new)
+
+            def _delete_profile() -> None:
+                nonlocal shared_active_profile
+                n = _sel_name()
+                if not n or len(shared_profiles) <= 1:
+                    return
+                shared_profiles.pop(n, None)
+                if shared_active_profile == n:
+                    shared_active_profile = sorted(shared_profiles.keys(), key=lambda s: s.lower())[0]
+                    _apply_filters_to_vars(shared_profiles[shared_active_profile])
+                _persist_filters(shared_active_profile)
+                _refresh_pf_list(select_name=shared_active_profile)
+
+            ttk.Button(pf_btns, text="Neu", width=7, command=_new_profile).pack(side="left")
+            ttk.Button(pf_btns, text="Speichern", width=9, command=_save_profile).pack(side="left", padx=(4, 0))
+            ttk.Button(pf_btns, text="Umbenennen", width=11, command=_rename_profile).pack(side="left", padx=(4, 0))
+            ttk.Button(pf_btns, text="Löschen", width=8, command=_delete_profile).pack(side="left", padx=(4, 0))
+            lb.bind("<<ListboxSelect>>", _on_select)
+            _refresh_pf_list()
+
+            ttk.Label(right, text="Image Filters", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+            row0 = ttk.Frame(right)
+            row0.pack(fill="x", pady=(6, 6))
+            ttk.Checkbutton(row0, text="Enable 90° base rotation", variable=filter_cardinal_rotation_90_var).pack(side="left")
+            ttk.Checkbutton(row0, text="Enable rotation jitter", variable=filter_enable_rotation_var).pack(side="left", padx=(8, 0))
+
+            rows = ttk.Frame(right)
+            rows.pack(fill="x")
+
+            def _add_row(label: str, enabled: tk.BooleanVar, strength: tk.DoubleVar, max_v: float = 2.0) -> None:
+                r = ttk.Frame(rows)
+                r.pack(fill="x", pady=(3, 0))
+                ttk.Checkbutton(r, text=label, variable=enabled).pack(side="left")
+                ttk.Scale(r, from_=0.0, to=max_v, orient="horizontal", variable=strength, length=220).pack(side="left", padx=(10, 6))
+                out = ttk.Label(r, width=5, anchor="e")
+                out.pack(side="left")
+
+                def _sync(_a="", _b="", _c=""):
+                    out.configure(text=f"{float(strength.get()):.2f}")
+
+                strength.trace_add("write", _sync)
+                _sync()
+
+            _add_row("Blur", filter_enable_blur_var, filter_blur_strength_var, max_v=2.0)
+            _add_row("Grain", filter_enable_grain_var, filter_grain_strength_var, max_v=3.0)
+            _add_row("Brightness", filter_enable_brightness_var, filter_brightness_strength_var, max_v=2.0)
+            _add_row("Contrast", filter_enable_contrast_var, filter_contrast_strength_var, max_v=2.0)
+            _add_row("Rotation", filter_enable_rotation_var, filter_rotation_strength_var, max_v=2.0)
+
+            btm = ttk.Frame(right)
+            btm.pack(fill="x", pady=(10, 0))
+            ttk.Button(btm, text="Apply", command=lambda: (_persist_filters(_sel_name() or shared_active_profile), win.destroy())).pack(side="right")
+
+        cardinal_rotation_90_var = filter_cardinal_rotation_90_var
         cardinal_rotation_90_check = ttk.Checkbutton(controls, text="90° Rotation", variable=cardinal_rotation_90_var)
         cardinal_rotation_90_check.pack(side="left", padx=(0, 15))
+        ttk.Button(controls, text="Image Filters", command=_open_filter_popup).pack(side="left", padx=(0, 15))
 
         status_label = ttk.Label(controls, text="Ready", foreground="#060")
         status_label.pack(side="left", padx=(10, 10))
@@ -541,6 +921,7 @@ def _open_tk_viewer(
             state.is_rendering = True
             render_btn.config(state="disabled")
             status_label.config(text="Rendering...", foreground="#c60")
+            _persist_filters(shared_active_profile)
 
             def _render_thread():
                 try:
@@ -656,7 +1037,8 @@ def _open_tk_viewer(
                                 run_id=run_id,
                                 backend=backend,
                                 rotation_jitter_range=_get_rotation_jitter_range(cfg),
-                                enable_cardinal_rotation_90=bool(cardinal_rotation_90_var.get()),
+                                enable_cardinal_rotation_90=bool(_current_filters_from_vars().get("cardinal_rotation_90", True)),
+                                image_filters=_current_filters_from_vars(),
                             )
 
                             jobs_path = out_root / "blender_jobs_previews.jsonl"
@@ -669,6 +1051,7 @@ def _open_tk_viewer(
                                 cycles_samples=settings.cycles_samples,
                                 device=settings.device,
                             )
+                            _postprocess_rendered_previews(out_root, jobs)
                             all_new_previews.extend(new_previews)
                         else:
                             # 2D OpenCV render
@@ -706,8 +1089,9 @@ def _open_tk_viewer(
                                 augment = _sample_preview_augment(
                                     rng,
                                     rotation_jitter_range=rotation_jitter_range,
-                                    enable_cardinal_rotation_90=bool(cardinal_rotation_90_var.get()),
+                                    enable_cardinal_rotation_90=bool(_current_filters_from_vars().get("cardinal_rotation_90", True)),
                                 )
+                                augment = _apply_filter_overrides_to_augment(augment, _current_filters_from_vars())
 
                                 nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
                                 defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
@@ -764,6 +1148,7 @@ def _open_tk_viewer(
             render_btn.config(state="disabled")
             render_all_btn.config(state="disabled")
             status_label.config(text=f"Rendering all {len(all_profiles)} profiles...", foreground="#c60")
+            _persist_filters(shared_active_profile)
 
             def _render_all_thread():
                 try:
@@ -878,7 +1263,8 @@ def _open_tk_viewer(
                                     run_id=run_id,
                                     backend=backend,
                                     rotation_jitter_range=_get_rotation_jitter_range(cfg),
-                                    enable_cardinal_rotation_90=bool(cardinal_rotation_90_var.get()),
+                                    enable_cardinal_rotation_90=bool(_current_filters_from_vars().get("cardinal_rotation_90", True)),
+                                    image_filters=_current_filters_from_vars(),
                                 )
 
                                 jobs_path = out_root / f"blender_jobs_previews_{_sanitize_dir_name(pid)}.jsonl"
@@ -891,6 +1277,7 @@ def _open_tk_viewer(
                                     cycles_samples=settings.cycles_samples,
                                     device=settings.device,
                                 )
+                                _postprocess_rendered_previews(out_root, jobs)
                                 all_new_previews.extend(new_previews)
                             else:
                                 import cv2  # type: ignore
@@ -926,8 +1313,9 @@ def _open_tk_viewer(
                                     augment = _sample_preview_augment(
                                         rng,
                                         rotation_jitter_range=rotation_jitter_range,
-                                        enable_cardinal_rotation_90=bool(cardinal_rotation_90_var.get()),
+                                        enable_cardinal_rotation_90=bool(_current_filters_from_vars().get("cardinal_rotation_90", True)),
                                     )
+                                    augment = _apply_filter_overrides_to_augment(augment, _current_filters_from_vars())
                                     nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
                                     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
                                     img = render_roi(
@@ -1022,6 +1410,37 @@ def _open_tk_viewer(
     cols = 4
 
     photo_refs: List[Any] = []
+    zoom_photo_refs: List[Any] = []
+
+    def _open_zoom_popup(path: Path, title: str) -> None:
+        try:
+            im = Image.open(path)
+        except Exception:
+            return
+
+        win = tk.Toplevel(root)
+        win.title(title)
+        win.transient(root)
+
+        sw = max(800, int(root.winfo_screenwidth() * 0.9))
+        sh = max(600, int(root.winfo_screenheight() * 0.9))
+
+        w, h = im.size
+        scale = min(sw / max(1, w), sh / max(1, h), 1.0)
+        vw = max(1, int(w * scale))
+        vh = max(1, int(h * scale))
+        if scale < 1.0:
+            im = im.resize((vw, vh), Image.Resampling.LANCZOS)
+
+        ph = ImageTk.PhotoImage(im)
+        zoom_photo_refs.append(ph)
+
+        frm = ttk.Frame(win, padding=8)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, image=ph).pack(fill="both", expand=True)
+
+        # Keep popup size snug to image while respecting screen bounds.
+        win.geometry(f"{min(vw + 24, sw)}x{min(vh + 24, sh)}")
 
     def _refresh_images():
         """Clear and rebuild the image grid."""
@@ -1066,11 +1485,10 @@ def _open_tk_viewer(
             lbl = ttk.Label(card, image=ph)
             lbl.pack()
 
-            def _open_file(path=img_path):
-                import webbrowser
-                webbrowser.open(path.as_uri())
-
-            lbl.bind("<Button-1>", lambda _e, f=_open_file: f())
+            lbl.bind(
+                "<Button-1>",
+                lambda _e, p=img_path, t=f"{pid} | {backend} | {defect}": _open_zoom_popup(p, t),
+            )
 
         for c in range(cols):
             inner.grid_columnconfigure(c, weight=1)
@@ -1093,6 +1511,7 @@ def _build_preview_jobs(
     backend: str = BACKEND_3D,
     rotation_jitter_range: Tuple[float, float] = (0.0, 0.0),
     enable_cardinal_rotation_90: bool = True,
+    image_filters: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[PreviewRec]]:
     """Return (jobs, preview_records). preview_records is for index.html.
 
@@ -1132,6 +1551,7 @@ def _build_preview_jobs(
             rotation_jitter_range=rotation_jitter_range,
             enable_cardinal_rotation_90=enable_cardinal_rotation_90,
         )
+        augment = _apply_filter_overrides_to_augment(augment, image_filters)
 
         rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
         job = {
@@ -1158,6 +1578,7 @@ def main() -> None:
     parser.add_argument("--profiles-dir", default="configs/profiles", help="Directory with component profile YAMLs")
     parser.add_argument("--configs-dir", default="configs", help="Directory with run_*.yaml configs (for auto matching)")
     parser.add_argument("--out", default="outputs/debug_previews", help="Output directory root")
+    parser.add_argument("--settings-file", default="", help="Shared GUI settings JSON (default: outputs/gui/settings.json)")
 
     parser.add_argument("--backend", choices=BACKEND_CHOICES, default="auto", help="Render backend: opencv_2d|blender_3d|both|auto")
     parser.add_argument("--profiles", default="", help="Comma-separated profile IDs to render")
@@ -1192,6 +1613,8 @@ def main() -> None:
     profiles_dir = (sim_root / args.profiles_dir).resolve()
     configs_dir = (sim_root / args.configs_dir).resolve()
     out_root = (sim_root / args.out).resolve()
+    settings_file = _shared_settings_path(sim_root, args.settings_file)
+    shared_profiles, shared_active_profile, shared_filter_settings = _load_shared_filter_profiles(settings_file)
 
     discovered_all = _discover_profiles(profiles_dir, backend_mode="both")
     if not discovered_all:
@@ -1299,12 +1722,13 @@ def main() -> None:
                         "forced_cfg": forced_cfg,
                         "seed_base": int(args.seed),
                         "states": args.states,
-                        "enable_cardinal_rotation_90": not bool(args.disable_cardinal_rotation_90),
+                        "enable_cardinal_rotation_90": bool(shared_filter_settings.get("cardinal_rotation_90", True)) if not bool(args.disable_cardinal_rotation_90) else False,
                         "blender": args.blender,
                         "samples": args.samples,
                         "device": args.device,
                         "roi_override": roi_override,
                         "backend_mode": backend_mode,
+                        "settings_file": str(settings_file),
                     }
                     _open_tk_viewer(
                         out_root,
@@ -1424,8 +1848,9 @@ def main() -> None:
                     augment = _sample_preview_augment(
                         rng,
                         rotation_jitter_range=rotation_jitter_range,
-                        enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
+                        enable_cardinal_rotation_90=(not bool(args.disable_cardinal_rotation_90) and bool(shared_filter_settings.get("cardinal_rotation_90", True))),
                     )
+                    augment = _apply_filter_overrides_to_augment(augment, shared_filter_settings)
                     nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
                     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
                     img = render_roi(
@@ -1502,7 +1927,8 @@ def main() -> None:
                     run_id=run_id,
                     backend=backend,
                     rotation_jitter_range=_get_rotation_jitter_range(cfg),
-                    enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
+                    enable_cardinal_rotation_90=(not bool(args.disable_cardinal_rotation_90) and bool(shared_filter_settings.get("cardinal_rotation_90", True))),
+                    image_filters=shared_filter_settings,
                 )
                 all_jobs.extend(jobs)
                 previews_for_index.extend(previews)
@@ -1516,12 +1942,13 @@ def main() -> None:
         "forced_cfg": forced_cfg,
         "seed_base": int(args.seed),
         "states": args.states,
-        "enable_cardinal_rotation_90": not bool(args.disable_cardinal_rotation_90),
+        "enable_cardinal_rotation_90": (not bool(args.disable_cardinal_rotation_90) and bool(shared_filter_settings.get("cardinal_rotation_90", True))),
         "blender": args.blender,
         "samples": args.samples,
         "device": args.device,
         "roi_override": roi_override,
         "backend_mode": backend_mode,
+        "settings_file": str(settings_file),
     }
 
     if args.dry_run:
@@ -1570,6 +1997,7 @@ def main() -> None:
             cycles_samples=cycles_samples,
             device=device,
         )
+        _postprocess_rendered_previews(out_root, all_jobs)
 
     index_path = (out_root / "index.html").resolve()
     print(f"[render] Done. Open: {index_path}")
