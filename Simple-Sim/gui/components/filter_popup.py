@@ -63,6 +63,7 @@ class FilterPopup:
 
         # Build UI
         self._build_ui()
+        self._bind_mousewheel()
 
         # Set up close handler
         self.top.protocol("WM_DELETE_WINDOW", self._handle_close)
@@ -71,6 +72,7 @@ class FilterPopup:
         """Build the popup UI."""
         root = ttk.Frame(self.top, padding=12)
         root.pack(fill="both", expand=True)
+        root.rowconfigure(0, weight=1)
         root.columnconfigure(1, weight=1)
 
         # Left: Profile list
@@ -124,7 +126,8 @@ class FilterPopup:
         ttk.Checkbutton(row0, text="Enable rotation jitter", variable=self.var_rotation).pack(side="left", padx=(12, 0))
 
         # Scrollable filter controls
-        canvas = tk.Canvas(parent, height=400)
+        canvas = tk.Canvas(parent)
+        self._scroll_canvas = canvas
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         controls_frame = ttk.Frame(canvas)
 
@@ -157,6 +160,30 @@ class FilterPopup:
         ttk.Button(btns, text="Reset Defaults", command=self._reset_defaults).pack(side="left")
         ttk.Button(btns, text="Reset to 1.0", command=self._reset_to_one).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Close", command=self._handle_close).pack(side="right")
+
+    def _bind_mousewheel(self) -> None:
+        """Route mouse wheel events inside popup to filter list scrolling."""
+        self.top.bind("<MouseWheel>", self._on_mousewheel)
+        # Linux/X11 wheel events
+        self.top.bind("<Button-4>", self._on_mousewheel)
+        self.top.bind("<Button-5>", self._on_mousewheel)
+
+    def _on_mousewheel(self, event: tk.Event) -> str:
+        """Scroll popup canvas while cursor is inside popup widgets."""
+        canvas = getattr(self, "_scroll_canvas", None)
+        if canvas is None:
+            return "break"
+        if getattr(event, "num", None) == 4:
+            canvas.yview_scroll(-1, "units")
+            return "break"
+        if getattr(event, "num", None) == 5:
+            canvas.yview_scroll(1, "units")
+            return "break"
+        delta = int(getattr(event, "delta", 0))
+        if delta != 0:
+            # Windows/macOS: delta sign indicates direction.
+            canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+        return "break"
 
     def _add_filter_sections(self, parent: ttk.Frame, current: Dict[str, Any]) -> None:
         """Add all filter sections with controls."""

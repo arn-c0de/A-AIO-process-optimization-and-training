@@ -204,7 +204,12 @@ def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optio
         aug["contrast_factor"] = 1.0 + ((cf - 1.0) * contrast_strength)
 
     if not filt.get("enable_rotation", True):
-        aug["rotation_deg"] = 0.0
+        if bool(filt.get("cardinal_rotation_90", True)):
+            # Keep random cardinal orientation but remove fine jitter.
+            rot = float(aug.get("rotation_deg", 0.0))
+            aug["rotation_deg"] = float(round(rot / 90.0) * 90.0)
+        else:
+            aug["rotation_deg"] = 0.0
     else:
         aug["rotation_deg"] = float(aug.get("rotation_deg", 0.0)) * rotation_strength
 
