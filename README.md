@@ -25,6 +25,8 @@ This is a **testing / prototyping repository** for experimenting with AOI/AI con
 ### Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 ![Top Avg Accuracy](Simple-Sim/ARENA_REPORT_assets/top_avg_accuracy.svg)
 
+## Old Arena stats before 90° implementation : [`Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md`](Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md)
+
 ## Production Notes: Bundled vs Single Models
 
 > **📌 Current Conclusions 2026-02**
