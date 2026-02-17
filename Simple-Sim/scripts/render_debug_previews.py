@@ -35,6 +35,8 @@ import numpy as np
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from gui.components.filter_popup import open_filter_popup
+
 from simple_sim.config import load_config, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generator_3d import write_jobs_jsonl, render_blender_batch
@@ -769,158 +771,52 @@ def _open_tk_viewer(
             )
 
         def _open_filter_popup() -> None:
-            win = tk.Toplevel(root)
-            win.title("Image Filters")
-            win.transient(root)
-            win.grab_set()
-            win.resizable(False, False)
+            """Open shared image filter popup."""
+            def on_close(updated_profiles: Dict[str, Dict[str, Any]], updated_active: str) -> None:
+                nonlocal shared_active_profile, shared_profiles
+                shared_profiles = updated_profiles
+                shared_active_profile = updated_active
+                _apply_filters_to_vars(shared_profiles.get(shared_active_profile, {}))
+                _save_shared_filter_profiles(
+                    settings_file,
+                    shared_profiles,
+                    shared_active_profile,
+                    _current_filters_from_vars(),
+                )
 
-            outer = ttk.Frame(win, padding=10)
-            outer.pack(fill="both", expand=True)
-            outer.columnconfigure(1, weight=1)
+            def show_messagebox(msg_type: str, title: str, message: str) -> None:
+                if msg_type == "warning":
+                    messagebox.showwarning(title, message, parent=root)
+                elif msg_type == "error":
+                    messagebox.showerror(title, message, parent=root)
+                else:
+                    messagebox.showinfo(title, message, parent=root)
 
-            left = ttk.Frame(outer)
-            left.grid(row=0, column=0, sticky="nsw", padx=(0, 10))
-            right = ttk.Frame(outer)
-            right.grid(row=0, column=1, sticky="nsew")
+            def ask_string(title: str, prompt: str, initial: str = "") -> Optional[str]:
+                from tkinter import simpledialog
+                return simpledialog.askstring(title, prompt, initialvalue=initial, parent=root)
 
-            ttk.Label(left, text="Filter Profiles", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
-            lb = tk.Listbox(left, height=10, width=22, exportselection=False)
-            lb.pack(fill="y", pady=(6, 6))
-            pf_btns = ttk.Frame(left)
-            pf_btns.pack(fill="x")
+            def ask_yes_no(title: str, question: str) -> bool:
+                return messagebox.askyesno(title, question, parent=root)
 
-            def _refresh_pf_list(select_name: Optional[str] = None) -> None:
-                names = sorted(shared_profiles.keys(), key=lambda s: s.lower())
-                lb.delete(0, "end")
-                for n in names:
-                    lb.insert("end", n)
-                tgt = select_name or shared_active_profile
-                if tgt in names:
-                    i = names.index(tgt)
-                    lb.selection_clear(0, "end")
-                    lb.selection_set(i)
-                    lb.activate(i)
+            def float_or_default(val: str, default: float) -> float:
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    return default
 
-            def _sel_name() -> Optional[str]:
-                sel = lb.curselection()
-                if not sel:
-                    return None
-                return str(lb.get(sel[0]))
-
-            def _on_select(_evt=None) -> None:
-                nonlocal shared_active_profile
-                n = _sel_name()
-                if not n:
-                    return
-                shared_active_profile = n
-                _apply_filters_to_vars(shared_profiles.get(n, {}))
-                _persist_filters(n)
-
-            def _new_profile() -> None:
-                n = (simpledialog.askstring("New Filter Profile", "Profile name:", parent=win) or "").strip()
-                if not n:
-                    return
-                if n in shared_profiles:
-                    return
-                shared_profiles[n] = _filter_settings_to_profile_store(_current_filters_from_vars())
-                _persist_filters(n)
-                _refresh_pf_list(select_name=n)
-
-            def _save_profile() -> None:
-                n = _sel_name()
-                if not n:
-                    return
-                shared_profiles[n] = _filter_settings_to_profile_store(_current_filters_from_vars())
-                _persist_filters(n)
-
-            def _rename_profile() -> None:
-                nonlocal shared_active_profile
-                old = _sel_name()
-                if not old:
-                    return
-                new = (simpledialog.askstring("Rename Filter Profile", "New name:", initialvalue=old, parent=win) or "").strip()
-                if not new or new == old or new in shared_profiles:
-                    return
-                shared_profiles[new] = shared_profiles.pop(old)
-                if shared_active_profile == old:
-                    shared_active_profile = new
-                _persist_filters(shared_active_profile)
-                _refresh_pf_list(select_name=new)
-
-            def _delete_profile() -> None:
-                nonlocal shared_active_profile
-                n = _sel_name()
-                if not n or len(shared_profiles) <= 1:
-                    return
-                shared_profiles.pop(n, None)
-                if shared_active_profile == n:
-                    shared_active_profile = sorted(shared_profiles.keys(), key=lambda s: s.lower())[0]
-                    _apply_filters_to_vars(shared_profiles[shared_active_profile])
-                _persist_filters(shared_active_profile)
-                _refresh_pf_list(select_name=shared_active_profile)
-
-            def _reset_selected_profile_to_one() -> None:
-                n = _sel_name()
-                if not n:
-                    return
-                shared_profiles[n] = {
-                    "cardinal_rotation_90": True,
-                    "enable_rotation": True,
-                    "enable_blur": True,
-                    "enable_grain": True,
-                    "enable_brightness": True,
-                    "enable_contrast": True,
-                    "rotation_strength": "1.00",
-                    "blur_strength": "1.00",
-                    "grain_strength": "1.00",
-                    "brightness_strength": "1.00",
-                    "contrast_strength": "1.00",
-                }
-                _apply_filters_to_vars(shared_profiles[n])
-                _persist_filters(n)
-                _refresh_pf_list(select_name=n)
-
-            ttk.Button(pf_btns, text="Neu", width=7, command=_new_profile).pack(side="left")
-            ttk.Button(pf_btns, text="Speichern", width=9, command=_save_profile).pack(side="left", padx=(4, 0))
-            ttk.Button(pf_btns, text="Umbenennen", width=11, command=_rename_profile).pack(side="left", padx=(4, 0))
-            ttk.Button(pf_btns, text="Löschen", width=8, command=_delete_profile).pack(side="left", padx=(4, 0))
-            ttk.Button(pf_btns, text="Reset to 1", width=10, command=_reset_selected_profile_to_one).pack(side="left", padx=(4, 0))
-            lb.bind("<<ListboxSelect>>", _on_select)
-            _refresh_pf_list()
-
-            ttk.Label(right, text="Image Filters", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
-            row0 = ttk.Frame(right)
-            row0.pack(fill="x", pady=(6, 6))
-            ttk.Checkbutton(row0, text="Enable 90° base rotation", variable=filter_cardinal_rotation_90_var).pack(side="left")
-            ttk.Checkbutton(row0, text="Enable rotation jitter", variable=filter_enable_rotation_var).pack(side="left", padx=(8, 0))
-
-            rows = ttk.Frame(right)
-            rows.pack(fill="x")
-
-            def _add_row(label: str, enabled: tk.BooleanVar, strength: tk.DoubleVar, max_v: float = 2.0) -> None:
-                r = ttk.Frame(rows)
-                r.pack(fill="x", pady=(3, 0))
-                ttk.Checkbutton(r, text=label, variable=enabled).pack(side="left")
-                ttk.Scale(r, from_=0.0, to=max_v, orient="horizontal", variable=strength, length=220).pack(side="left", padx=(10, 6))
-                out = ttk.Label(r, width=5, anchor="e")
-                out.pack(side="left")
-
-                def _sync(_a="", _b="", _c=""):
-                    out.configure(text=f"{float(strength.get()):.2f}")
-
-                strength.trace_add("write", _sync)
-                _sync()
-
-            _add_row("Blur", filter_enable_blur_var, filter_blur_strength_var, max_v=2.0)
-            _add_row("Grain", filter_enable_grain_var, filter_grain_strength_var, max_v=3.0)
-            _add_row("Brightness", filter_enable_brightness_var, filter_brightness_strength_var, max_v=2.0)
-            _add_row("Contrast", filter_enable_contrast_var, filter_contrast_strength_var, max_v=2.0)
-            _add_row("Rotation", filter_enable_rotation_var, filter_rotation_strength_var, max_v=2.0)
-
-            btm = ttk.Frame(right)
-            btm.pack(fill="x", pady=(10, 0))
-            ttk.Button(btm, text="Apply", command=lambda: (_persist_filters(_sel_name() or shared_active_profile), win.destroy())).pack(side="right")
+            open_filter_popup(
+                parent=root,
+                profiles=shared_profiles,
+                active_profile=shared_active_profile,
+                on_close=on_close,
+                get_current_values=lambda: _filter_settings_to_profile_store(_current_filters_from_vars()),
+                set_current_values=_apply_filters_to_vars,
+                float_or_default=float_or_default,
+                show_messagebox=show_messagebox,
+                ask_string=ask_string,
+                ask_yes_no=ask_yes_no,
+            )
 
         cardinal_rotation_90_var = filter_cardinal_rotation_90_var
         cardinal_rotation_90_check = ttk.Checkbutton(controls, text="90° Rotation", variable=cardinal_rotation_90_var)

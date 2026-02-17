@@ -26,6 +26,7 @@ from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.tooltip import ToolTip
 from gui.components.overlay_renderer import draw_defect_overlay
+from gui.components.filter_popup import open_filter_popup
 from gui.utils.settings_store import SettingsStore
 
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
@@ -234,6 +235,7 @@ class PipelineControlTab(BaseTab):
 
     def _current_filter_settings_dict(self) -> Dict[str, Any]:
         return {
+            # Existing filters
             "cardinal_rotation_90": bool(self.ui.var_filter_cardinal_rotation_90.get()),
             "enable_rotation": bool(self.ui.var_filter_enable_rotation.get()),
             "enable_blur": bool(self.ui.var_filter_enable_blur.get()),
@@ -245,11 +247,40 @@ class PipelineControlTab(BaseTab):
             "grain_strength": f"{self._float_or_default(self.ui.var_filter_grain_strength.get(), default=1.0):.2f}",
             "brightness_strength": f"{self._float_or_default(self.ui.var_filter_brightness_strength.get(), default=1.0):.2f}",
             "contrast_strength": f"{self._float_or_default(self.ui.var_filter_contrast_strength.get(), default=1.0):.2f}",
+            # High priority new filters
+            "enable_perspective": bool(self.ui.var_filter_enable_perspective.get()),
+            "perspective_strength": f"{self._float_or_default(self.ui.var_filter_perspective_strength.get(), default=1.0):.2f}",
+            "enable_motion_blur": bool(self.ui.var_filter_enable_motion_blur.get()),
+            "motion_blur_strength": f"{self._float_or_default(self.ui.var_filter_motion_blur_strength.get(), default=1.0):.2f}",
+            "enable_saturation": bool(self.ui.var_filter_enable_saturation.get()),
+            "saturation_factor": f"{self._float_or_default(self.ui.var_filter_saturation_factor.get(), default=1.0):.2f}",
+            "enable_hue_shift": bool(self.ui.var_filter_enable_hue_shift.get()),
+            "hue_shift_deg": f"{self._float_or_default(self.ui.var_filter_hue_shift_deg.get(), default=0.0):.2f}",
+            "enable_shadow": bool(self.ui.var_filter_enable_shadow.get()),
+            "shadow_strength": f"{self._float_or_default(self.ui.var_filter_shadow_strength.get(), default=0.3):.2f}",
+            "enable_reflection": bool(self.ui.var_filter_enable_reflection.get()),
+            "reflection_strength": f"{self._float_or_default(self.ui.var_filter_reflection_strength.get(), default=0.5):.2f}",
+            # Medium/Low priority new filters
+            "enable_vignetting": bool(self.ui.var_filter_enable_vignetting.get()),
+            "vignetting_strength": f"{self._float_or_default(self.ui.var_filter_vignetting_strength.get(), default=1.0):.2f}",
+            "enable_chromatic_aberration": bool(self.ui.var_filter_enable_chromatic_aberration.get()),
+            "chromatic_strength": f"{self._float_or_default(self.ui.var_filter_chromatic_strength.get(), default=1.0):.2f}",
+            "enable_jpeg_compression": bool(self.ui.var_filter_enable_jpeg_compression.get()),
+            "jpeg_quality": f"{int(self._float_or_default(self.ui.var_filter_jpeg_quality.get(), default=85))}",
+            "enable_color_temperature": bool(self.ui.var_filter_enable_color_temperature.get()),
+            "color_temperature_kelvin": f"{int(self._float_or_default(self.ui.var_filter_color_temperature_kelvin.get(), default=5500))}",
+            "enable_lens_distortion": bool(self.ui.var_filter_enable_lens_distortion.get()),
+            "distortion_k1": f"{self._float_or_default(self.ui.var_filter_distortion_k1.get(), default=0.0):.2f}",
+            "enable_dust": bool(self.ui.var_filter_enable_dust.get()),
+            "dust_density": f"{self._float_or_default(self.ui.var_filter_dust_density.get(), default=0.3):.2f}",
+            "enable_sharpen": bool(self.ui.var_filter_enable_sharpen.get()),
+            "sharpen_strength": f"{self._float_or_default(self.ui.var_filter_sharpen_strength.get(), default=1.0):.2f}",
         }
 
     def _apply_filter_settings_dict(self, data: Dict[str, Any]) -> None:
         if not isinstance(data, dict):
             return
+        # Existing filters
         self.ui.var_filter_cardinal_rotation_90.set(bool(data.get("cardinal_rotation_90", True)))
         self.ui.var_filter_enable_rotation.set(bool(data.get("enable_rotation", True)))
         self.ui.var_filter_enable_blur.set(bool(data.get("enable_blur", True)))
@@ -261,6 +292,34 @@ class PipelineControlTab(BaseTab):
         self.ui.var_filter_grain_strength.set(str(data.get("grain_strength", "1.00")))
         self.ui.var_filter_brightness_strength.set(str(data.get("brightness_strength", "1.00")))
         self.ui.var_filter_contrast_strength.set(str(data.get("contrast_strength", "1.00")))
+        # High priority new filters (enabled by default)
+        self.ui.var_filter_enable_perspective.set(bool(data.get("enable_perspective", True)))
+        self.ui.var_filter_perspective_strength.set(str(data.get("perspective_strength", "1.00")))
+        self.ui.var_filter_enable_motion_blur.set(bool(data.get("enable_motion_blur", True)))
+        self.ui.var_filter_motion_blur_strength.set(str(data.get("motion_blur_strength", "1.00")))
+        self.ui.var_filter_enable_saturation.set(bool(data.get("enable_saturation", True)))
+        self.ui.var_filter_saturation_factor.set(str(data.get("saturation_factor", "1.00")))
+        self.ui.var_filter_enable_hue_shift.set(bool(data.get("enable_hue_shift", True)))
+        self.ui.var_filter_hue_shift_deg.set(str(data.get("hue_shift_deg", "0.00")))
+        self.ui.var_filter_enable_shadow.set(bool(data.get("enable_shadow", True)))
+        self.ui.var_filter_shadow_strength.set(str(data.get("shadow_strength", "0.30")))
+        self.ui.var_filter_enable_reflection.set(bool(data.get("enable_reflection", True)))
+        self.ui.var_filter_reflection_strength.set(str(data.get("reflection_strength", "0.50")))
+        # Medium/Low priority new filters (disabled by default)
+        self.ui.var_filter_enable_vignetting.set(bool(data.get("enable_vignetting", False)))
+        self.ui.var_filter_vignetting_strength.set(str(data.get("vignetting_strength", "1.00")))
+        self.ui.var_filter_enable_chromatic_aberration.set(bool(data.get("enable_chromatic_aberration", False)))
+        self.ui.var_filter_chromatic_strength.set(str(data.get("chromatic_strength", "1.00")))
+        self.ui.var_filter_enable_jpeg_compression.set(bool(data.get("enable_jpeg_compression", False)))
+        self.ui.var_filter_jpeg_quality.set(str(data.get("jpeg_quality", "85")))
+        self.ui.var_filter_enable_color_temperature.set(bool(data.get("enable_color_temperature", False)))
+        self.ui.var_filter_color_temperature_kelvin.set(str(data.get("color_temperature_kelvin", "5500")))
+        self.ui.var_filter_enable_lens_distortion.set(bool(data.get("enable_lens_distortion", False)))
+        self.ui.var_filter_distortion_k1.set(str(data.get("distortion_k1", "0.00")))
+        self.ui.var_filter_enable_dust.set(bool(data.get("enable_dust", False)))
+        self.ui.var_filter_dust_density.set(str(data.get("dust_density", "0.30")))
+        self.ui.var_filter_enable_sharpen.set(bool(data.get("enable_sharpen", False)))
+        self.ui.var_filter_sharpen_strength.set(str(data.get("sharpen_strength", "1.00")))
 
     def _load_filter_profiles(self) -> tuple[Dict[str, Dict[str, Any]], str]:
         st = self._store()
@@ -317,9 +376,23 @@ class PipelineControlTab(BaseTab):
             bool(self.ui.var_filter_enable_grain.get()),
             bool(self.ui.var_filter_enable_brightness.get()),
             bool(self.ui.var_filter_enable_contrast.get()),
+            bool(self.ui.var_filter_enable_perspective.get()),
+            bool(self.ui.var_filter_enable_motion_blur.get()),
+            bool(self.ui.var_filter_enable_saturation.get()),
+            bool(self.ui.var_filter_enable_hue_shift.get()),
+            bool(self.ui.var_filter_enable_shadow.get()),
+            bool(self.ui.var_filter_enable_reflection.get()),
+            bool(self.ui.var_filter_enable_vignetting.get()),
+            bool(self.ui.var_filter_enable_chromatic_aberration.get()),
+            bool(self.ui.var_filter_enable_jpeg_compression.get()),
+            bool(self.ui.var_filter_enable_color_temperature.get()),
+            bool(self.ui.var_filter_enable_lens_distortion.get()),
+            bool(self.ui.var_filter_enable_dust.get()),
+            bool(self.ui.var_filter_enable_sharpen.get()),
         ])
         return {
             "enable": has_any_filter,
+            # Existing filters
             "cardinal_rotation_90": bool(self.ui.var_filter_cardinal_rotation_90.get()),
             "enable_rotation": bool(self.ui.var_filter_enable_rotation.get()),
             "enable_blur": bool(self.ui.var_filter_enable_blur.get()),
@@ -331,239 +404,62 @@ class PipelineControlTab(BaseTab):
             "grain_strength": self._float_or_default(self.ui.var_filter_grain_strength.get(), default=1.0),
             "brightness_strength": self._float_or_default(self.ui.var_filter_brightness_strength.get(), default=1.0),
             "contrast_strength": self._float_or_default(self.ui.var_filter_contrast_strength.get(), default=1.0),
+            # High priority new filters
+            "enable_perspective": bool(self.ui.var_filter_enable_perspective.get()),
+            "perspective_strength": self._float_or_default(self.ui.var_filter_perspective_strength.get(), default=1.0),
+            "perspective_angle_x": self._float_or_default(self.ui.var_filter_perspective_angle_x.get(), default=0.0),
+            "perspective_angle_y": self._float_or_default(self.ui.var_filter_perspective_angle_y.get(), default=0.0),
+            "enable_motion_blur": bool(self.ui.var_filter_enable_motion_blur.get()),
+            "motion_blur_strength": self._float_or_default(self.ui.var_filter_motion_blur_strength.get(), default=1.0),
+            "motion_blur_angle": self._float_or_default(self.ui.var_filter_motion_blur_angle.get(), default=0.0),
+            "enable_saturation": bool(self.ui.var_filter_enable_saturation.get()),
+            "saturation_factor": self._float_or_default(self.ui.var_filter_saturation_factor.get(), default=1.0),
+            "enable_hue_shift": bool(self.ui.var_filter_enable_hue_shift.get()),
+            "hue_shift_deg": self._float_or_default(self.ui.var_filter_hue_shift_deg.get(), default=0.0),
+            "enable_shadow": bool(self.ui.var_filter_enable_shadow.get()),
+            "shadow_strength": self._float_or_default(self.ui.var_filter_shadow_strength.get(), default=0.3),
+            "shadow_size": self._float_or_default(self.ui.var_filter_shadow_size.get(), default=0.2),
+            "enable_reflection": bool(self.ui.var_filter_enable_reflection.get()),
+            "reflection_strength": self._float_or_default(self.ui.var_filter_reflection_strength.get(), default=0.5),
+            "reflection_size": self._float_or_default(self.ui.var_filter_reflection_size.get(), default=0.15),
+            # Medium/Low priority new filters
+            "enable_vignetting": bool(self.ui.var_filter_enable_vignetting.get()),
+            "vignetting_strength": self._float_or_default(self.ui.var_filter_vignetting_strength.get(), default=1.0),
+            "enable_chromatic_aberration": bool(self.ui.var_filter_enable_chromatic_aberration.get()),
+            "chromatic_strength": self._float_or_default(self.ui.var_filter_chromatic_strength.get(), default=1.0),
+            "enable_jpeg_compression": bool(self.ui.var_filter_enable_jpeg_compression.get()),
+            "jpeg_quality": int(self._float_or_default(self.ui.var_filter_jpeg_quality.get(), default=85)),
+            "enable_color_temperature": bool(self.ui.var_filter_enable_color_temperature.get()),
+            "color_temperature_kelvin": int(self._float_or_default(self.ui.var_filter_color_temperature_kelvin.get(), default=5500)),
+            "enable_lens_distortion": bool(self.ui.var_filter_enable_lens_distortion.get()),
+            "distortion_k1": self._float_or_default(self.ui.var_filter_distortion_k1.get(), default=0.0),
+            "distortion_k2": self._float_or_default(self.ui.var_filter_distortion_k2.get(), default=0.0),
+            "enable_dust": bool(self.ui.var_filter_enable_dust.get()),
+            "dust_density": self._float_or_default(self.ui.var_filter_dust_density.get(), default=0.3),
+            "dust_size": self._float_or_default(self.ui.var_filter_dust_size.get(), default=2.0),
+            "enable_sharpen": bool(self.ui.var_filter_enable_sharpen.get()),
+            "sharpen_strength": self._float_or_default(self.ui.var_filter_sharpen_strength.get(), default=1.0),
         }
 
     def _open_image_filters_popup(self) -> None:
+        """Open shared image filter popup."""
         profiles, active_profile = self._load_filter_profiles()
 
-        top = tk.Toplevel(self.frame)
-        top.title("Image Filters")
-        top.transient(self.frame.winfo_toplevel())
-        top.grab_set()
-        top.resizable(False, False)
+        def on_close(updated_profiles: Dict[str, Dict[str, Any]], updated_active: str) -> None:
+            self._save_filter_profiles(updated_profiles, updated_active)
 
-        root = ttk.Frame(top, padding=12)
-        root.pack(fill="both", expand=True)
-        root.columnconfigure(1, weight=1)
-
-        left = ttk.Frame(root)
-        left.grid(row=0, column=0, sticky="nsw", padx=(0, 12))
-        right = ttk.Frame(root)
-        right.grid(row=0, column=1, sticky="nsew")
-
-        ttk.Label(left, text="Filter Profiles", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
-        lb_profiles = tk.Listbox(left, height=10, width=22, exportselection=False)
-        lb_profiles.pack(fill="y", pady=(6, 6))
-
-        btn_profiles = ttk.Frame(left)
-        btn_profiles.pack(fill="x")
-
-        ttk.Label(right, text="Apply filters during image generation", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
-        ttk.Label(right, text="90° rotation moved here. Button sits right of Stop.").pack(anchor="w", pady=(2, 8))
-
-        row0 = ttk.Frame(right)
-        row0.pack(fill="x", pady=(0, 8))
-        ttk.Checkbutton(row0, text="Enable 90° base rotation", variable=self.ui.var_filter_cardinal_rotation_90).pack(side="left")
-        ttk.Checkbutton(row0, text="Enable rotation jitter", variable=self.ui.var_filter_enable_rotation).pack(side="left", padx=(12, 0))
-
-        controls = ttk.Frame(right)
-        controls.pack(fill="x")
-
-        def add_filter_row(
-            label: str,
-            var_enabled: tk.BooleanVar,
-            var_strength: tk.StringVar,
-            *,
-            min_v: float = 0.0,
-            max_v: float = 2.0,
-        ) -> None:
-            row = ttk.Frame(controls)
-            row.pack(fill="x", pady=(3, 0))
-            ttk.Checkbutton(row, text=label, variable=var_enabled).pack(side="left")
-
-            strength_var = tk.DoubleVar(value=self._float_or_default(var_strength.get(), default=1.0))
-            ttk.Scale(row, from_=min_v, to=max_v, orient="horizontal", variable=strength_var, length=210).pack(side="left", padx=(10, 6))
-            lbl = ttk.Label(row, width=5, anchor="e")
-            lbl.pack(side="left")
-            syncing = {"busy": False}
-
-            def _sync(_a: str = "", _b: str = "", _c: str = "") -> None:
-                if syncing["busy"]:
-                    return
-                syncing["busy"] = True
-                v = max(min_v, min(max_v, float(strength_var.get())))
-                var_strength.set(f"{v:.2f}")
-                lbl.configure(text=f"{v:.2f}")
-                syncing["busy"] = False
-
-            def _sync_from_string(_a: str = "", _b: str = "", _c: str = "") -> None:
-                if syncing["busy"]:
-                    return
-                syncing["busy"] = True
-                v = max(min_v, min(max_v, self._float_or_default(var_strength.get(), default=1.0)))
-                strength_var.set(v)
-                lbl.configure(text=f"{v:.2f}")
-                syncing["busy"] = False
-
-            strength_var.trace_add("write", _sync)
-            var_strength.trace_add("write", _sync_from_string)
-            _sync()
-
-        add_filter_row("Blur", self.ui.var_filter_enable_blur, self.ui.var_filter_blur_strength)
-        add_filter_row("Grain", self.ui.var_filter_enable_grain, self.ui.var_filter_grain_strength, max_v=3.0)
-        add_filter_row("Brightness", self.ui.var_filter_enable_brightness, self.ui.var_filter_brightness_strength, max_v=2.0)
-        add_filter_row("Contrast", self.ui.var_filter_enable_contrast, self.ui.var_filter_contrast_strength, max_v=2.0)
-        add_filter_row("Rotation", self.ui.var_filter_enable_rotation, self.ui.var_filter_rotation_strength, max_v=2.0)
-
-        def _refresh_profile_list(select_name: Optional[str] = None) -> None:
-            names = sorted(profiles.keys(), key=lambda s: s.lower())
-            lb_profiles.delete(0, "end")
-            for n in names:
-                lb_profiles.insert("end", n)
-            target = select_name or active_profile
-            if target in names:
-                idx = names.index(target)
-                lb_profiles.selection_clear(0, "end")
-                lb_profiles.selection_set(idx)
-                lb_profiles.activate(idx)
-
-        def _selected_profile_name() -> Optional[str]:
-            sel = lb_profiles.curselection()
-            if not sel:
-                return None
-            try:
-                return str(lb_profiles.get(sel[0]))
-            except Exception:
-                return None
-
-        def _persist_active_profile() -> None:
-            if active_profile in profiles:
-                profiles[active_profile] = self._current_filter_settings_dict()
-            self._save_filter_profiles(profiles, active_profile)
-
-        def _load_profile_from_selection(_evt: Optional[tk.Event] = None) -> None:
-            nonlocal active_profile
-            name = _selected_profile_name()
-            if not name:
-                return
-            _persist_active_profile()
-            data = profiles.get(name)
-            if isinstance(data, dict):
-                self._apply_filter_settings_dict(data)
-                active_profile = name
-                _persist_active_profile()
-
-        def _new_profile() -> None:
-            nonlocal active_profile
-            name = (self.ui.ask_string("New Filter Profile", "Profile name:") or "").strip()
-            if not name:
-                return
-            if name in profiles:
-                self.ui.show_messagebox("warning", "Exists", f"Profile '{name}' already exists.")
-                return
-            profiles[name] = self._current_filter_settings_dict()
-            active_profile = name
-            _persist_active_profile()
-            _refresh_profile_list(select_name=name)
-
-        def _save_profile() -> None:
-            nonlocal active_profile
-            name = _selected_profile_name()
-            if not name:
-                self.ui.show_messagebox("warning", "No selection", "Select a profile first.")
-                return
-            profiles[name] = self._current_filter_settings_dict()
-            active_profile = name
-            _persist_active_profile()
-
-        def _rename_profile() -> None:
-            nonlocal active_profile
-            old = _selected_profile_name()
-            if not old:
-                self.ui.show_messagebox("warning", "No selection", "Select a profile first.")
-                return
-            new = (self.ui.ask_string("Rename Filter Profile", "New name:", initialvalue=old) or "").strip()
-            if not new or new == old:
-                return
-            if new in profiles:
-                self.ui.show_messagebox("warning", "Exists", f"Profile '{new}' already exists.")
-                return
-            profiles[new] = profiles.pop(old)
-            if active_profile == old:
-                active_profile = new
-            _persist_active_profile()
-            _refresh_profile_list(select_name=new)
-
-        def _delete_profile() -> None:
-            nonlocal active_profile
-            name = _selected_profile_name()
-            if not name:
-                self.ui.show_messagebox("warning", "No selection", "Select a profile first.")
-                return
-            if len(profiles) <= 1:
-                self.ui.show_messagebox("warning", "Blocked", "At least one profile must remain.")
-                return
-            if not self.ui.ask_yes_no("Delete Filter Profile", f"Delete profile '{name}'?"):
-                return
-            profiles.pop(name, None)
-            if active_profile == name:
-                active_profile = sorted(profiles.keys(), key=lambda s: s.lower())[0]
-                self._apply_filter_settings_dict(profiles.get(active_profile, {}))
-            _persist_active_profile()
-            _refresh_profile_list(select_name=active_profile)
-
-        ttk.Button(btn_profiles, text="Neu", width=7, command=_new_profile).pack(side="left")
-        ttk.Button(btn_profiles, text="Speichern", width=9, command=_save_profile).pack(side="left", padx=(4, 0))
-        ttk.Button(btn_profiles, text="Umbenennen", width=11, command=_rename_profile).pack(side="left", padx=(4, 0))
-        ttk.Button(btn_profiles, text="Löschen", width=8, command=_delete_profile).pack(side="left", padx=(4, 0))
-        lb_profiles.bind("<<ListboxSelect>>", _load_profile_from_selection)
-        lb_profiles.bind("<Double-Button-1>", _load_profile_from_selection)
-        _refresh_profile_list(select_name=active_profile)
-        self._apply_filter_settings_dict(profiles.get(active_profile, {}))
-
-        btns = ttk.Frame(right)
-        btns.pack(fill="x", pady=(10, 0))
-
-        def _reset_defaults() -> None:
-            self.ui.var_filter_cardinal_rotation_90.set(True)
-            self.ui.var_filter_enable_rotation.set(True)
-            self.ui.var_filter_enable_blur.set(True)
-            self.ui.var_filter_enable_grain.set(True)
-            self.ui.var_filter_enable_brightness.set(True)
-            self.ui.var_filter_enable_contrast.set(True)
-            self.ui.var_filter_rotation_strength.set("1.0")
-            self.ui.var_filter_blur_strength.set("1.0")
-            self.ui.var_filter_grain_strength.set("1.0")
-            self.ui.var_filter_brightness_strength.set("1.0")
-            self.ui.var_filter_contrast_strength.set("1.0")
-            _persist_active_profile()
-
-        def _reset_selected_profile_to_one() -> None:
-            name = _selected_profile_name()
-            if not name:
-                self.ui.show_messagebox("warning", "No selection", "Select a profile first.")
-                return
-            profiles[name] = {
-                "cardinal_rotation_90": True,
-                "enable_rotation": True,
-                "enable_blur": True,
-                "enable_grain": True,
-                "enable_brightness": True,
-                "enable_contrast": True,
-                "rotation_strength": "1.00",
-                "blur_strength": "1.00",
-                "grain_strength": "1.00",
-                "brightness_strength": "1.00",
-                "contrast_strength": "1.00",
-            }
-            self._apply_filter_settings_dict(profiles[name])
-            _persist_active_profile()
-            _refresh_profile_list(select_name=name)
-
-        ttk.Button(btns, text="Defaults", command=_reset_defaults).pack(side="left")
-        ttk.Button(btns, text="Reset to 1", command=_reset_selected_profile_to_one).pack(side="left", padx=(6, 0))
-        ttk.Button(btns, text="Close", command=lambda: (_persist_active_profile(), top.destroy())).pack(side="right")
-        top.protocol("WM_DELETE_WINDOW", lambda: (_persist_active_profile(), top.destroy()))
+        open_filter_popup(
+            parent=self.frame,
+            profiles=profiles,
+            active_profile=active_profile,
+            on_close=on_close,
+            get_current_values=self._current_filter_settings_dict,
+            set_current_values=self._apply_filter_settings_dict,
+            float_or_default=self._float_or_default,
+            show_messagebox=self.ui.show_messagebox,
+            ask_string=self.ui.ask_string,
+            ask_yes_no=self.ui.ask_yes_no,
+        )
 
     def _refresh_profile_models(self) -> None:
         paths = self.logic.get_profile_classifier_models()
