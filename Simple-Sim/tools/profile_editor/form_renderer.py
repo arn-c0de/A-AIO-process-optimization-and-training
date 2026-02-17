@@ -78,6 +78,10 @@ class FormRenderer(ttk.Frame):
     def _commit_entry(self, path: Tuple[str, ...], widget: ttk.Entry) -> None:
         self._on_field_commit(self.target, path, widget.get())
 
+    def apply_theme(self, *, dark: bool) -> None:
+        bg = "#1f2329" if dark else "#ffffff"
+        self.canvas.configure(bg=bg)
+
     @staticmethod
     def _to_form_text(value: Any) -> str:
         if isinstance(value, bool):

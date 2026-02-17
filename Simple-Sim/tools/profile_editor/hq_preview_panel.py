@@ -35,6 +35,10 @@ class HQPreviewPanel(ttk.Frame):
         self.path_var.set(str(self._img_path) if self._img_path else "")
         self._redraw()
 
+    def apply_theme(self, *, dark: bool) -> None:
+        self.canvas.configure(bg="#0d0f14" if dark else "#f5f7fa")
+        self._redraw()
+
     def _redraw(self) -> None:
         self.canvas.delete("all")
         w = max(1, self.canvas.winfo_width())
