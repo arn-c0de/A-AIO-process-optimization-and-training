@@ -230,6 +230,13 @@ def _overlay_in_place(path: Path, defect: Dict[str, Any], nominal: Dict[str, Any
     if not ok:
         raise RuntimeError(f"Failed to write overlay image: {path}")
 
+import re
+def generate_slug(text: str) -> str:
+    s = text.lower().strip()
+    s = re.sub(r'[^\w\s-]', '', s) # Remove all non-word chars (except whitespace and hyphen)
+    s = re.sub(r'[\s_-]+', '-', s) # Replace all whitespace and underscore with a single hyphen
+    return s.strip('-') # Remove leading/trailing hyphens
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate SAMPLE_GALLERY.md images from real 2D/3D renderers.")
@@ -421,45 +428,57 @@ def main() -> None:
 
     # Write SAMPLE_GALLERY.md
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    lines: list[str] = []
-    lines.append("# Sample Gallery")
-    lines.append("")
-    lines.append(f"Auto-generated reference images for all component profiles (2D and 3D). Last updated: {now}")
-    lines.append("")
-    lines.append("Re-generate by running:")
-    lines.append("```bash")
-    lines.append(".venv/bin/python tools/update_sample_gallery.py")
-    lines.append("```")
-    lines.append("")
+    header_lines: list[str] = []
+    header_lines.append("# Sample Gallery")
+    header_lines.append("")
+    header_lines.append(f"Auto-generated reference images for all component profiles (2D and 3D). Last updated: {now}")
+    header_lines.append("")
+    header_lines.append("Re-generate by running:")
+    header_lines.append("```bash")
+    header_lines.append(".venv/bin/python tools/update_sample_gallery.py")
+    header_lines.append("```")
+    header_lines.append("")
 
-    # Group entries by profile and render backend
-    profiles_seen: dict[str, dict[str, list[tuple[str, str, str]]]] = defaultdict(lambda: defaultdict(list))
+    # Group entries by render backend and then by profile_id
+    profiles_by_backend: dict[str, dict[str, list[tuple[str, str]]]] = defaultdict(lambda: defaultdict(list))
     for profile_id, _, class_name, rel_path, render_backend in entries:
-        profiles_seen[profile_id][render_backend].append((profile_id, class_name, rel_path))
+        profiles_by_backend[render_backend][profile_id].append((class_name, rel_path))
 
-    for profile_id in sorted(profiles_seen.keys()):
-        backends = profiles_seen[profile_id]
+    toc_lines: list[str] = []
+    content_lines: list[str] = []
 
-        lines.append(f"## {profile_id}")
-        lines.append("")
+    # Generate 2D Profiles Section
+    if "opencv_2d" in profiles_by_backend:
+        toc_lines.append(f"- [2D Profiles](#{generate_slug('2D Profiles')})")
+        content_lines.append("## 2D Profiles")
+        content_lines.append("")
+        for profile_id in sorted(profiles_by_backend["opencv_2d"].keys()):
+            toc_lines.append(f"  - [{profile_id}](#{generate_slug(profile_id)})")
+            content_lines.append(f"### {profile_id}")
+            content_lines.append("")
+            content_lines.append("| Class | Sample |")
+            content_lines.append("|-------|--------|")
+            for class_name, rel_path in sorted(profiles_by_backend["opencv_2d"][profile_id], key=lambda x: x[0]):
+                content_lines.append(f"| {class_name} | ![{class_name}]({rel_path}) |")
+            content_lines.append("")
 
-        # Organize by render backend
-        for backend in sorted(backends.keys()):
-            items = backends[backend]
+    # Generate 3D Profiles Section
+    if "blender_3d" in profiles_by_backend:
+        toc_lines.append(f"- [3D Profiles](#{generate_slug('3D Profiles')})")
+        content_lines.append("## 3D Profiles")
+        content_lines.append("")
+        for profile_id in sorted(profiles_by_backend["blender_3d"].keys()):
+            toc_lines.append(f"  - [{profile_id}](#{generate_slug(profile_id)})")
+            content_lines.append(f"### {profile_id}")
+            content_lines.append("")
+            content_lines.append("| Class | Sample |")
+            content_lines.append("|-------|--------|")
+            for class_name, rel_path in sorted(profiles_by_backend["blender_3d"][profile_id], key=lambda x: x[0]):
+                content_lines.append(f"| {class_name} | ![{class_name}]({rel_path}) |")
+            content_lines.append("")
 
-            # Add backend label if multiple backends present for this profile
-            if len(backends) > 1:
-                backend_label = "2D (OpenCV)" if backend == "opencv_2d" else "3D (Blender)" if backend == "blender_3d" else backend
-                lines.append(f"### {backend_label}")
-                lines.append("")
-
-            lines.append("| Class | Sample |")
-            lines.append("|-------|--------|")
-            for _, class_name, rel_path in sorted(items, key=lambda x: x[1]):
-                lines.append(f"| {class_name} | ![{class_name}]({rel_path}) |")
-            lines.append("")
-
-    gallery_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    final_lines = header_lines + ["## Table of Contents", ""] + toc_lines + [""] + content_lines
+    gallery_md.write_text("\n".join(final_lines) + "\n", encoding="utf-8")
     print(f"\n✓ Gallery written to {gallery_md}")
     print(f"✓ Images in {gallery_dir}")
     print(f"✓ Total samples: {len(entries)}")
