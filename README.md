@@ -20,10 +20,12 @@ A sandbox environment for pre-training and specializing models on synthetic data
 - Sample images: [`Simple-Sim/SAMPLE_GALLERY.md`](Simple-Sim/SAMPLE_GALLERY.md)
 
 ---
+
 ## Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 >  Old Arena stats before 90° implementation : [`Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md`](Simple-Sim/docs/arena-reports-historie/2026-02-ARENA_REPORT.md)
 
 ![Top Avg Accuracy](Simple-Sim/ARENA_REPORT_assets/top_avg_accuracy.svg)
+
 ---
 
 ## Current Research 2026-02-17
@@ -34,9 +36,8 @@ A sandbox environment for pre-training and specializing models on synthetic data
 > ## Completed Testing Research
 > - Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md`](Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md)
 
-
-
 ---
+
 ## Production Notes: Bundled vs Single Models
 > **📌 Current Conclusions 2026-02**
 >
@@ -56,6 +57,8 @@ A sandbox environment for pre-training and specializing models on synthetic data
 > - Ideal for edge deployment and real-world PCB inspection where component type is unknown
 >
 > **→ Recommendation**: Use single models trained on all datasets for robustness, simplicity, and smaller footprint.
+
+---
 
 ## License
 
