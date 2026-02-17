@@ -169,12 +169,18 @@ class FilterPopup:
             default_strength: float,
             min_v: float = 0.0,
             max_v: float = 2.0,
+            enable_var: Optional[tk.BooleanVar] = None,
         ) -> None:
             row = ttk.Frame(parent)
             row.pack(fill="x", pady=(3, 0))
 
-            var_enable = tk.BooleanVar(value=current.get(key_enable, default_enable))
-            var_strength = tk.DoubleVar(value=self.float_or_default(str(current.get(key_strength, default_strength)), default_strength))
+            var_enable = enable_var if enable_var is not None else tk.BooleanVar(value=current.get(key_enable, default_enable))
+            var_strength = tk.DoubleVar(
+                value=self.float_or_default(
+                    str(current.get(key_strength, default_strength)),
+                    default=default_strength,
+                )
+            )
 
             ttk.Checkbutton(row, text=label, variable=var_enable).pack(side="left")
 
@@ -201,7 +207,7 @@ class FilterPopup:
         add_filter_row("Grain", "enable_grain", "grain_strength", True, 1.0, max_v=3.0)
         add_filter_row("Brightness", "enable_brightness", "brightness_strength", True, 1.0, max_v=2.0)
         add_filter_row("Contrast", "enable_contrast", "contrast_strength", True, 1.0, max_v=2.0)
-        add_filter_row("Rotation", "enable_rotation", "rotation_strength", True, 1.0, max_v=2.0)
+        add_filter_row("Rotation", "enable_rotation", "rotation_strength", True, 1.0, max_v=2.0, enable_var=self.var_rotation)
 
         # High priority
         add_section("━━━ High Priority (enabled) ━━━")
@@ -275,7 +281,10 @@ class FilterPopup:
             if key in data:
                 value = data[key]
                 if isinstance(var, tk.BooleanVar):
-                    var.set(bool(value))
+                    if isinstance(value, str):
+                        var.set(value.strip().lower() in {"1", "true", "yes", "on"})
+                    else:
+                        var.set(bool(value))
                 elif isinstance(var, (tk.DoubleVar, tk.StringVar)):
                     try:
                         if isinstance(var, tk.DoubleVar):

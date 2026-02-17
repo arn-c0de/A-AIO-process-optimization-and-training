@@ -22,6 +22,20 @@
 - `pipeline.filter.grain_strength`
 - `pipeline.filter.brightness_strength`
 - `pipeline.filter.contrast_strength`
+- Plus all new filter keys (high/medium/low priority), e.g.:
+  - `pipeline.filter.enable_perspective`, `pipeline.filter.perspective_strength`
+  - `pipeline.filter.enable_motion_blur`, `pipeline.filter.motion_blur_strength`
+  - `pipeline.filter.enable_saturation`, `pipeline.filter.saturation_factor`
+  - `pipeline.filter.enable_hue_shift`, `pipeline.filter.hue_shift_deg`
+  - `pipeline.filter.enable_shadow`, `pipeline.filter.shadow_strength`
+  - `pipeline.filter.enable_reflection`, `pipeline.filter.reflection_strength`
+  - `pipeline.filter.enable_vignetting`, `pipeline.filter.vignetting_strength`
+  - `pipeline.filter.enable_chromatic_aberration`, `pipeline.filter.chromatic_strength`
+  - `pipeline.filter.enable_jpeg_compression`, `pipeline.filter.jpeg_quality`
+  - `pipeline.filter.enable_color_temperature`, `pipeline.filter.color_temperature_kelvin`
+  - `pipeline.filter.enable_lens_distortion`, `pipeline.filter.distortion_k1`
+  - `pipeline.filter.enable_dust`, `pipeline.filter.dust_density`
+  - `pipeline.filter.enable_sharpen`, `pipeline.filter.sharpen_strength`
 
 ## Which filters exist
 - `90° base rotation` (cardinal: 0/90/180/270)
@@ -39,6 +53,7 @@ Each filter has:
 - On startup, active profile and filter values are loaded from `settings.json`.
 - In popup/profile actions (new/save/rename/delete/select/close), active profile values are persisted.
 - Debug preview and main GUI are synchronized through the same file.
+- `render_debug_previews.py` persists the full filter set (not only legacy blur/grain/brightness/contrast keys).
 
 ## Runtime transfer into generation
 - Pipeline run passes filter config through environment variable: `IMAGE_FILTERS` (JSON).
