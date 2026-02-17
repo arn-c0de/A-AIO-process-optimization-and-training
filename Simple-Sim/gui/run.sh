@@ -23,6 +23,9 @@ if [[ ! -x "${PYTHON}" ]]; then
   python3 -m venv "${VENV_DIR}"
 fi
 
+echo "Ensuring pip is installed"
+"${PYTHON}" -m ensurepip --upgrade
+
 PIP_FLAGS=()
 if [[ -n "${WHEELHOUSE:-}" ]]; then
   PIP_FLAGS+=(--no-index --find-links "${WHEELHOUSE}")

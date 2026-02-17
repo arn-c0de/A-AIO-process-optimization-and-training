@@ -11,6 +11,7 @@ set -euo pipefail
 #   ./run_render_debug.sh --backend both --all --non-interactive
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REAL_HERE="$(cd "$HERE" && pwd -P)"
 cd "$HERE"
 
 REQ_FILE="$HERE/requirements.txt"
@@ -20,19 +21,37 @@ if [[ ! -f "$REQ_FILE" ]]; then
 fi
 
 VENV_DIR=""
-for cand in "venv" ".venv"; do
-  if [[ -x "$HERE/$cand/bin/python" ]]; then
-    VENV_DIR="$HERE/$cand"
-    break
-  fi
-done
+
+# Prefer currently active venv, then local candidates from both logical and
+# physical script paths (helps when the same repo is mounted via different roots).
+if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+  VENV_DIR="$VIRTUAL_ENV"
+else
+  for base in "$HERE" "$REAL_HERE"; do
+    for cand in ".venv" "venv"; do
+      if [[ -x "$base/$cand/bin/python" ]]; then
+        VENV_DIR="$base/$cand"
+        break 2
+      fi
+    done
+  done
+fi
+
 if [[ -z "$VENV_DIR" ]]; then
   VENV_DIR="$HERE/.venv"
   python3 -m venv "$VENV_DIR"
 fi
 
+PYTHON_BIN="$VENV_DIR/bin/python"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "[error] No python executable found in virtual environment: $VENV_DIR" >&2
+  exit 2
+fi
+
 # shellcheck disable=SC1090
-source "$VENV_DIR/bin/activate"
+if [[ -f "$VENV_DIR/bin/activate" ]]; then
+  source "$VENV_DIR/bin/activate"
+fi
 
 req_has() {
   # case-insensitive match of a bare requirement name at start of line
@@ -41,22 +60,22 @@ req_has() {
 }
 
 missing_mods=()
-python - <<'PY' || missing_mods+=("numpy")
+"$PYTHON_BIN" - <<'PY' || missing_mods+=("numpy")
 import numpy  # noqa: F401
 PY
-python - <<'PY' || missing_mods+=("yaml")
+"$PYTHON_BIN" - <<'PY' || missing_mods+=("yaml")
 import yaml  # noqa: F401
 PY
-python - <<'PY' || missing_mods+=("pil")
+"$PYTHON_BIN" - <<'PY' || missing_mods+=("pil")
 from PIL import Image  # noqa: F401
 PY
-python - <<'PY' || missing_mods+=("cv2")
+"$PYTHON_BIN" - <<'PY' || missing_mods+=("cv2")
 import cv2  # noqa: F401
 PY
 
 if (( ${#missing_mods[@]} )); then
   echo "[info] Missing Python modules in venv: ${missing_mods[*]}"
-  python -m pip install -q --upgrade pip
+  "$PYTHON_BIN" -m pip install -q --upgrade pip
 
   # Install minimal deps (fast) but ensure they're listed in requirements.txt.
   to_install=()
@@ -78,11 +97,13 @@ if (( ${#missing_mods[@]} )); then
   done
 
   if (( ${#to_install[@]} )); then
-    python -m pip install "${to_install[@]}"
+    "$PYTHON_BIN" -m pip install "${to_install[@]}"
   else
     echo "[warn] Could not map missing modules to requirements.txt entries; falling back to full requirements install." >&2
-    python -m pip install -r "$REQ_FILE"
+    "$PYTHON_BIN" -m pip install -r "$REQ_FILE"
   fi
 fi
 
-exec python "$HERE/scripts/render_debug_previews.py" "$@"
+SETTINGS_FILE="${RENDER_DEBUG_SETTINGS_FILE:-$HERE/outputs/gui/settings.json}"
+
+exec "$PYTHON_BIN" "$HERE/scripts/render_debug_previews.py" --settings-file "$SETTINGS_FILE" "$@"

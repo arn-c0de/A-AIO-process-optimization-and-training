@@ -5,6 +5,82 @@ import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 
 
+def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Normalize optional IMAGE_FILTERS payload with safe defaults."""
+    src = image_filters or {}
+
+    def _bool(name: str, default: bool) -> bool:
+        v = src.get(name, default)
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            return v.strip().lower() in {"1", "true", "yes", "on"}
+        return default
+
+    def _float(name: str, default: float, lo: float = 0.0, hi: float = 5.0) -> float:
+        try:
+            v = float(src.get(name, default))
+        except Exception:
+            v = float(default)
+        return max(lo, min(hi, v))
+
+    return {
+        "enable": _bool("enable", True),
+        "cardinal_rotation_90": _bool("cardinal_rotation_90", True),
+        "enable_rotation": _bool("enable_rotation", True),
+        "enable_blur": _bool("enable_blur", True),
+        "enable_grain": _bool("enable_grain", True),
+        "enable_brightness": _bool("enable_brightness", True),
+        "enable_contrast": _bool("enable_contrast", True),
+        "rotation_strength": _float("rotation_strength", 1.0, 0.0, 4.0),
+        "blur_strength": _float("blur_strength", 1.0, 0.0, 4.0),
+        "grain_strength": _float("grain_strength", 1.0, 0.0, 4.0),
+        "brightness_strength": _float("brightness_strength", 1.0, 0.0, 4.0),
+        "contrast_strength": _float("contrast_strength", 1.0, 0.0, 4.0),
+    }
+
+
+def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    """Apply toggle + strength overrides to sampled augment params."""
+    aug = dict(augment or {})
+    filt = normalize_image_filters(image_filters)
+    if not filt.get("enable", True):
+        return aug
+
+    if not filt.get("enable_blur", True):
+        aug["blur_sigma"] = 0.0
+    else:
+        aug["blur_sigma"] = float(aug.get("blur_sigma", 0.0)) * float(filt.get("blur_strength", 1.0))
+
+    if not filt.get("enable_grain", True):
+        aug["noise_stddev"] = 0.0
+    else:
+        aug["noise_stddev"] = float(aug.get("noise_stddev", 0.0)) * float(filt.get("grain_strength", 1.0))
+
+    if not filt.get("enable_brightness", True):
+        aug["brightness_factor"] = 1.0
+    else:
+        bf = float(aug.get("brightness_factor", 1.0))
+        bs = float(filt.get("brightness_strength", 1.0))
+        aug["brightness_factor"] = 1.0 + ((bf - 1.0) * bs)
+
+    if not filt.get("enable_contrast", True):
+        aug["contrast_factor"] = 1.0
+    else:
+        cf = float(aug.get("contrast_factor", 1.0))
+        cs = float(filt.get("contrast_strength", 1.0))
+        aug["contrast_factor"] = 1.0 + ((cf - 1.0) * cs)
+
+    if not filt.get("enable_rotation", True):
+        aug["rotation_deg"] = 0.0
+    else:
+        aug["rotation_deg"] = float(aug.get("rotation_deg", 0.0)) * float(filt.get("rotation_strength", 1.0))
+
+    return aug
+
+
 def sample_nominal_geometry(
     roi_config: Dict[str, Any],
     rng: np.random.Generator,
