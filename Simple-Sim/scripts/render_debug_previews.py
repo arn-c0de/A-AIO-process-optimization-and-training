@@ -169,7 +169,6 @@ def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[st
         active = "Default"
     if active not in profiles:
         active = sorted(profiles.keys(), key=lambda s: s.lower())[0]
-    profiles[active] = _filter_settings_to_profile_store(current)
     return profiles, active, _normalize_filter_settings(profiles.get(active, {}))
 
 
@@ -861,10 +860,32 @@ def _open_tk_viewer(
                 _persist_filters(shared_active_profile)
                 _refresh_pf_list(select_name=shared_active_profile)
 
+            def _reset_selected_profile_to_one() -> None:
+                n = _sel_name()
+                if not n:
+                    return
+                shared_profiles[n] = {
+                    "cardinal_rotation_90": True,
+                    "enable_rotation": True,
+                    "enable_blur": True,
+                    "enable_grain": True,
+                    "enable_brightness": True,
+                    "enable_contrast": True,
+                    "rotation_strength": "1.00",
+                    "blur_strength": "1.00",
+                    "grain_strength": "1.00",
+                    "brightness_strength": "1.00",
+                    "contrast_strength": "1.00",
+                }
+                _apply_filters_to_vars(shared_profiles[n])
+                _persist_filters(n)
+                _refresh_pf_list(select_name=n)
+
             ttk.Button(pf_btns, text="Neu", width=7, command=_new_profile).pack(side="left")
             ttk.Button(pf_btns, text="Speichern", width=9, command=_save_profile).pack(side="left", padx=(4, 0))
             ttk.Button(pf_btns, text="Umbenennen", width=11, command=_rename_profile).pack(side="left", padx=(4, 0))
             ttk.Button(pf_btns, text="Löschen", width=8, command=_delete_profile).pack(side="left", padx=(4, 0))
+            ttk.Button(pf_btns, text="Reset to 1", width=10, command=_reset_selected_profile_to_one).pack(side="left", padx=(4, 0))
             lb.bind("<<ListboxSelect>>", _on_select)
             _refresh_pf_list()
 

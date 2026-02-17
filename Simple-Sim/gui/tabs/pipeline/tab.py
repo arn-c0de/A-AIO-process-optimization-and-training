@@ -299,8 +299,6 @@ class PipelineControlTab(BaseTab):
             active = "Default"
         if active not in profiles:
             active = sorted(profiles.keys())[0]
-        if current_live:
-            profiles[active] = dict(current_live)
         return profiles, active
 
     def _save_filter_profiles(self, profiles: Dict[str, Dict[str, Any]], active: str) -> None:
@@ -387,13 +385,28 @@ class PipelineControlTab(BaseTab):
             ttk.Scale(row, from_=min_v, to=max_v, orient="horizontal", variable=strength_var, length=210).pack(side="left", padx=(10, 6))
             lbl = ttk.Label(row, width=5, anchor="e")
             lbl.pack(side="left")
+            syncing = {"busy": False}
 
             def _sync(_a: str = "", _b: str = "", _c: str = "") -> None:
+                if syncing["busy"]:
+                    return
+                syncing["busy"] = True
                 v = max(min_v, min(max_v, float(strength_var.get())))
                 var_strength.set(f"{v:.2f}")
                 lbl.configure(text=f"{v:.2f}")
+                syncing["busy"] = False
+
+            def _sync_from_string(_a: str = "", _b: str = "", _c: str = "") -> None:
+                if syncing["busy"]:
+                    return
+                syncing["busy"] = True
+                v = max(min_v, min(max_v, self._float_or_default(var_strength.get(), default=1.0)))
+                strength_var.set(v)
+                lbl.configure(text=f"{v:.2f}")
+                syncing["busy"] = False
 
             strength_var.trace_add("write", _sync)
+            var_strength.trace_add("write", _sync_from_string)
             _sync()
 
         add_filter_row("Blur", self.ui.var_filter_enable_blur, self.ui.var_filter_blur_strength)
@@ -525,7 +538,30 @@ class PipelineControlTab(BaseTab):
             self.ui.var_filter_contrast_strength.set("1.0")
             _persist_active_profile()
 
+        def _reset_selected_profile_to_one() -> None:
+            name = _selected_profile_name()
+            if not name:
+                self.ui.show_messagebox("warning", "No selection", "Select a profile first.")
+                return
+            profiles[name] = {
+                "cardinal_rotation_90": True,
+                "enable_rotation": True,
+                "enable_blur": True,
+                "enable_grain": True,
+                "enable_brightness": True,
+                "enable_contrast": True,
+                "rotation_strength": "1.00",
+                "blur_strength": "1.00",
+                "grain_strength": "1.00",
+                "brightness_strength": "1.00",
+                "contrast_strength": "1.00",
+            }
+            self._apply_filter_settings_dict(profiles[name])
+            _persist_active_profile()
+            _refresh_profile_list(select_name=name)
+
         ttk.Button(btns, text="Defaults", command=_reset_defaults).pack(side="left")
+        ttk.Button(btns, text="Reset to 1", command=_reset_selected_profile_to_one).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Close", command=lambda: (_persist_active_profile(), top.destroy())).pack(side="right")
         top.protocol("WM_DELETE_WINDOW", lambda: (_persist_active_profile(), top.destroy()))
 
