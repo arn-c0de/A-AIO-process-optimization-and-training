@@ -392,11 +392,18 @@ class Preview3D(ttk.Frame):
         comp_h = max(8.0, min(42.0, h_ratio * max(comp_l, comp_w) * 0.65))
         pad_t = max(2.0, min(10.0, min(pad_w, pad_h) * 0.22))
 
-        board_w = max(260.0, comp_l * 2.8, pad_sx + pad_w * 2.6)
-        board_h = max(220.0, comp_w * 2.8, pad_sy + pad_h * 2.8)
-
         footprint = str(((profile.get("component") or {}).get("footprint") or "chip_2pad")).strip()
         self._scene_footprint = footprint
+
+        body_len_x = comp_l
+        body_len_y = comp_w
+        if footprint == "soic_16":
+            # Match blender/render_batch.py orientation for SOIC-16.
+            body_len_x = comp_w
+            body_len_y = comp_l
+
+        board_w = max(260.0, body_len_x * 2.8, pad_sx + pad_w * 2.6)
+        board_h = max(220.0, body_len_y * 2.8, pad_sy + pad_h * 2.8)
 
         substrate = self._box(
             "substrate",
@@ -409,14 +416,46 @@ class Preview3D(ttk.Frame):
         body = self._box(
             "component_body",
             (0.0, 0.0, comp_h * 0.5 + pad_t),
-            (comp_l, comp_w, comp_h),
+            (body_len_x, body_len_y, comp_h),
             "#2b2b2f",
             "#616161",
             movable=False,
         )
 
         pads: List[BoxMesh] = []
-        if footprint in {"sot23", "qfn_32", "qfn"}:
+        if footprint == "soic_16":
+            # 8 pads on the left + 8 pads on the right, matching blender/render_batch.py intent.
+            # Keep pads distributed along package length and outside body width.
+            row_x = max(pad_sx * 0.5, (body_len_x * 0.5) + (pad_h * 0.65))
+            y_span = max(pad_w * 7.0, body_len_y * 0.82)
+            pitch = y_span / 7.0
+            y0 = -y_span * 0.5
+            idx = 1
+            for i in range(8):
+                y = y0 + i * pitch
+                pads.append(
+                    self._box(
+                        f"pad_{idx}",
+                        (-row_x, y, pad_t * 0.5),
+                        (pad_h, pad_w, pad_t),
+                        "#bd7a33",
+                        "#d79c5f",
+                        movable=True,
+                    )
+                )
+                idx += 1
+                pads.append(
+                    self._box(
+                        f"pad_{idx}",
+                        (row_x, y, pad_t * 0.5),
+                        (pad_h, pad_w, pad_t),
+                        "#bd7a33",
+                        "#d79c5f",
+                        movable=True,
+                    )
+                )
+                idx += 1
+        elif footprint in {"sot23", "qfn_32", "qfn"}:
             offsets = [(-pad_sx * 0.5, -pad_sy * 0.5), (pad_sx * 0.5, -pad_sy * 0.5), (0.0, pad_sy * 0.5)]
             if footprint.startswith("qfn"):
                 offsets = [
@@ -559,7 +598,8 @@ class Preview3D(ttk.Frame):
             )
             return
 
-        draw_faces: List[Tuple[float, List[Tuple[float, float]], str, str, str]] = []
+        draw_faces: List[Tuple[float, List[Tuple[float, float]], str, str]] = []
+        edge_segments: List[Tuple[Tuple[float, float], Tuple[float, float], str]] = []
         self._hit_regions = []
         for mesh_index, mesh in enumerate(self.meshes):
             vis = self._visibility_vars.get(mesh.name)
@@ -569,19 +609,55 @@ class Preview3D(ttk.Frame):
                 cam_pts = [self._to_camera(v) for v in face]
                 if max(pt[2] for pt in cam_pts) <= 1.0:
                     continue
+                # Cull backfaces for stable solid filling; keep edges in overlay pass.
+                a = cam_pts[0]
+                b = cam_pts[1]
+                c = cam_pts[2]
+                ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+                ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+                n = self._cross(ab, ac)
+                if n[2] >= 0.0:
+                    continue
                 poly = [self._project_cam(pt[0], pt[1], pt[2], width, height) for pt in cam_pts]
                 depth = sum(pt[2] for pt in cam_pts) / 4.0 + mesh_index * 1e-3
-                draw_faces.append((depth, poly, mesh.color, mesh.outline, mesh.name))
+                draw_faces.append((depth, poly, mesh.color, mesh.name))
+
+                # Collect face edges; render them in a dedicated pass to avoid outline flicker.
+                for i in range(4):
+                    a = cam_pts[i]
+                    b = cam_pts[(i + 1) % 4]
+                    if a[2] <= 1.0 or b[2] <= 1.0:
+                        continue
+                    pa = self._project_cam(a[0], a[1], a[2], width, height)
+                    pb = self._project_cam(b[0], b[1], b[2], width, height)
+                    edge_segments.append((pa, pb, mesh.outline))
 
         draw_faces.sort(key=lambda item: item[0], reverse=True)
-        for _depth, poly, color, outline, name in draw_faces:
+        for _depth, poly, color, name in draw_faces:
             flat: List[float] = []
             for x, y in poly:
                 flat.extend([x, y])
-            line_color = "#ffffff" if name == self._selected_name else outline
-            line_width = 2 if name == self._selected_name else 1
-            self.canvas.create_polygon(flat, fill=color, outline=line_color, width=line_width)
+            self.canvas.create_polygon(flat, fill=color, outline="", width=0)
             self._hit_regions.append((name, poly))
+
+        # Edge overlay pass
+        for (x1, y1), (x2, y2), edge_color in edge_segments:
+            self.canvas.create_line(x1, y1, x2, y2, fill=edge_color, width=1)
+
+        # Highlight selected mesh with stronger edge color.
+        if self._selected_name:
+            selected = self._mesh_by_name(self._selected_name)
+            if selected is not None:
+                for face in selected.faces:
+                    cam_pts = [self._to_camera(v) for v in face]
+                    for i in range(4):
+                        a = cam_pts[i]
+                        b = cam_pts[(i + 1) % 4]
+                        if a[2] <= 1.0 or b[2] <= 1.0:
+                            continue
+                        p1 = self._project_cam(a[0], a[1], a[2], width, height)
+                        p2 = self._project_cam(b[0], b[1], b[2], width, height)
+                        self.canvas.create_line(p1[0], p1[1], p2[0], p2[1], fill="#ffffff", width=2)
 
         self.canvas.create_text(10, 10, anchor="nw", fill="#8fa3ad", text="LMB orbit | RMB pan | Wheel/Slider zoom")
         if self.move_objects_mode.get():

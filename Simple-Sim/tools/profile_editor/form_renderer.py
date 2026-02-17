@@ -18,6 +18,7 @@ class FormRenderer(ttk.Frame):
         self.target = target
         self._on_field_commit = on_field_commit
         self._entries: Dict[Tuple[str, ...], ttk.Entry] = {}
+        self._dark_mode = False
 
         self.canvas = tk.Canvas(self, highlightthickness=0)
         self.v_scroll = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
@@ -66,6 +67,7 @@ class FormRenderer(ttk.Frame):
             label = ".".join(path[1:]) if len(path) > 1 else path[0]
             ttk.Label(self.inner, text=label).grid(row=row, column=0, sticky="w", padx=(8, 6), pady=2)
             entry = ttk.Entry(self.inner)
+            entry.configure(style="Dark.TEntry" if self._dark_mode else "Light.TEntry")
             entry.insert(0, self._to_form_text(value))
             entry.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=2)
             entry.bind("<Return>", lambda _e, p=path, w=entry: self._commit_entry(p, w))
@@ -79,8 +81,15 @@ class FormRenderer(ttk.Frame):
         self._on_field_commit(self.target, path, widget.get())
 
     def apply_theme(self, *, dark: bool) -> None:
+        self._dark_mode = dark
         bg = "#1f2329" if dark else "#ffffff"
         self.canvas.configure(bg=bg)
+        entry_style = "Dark.TEntry" if dark else "Light.TEntry"
+        for entry in self._entries.values():
+            try:
+                entry.configure(style=entry_style)
+            except Exception:
+                pass
 
     @staticmethod
     def _to_form_text(value: Any) -> str:
