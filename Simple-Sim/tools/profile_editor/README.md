@@ -55,6 +55,7 @@ Or:
 - `Render HQ Now`: trigger immediate HQ Blender render.
 - `Refresh Files`: force registry reload.
 - Top-right live usage display: `CPU | GPU | RAM`.
+- `Night Mode`: global day/night theme toggle for the full editor.
 
 ### 3) Left Panel: Preview
 
@@ -80,6 +81,10 @@ Or:
   - invert orbit X/Y
   - invert pan X/Y
   - invert zoom
+- `Move Objects` mode:
+  - click pads in `Fast 3D` and drag them
+  - geometry values are updated live in profile YAML/form (`geometry_ranges.*`)
+- Selected movable objects show a small X/Y gizmo overlay.
 - Updates instantly when values change in center/right panels.
 
 #### `Blender HQ` Tab
@@ -138,6 +143,7 @@ Or:
 - File: `outputs/profile_editor/settings.json`
 - Loaded on startup and auto-saved continuously.
 - Stored values:
+  - theme mode (`day` / `night`)
   - window geometry
   - last selected profile
   - last selected run

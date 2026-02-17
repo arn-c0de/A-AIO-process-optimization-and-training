@@ -83,3 +83,15 @@ class YamlEditorPanel(ttk.Frame):
     def get_text(self, target: str) -> str:
         widget = self.profile_text if target == "profile" else self.run_text
         return widget.get("1.0", "end-1c")
+
+    def apply_theme(self, *, dark: bool) -> None:
+        if dark:
+            bg = "#11161c"
+            fg = "#f5f7fa"
+            insert_bg = "#f5f7fa"
+        else:
+            bg = "#ffffff"
+            fg = "#000000"
+            insert_bg = "#000000"
+        for w in (self.profile_text, self.run_text):
+            w.configure(bg=bg, fg=fg, insertbackground=insert_bg)

@@ -48,6 +48,7 @@ class ProfileEditorApp:
         self._closed = False
         self._settings_after_id: str | None = None
         self._session_settings = self._load_session_settings()
+        self.dark_mode_var = tk.BooleanVar(value=bool(self._session_settings.get("dark_mode", False)))
 
         self._build_ui()
         self._apply_session_settings_to_ui()
@@ -81,12 +82,17 @@ class ProfileEditorApp:
         ttk.Button(top, text="Save Run", command=self._save_run).pack(side="left", padx=(0, 6))
         ttk.Button(top, text="Render HQ Now", command=self._trigger_hq_render_now).pack(side="left", padx=(0, 6))
         ttk.Button(top, text="Refresh Files", command=self._refresh_choices).pack(side="left")
+        ttk.Checkbutton(top, text="Night Mode", variable=self.dark_mode_var, command=self._on_theme_toggled).pack(
+            side="left", padx=(8, 0)
+        )
         ttk.Label(top, text="").pack(side="left", expand=True)
         self.system_stats_var = tk.StringVar(value="CPU n/a | GPU n/a | RAM n/a")
-        ttk.Label(top, textvariable=self.system_stats_var, foreground="#4d5656").pack(side="right")
+        self.system_stats_label = ttk.Label(top, textvariable=self.system_stats_var)
+        self.system_stats_label.pack(side="right")
 
         self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(self.root, textvariable=self.status_var, anchor="w", foreground="#34495e").pack(fill="x", padx=10)
+        self.status_label = ttk.Label(self.root, textvariable=self.status_var, anchor="w")
+        self.status_label.pack(fill="x", padx=10)
 
         paned = ttk.Panedwindow(self.root, orient="horizontal")
         paned.pack(fill="both", expand=True, padx=8, pady=8)
@@ -102,7 +108,11 @@ class ProfileEditorApp:
         left_tabs = ttk.Notebook(left)
         left_tabs.pack(fill="both", expand=True)
 
-        self.preview = Preview3D(left_tabs, on_settings_changed=self._schedule_settings_save)
+        self.preview = Preview3D(
+            left_tabs,
+            on_settings_changed=self._schedule_settings_save,
+            on_geometry_changed=self._on_preview_geometry_changed,
+        )
         self.hq_preview = HQPreviewPanel(left_tabs)
 
         left_tabs.add(self.preview, text="Fast 3D")
@@ -119,6 +129,7 @@ class ProfileEditorApp:
 
         self.yaml_editor = YamlEditorPanel(right, self._on_yaml_apply)
         self.yaml_editor.pack(fill="both", expand=True)
+        self._apply_theme(bool(self.dark_mode_var.get()))
 
     def _load_initial_choices(self) -> None:
         self._refresh_choices()
@@ -322,6 +333,64 @@ class ProfileEditorApp:
         self._update_title()
         self._schedule_hq_render()
 
+    def _on_preview_geometry_changed(self, updates: dict[tuple[str, ...], object]) -> None:
+        for path, value in updates.items():
+            self.store.update_leaf("profile", path, value, source="preview3d")
+
+    def _on_theme_toggled(self) -> None:
+        self._apply_theme(bool(self.dark_mode_var.get()))
+        self._schedule_settings_save()
+
+    def _apply_theme(self, dark: bool) -> None:
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        if dark:
+            bg = "#171b20"
+            panel = "#1f2329"
+            fg = "#f5f7fa"
+            field_bg = "#11161c"
+            field_fg = "#f5f7fa"
+            self.root.configure(bg=bg)
+            self.system_stats_label.configure(foreground="#d9e1ea")
+            self.status_label.configure(foreground="#d9e1ea")
+        else:
+            bg = "#f0f0f0"
+            panel = "#ffffff"
+            fg = "#000000"
+            field_bg = "#ffffff"
+            field_fg = "#000000"
+            self.root.configure(bg=bg)
+            self.system_stats_label.configure(foreground="#4d5656")
+            self.status_label.configure(foreground="#34495e")
+
+        style.configure(".", background=bg, foreground=fg)
+        style.configure("TFrame", background=bg)
+        style.configure("TLabel", background=bg, foreground=fg)
+        style.configure("TButton", background=panel, foreground=fg)
+        style.configure("TCheckbutton", background=bg, foreground=fg)
+        style.configure("TMenubutton", background=panel, foreground=fg)
+        style.configure("TNotebook", background=bg)
+        style.configure("TNotebook.Tab", background=panel, foreground=fg)
+        style.configure("TPanedwindow", background=bg)
+        style.configure("TScale", background=bg)
+        style.configure(
+            "TCombobox",
+            fieldbackground=field_bg,
+            background=panel,
+            foreground=field_fg,
+            arrowcolor=field_fg,
+        )
+
+        self.preview.apply_theme(dark=dark)
+        self.hq_preview.apply_theme(dark=dark)
+        self.profile_form.apply_theme(dark=dark)
+        self.run_form.apply_theme(dark=dark)
+        self.yaml_editor.apply_theme(dark=dark)
+
     def _schedule_hq_render(self) -> None:
         if self._hq_after_id:
             self.root.after_cancel(self._hq_after_id)
@@ -420,12 +489,15 @@ class ProfileEditorApp:
         preview_settings = self._session_settings.get("preview3d")
         if isinstance(preview_settings, dict):
             self.preview.apply_user_settings(preview_settings)
+        self.dark_mode_var.set(bool(self._session_settings.get("dark_mode", False)))
+        self._apply_theme(bool(self.dark_mode_var.get()))
 
     def _collect_session_settings(self) -> dict:
         return {
             "window_geometry": str(self.root.geometry()),
             "selected_profile_id": str(self.profile_var.get() or ""),
             "selected_run_id": str(self.run_var.get() or ""),
+            "dark_mode": bool(self.dark_mode_var.get()),
             "preview3d": self.preview.get_user_settings(),
         }
 
