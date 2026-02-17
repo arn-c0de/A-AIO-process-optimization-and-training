@@ -354,6 +354,8 @@ class ProfileEditorApp:
             fg = "#f5f7fa"
             field_bg = "#11161c"
             field_fg = "#f5f7fa"
+            tab_active = "#2a3138"
+            tab_selected = "#303841"
             self.root.configure(bg=bg)
             self.system_stats_label.configure(foreground="#d9e1ea")
             self.status_label.configure(foreground="#d9e1ea")
@@ -363,6 +365,8 @@ class ProfileEditorApp:
             fg = "#000000"
             field_bg = "#ffffff"
             field_fg = "#000000"
+            tab_active = "#e7e7e7"
+            tab_selected = "#ffffff"
             self.root.configure(bg=bg)
             self.system_stats_label.configure(foreground="#4d5656")
             self.status_label.configure(foreground="#34495e")
@@ -375,8 +379,16 @@ class ProfileEditorApp:
         style.configure("TMenubutton", background=panel, foreground=fg)
         style.configure("TNotebook", background=bg)
         style.configure("TNotebook.Tab", background=panel, foreground=fg)
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", tab_selected), ("active", tab_active), ("!selected", panel)],
+            foreground=[("selected", fg), ("active", fg), ("!selected", fg)],
+        )
         style.configure("TPanedwindow", background=bg)
         style.configure("TScale", background=bg)
+        style.configure("TEntry", fieldbackground=field_bg, foreground=field_fg)
+        style.configure("Dark.TEntry", fieldbackground="#11161c", foreground="#f5f7fa")
+        style.configure("Light.TEntry", fieldbackground="#ffffff", foreground="#000000")
         style.configure(
             "TCombobox",
             fieldbackground=field_bg,
@@ -384,6 +396,19 @@ class ProfileEditorApp:
             foreground=field_fg,
             arrowcolor=field_fg,
         )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", field_bg)],
+            foreground=[("readonly", field_fg)],
+            selectbackground=[("readonly", field_bg)],
+            selectforeground=[("readonly", field_fg)],
+        )
+
+        # ttk.Combobox popup list uses a Tk Listbox; theme it explicitly.
+        self.root.option_add("*TCombobox*Listbox.background", field_bg)
+        self.root.option_add("*TCombobox*Listbox.foreground", field_fg)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", tab_active if dark else "#d9e8ff")
+        self.root.option_add("*TCombobox*Listbox.selectForeground", field_fg)
 
         self.preview.apply_theme(dark=dark)
         self.hq_preview.apply_theme(dark=dark)
