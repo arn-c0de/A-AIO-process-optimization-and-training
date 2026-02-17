@@ -1,5 +1,7 @@
 # Training Logs Index
 
+Last updated: February 17, 2026
+
 Central index of training and research logs.
 
 ## Current Research
