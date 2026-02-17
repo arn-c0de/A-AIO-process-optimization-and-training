@@ -351,7 +351,25 @@ def _apply_filter_overrides_to_augment(augment: Dict[str, float], image_filters:
 
 def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[Dict[str, Any]]) -> None:
     import cv2  # type: ignore
-    from simple_sim.generator_2d import apply_blur, apply_noise, apply_brightness, apply_contrast  # type: ignore
+    from simple_sim.generator_2d import (  # type: ignore
+        apply_blur,
+        apply_noise,
+        apply_brightness,
+        apply_contrast,
+        apply_saturation,
+        apply_hue_shift,
+        apply_color_temperature,
+        apply_vignetting,
+        apply_chromatic_aberration,
+        apply_lens_distortion,
+        apply_motion_blur,
+        apply_sharpen,
+        apply_shadow,
+        apply_reflection,
+        apply_dust_particles,
+        apply_jpeg_compression,
+        apply_perspective_transform,
+    )
 
     for j in jobs:
         aug = (j.get("augment") or {})
@@ -359,11 +377,47 @@ def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[Dict[str, Any]
         noise_stddev = float(aug.get("noise_stddev", 0.0) or 0.0)
         brightness_factor = float(aug.get("brightness_factor", 1.0) or 1.0)
         contrast_factor = float(aug.get("contrast_factor", 1.0) or 1.0)
+        saturation_factor = float(aug.get("saturation_factor", 1.0) or 1.0)
+        hue_shift_deg = float(aug.get("hue_shift_deg", 0.0) or 0.0)
+        color_temperature_kelvin = int(aug.get("color_temperature_kelvin", 5500) or 5500)
+        vignetting_strength = float(aug.get("vignetting_strength", 0.0) or 0.0)
+        chromatic_strength = float(aug.get("chromatic_strength", 0.0) or 0.0)
+        distortion_k1 = float(aug.get("distortion_k1", 0.0) or 0.0)
+        distortion_k2 = float(aug.get("distortion_k2", 0.0) or 0.0)
+        motion_blur_strength = float(aug.get("motion_blur_strength", 0.0) or 0.0)
+        motion_blur_angle = float(aug.get("motion_blur_angle", 0.0) or 0.0)
+        sharpen_strength = float(aug.get("sharpen_strength", 0.0) or 0.0)
+        shadow_strength = float(aug.get("shadow_strength", 0.0) or 0.0)
+        shadow_size = float(aug.get("shadow_size", 0.2) or 0.2)
+        reflection_strength = float(aug.get("reflection_strength", 0.0) or 0.0)
+        reflection_size = float(aug.get("reflection_size", 0.15) or 0.15)
+        dust_density = float(aug.get("dust_density", 0.0) or 0.0)
+        dust_size = float(aug.get("dust_size", 2.0) or 2.0)
+        jpeg_quality = int(aug.get("jpeg_quality", 100) or 100)
+        perspective_strength = float(aug.get("perspective_strength", 0.0) or 0.0)
+        perspective_angle_x = float(aug.get("perspective_angle_x", 0.0) or 0.0)
+        perspective_angle_y = float(aug.get("perspective_angle_y", 0.0) or 0.0)
+        rotation_deg = float(aug.get("rotation_deg", 0.0) or 0.0)
         if (
             blur_sigma <= 1e-6
             and noise_stddev <= 1e-6
             and abs(brightness_factor - 1.0) <= 1e-6
             and abs(contrast_factor - 1.0) <= 1e-6
+            and abs(saturation_factor - 1.0) <= 1e-6
+            and abs(hue_shift_deg) <= 1e-6
+            and color_temperature_kelvin == 5500
+            and vignetting_strength <= 1e-6
+            and chromatic_strength <= 1e-6
+            and abs(distortion_k1) <= 1e-6
+            and abs(distortion_k2) <= 1e-6
+            and motion_blur_strength <= 1e-6
+            and sharpen_strength <= 1e-6
+            and shadow_strength <= 1e-6
+            and reflection_strength <= 1e-6
+            and dust_density <= 1e-6
+            and jpeg_quality >= 100
+            and perspective_strength <= 1e-6
+            and abs(rotation_deg) <= 1e-6
         ):
             continue
         p = (Path(out_root) / str(j.get("image_path", ""))).resolve()
@@ -375,6 +429,24 @@ def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[Dict[str, Any]
         img = apply_noise(img, noise_stddev, rng)
         img = apply_brightness(img, brightness_factor)
         img = apply_contrast(img, contrast_factor)
+        img = apply_saturation(img, saturation_factor)
+        img = apply_hue_shift(img, hue_shift_deg)
+        img = apply_color_temperature(img, color_temperature_kelvin)
+        img = apply_vignetting(img, vignetting_strength)
+        img = apply_chromatic_aberration(img, chromatic_strength)
+        img = apply_lens_distortion(img, distortion_k1, distortion_k2)
+        img = apply_motion_blur(img, motion_blur_strength, motion_blur_angle)
+        img = apply_sharpen(img, sharpen_strength)
+        img = apply_shadow(img, shadow_strength, shadow_size, rng)
+        img = apply_reflection(img, reflection_strength, reflection_size, rng)
+        img = apply_dust_particles(img, dust_density, dust_size, rng)
+        img = apply_jpeg_compression(img, jpeg_quality)
+        img = apply_perspective_transform(img, perspective_strength, perspective_angle_x, perspective_angle_y)
+        if abs(rotation_deg) > 0.1:
+            h, w = img.shape[:2]
+            center = (w // 2, h // 2)
+            m = cv2.getRotationMatrix2D(center, rotation_deg, 1.0)
+            img = cv2.warpAffine(img, m, (w, h), borderMode=cv2.BORDER_REPLICATE)
         cv2.imwrite(str(p), img)
 
 
