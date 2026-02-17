@@ -278,6 +278,34 @@ def _save_shared_filter_profiles(settings_path: Path, profiles: Dict[str, Dict[s
     data["pipeline.filter.grain_strength"] = f"{float(cur['grain_strength']):.2f}"
     data["pipeline.filter.brightness_strength"] = f"{float(cur['brightness_strength']):.2f}"
     data["pipeline.filter.contrast_strength"] = f"{float(cur['contrast_strength']):.2f}"
+    # High priority new filters
+    data["pipeline.filter.enable_perspective"] = bool(cur["enable_perspective"])
+    data["pipeline.filter.perspective_strength"] = f"{float(cur['perspective_strength']):.2f}"
+    data["pipeline.filter.enable_motion_blur"] = bool(cur["enable_motion_blur"])
+    data["pipeline.filter.motion_blur_strength"] = f"{float(cur['motion_blur_strength']):.2f}"
+    data["pipeline.filter.enable_saturation"] = bool(cur["enable_saturation"])
+    data["pipeline.filter.saturation_factor"] = f"{float(cur['saturation_factor']):.2f}"
+    data["pipeline.filter.enable_hue_shift"] = bool(cur["enable_hue_shift"])
+    data["pipeline.filter.hue_shift_deg"] = f"{float(cur['hue_shift_deg']):.2f}"
+    data["pipeline.filter.enable_shadow"] = bool(cur["enable_shadow"])
+    data["pipeline.filter.shadow_strength"] = f"{float(cur['shadow_strength']):.2f}"
+    data["pipeline.filter.enable_reflection"] = bool(cur["enable_reflection"])
+    data["pipeline.filter.reflection_strength"] = f"{float(cur['reflection_strength']):.2f}"
+    # Medium/Low priority new filters
+    data["pipeline.filter.enable_vignetting"] = bool(cur["enable_vignetting"])
+    data["pipeline.filter.vignetting_strength"] = f"{float(cur['vignetting_strength']):.2f}"
+    data["pipeline.filter.enable_chromatic_aberration"] = bool(cur["enable_chromatic_aberration"])
+    data["pipeline.filter.chromatic_strength"] = f"{float(cur['chromatic_strength']):.2f}"
+    data["pipeline.filter.enable_jpeg_compression"] = bool(cur["enable_jpeg_compression"])
+    data["pipeline.filter.jpeg_quality"] = str(int(cur["jpeg_quality"]))
+    data["pipeline.filter.enable_color_temperature"] = bool(cur["enable_color_temperature"])
+    data["pipeline.filter.color_temperature_kelvin"] = str(int(cur["color_temperature_kelvin"]))
+    data["pipeline.filter.enable_lens_distortion"] = bool(cur["enable_lens_distortion"])
+    data["pipeline.filter.distortion_k1"] = f"{float(cur['distortion_k1']):.2f}"
+    data["pipeline.filter.enable_dust"] = bool(cur["enable_dust"])
+    data["pipeline.filter.dust_density"] = f"{float(cur['dust_density']):.2f}"
+    data["pipeline.filter.enable_sharpen"] = bool(cur["enable_sharpen"])
+    data["pipeline.filter.sharpen_strength"] = f"{float(cur['sharpen_strength']):.2f}"
     _write_settings_json(settings_path, data)
 
 
@@ -812,6 +840,34 @@ def _open_tk_viewer(
         filter_grain_strength_var = tk.DoubleVar(value=float(current_image_filters.get("grain_strength", 1.0)))
         filter_brightness_strength_var = tk.DoubleVar(value=float(current_image_filters.get("brightness_strength", 1.0)))
         filter_contrast_strength_var = tk.DoubleVar(value=float(current_image_filters.get("contrast_strength", 1.0)))
+        # High priority new filters
+        filter_enable_perspective_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_perspective", True)))
+        filter_perspective_strength_var = tk.DoubleVar(value=float(current_image_filters.get("perspective_strength", 1.0)))
+        filter_enable_motion_blur_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_motion_blur", True)))
+        filter_motion_blur_strength_var = tk.DoubleVar(value=float(current_image_filters.get("motion_blur_strength", 1.0)))
+        filter_enable_saturation_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_saturation", True)))
+        filter_saturation_factor_var = tk.DoubleVar(value=float(current_image_filters.get("saturation_factor", 1.0)))
+        filter_enable_hue_shift_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_hue_shift", True)))
+        filter_hue_shift_deg_var = tk.DoubleVar(value=float(current_image_filters.get("hue_shift_deg", 0.0)))
+        filter_enable_shadow_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_shadow", True)))
+        filter_shadow_strength_var = tk.DoubleVar(value=float(current_image_filters.get("shadow_strength", 0.3)))
+        filter_enable_reflection_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_reflection", True)))
+        filter_reflection_strength_var = tk.DoubleVar(value=float(current_image_filters.get("reflection_strength", 0.5)))
+        # Medium/Low priority new filters
+        filter_enable_vignetting_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_vignetting", False)))
+        filter_vignetting_strength_var = tk.DoubleVar(value=float(current_image_filters.get("vignetting_strength", 1.0)))
+        filter_enable_chromatic_aberration_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_chromatic_aberration", False)))
+        filter_chromatic_strength_var = tk.DoubleVar(value=float(current_image_filters.get("chromatic_strength", 1.0)))
+        filter_enable_jpeg_compression_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_jpeg_compression", False)))
+        filter_jpeg_quality_var = tk.DoubleVar(value=float(current_image_filters.get("jpeg_quality", 85)))
+        filter_enable_color_temperature_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_color_temperature", False)))
+        filter_color_temperature_kelvin_var = tk.DoubleVar(value=float(current_image_filters.get("color_temperature_kelvin", 5500)))
+        filter_enable_lens_distortion_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_lens_distortion", False)))
+        filter_distortion_k1_var = tk.DoubleVar(value=float(current_image_filters.get("distortion_k1", 0.0)))
+        filter_enable_dust_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_dust", False)))
+        filter_dust_density_var = tk.DoubleVar(value=float(current_image_filters.get("dust_density", 0.3)))
+        filter_enable_sharpen_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_sharpen", False)))
+        filter_sharpen_strength_var = tk.DoubleVar(value=float(current_image_filters.get("sharpen_strength", 1.0)))
 
         def _current_filters_from_vars() -> Dict[str, Any]:
             return _normalize_filter_settings(
@@ -827,6 +883,34 @@ def _open_tk_viewer(
                     "grain_strength": float(filter_grain_strength_var.get()),
                     "brightness_strength": float(filter_brightness_strength_var.get()),
                     "contrast_strength": float(filter_contrast_strength_var.get()),
+                    # High priority new filters
+                    "enable_perspective": bool(filter_enable_perspective_var.get()),
+                    "perspective_strength": float(filter_perspective_strength_var.get()),
+                    "enable_motion_blur": bool(filter_enable_motion_blur_var.get()),
+                    "motion_blur_strength": float(filter_motion_blur_strength_var.get()),
+                    "enable_saturation": bool(filter_enable_saturation_var.get()),
+                    "saturation_factor": float(filter_saturation_factor_var.get()),
+                    "enable_hue_shift": bool(filter_enable_hue_shift_var.get()),
+                    "hue_shift_deg": float(filter_hue_shift_deg_var.get()),
+                    "enable_shadow": bool(filter_enable_shadow_var.get()),
+                    "shadow_strength": float(filter_shadow_strength_var.get()),
+                    "enable_reflection": bool(filter_enable_reflection_var.get()),
+                    "reflection_strength": float(filter_reflection_strength_var.get()),
+                    # Medium/Low priority new filters
+                    "enable_vignetting": bool(filter_enable_vignetting_var.get()),
+                    "vignetting_strength": float(filter_vignetting_strength_var.get()),
+                    "enable_chromatic_aberration": bool(filter_enable_chromatic_aberration_var.get()),
+                    "chromatic_strength": float(filter_chromatic_strength_var.get()),
+                    "enable_jpeg_compression": bool(filter_enable_jpeg_compression_var.get()),
+                    "jpeg_quality": float(filter_jpeg_quality_var.get()),
+                    "enable_color_temperature": bool(filter_enable_color_temperature_var.get()),
+                    "color_temperature_kelvin": float(filter_color_temperature_kelvin_var.get()),
+                    "enable_lens_distortion": bool(filter_enable_lens_distortion_var.get()),
+                    "distortion_k1": float(filter_distortion_k1_var.get()),
+                    "enable_dust": bool(filter_enable_dust_var.get()),
+                    "dust_density": float(filter_dust_density_var.get()),
+                    "enable_sharpen": bool(filter_enable_sharpen_var.get()),
+                    "sharpen_strength": float(filter_sharpen_strength_var.get()),
                 }
             )
 
@@ -843,6 +927,34 @@ def _open_tk_viewer(
             filter_grain_strength_var.set(float(x["grain_strength"]))
             filter_brightness_strength_var.set(float(x["brightness_strength"]))
             filter_contrast_strength_var.set(float(x["contrast_strength"]))
+            # High priority new filters
+            filter_enable_perspective_var.set(bool(x["enable_perspective"]))
+            filter_perspective_strength_var.set(float(x["perspective_strength"]))
+            filter_enable_motion_blur_var.set(bool(x["enable_motion_blur"]))
+            filter_motion_blur_strength_var.set(float(x["motion_blur_strength"]))
+            filter_enable_saturation_var.set(bool(x["enable_saturation"]))
+            filter_saturation_factor_var.set(float(x["saturation_factor"]))
+            filter_enable_hue_shift_var.set(bool(x["enable_hue_shift"]))
+            filter_hue_shift_deg_var.set(float(x["hue_shift_deg"]))
+            filter_enable_shadow_var.set(bool(x["enable_shadow"]))
+            filter_shadow_strength_var.set(float(x["shadow_strength"]))
+            filter_enable_reflection_var.set(bool(x["enable_reflection"]))
+            filter_reflection_strength_var.set(float(x["reflection_strength"]))
+            # Medium/Low priority new filters
+            filter_enable_vignetting_var.set(bool(x["enable_vignetting"]))
+            filter_vignetting_strength_var.set(float(x["vignetting_strength"]))
+            filter_enable_chromatic_aberration_var.set(bool(x["enable_chromatic_aberration"]))
+            filter_chromatic_strength_var.set(float(x["chromatic_strength"]))
+            filter_enable_jpeg_compression_var.set(bool(x["enable_jpeg_compression"]))
+            filter_jpeg_quality_var.set(float(x["jpeg_quality"]))
+            filter_enable_color_temperature_var.set(bool(x["enable_color_temperature"]))
+            filter_color_temperature_kelvin_var.set(float(x["color_temperature_kelvin"]))
+            filter_enable_lens_distortion_var.set(bool(x["enable_lens_distortion"]))
+            filter_distortion_k1_var.set(float(x["distortion_k1"]))
+            filter_enable_dust_var.set(bool(x["enable_dust"]))
+            filter_dust_density_var.set(float(x["dust_density"]))
+            filter_enable_sharpen_var.set(bool(x["enable_sharpen"]))
+            filter_sharpen_strength_var.set(float(x["sharpen_strength"]))
 
         def _persist_filters(active_name: Optional[str] = None) -> None:
             nonlocal shared_active_profile
