@@ -79,6 +79,7 @@ class PipelineUI:
         self.var_profiles_multi_mode: tk.StringVar = tk.StringVar(value="separate")
         self.var_profiles_multi_json: tk.StringVar = tk.StringVar(value="[]")
         self.var_profiles_multi_summary: tk.StringVar = tk.StringVar(value="")
+        # Existing filter variables
         self.var_filter_cardinal_rotation_90: tk.BooleanVar = tk.BooleanVar(value=True)
         self.var_filter_enable_rotation: tk.BooleanVar = tk.BooleanVar(value=True)
         self.var_filter_enable_blur: tk.BooleanVar = tk.BooleanVar(value=True)
@@ -90,6 +91,55 @@ class PipelineUI:
         self.var_filter_grain_strength: tk.StringVar = tk.StringVar(value="1.0")
         self.var_filter_brightness_strength: tk.StringVar = tk.StringVar(value="1.0")
         self.var_filter_contrast_strength: tk.StringVar = tk.StringVar(value="1.0")
+
+        # High priority new filters (enabled by default)
+        self.var_filter_enable_perspective: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_perspective_strength: tk.StringVar = tk.StringVar(value="1.0")
+        self.var_filter_perspective_angle_x: tk.StringVar = tk.StringVar(value="0.0")
+        self.var_filter_perspective_angle_y: tk.StringVar = tk.StringVar(value="0.0")
+
+        self.var_filter_enable_motion_blur: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_motion_blur_strength: tk.StringVar = tk.StringVar(value="1.0")
+        self.var_filter_motion_blur_angle: tk.StringVar = tk.StringVar(value="0.0")
+
+        self.var_filter_enable_saturation: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_saturation_factor: tk.StringVar = tk.StringVar(value="1.0")
+
+        self.var_filter_enable_hue_shift: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_hue_shift_deg: tk.StringVar = tk.StringVar(value="0.0")
+
+        self.var_filter_enable_shadow: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_shadow_strength: tk.StringVar = tk.StringVar(value="0.3")
+        self.var_filter_shadow_size: tk.StringVar = tk.StringVar(value="0.2")
+
+        self.var_filter_enable_reflection: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_reflection_strength: tk.StringVar = tk.StringVar(value="0.5")
+        self.var_filter_reflection_size: tk.StringVar = tk.StringVar(value="0.15")
+
+        # Medium priority new filters (disabled by default)
+        self.var_filter_enable_vignetting: tk.BooleanVar = tk.BooleanVar(value=False)
+        self.var_filter_vignetting_strength: tk.StringVar = tk.StringVar(value="1.0")
+
+        self.var_filter_enable_chromatic_aberration: tk.BooleanVar = tk.BooleanVar(value=False)
+        self.var_filter_chromatic_strength: tk.StringVar = tk.StringVar(value="1.0")
+
+        self.var_filter_enable_jpeg_compression: tk.BooleanVar = tk.BooleanVar(value=False)
+        self.var_filter_jpeg_quality: tk.StringVar = tk.StringVar(value="85")
+
+        self.var_filter_enable_color_temperature: tk.BooleanVar = tk.BooleanVar(value=False)
+        self.var_filter_color_temperature_kelvin: tk.StringVar = tk.StringVar(value="5500")
+
+        # Low priority new filters (disabled by default)
+        self.var_filter_enable_lens_distortion: tk.BooleanVar = tk.BooleanVar(value=False)
+        self.var_filter_distortion_k1: tk.StringVar = tk.StringVar(value="0.0")
+        self.var_filter_distortion_k2: tk.StringVar = tk.StringVar(value="0.0")
+
+        self.var_filter_enable_dust: tk.BooleanVar = tk.BooleanVar(value=False)
+        self.var_filter_dust_density: tk.StringVar = tk.StringVar(value="0.3")
+        self.var_filter_dust_size: tk.StringVar = tk.StringVar(value="2.0")
+
+        self.var_filter_enable_sharpen: tk.BooleanVar = tk.BooleanVar(value=False)
+        self.var_filter_sharpen_strength: tk.StringVar = tk.StringVar(value="1.0")
         self.entry_profiles_multi: ttk.Entry
         self.btn_profiles_multi_pick: ttk.Button
         self.var_dataset_profile: tk.StringVar = tk.StringVar(value="Profile: -")

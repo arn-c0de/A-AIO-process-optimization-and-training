@@ -10,6 +10,7 @@ Practical how-to guides for common tasks and workflows.
 |----------|---------|
 | [Command Cheatsheet](guides/CHEATSHEET.md) | Quick reference for common commands and operations |
 | [3D Rendering Quickstart](guides/3D_RENDERING_QUICKSTART.md) | Guide to setting up and customizing 3D rendering with Blender |
+| [Filter Settings](guides/FILTER_SETTINGS.md) | Guide to configuring filter settings for image processing |
 | [Model Merge: Bundles vs Ensembles](guides/MODEL_MERGE_BUNDLES_ENSEMBLES.md) | Bundles vs ensembles, and what you need for unknown images (profile dispatch vs general models) |
 
 ## Technical Reference
