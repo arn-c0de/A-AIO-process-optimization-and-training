@@ -81,6 +81,7 @@ class PipelineControlTab(BaseTab):
 
         self._profile_paths: list[Path] = []
         self._dataset_milestones: dict[str, int] = {}
+        self._filter_popup_extras: Dict[str, Any] = {}
         
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -223,6 +224,42 @@ class PipelineControlTab(BaseTab):
         except Exception: pass
         try: self._refresh_models()
         except Exception: pass
+        try: self._load_filter_popup_extras_from_profiles(st)
+        except Exception: self._filter_popup_extras = {}
+
+    @staticmethod
+    def _is_filter_popup_extra_key(key: str) -> bool:
+        return key.endswith("_randomize") or key.endswith("_min") or key.endswith("_max")
+
+    @staticmethod
+    def _parse_bool_like(value: Any, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return default
+
+    def _load_filter_popup_extras_from_profiles(self, st: SettingsStore) -> None:
+        raw_profiles = str(st.get("pipeline.filter_profiles_json", "") or "").strip()
+        raw_active = str(st.get("pipeline.filter_profile_active", "") or "").strip() or "Default"
+        extras: Dict[str, Any] = {}
+        if raw_profiles:
+            try:
+                obj = json.loads(raw_profiles)
+                if isinstance(obj, dict):
+                    active_profile = obj.get(raw_active)
+                    if not isinstance(active_profile, dict) and obj:
+                        first_key = sorted(obj.keys())[0]
+                        active_profile = obj.get(first_key)
+                    if isinstance(active_profile, dict):
+                        for k, v in active_profile.items():
+                            if isinstance(k, str) and self._is_filter_popup_extra_key(k):
+                                extras[k] = v
+            except Exception:
+                extras = {}
+        self._filter_popup_extras = extras
 
     def _wire_settings_autosave(self) -> None:
         st = self._store()
@@ -286,7 +323,7 @@ class PipelineControlTab(BaseTab):
             return float(default)
 
     def _current_filter_settings_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             # Existing filters
             "cardinal_rotation_90": bool(self.ui.var_filter_cardinal_rotation_90.get()),
             "enable_rotation": bool(self.ui.var_filter_enable_rotation.get()),
@@ -328,10 +365,17 @@ class PipelineControlTab(BaseTab):
             "enable_sharpen": bool(self.ui.var_filter_enable_sharpen.get()),
             "sharpen_strength": f"{self._float_or_default(self.ui.var_filter_sharpen_strength.get(), default=1.0):.2f}",
         }
+        data.update(self._filter_popup_extras)
+        return data
 
     def _apply_filter_settings_dict(self, data: Dict[str, Any]) -> None:
         if not isinstance(data, dict):
             return
+        extras: Dict[str, Any] = {}
+        for k, v in data.items():
+            if isinstance(k, str) and self._is_filter_popup_extra_key(k):
+                extras[k] = v
+        self._filter_popup_extras = extras
         # Existing filters
         self.ui.var_filter_cardinal_rotation_90.set(bool(data.get("cardinal_rotation_90", True)))
         self.ui.var_filter_enable_rotation.set(bool(data.get("enable_rotation", True)))
@@ -434,6 +478,7 @@ class PipelineControlTab(BaseTab):
                 "enable_sharpen": bool(st.get("pipeline.filter.enable_sharpen", False)),
                 "sharpen_strength": str(st.get("pipeline.filter.sharpen_strength", "1.00")),
             }
+            current_live.update(self._filter_popup_extras)
         if not profiles:
             profiles = {"Default": current_live or self._current_filter_settings_dict()}
             active = "Default"
@@ -471,7 +516,7 @@ class PipelineControlTab(BaseTab):
             bool(self.ui.var_filter_enable_dust.get()),
             bool(self.ui.var_filter_enable_sharpen.get()),
         ])
-        return {
+        payload = {
             "enable": has_any_filter,
             # Existing filters
             "cardinal_rotation_90": bool(self.ui.var_filter_cardinal_rotation_90.get()),
@@ -521,6 +566,14 @@ class PipelineControlTab(BaseTab):
             "enable_sharpen": bool(self.ui.var_filter_enable_sharpen.get()),
             "sharpen_strength": self._float_or_default(self.ui.var_filter_sharpen_strength.get(), default=1.0),
         }
+        for k, v in self._filter_popup_extras.items():
+            if not isinstance(k, str) or not self._is_filter_popup_extra_key(k):
+                continue
+            if k.endswith("_randomize"):
+                payload[k] = self._parse_bool_like(v, default=False)
+            else:
+                payload[k] = self._float_or_default(str(v), default=0.0)
+        return payload
 
     def _open_image_filters_popup(self) -> None:
         """Open shared image filter popup."""

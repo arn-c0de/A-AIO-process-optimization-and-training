@@ -198,8 +198,46 @@ class FilterPopup:
             var_strength.trace_add("write", lambda *args: update_label())
             update_label()
 
+            # Per-filter randomization: when enabled, slider is disabled and
+            # min/max values are used to sample a random value per image.
+            key_randomize = f"{key_strength}_randomize"
+            key_min = f"{key_strength}_min"
+            key_max = f"{key_strength}_max"
+            base_val = self.float_or_default(str(current.get(key_strength, default_strength)), default=default_strength)
+            var_randomize = tk.BooleanVar(value=bool(current.get(key_randomize, False)))
+            var_min = tk.DoubleVar(
+                value=self.float_or_default(str(current.get(key_min, base_val)), default=base_val)
+            )
+            var_max = tk.DoubleVar(
+                value=self.float_or_default(str(current.get(key_max, base_val)), default=base_val)
+            )
+
+            chk_random = ttk.Checkbutton(row, text="Rnd", variable=var_randomize)
+            chk_random.pack(side="left", padx=(8, 4))
+            ent_min = ttk.Entry(row, textvariable=var_min, width=6)
+            ent_min.pack(side="left")
+            ttk.Label(row, text="-").pack(side="left", padx=(2, 2))
+            ent_max = ttk.Entry(row, textvariable=var_max, width=6)
+            ent_max.pack(side="left")
+
+            def _update_random_mode(*_args: Any) -> None:
+                if bool(var_randomize.get()):
+                    scale.state(["disabled"])
+                    ent_min.state(["!disabled"])
+                    ent_max.state(["!disabled"])
+                else:
+                    scale.state(["!disabled"])
+                    ent_min.state(["disabled"])
+                    ent_max.state(["disabled"])
+
+            var_randomize.trace_add("write", _update_random_mode)
+            _update_random_mode()
+
             self.filter_vars[key_enable] = var_enable
             self.filter_vars[key_strength] = var_strength
+            self.filter_vars[key_randomize] = var_randomize
+            self.filter_vars[key_min] = var_min
+            self.filter_vars[key_max] = var_max
 
         # Existing filters
         add_section("━━━ Existing Filters ━━━")
@@ -399,7 +437,7 @@ class FilterPopup:
 
     def _get_default_values(self) -> Dict[str, Any]:
         """Get default filter values."""
-        return {
+        defaults = {
             # Existing filters
             "cardinal_rotation_90": True,
             "enable_rotation": True,
@@ -441,6 +479,31 @@ class FilterPopup:
             "enable_sharpen": False,
             "sharpen_strength": "1.00",
         }
+        randomizable_defaults = {
+            "rotation_strength": "1.00",
+            "blur_strength": "1.00",
+            "grain_strength": "1.00",
+            "brightness_strength": "1.00",
+            "contrast_strength": "1.00",
+            "perspective_strength": "1.00",
+            "motion_blur_strength": "1.00",
+            "saturation_factor": "1.00",
+            "hue_shift_deg": "0.00",
+            "shadow_strength": "0.30",
+            "reflection_strength": "0.50",
+            "vignetting_strength": "1.00",
+            "chromatic_strength": "1.00",
+            "jpeg_quality": "85",
+            "color_temperature_kelvin": "5500",
+            "distortion_k1": "0.00",
+            "dust_density": "0.30",
+            "sharpen_strength": "1.00",
+        }
+        for key, value in randomizable_defaults.items():
+            defaults[f"{key}_randomize"] = False
+            defaults[f"{key}_min"] = value
+            defaults[f"{key}_max"] = value
+        return defaults
 
     def _handle_close(self) -> None:
         """Handle popup close."""
