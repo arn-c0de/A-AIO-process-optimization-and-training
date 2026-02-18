@@ -1013,33 +1013,30 @@ def apply_shadow(img: np.ndarray, strength: float, size: float, rng: np.random.G
         return img
 
     h, w = img.shape[:2]
-
-    # Random shadow position
     shadow_w = int(w * size)
     shadow_h = int(h * size)
+    if shadow_w < 1 or shadow_h < 1:
+        return img
 
-    # Create shadow mask with gradient
+    x_pos = int(rng.integers(0, max(1, w - shadow_w)))
+    y_pos = int(rng.integers(0, max(1, h - shadow_h)))
+
+    # Vectorised elliptical gradient over the shadow patch
+    iy, ix = np.ogrid[:shadow_h, :shadow_w]
+    dist = np.sqrt(((iy - shadow_h / 2) / (shadow_h / 2)) ** 2 +
+                   ((ix - shadow_w / 2) / (shadow_w / 2)) ** 2)
+    patch_mask = np.where(dist < 1.0, 1.0 - (1.0 - dist) * strength, 1.0).astype(np.float32)
+
     shadow_mask = np.ones((h, w), dtype=np.float32)
+    y1 = min(y_pos + shadow_h, h)
+    x1 = min(x_pos + shadow_w, w)
+    shadow_mask[y_pos:y1, x_pos:x1] = np.minimum(
+        shadow_mask[y_pos:y1, x_pos:x1],
+        patch_mask[:y1 - y_pos, :x1 - x_pos],
+    )
 
-    # Random position for shadow
-    x_pos = rng.integers(0, max(1, w - shadow_w))
-    y_pos = rng.integers(0, max(1, h - shadow_h))
-
-    # Create gradient shadow
-    for i in range(shadow_h):
-        for j in range(shadow_w):
-            # Elliptical gradient
-            dist = np.sqrt(((i - shadow_h/2) / (shadow_h/2))**2 +
-                          ((j - shadow_w/2) / (shadow_w/2))**2)
-            if dist < 1.0:
-                shadow_val = 1.0 - (1.0 - dist) * strength
-                if y_pos + i < h and x_pos + j < w:
-                    shadow_mask[y_pos + i, x_pos + j] = min(shadow_mask[y_pos + i, x_pos + j], shadow_val)
-
-    # Apply shadow
     shadow_mask = np.stack([shadow_mask] * 3, axis=-1)
-    result = (img.astype(np.float32) * shadow_mask).astype(np.uint8)
-    return result
+    return (img.astype(np.float32) * shadow_mask).astype(np.uint8)
 
 
 def apply_reflection(img: np.ndarray, strength: float, size: float, rng: np.random.Generator) -> np.ndarray:
@@ -1058,33 +1055,27 @@ def apply_reflection(img: np.ndarray, strength: float, size: float, rng: np.rand
         return img
 
     h, w = img.shape[:2]
-
-    # Random reflection position
     refl_w = int(w * size)
     refl_h = int(h * size)
+    if refl_w < 1 or refl_h < 1:
+        return img
 
-    # Create reflection overlay
+    x_pos = int(rng.integers(0, max(1, w - refl_w)))
+    y_pos = int(rng.integers(0, max(1, h - refl_h)))
+
+    # Vectorised elliptical bright-spot over the reflection patch
+    iy, ix = np.ogrid[:refl_h, :refl_w]
+    dist = np.sqrt(((iy - refl_h / 2) / (refl_h / 2)) ** 2 +
+                   ((ix - refl_w / 2) / (refl_w / 2)) ** 2)
+    patch = np.where(dist < 1.0, (1.0 - dist) * strength * 255, 0.0).astype(np.float32)
+
     reflection = np.zeros((h, w), dtype=np.float32)
+    y1 = min(y_pos + refl_h, h)
+    x1 = min(x_pos + refl_w, w)
+    reflection[y_pos:y1, x_pos:x1] = patch[:y1 - y_pos, :x1 - x_pos]
 
-    # Random position
-    x_pos = rng.integers(0, max(1, w - refl_w))
-    y_pos = rng.integers(0, max(1, h - refl_h))
-
-    # Create bright spot with gradient
-    for i in range(refl_h):
-        for j in range(refl_w):
-            # Elliptical gradient
-            dist = np.sqrt(((i - refl_h/2) / (refl_h/2))**2 +
-                          ((j - refl_w/2) / (refl_w/2))**2)
-            if dist < 1.0:
-                refl_val = (1.0 - dist) * strength * 255
-                if y_pos + i < h and x_pos + j < w:
-                    reflection[y_pos + i, x_pos + j] = refl_val
-
-    # Apply reflection
     reflection = np.stack([reflection] * 3, axis=-1)
-    result = np.clip(img.astype(np.float32) + reflection, 0, 255).astype(np.uint8)
-    return result
+    return np.clip(img.astype(np.float32) + reflection, 0, 255).astype(np.uint8)
 
 
 def apply_dust_particles(img: np.ndarray, density: float, size: float, rng: np.random.Generator) -> np.ndarray:
