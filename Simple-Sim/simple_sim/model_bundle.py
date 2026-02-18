@@ -22,12 +22,22 @@ BUNDLE_META_NAME = "bundle.json"
 
 
 def is_bundle_dir(p: Path) -> bool:
+    """Return True if *p* looks like a model bundle directory.
+
+    A directory qualifies if it contains ``bundle.json`` or its name ends
+    with ``.bundle`` (allowing detection before metadata is first written).
+
+    Args:
+        p: Path to inspect
+
+    Returns:
+        True if *p* is an existing bundle directory, False otherwise
+    """
     p = Path(p)
     if not p.exists() or not p.is_dir():
         return False
     if (p / BUNDLE_META_NAME).exists():
         return True
-    # Heuristic: allow `.bundle` dirs even before metadata is written.
     return p.name.endswith(".bundle")
 
 
@@ -64,6 +74,14 @@ class BundleMeta:
 
 
 def read_bundle_meta(bundle_dir: Path) -> Optional[BundleMeta]:
+    """Read and parse ``bundle.json`` from *bundle_dir*.
+
+    Args:
+        bundle_dir: Bundle directory containing ``bundle.json``
+
+    Returns:
+        Parsed :class:`BundleMeta`, or ``None`` if the file is absent or invalid
+    """
     p = Path(bundle_dir) / BUNDLE_META_NAME
     if not p.exists():
         return None
@@ -88,7 +106,15 @@ def read_bundle_meta(bundle_dir: Path) -> Optional[BundleMeta]:
 
 
 def upsert_bundle_meta(bundle_dir: Path, profile_id: str, ckpt_path: Path) -> None:
-    """Update `bundle.json` to include profile_id -> checkpoint filename."""
+    """Insert or update a profile entry in ``bundle.json``.
+
+    Creates the bundle directory and ``bundle.json`` if they do not yet exist.
+
+    Args:
+        bundle_dir: Target bundle directory
+        profile_id: Profile identifier to register
+        ckpt_path: Absolute or relative path to the checkpoint file
+    """
     bundle_dir = Path(bundle_dir)
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
