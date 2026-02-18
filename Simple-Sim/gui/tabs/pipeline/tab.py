@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import logging
 import os
 import queue
 import threading
@@ -36,6 +37,8 @@ from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, w
 
 from .ui import PipelineUI
 from .logic import PipelineLogic
+
+_LOG = logging.getLogger(__name__)
 
 
 class PipelineControlTab(BaseTab):
@@ -1011,7 +1014,7 @@ class PipelineControlTab(BaseTab):
                 splits = stats.get("splits", {})
                 self._set_dataset_samples_from_manifest(ds, stats.get("total_samples"), splits.get("train"), splits.get("val"), splits.get("test"))
             except Exception as exc:
-                print(f"Failed to refresh dataset stats: {exc}")
+                _LOG.warning("Failed to refresh dataset stats: %s", exc)
                 self._set_dataset_samples_info("Samples: manifest error", "")
         else: self._set_dataset_samples_info("Samples: manifest missing", "")
 
@@ -1051,7 +1054,7 @@ class PipelineControlTab(BaseTab):
         try:
             self.event_log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.event_log_path, "a", encoding="utf-8") as f: f.write(json.dumps(event) + "\n")
-        except Exception as e: print(f"Failed to log milestone: {e}")
+        except Exception as e: _LOG.warning("Failed to log milestone: %s", e)
 
     def _apply_dataset_settings(self, ds: Path) -> None:
         if not ds: return
@@ -1423,7 +1426,7 @@ class PipelineControlTab(BaseTab):
             if self.logic.ensure_dataset_skeleton(profile_id, config_candidate, out_dir, self._append_log):
                 self._refresh_datasets()
                 self._select_dataset(out_dir)
-        except Exception as exc: print(f"Failed to create dataset placeholder: {exc}")
+        except Exception as exc: _LOG.warning("Failed to create dataset placeholder: %s", exc)
 
     def _autoselect_config_for_profile(self, profile_id: str, *, prefer_quiet: bool) -> None:
         want_backend = (self.ui.var_render_backend.get().strip() or None)
@@ -1508,7 +1511,7 @@ class PipelineControlTab(BaseTab):
             else:
                 self.ui.var_profile_compat.set(f"✓ Compatible: {ds_profile_id}"); self.ui.lbl_profile_compat.configure(foreground="green")
 
-        except Exception as e: print(f"Profile compatibility check failed: {e}"); self.ui.var_profile_compat.set("")
+        except Exception as e: _LOG.warning("Profile compatibility check failed: %s", e); self.ui.var_profile_compat.set("")
 
     def _show_dataset_profile_info(self) -> None:
         if not (ds := self._selected_dataset_dir()): self.ui.show_messagebox("info", "Dataset Profile", "No dataset selected"); return
@@ -1571,7 +1574,7 @@ class PipelineControlTab(BaseTab):
                 self._meta_by_image_rel = {row.image_path: row for row in meta_rows}
             if (labels_path := ds / "labels.jsonl").exists():
                 self._label_dict = {row.id: row.class_name for row in read_jsonl(labels_path, LabelRow)}
-        except Exception as e: print(f"Failed to load metadata/labels: {e}")
+        except Exception as e: _LOG.warning("Failed to load metadata/labels: %s", e)
 
         try:
             if (manifest_path := ds / "dataset_manifest.json").exists():
@@ -1588,7 +1591,7 @@ class PipelineControlTab(BaseTab):
                 self._set_dataset_samples_info("Samples: legacy dataset", "black")
         except Exception as e:
             self.ui.var_dataset_profile.set(f"Profile: ⚠ Error loading manifest"); self._set_dataset_samples_info("Samples: error", "")
-            print(f"Failed to load dataset manifest: {e}")
+            _LOG.warning("Failed to load dataset manifest: %s", e)
 
         self._check_profile_compatibility(); self._apply_dataset_settings(ds)
 
@@ -1719,17 +1722,17 @@ class PipelineControlTab(BaseTab):
             old, new = models_root / f"{old_name}{suffix}.pt", models_root / f"{new_name}{suffix}.pt"
             if old.exists():
                 try: old.rename(new)
-                except Exception as e: print(f"Failed to rename model {old} -> {new}: {e}")
+                except Exception as e: _LOG.warning("Failed to rename model %s -> %s: %s", old, new, e)
             old_meta, new_meta = models_root / f"{old_name}{suffix}.pt.meta.json", models_root / f"{new_name}{suffix}.pt.meta.json"
             if old_meta.exists():
                 try: old_meta.rename(new_meta)
-                except Exception as e: print(f"Failed to rename meta {old_meta} -> {new_meta}: {e}")
+                except Exception as e: _LOG.warning("Failed to rename meta %s -> %s: %s", old_meta, new_meta, e)
 
         versions_root = models_root / "versions"
         old_dir, new_dir = versions_root / old_name, versions_root / new_name
         if old_dir.exists():
             try: old_dir.rename(new_dir)
-            except Exception as e: print(f"Failed to rename versioned models {old_dir} -> {new_dir}: {e}")
+            except Exception as e: _LOG.warning("Failed to rename versioned models %s -> %s: %s", old_dir, new_dir, e)
 
     def _validate_selected(self) -> None:
         dss = self._selected_dataset_dirs();

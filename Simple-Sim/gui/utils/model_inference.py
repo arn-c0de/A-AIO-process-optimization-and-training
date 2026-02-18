@@ -1,13 +1,27 @@
 """Model loading and inference wrapper."""
 
 from __future__ import annotations
+
+import logging
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
+
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
 import cv2
 import numpy as np
+
+from simple_sim.data_loader import IMAGENET_MEAN, IMAGENET_STD
+
+_LOG = logging.getLogger(__name__)
+
+_INFERENCE_TRANSFORM = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((256, 256)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+])
 
 
 class ModelWrapper:
@@ -46,14 +60,7 @@ class ModelWrapper:
         self.model = self.model.to(self.device)
         self.model.eval()
 
-        # Setup transform (same as training)
-        self.transform = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize((256, 256)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                               std=[0.229, 0.224, 0.225])
-        ])
+        self.transform = _INFERENCE_TRANSFORM
 
     def predict(self, image_path: Path) -> Tuple[str, float, np.ndarray]:
         """Run inference on single image.
@@ -103,7 +110,7 @@ def load_model(model_path: Path, device: str = 'cpu') -> Optional[ModelWrapper]:
     try:
         return ModelWrapper(model_path, device)
     except Exception as e:
-        print(f"Failed to load model: {e}")
+        _LOG.warning("Failed to load model: %s", e)
         return None
 
 
@@ -127,5 +134,5 @@ def predict_image(model: ModelWrapper, image_path: Path) -> Optional[Dict[str, A
                             for name, prob in zip(model.class_names, probabilities)}
         }
     except Exception as e:
-        print(f"Failed to predict image {image_path}: {e}")
+        _LOG.warning("Failed to predict image %s: %s", image_path, e)
         return None
