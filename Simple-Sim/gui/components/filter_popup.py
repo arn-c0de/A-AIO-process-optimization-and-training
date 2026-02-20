@@ -177,6 +177,7 @@ class FilterPopup:
         btns = ttk.Frame(parent)
         btns.pack(fill="x", pady=(10, 0))
 
+        ttk.Button(btns, text="Clean", command=self._set_clean_filters).pack(side="left")
         ttk.Button(btns, text="Reset Defaults", command=self._reset_defaults).pack(side="left")
         ttk.Button(btns, text="Reset to 1.0", command=self._reset_to_one).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Close", command=self._handle_close).pack(side="right")
@@ -942,6 +943,13 @@ class FilterPopup:
         self._persist_active_profile()
         self._refresh_profile_list(select_name=name)
 
+    def _set_clean_filters(self) -> None:
+        """Disable all filters and use neutral values for clean image generation."""
+        clean = self._get_clean_values()
+        self.set_current_values(clean)
+        self._update_internal_vars(clean)
+        self._persist_active_profile()
+
     def _get_default_values(self) -> Dict[str, Any]:
         """Get default filter values."""
         defaults = {
@@ -1011,6 +1019,46 @@ class FilterPopup:
             defaults[f"{key}_min"] = value
             defaults[f"{key}_max"] = value
         return defaults
+
+    def _get_clean_values(self) -> Dict[str, Any]:
+        """Get a neutral preset with all filters disabled."""
+        clean = self._get_default_values()
+
+        # Disable every boolean filter switch, including rotation modes.
+        for key in list(clean.keys()):
+            if key.startswith("enable_") or key == "cardinal_rotation_90":
+                clean[key] = False
+
+        # Neutral/no-op values.
+        neutral_values = {
+            "rotation_strength": "0.00",
+            "blur_strength": "0.00",
+            "grain_strength": "0.00",
+            "brightness_strength": "1.00",
+            "contrast_strength": "1.00",
+            "perspective_strength": "0.00",
+            "motion_blur_strength": "0.00",
+            "saturation_factor": "1.00",
+            "hue_shift_deg": "0.00",
+            "shadow_strength": "0.00",
+            "reflection_strength": "0.00",
+            "vignetting_strength": "0.00",
+            "chromatic_strength": "0.00",
+            "jpeg_quality": "100",
+            "color_temperature_kelvin": "5500",
+            "distortion_k1": "0.00",
+            "dust_density": "0.00",
+            "sharpen_strength": "0.00",
+        }
+        clean.update(neutral_values)
+
+        # Keep per-filter randomization disabled and lock ranges to neutral values.
+        for key, value in neutral_values.items():
+            clean[f"{key}_randomize"] = False
+            clean[f"{key}_min"] = value
+            clean[f"{key}_max"] = value
+
+        return clean
 
     def _update_rotation_row_state(self) -> None:
         """Enforce 90-degree-only mode when cardinal rotation is enabled."""
