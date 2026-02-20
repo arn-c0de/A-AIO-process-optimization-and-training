@@ -28,6 +28,7 @@ Thumbs.db
 
 # Large artifacts (should not go to GitHub)
 # Project-specific
+
 Simple-Sim/outputs/
 Simple-Sim/wheelhouse/
 Simple-Sim/.venv-wheelhouse/
@@ -64,3 +65,4 @@ Simple-Sim/.venv-wheelhouse/
 *.tar.gz
 
 Simple-Sim.meta.json
+.claude

@@ -10,6 +10,8 @@ import threading
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.settings_store import SettingsStore
+from gui.utils.dataset_ops import delete_samples, move_samples
+from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, dataset_display_name
 from .ui import AnalysisUI
 from .logic import AnalysisLogic
 from simple_sim.schema import MetaRow
@@ -28,6 +30,7 @@ class AnalysisTab(BaseTab):
         self.visible_sample_item_by_id: dict[str, str] = {}
         self._filter_after_id: Optional[str] = None
         self._dataset_by_display: dict[str, Path] = {}
+        self._dataset_catalog = DatasetCatalog(sim_root, state.settings_store)
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -40,11 +43,19 @@ class AnalysisTab(BaseTab):
     def on_dataset_changed(self) -> None:
         if not self.state.dataset_dir: return
         display = self._display_for_dataset(self.state.dataset_dir)
+        cat = self._dataset_catalog.category_for(self.state.dataset_dir)
+        if cat and cat != DEFAULT_CATEGORY:
+            display = f"[{cat}] {display}"
         if display in self._dataset_by_display:
             self.ui.var_dataset.set(display)
         else:
             self._refresh_datasets()
-            self.ui.var_dataset.set(self._display_for_dataset(self.state.dataset_dir))
+            if display in self._dataset_by_display:
+                self.ui.var_dataset.set(display)
+            elif values := list(self.ui.dataset_combo["values"]):
+                self.ui.var_dataset.set(values[0])
+                self._on_dataset_selected()
+                return
         self._load_dataset()
         self._try_load_model()
 
@@ -76,24 +87,28 @@ class AnalysisTab(BaseTab):
             var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
 
     def _display_for_dataset(self, p: Path) -> str:
-        try:
-            runs, versions = self.logic.sim_data_roots()
-            rp = p.resolve()
-            if str(rp).startswith(str(runs.resolve()) + "/"): return rp.name
-            if str(rp).startswith(str(versions.resolve()) + "/"): return f"{rp.parent.name}:{rp.name}"
-        except Exception: pass
-        return p.name
+        runs, versions = self.logic.sim_data_roots()
+        return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
     def _refresh_datasets(self) -> None:
+        self._dataset_catalog.reload()
         cand = self.logic.get_datasets()
         cand.sort(key=lambda p: (1, -p.stat().st_mtime, p.name) if "versions" in str(p) else (0, p.name, -p.stat().st_mtime))
+        self._dataset_catalog.prune_unknown(cand)
+        self._dataset_catalog.save(self.frame)
+        cand = [p for p in cand if not self._dataset_catalog.is_archived(p)]
         
         self._dataset_by_display.clear()
         displays: list[str] = []
         seen: dict[str, int] = {}
         for p in cand:
             base = self._display_for_dataset(p)
-            disp = f"{base} ({seen.get(base, 0)})" if (seen.update({base: seen.get(base, 0) + 1})) else base
+            category = self._dataset_catalog.category_for(p)
+            if category and category != DEFAULT_CATEGORY:
+                base = f"[{category}] {base}"
+            n = seen.get(base, 0) + 1
+            seen[base] = n
+            disp = base if n == 1 else f"{base} ({n})"
             self._dataset_by_display[disp] = p
             displays.append(disp)
         
@@ -102,11 +117,19 @@ class AnalysisTab(BaseTab):
         
         if self.state.dataset_dir:
             want = self._display_for_dataset(self.state.dataset_dir)
+            cat = self._dataset_catalog.category_for(self.state.dataset_dir)
+            if cat and cat != DEFAULT_CATEGORY:
+                want = f"[{cat}] {want}"
             for d, pp in self._dataset_by_display.items():
                 if pp == self.state.dataset_dir or d == want:
                     self.ui.var_dataset.set(d)
                     return
         if displays: self.ui.var_dataset.set(displays[0])
+
+    def refresh(self) -> None:
+        if not self.initialized:
+            return
+        self._refresh_datasets()
 
     def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
         if not (ds := self._dataset_by_display.get(self.ui.var_dataset.get().strip())): return
@@ -226,3 +249,108 @@ class AnalysisTab(BaseTab):
                 messagebox.showerror("Error", f"Analysis failed:\\n{e}")
 
         threading.Thread(target=analyze, daemon=True).start()
+
+    def _selected_sample_ids(self) -> List[str]:
+        selected: List[str] = []
+        try:
+            for item in self.ui.tree.selection():
+                if item in self.meta_dict:
+                    selected.append(item)
+        except Exception:
+            selected = []
+
+        if selected:
+            seen = set()
+            ordered: List[str] = []
+            for sample_id in selected:
+                if sample_id in seen:
+                    continue
+                seen.add(sample_id)
+                ordered.append(sample_id)
+            return ordered
+
+        if self.current_sample_id in self.meta_dict:
+            return [self.current_sample_id]
+        if self.visible_sample_ids:
+            return [self.visible_sample_ids[0]]
+        return []
+
+    def _delete_current_image(self) -> None:
+        if not self.state.dataset_dir:
+            return
+        sample_ids = self._selected_sample_ids()
+        if not sample_ids:
+            messagebox.showinfo("Info", "No sample selected.")
+            return
+        if not messagebox.askyesno(
+            "Delete image",
+            f"Delete {len(sample_ids)} sample(s) from dataset '{self.state.dataset_dir.name}'?",
+        ):
+            return
+
+        try:
+            delete_samples(self.state.dataset_dir, sample_ids)
+            self._refresh_datasets()
+            self._load_dataset()
+            self._try_load_model()
+            try:
+                self.parent.event_generate("<<DatasetChanged>>", when="tail")
+            except Exception:
+                pass
+        except Exception as exc:
+            messagebox.showerror("Delete failed", str(exc))
+
+    def _move_current_image(self) -> None:
+        if not self.state.dataset_dir:
+            return
+        sample_ids = self._selected_sample_ids()
+        if not sample_ids:
+            messagebox.showinfo("Info", "No sample selected.")
+            return
+
+        source_ds = self.state.dataset_dir
+        targets = [(display, path) for display, path in self._dataset_by_display.items() if path.resolve() != source_ds.resolve()]
+        if not targets:
+            messagebox.showinfo("Move image", "No target dataset available.")
+            return
+
+        dialog = tk.Toplevel(self.frame.winfo_toplevel())
+        dialog.title("Move Image")
+        dialog.transient(self.frame.winfo_toplevel())
+        dialog.grab_set()
+        frm = ttk.Frame(dialog, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Select target dataset for {len(sample_ids)} selected sample(s):").pack(anchor="w")
+        lb = tk.Listbox(frm, height=min(12, max(5, len(targets))), exportselection=False)
+        lb.pack(fill="both", expand=True, pady=(6, 8))
+        for label, _ in targets:
+            lb.insert("end", label)
+        lb.selection_set(0)
+
+        def _confirm_move() -> None:
+            idxs = lb.curselection()
+            if not idxs:
+                return
+            target_display, target_dir = targets[int(idxs[0])]
+            if not messagebox.askyesno(
+                "Move image",
+                f"Move {len(sample_ids)} sample(s)\nfrom '{source_ds.name}'\nto '{target_display}'?",
+            ):
+                return
+            try:
+                move_samples(source_ds, target_dir, sample_ids, enforce_profile_match=True)
+                dialog.destroy()
+                self._refresh_datasets()
+                self._load_dataset()
+                self._try_load_model()
+                try:
+                    self.parent.event_generate("<<DatasetChanged>>", when="tail")
+                except Exception:
+                    pass
+            except Exception as exc:
+                messagebox.showerror("Move failed", str(exc))
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
+        ttk.Button(btns, text="Move", command=_confirm_move).pack(side="right", padx=(0, 8))

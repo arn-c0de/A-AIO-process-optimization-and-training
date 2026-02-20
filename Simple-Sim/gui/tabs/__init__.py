@@ -8,6 +8,7 @@ from .board_detection.tab import BoardDetectionTab
 from .weights.tab import WeightsTab
 from .merge.tab import MergeTab
 from .pipeline.tab import PipelineControlTab
+from .datasets.tab import DatasetsTab
 
 __all__ = [
     'BaseTab',
@@ -18,4 +19,5 @@ __all__ = [
     'ValidationTab',
     'MergeTab',
     'BoardDetectionTab',
+    'DatasetsTab',
 ]
