@@ -1,17 +1,69 @@
 """Extended dataset validation with outlier and duplicate detection."""
 
 from __future__ import annotations
-import sys
+
+import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
+
 import numpy as np
 import cv2
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from tools.validate_dataset import validate_dataset
+
+_LOG = logging.getLogger(__name__)
+
+# Tolerance thresholds used in edge-case detection.
+_OK_SHIFT_PX = 3.0
+_OK_ROTATION_DEG = 5.0
+_TOMBSTONE_TILT_DEG = 75.0
+
+
+def _detect_metric_outliers(
+    sample_ids: List[str],
+    scores: List[float],
+    metric: str,
+    threshold_sigma: float,
+    reason_template: str,
+) -> List[Dict[str, Any]]:
+    """Detect outliers in a list of per-sample metric scores using z-scores.
+
+    Args:
+        sample_ids: Sample identifier for each score entry.
+        scores: Metric score for each sample.
+        metric: Metric name used in the returned flag dictionary.
+        threshold_sigma: Minimum absolute z-score to flag as an outlier.
+        reason_template: Format string receiving ``z`` (float), e.g.
+            ``"Blur score {z:.1f}σ from mean"``.
+
+    Returns:
+        List of outlier dictionaries with keys ``sample_id``, ``flag``,
+        ``metric``, ``value``, ``z_score``, and ``reason``.
+    """
+    if not scores:
+        return []
+
+    mean = np.mean(scores)
+    std = np.std(scores)
+
+    if std == 0:
+        return []
+
+    outliers: List[Dict[str, Any]] = []
+    for sample_id, value in zip(sample_ids, scores):
+        z_score = abs(value - mean) / std
+        if z_score > threshold_sigma:
+            outliers.append({
+                'sample_id': sample_id,
+                'flag': 'OUTLIER',
+                'metric': metric,
+                'value': value,
+                'z_score': z_score,
+                'reason': reason_template.format(z=z_score),
+            })
+
+    return outliers
 
 
 def detect_image_outliers(dataset_dir: Path,
@@ -54,42 +106,14 @@ def detect_image_outliers(dataset_dir: Path,
         brightness_scores.append(brightness)
         sample_ids.append(meta_row.id)
 
-    # Detect outliers
-    outliers = []
-
-    if len(blur_scores) > 0:
-        blur_mean = np.mean(blur_scores)
-        blur_std = np.std(blur_scores)
-
-        for i, (sample_id, blur_score) in enumerate(zip(sample_ids, blur_scores)):
-            if blur_std > 0:
-                z_score = abs(blur_score - blur_mean) / blur_std
-                if z_score > threshold_sigma:
-                    outliers.append({
-                        'sample_id': sample_id,
-                        'flag': 'OUTLIER',
-                        'metric': 'blur',
-                        'value': blur_score,
-                        'z_score': z_score,
-                        'reason': f'Blur score {z_score:.1f}σ from mean'
-                    })
-
-    if len(brightness_scores) > 0:
-        bright_mean = np.mean(brightness_scores)
-        bright_std = np.std(brightness_scores)
-
-        for i, (sample_id, brightness) in enumerate(zip(sample_ids, brightness_scores)):
-            if bright_std > 0:
-                z_score = abs(brightness - bright_mean) / bright_std
-                if z_score > threshold_sigma:
-                    outliers.append({
-                        'sample_id': sample_id,
-                        'flag': 'OUTLIER',
-                        'metric': 'brightness',
-                        'value': brightness,
-                        'z_score': z_score,
-                        'reason': f'Brightness {z_score:.1f}σ from mean'
-                    })
+    outliers = _detect_metric_outliers(
+        sample_ids, blur_scores, 'blur', threshold_sigma,
+        'Blur score {z:.1f}\u03c3 from mean',
+    )
+    outliers += _detect_metric_outliers(
+        sample_ids, brightness_scores, 'brightness', threshold_sigma,
+        'Brightness {z:.1f}\u03c3 from mean',
+    )
 
     return outliers
 
@@ -109,7 +133,7 @@ def detect_duplicate_images(dataset_dir: Path,
         import imagehash
         from PIL import Image
     except ImportError:
-        print("Warning: imagehash not installed, skipping duplicate detection")
+        _LOG.warning("imagehash not installed, skipping duplicate detection")
         return []
 
     dataset_dir = Path(dataset_dir)
@@ -163,11 +187,6 @@ def detect_edge_cases(dataset_dir: Path) -> List[Dict[str, Any]]:
 
     id_to_label = {row.id: row.class_name for row in label_rows}
 
-    # Typical tolerances (should be read from config, but using defaults here)
-    ok_shift_px = 3.0
-    ok_rotation_deg = 5.0
-    tombstone_tilt_deg = 75.0
-
     edge_cases = []
 
     for meta_row in meta_rows:
@@ -184,34 +203,34 @@ def detect_edge_cases(dataset_dir: Path) -> List[Dict[str, Any]]:
         # Check if near OK/MISALIGNED boundary
         if label in ['OK', 'MISALIGNED']:
             # Within 10% of threshold
-            shift_margin = 0.1 * ok_shift_px
-            rot_margin = 0.1 * ok_rotation_deg
+            shift_margin = 0.1 * _OK_SHIFT_PX
+            rot_margin = 0.1 * _OK_ROTATION_DEG
 
-            if abs(shift_magnitude - ok_shift_px) < shift_margin:
+            if abs(shift_magnitude - _OK_SHIFT_PX) < shift_margin:
                 edge_cases.append({
                     'sample_id': meta_row.id,
                     'flag': 'EDGE_CASE',
-                    'reason': f'Shift magnitude {shift_magnitude:.2f}px near threshold {ok_shift_px}px',
+                    'reason': f'Shift magnitude {shift_magnitude:.2f}px near threshold {_OK_SHIFT_PX}px',
                     'label': label
                 })
 
-            if abs(rotation_deg - ok_rotation_deg) < rot_margin:
+            if abs(rotation_deg - _OK_ROTATION_DEG) < rot_margin:
                 edge_cases.append({
                     'sample_id': meta_row.id,
                     'flag': 'EDGE_CASE',
-                    'reason': f'Rotation {rotation_deg:.2f}° near threshold {ok_rotation_deg}°',
+                    'reason': f'Rotation {rotation_deg:.2f}\u00b0 near threshold {_OK_ROTATION_DEG}\u00b0',
                     'label': label
                 })
 
         # Check if near TOMBSTONE boundary
         if label == 'TOMBSTONE':
-            tilt_margin = 0.1 * (90 - tombstone_tilt_deg)
+            tilt_margin = 0.1 * (90 - _TOMBSTONE_TILT_DEG)
 
-            if abs(tilt_deg - tombstone_tilt_deg) < tilt_margin:
+            if abs(tilt_deg - _TOMBSTONE_TILT_DEG) < tilt_margin:
                 edge_cases.append({
                     'sample_id': meta_row.id,
                     'flag': 'EDGE_CASE',
-                    'reason': f'Tilt {tilt_deg:.2f}° near threshold {tombstone_tilt_deg}°',
+                    'reason': f'Tilt {tilt_deg:.2f}\u00b0 near threshold {_TOMBSTONE_TILT_DEG}\u00b0',
                     'label': label
                 })
 
@@ -263,7 +282,7 @@ def run_validation_suite(dataset_dir: Path,
             outliers = detect_image_outliers(dataset_dir)
             results['outliers'] = outliers
         except Exception as e:
-            print(f"Outlier detection failed: {e}")
+            _LOG.warning("Outlier detection failed: %s", e)
 
     # Duplicate detection
     if run_duplicates:
@@ -271,7 +290,7 @@ def run_validation_suite(dataset_dir: Path,
             duplicates = detect_duplicate_images(dataset_dir)
             results['duplicates'] = duplicates
         except Exception as e:
-            print(f"Duplicate detection failed: {e}")
+            _LOG.warning("Duplicate detection failed: %s", e)
 
     # Edge case detection
     if run_edge_cases:
@@ -279,6 +298,6 @@ def run_validation_suite(dataset_dir: Path,
             edge_cases = detect_edge_cases(dataset_dir)
             results['edge_cases'] = edge_cases
         except Exception as e:
-            print(f"Edge case detection failed: {e}")
+            _LOG.warning("Edge case detection failed: %s", e)
 
     return results

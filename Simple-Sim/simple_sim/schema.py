@@ -5,6 +5,7 @@ Schema notes:
 - meta.jsonl schema_version 2: adds render_meta (backend-specific render details)
 """
 
+import dataclasses
 import json
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
@@ -116,9 +117,6 @@ def write_jsonl(path: Path, rows: List[Any]) -> None:
 
     with open(temp_path, 'w') as f:
         for row in rows:
-            # Validate before writing
-            if isinstance(row, (MetaRow, LabelRow)):
-                row.__post_init__()  # Re-validate
             json_line = json.dumps(asdict(row))
             f.write(json_line + '\n')
 
@@ -152,15 +150,10 @@ def read_jsonl(path: Path, schema_cls: Type[T]) -> List[T]:
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON at line {line_num}: {e}")
 
-            # Check for unknown fields
-            if schema_cls == MetaRow:
-                expected_fields = {'schema_version', 'id', 'run_id', 'domain', 'split', 'seed',
-                                 'image_path', 'render_backend', 'footprint', 'nominal', 'defect', 'augment',
-                                 'render_meta'}
-            elif schema_cls == LabelRow:
-                expected_fields = {'schema_version', 'id', 'class_name', 'profile_id'}
-            else:
+            # Check for unknown fields using dataclass introspection
+            if not dataclasses.is_dataclass(schema_cls):
                 raise ValueError(f"Unknown schema class: {schema_cls}")
+            expected_fields = {f.name for f in dataclasses.fields(schema_cls)}
 
             unknown_fields = set(data.keys()) - expected_fields
             if unknown_fields:

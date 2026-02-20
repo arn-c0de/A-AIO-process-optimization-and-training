@@ -1,10 +1,14 @@
 """Flag management for dataset quality issues."""
 
 from __future__ import annotations
+
 import json
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+
+_LOG = logging.getLogger(__name__)
 
 
 class FlagManager:
@@ -43,7 +47,7 @@ class FlagManager:
 
                     self._flags[sample_id].append(flag_dict)
         except Exception as e:
-            print(f"Failed to load flags: {e}")
+            _LOG.warning("Failed to load flags: %s", e)
 
     def _save_flags(self) -> None:
         """Save flags to JSONL file."""
@@ -55,7 +59,7 @@ class FlagManager:
                     for flag_dict in flag_list:
                         f.write(json.dumps(flag_dict) + '\n')
         except Exception as e:
-            print(f"Failed to save flags: {e}")
+            _LOG.warning("Failed to save flags: %s", e)
 
     def add_flag(self, sample_id: str, flag_type: str, reason: str) -> None:
         """Add a flag to a sample.
