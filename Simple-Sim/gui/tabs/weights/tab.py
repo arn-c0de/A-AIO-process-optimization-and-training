@@ -60,6 +60,14 @@ class WeightsTab(BaseTab):
         self._wire_settings_autosave()
         self._tick_ui()
 
+    def on_activate(self) -> None:
+        """Build lazily once, then auto-refresh model categorization on each open."""
+        super().on_activate()
+        # Keep group placement up-to-date without requiring a manual Refresh click.
+        self._favorites = self.logic.load_favorites()
+        self._arena = self.logic.load_arena()
+        self._refresh_models()
+
     def on_dataset_changed(self) -> None:
         if not self.state.dataset_dir: return
         self.ui.var_dataset.set(str(self.state.dataset_dir))
@@ -237,7 +245,15 @@ class WeightsTab(BaseTab):
 
         for group in group_names:
             group_iid = f"group::{group}"
-            self.ui.tree.insert("", "end", iid=group_iid, text=f"{group} ({len(group_members.get(group, []))})", values=("",)*5 + (f"{len(group_members.get(group, []))} models",), tags=("group_header",), open=group_iid in prev_open_groups)
+            self.ui.tree.insert(
+                "",
+                "end",
+                iid=group_iid,
+                text=f"{group} ({len(group_members.get(group, []))})",
+                values=("",) * 5 + (f"{len(group_members.get(group, []))} models",),
+                tags=("group_header",),
+                open=(group_iid in prev_open_groups) or (group == "Favorites"),
+            )
             self._group_iids[group] = group_iid
             
             for p in group_members.get(group, []):
