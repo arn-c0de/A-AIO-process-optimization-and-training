@@ -149,6 +149,9 @@ class PipelineUI:
         
         self._thumb_refs: List[ImageTk.PhotoImage] = []
 
+        # Precise mode
+        self.btn_precise_settings: ttk.Button
+
     def build_ui(self) -> None:
         top = ttk.Frame(self.frame)
         top.pack(fill="x", pady=(0, 5))
@@ -212,14 +215,26 @@ class PipelineUI:
         ttk.Radiobutton(run_mode_frame, text="Single", variable=self.var_run_mode, value="single").pack(side="left")
         ttk.Radiobutton(run_mode_frame, text="Multiple", variable=self.var_run_mode, value="multiple").pack(side="left", padx=(5, 0))
         ttk.Radiobutton(run_mode_frame, text="Continuous", variable=self.var_run_mode, value="continuous").pack(side="left", padx=(5, 0))
+        ttk.Radiobutton(run_mode_frame, text="Precise", variable=self.var_run_mode, value="precise").pack(side="left", padx=(5, 0))
 
         ttk.Label(top, text="Count:").pack(side="left", padx=(10, 6))
         self.run_count_entry = ttk.Entry(top, textvariable=self.var_run_count, width=5)
         self.run_count_entry.pack(side="left")
 
+        self.btn_precise_settings = ttk.Button(
+            top, text="Precise Settings...", width=16,
+            command=self.tab._open_precise_popup, state="disabled",
+        )
+        self.btn_precise_settings.pack(side="left", padx=(8, 0))
+        ToolTip(self.btn_precise_settings, text_func=lambda: "Configure exact sample counts per class / per profile")
+
         def on_run_mode_change(*args):
-            if self.var_run_mode.get() == "multiple": self.run_count_entry.configure(state="normal")
-            else: self.run_count_entry.configure(state="disabled")
+            mode = self.var_run_mode.get()
+            if mode == "multiple":
+                self.run_count_entry.configure(state="normal")
+            else:
+                self.run_count_entry.configure(state="disabled")
+            self.btn_precise_settings.configure(state="normal" if mode == "precise" else "disabled")
         self.var_run_mode.trace("w", on_run_mode_change)
         on_run_mode_change()
 
@@ -341,6 +356,8 @@ class PipelineUI:
         ttk.Button(dsbar, text="Snapshot", command=self.tab._snapshot_dataset_selected).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Rename", command=self.tab._rename_dataset_selected).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Delete", command=self.tab._delete_dataset).pack(side="left", padx=(8, 0))
+        ttk.Button(dsbar, text="Delete Images...", command=self.tab._delete_images_from_dataset).pack(side="left", padx=(8, 0))
+        ttk.Button(dsbar, text="Move Images...", command=self.tab._move_images_between_datasets).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Create New", command=self.tab._create_new_dataset).pack(side="left", padx=(8, 0))
 
         dsbtns = ttk.Frame(left)
@@ -476,7 +493,7 @@ class PipelineUI:
 
                 img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
                 img_pil = Image.fromarray(img_rgb)
-                img_pil.thumbnail((280, 180))
+                img_pil.thumbnail((120, 90))
                 tkimg = ImageTk.PhotoImage(img_pil)
                 self._thumb_refs.append(tkimg)
 

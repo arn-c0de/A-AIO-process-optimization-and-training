@@ -28,7 +28,10 @@ from gui.state import UiState
 from gui.utils.tooltip import ToolTip
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.components.filter_popup import open_filter_popup
+from gui.components.precise_popup import open_precise_popup
 from gui.utils.settings_store import SettingsStore
+from gui.utils.dataset_ops import delete_samples, list_dataset_samples, move_samples, DatasetSampleInfo
+from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, dataset_display_name
 
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
@@ -67,6 +70,17 @@ class PipelineControlTab(BaseTab):
         self._last_profile_id: str = "chip_0603_resistor@1"
         self._suspend_profile_event: bool = False
 
+        self._precise_settings: Dict[str, Any] = {
+            "total": 100,
+            "per_class": False,
+            "class_names": ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
+            "classes": {},
+            "multi_profiles": [],
+            "multi_totals": {},
+            "multi_classes": {},
+        }
+        self._precise_popup_ref: Any = None  # PrecisePopup instance while open
+
         self._last_stats_ts: float = 0.0
         self._last_gpu_ts: float = 0.0
         self._last_ds_size_ts: float = 0.0
@@ -85,6 +99,7 @@ class PipelineControlTab(BaseTab):
         self._profile_paths: list[Path] = []
         self._dataset_milestones: dict[str, int] = {}
         self._filter_popup_extras: Dict[str, Any] = {}
+        self._dataset_catalog = DatasetCatalog(sim_root, state.settings_store)
         
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -222,6 +237,16 @@ class PipelineControlTab(BaseTab):
                 var.set(v)
             except Exception:
                 pass
+        try:
+            raw = str(st.get("pipeline.precise_settings_json", "") or "").strip()
+            if raw:
+                loaded = json.loads(raw)
+                if isinstance(loaded, dict):
+                    for k, v in loaded.items():
+                        if k in self._precise_settings:
+                            self._precise_settings[k] = v
+        except Exception:
+            pass
 
         try: self._refresh_datasets(); self._on_dataset_multi_toggle(); self._on_dataset_selected()
         except Exception: pass
@@ -578,6 +603,158 @@ class PipelineControlTab(BaseTab):
                 payload[k] = self._float_or_default(str(v), default=0.0)
         return payload
 
+    # ------------------------------------------------------------------
+    # Precise mode helpers
+    # ------------------------------------------------------------------
+
+    def _open_precise_popup(self) -> None:
+        """Open the precise mode settings popup (non-modal)."""
+        # If already open, just bring it to front
+        if self._precise_popup_ref is not None and self._precise_popup_ref.is_open():
+            try:
+                self._precise_popup_ref._win.lift()
+                self._precise_popup_ref._win.focus_set()
+            except Exception:
+                pass
+            return
+
+        multi_enabled = bool(self.ui.var_profiles_multi.get())
+        self._precise_settings["multi_profiles"] = (
+            self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            if multi_enabled else []
+        )
+        self._refresh_precise_classes()
+
+        def on_apply(updated: Dict[str, Any]) -> None:
+            self._precise_settings.update(updated)
+            self._save_precise_settings()
+
+        self._precise_popup_ref = open_precise_popup(
+            parent=self.frame,
+            settings=self._precise_settings,
+            on_apply=on_apply,
+            get_class_names_func=self._get_precise_class_names_from_config,
+        )
+
+    def _get_precise_class_names_from_config(self) -> List[str]:
+        cfg_str = self.ui.var_config.get().strip()
+        if cfg_str:
+            cfg_path = (self.sim_root / cfg_str) if not Path(cfg_str).is_absolute() else Path(cfg_str)
+            try:
+                data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                names = list((data.get("classes") or {}).keys())
+                if names:
+                    return names
+            except Exception:
+                pass
+        return ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+
+    def _refresh_precise_classes(self) -> None:
+        """Sync class names and multi-profile list into _precise_settings; push to open popup."""
+        names = self._get_precise_class_names_from_config()
+        self._precise_settings["class_names"] = names
+        default = int(self._precise_settings.get("total", 100))
+        for cls in names:
+            self._precise_settings["classes"].setdefault(cls, default)
+
+        multi_enabled = bool(self.ui.var_profiles_multi.get())
+        self._precise_settings["multi_profiles"] = (
+            self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            if multi_enabled else []
+        )
+
+        # Live-update the popup if it is currently open
+        if self._precise_popup_ref is not None and self._precise_popup_ref.is_open():
+            try:
+                self._precise_popup_ref.refresh(self._precise_settings)
+            except Exception:
+                pass
+
+    def _save_precise_settings(self) -> None:
+        st = self._store()
+        if st is not None:
+            st.set("pipeline.precise_settings_json", json.dumps(self._precise_settings, ensure_ascii=True))
+            st.schedule_save(self.frame)
+
+    def _get_precise_counts(self) -> Optional[Dict[str, Any]]:
+        """Return sample-count overrides for precise mode, or None on validation error."""
+        s = self._precise_settings
+        multi_profiles: List[str] = s.get("multi_profiles") or []
+        per_class = bool(s.get("per_class", False))
+
+        if multi_profiles:
+            per_profile: Dict[str, Any] = {}
+            if per_class:
+                for pid in multi_profiles:
+                    cls_dict: Dict[str, Any] = (s.get("multi_classes") or {}).get(pid) or {}
+                    if not cls_dict:
+                        self.ui.show_messagebox("error", "Error", f"Precise mode: no class entries for '{pid}'.\nOpen Precise Settings and click ↻.")
+                        return None
+                    counts: Dict[str, int] = {}
+                    for cls, val in cls_dict.items():
+                        try:
+                            n = int(val)
+                            if n < 0: raise ValueError()
+                            counts[cls] = n
+                        except Exception:
+                            self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for '{pid}' / '{cls}'.")
+                            return None
+                    per_profile[pid] = counts
+            else:
+                for pid in multi_profiles:
+                    try:
+                        n = int((s.get("multi_totals") or {}).get(pid, s.get("total", 100)))
+                        if n < 1: raise ValueError()
+                        per_profile[pid] = {"_total": n}
+                    except Exception:
+                        self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for profile '{pid}'.")
+                        return None
+            return {"_per_profile": per_profile}
+
+        # Single profile
+        if per_class:
+            classes: Dict[str, Any] = s.get("classes") or {}
+            if not classes:
+                self.ui.show_messagebox("error", "Error", "Precise mode: no class entries.\nOpen Precise Settings and click ↻.")
+                return None
+            counts2: Dict[str, int] = {}
+            for cls, val in classes.items():
+                try:
+                    n = int(val)
+                    if n < 0: raise ValueError()
+                    counts2[cls] = n
+                except Exception:
+                    self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for class '{cls}'.")
+                    return None
+            return counts2
+        else:
+            try:
+                total = int(s.get("total", 100))
+                if total < 1: raise ValueError()
+            except Exception:
+                self.ui.show_messagebox("error", "Error", "Precise mode: invalid total count.\nOpen Precise Settings.")
+                return None
+            return {"_total": total}
+
+    def _write_precise_config(self, cfg_path: Path, counts: Dict[str, Any]) -> Path:
+        """Write a temp config YAML with the classes section overridden by counts."""
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        existing_classes: Dict[str, int] = {str(k): int(v) for k, v in (data.get("classes") or {}).items()}
+        if "_total" in counts:
+            total = int(counts["_total"])
+            new_classes = {cls: total for cls in existing_classes} if existing_classes else {}
+        else:
+            new_classes = {str(k): int(v) for k, v in counts.items()}
+        data["classes"] = new_classes
+        live_dir = self.sim_root / "outputs" / "live"
+        live_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml",
+                                        prefix="precise_", dir=str(live_dir), delete=False) as tf:
+            yaml.safe_dump(data, tf, sort_keys=False)
+            return Path(tf.name)
+
+    # ------------------------------------------------------------------
+
     def _open_image_filters_popup(self) -> None:
         """Open shared image filter popup."""
         profiles, active_profile = self._load_filter_profiles()
@@ -596,6 +773,7 @@ class PipelineControlTab(BaseTab):
             show_messagebox=self.ui.show_messagebox,
             ask_string=self.ui.ask_string,
             ask_yes_no=self.ui.ask_yes_no,
+            sim_root=str(self.sim_root),
         )
 
     def _refresh_profile_models(self) -> None:
@@ -678,6 +856,7 @@ class PipelineControlTab(BaseTab):
                 self.ui.show_messagebox("error", "Error", "Invalid run count. Please enter a positive integer.")
                 return
         elif run_mode == "continuous": run_count = -1
+        elif run_mode == "precise": run_count = 1
 
         self._append_log(f"Run mode: {run_mode}" + (f" ({run_count}x)" if run_count > 0 else " (continuous)") + "\n\n")
 
@@ -785,6 +964,30 @@ class PipelineControlTab(BaseTab):
                     "profile_id": pid, "config": cfg_rel, "out_dir": str(out_i), "model_path": str(model_i),
                 })
         
+        # Precise mode: patch each spec's config with user-specified sample counts
+        if run_mode == "precise":
+            precise_counts = self._get_precise_counts()
+            if precise_counts is None:
+                return
+            per_profile_map: Optional[Dict[str, Any]] = precise_counts.get("_per_profile") if isinstance(precise_counts, dict) else None
+            patched_specs: list[dict[str, str]] = []
+            for spec in run_specs:
+                cfg_rel = spec["config"]
+                cfg_path = (self.sim_root / cfg_rel) if not Path(cfg_rel).is_absolute() else Path(cfg_rel)
+                # Use profile-specific counts when available
+                if per_profile_map is not None:
+                    pid = spec.get("profile_id", "")
+                    spec_counts = per_profile_map.get(pid) or next(iter(per_profile_map.values()), {})
+                else:
+                    spec_counts = precise_counts
+                try:
+                    patched_path = self._write_precise_config(cfg_path, spec_counts)
+                    patched_specs.append({**spec, "config": _rel_to_sim_root(patched_path)})
+                except Exception as e:
+                    self.ui.show_messagebox("error", "Error", f"Failed to write precise config:\n\n{e}")
+                    return
+            run_specs = patched_specs
+
         image_filters = self._image_filters_payload()
 
         if not self._confirm_pipeline_start(
@@ -1076,17 +1279,24 @@ class PipelineControlTab(BaseTab):
         self._last_profile_id = profile_id
 
     def _refresh_datasets(self) -> None:
+        self._dataset_catalog.reload()
         sim_data, runs, versions = self.sim_root / "outputs" / "sim_data", self.sim_root / "outputs" / "sim_data" / "runs", self.sim_root / "outputs" / "sim_data" / "versions"
         runs.mkdir(parents=True, exist_ok=True); versions.mkdir(parents=True, exist_ok=True)
 
         cand: list[Path] = [p for p in runs.iterdir() if p.is_dir()]
         cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
         cand.sort(key=lambda p: (1, -p.stat().st_mtime, p.name) if str(p.resolve()).startswith(str(versions.resolve()) + os.sep) else (0, p.name))
+        self._dataset_catalog.prune_unknown(cand)
+        self._dataset_catalog.save(self.frame)
+        cand = [p for p in cand if not self._dataset_catalog.is_archived(p)]
 
         self._dataset_dirs, self._dataset_labels, self._dataset_by_label = cand, [], {}
         seen: dict[str, int] = {}
         for p in cand:
             base_label = self._display_for_dataset(p, runs=runs, versions=versions)
+            category = self._dataset_catalog.category_for(p)
+            cat_prefix = f"[{category}] " if category and category != DEFAULT_CATEGORY else ""
+            base_label = f"{cat_prefix}{base_label}"
             n = seen.get(base_label, 0) + 1; seen[base_label] = n
             label = base_label if n == 1 else f"{base_label} ({n})"
             self._dataset_labels.append(label); self._dataset_by_label[label] = p
@@ -1097,6 +1307,9 @@ class PipelineControlTab(BaseTab):
         if (cur := self.ui.var_dataset.get().strip()) and cur in self._dataset_by_label: return
         if self.state.dataset_dir:
             want = self._display_for_dataset(self.state.dataset_dir, runs=runs, versions=versions)
+            cat = self._dataset_catalog.category_for(self.state.dataset_dir)
+            if cat and cat != DEFAULT_CATEGORY:
+                want = f"[{cat}] {want}"
             for label, p in self._dataset_by_label.items():
                 if p == self.state.dataset_dir or label == want: self.ui.var_dataset.set(label); return
         if self._dataset_labels: self.ui.var_dataset.set(self._dataset_labels[0]); self._on_dataset_selected()
@@ -1210,12 +1423,7 @@ class PipelineControlTab(BaseTab):
         self._sync_multi_summary()
 
     def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
-        try:
-            rp = p.resolve()
-            if str(rp).startswith(str(runs.resolve()) + os.sep): return rp.name
-            if str(rp).startswith(str(versions.resolve()) + os.sep): return f"{rp.parent.name}:{rp.name}"
-        except Exception: pass
-        return p.name
+        return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
     def _refresh_models(self) -> None:
         paths = self.logic.get_all_model_paths()
@@ -1318,6 +1526,8 @@ class PipelineControlTab(BaseTab):
             cur = self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
             if not cur and (pid := self.ui.var_profile.get().strip()): cur = [pid]
             self._set_profiles_multi(cur)
+        try: self._refresh_precise_classes()
+        except Exception: pass
 
     def _pick_profiles_multi(self) -> None:
         values = list(self.ui.profile_combo["values"])
@@ -1347,6 +1557,8 @@ class PipelineControlTab(BaseTab):
         self._set_profiles_multi(sel)
         if sel: self.ui.var_profile.set(sel[0])
         dialog.destroy()
+        try: self._refresh_precise_classes()
+        except Exception: pass
 
     def _on_render_backend_changed(self, _event: Optional[object] = None) -> None:
         try:
@@ -1451,6 +1663,10 @@ class PipelineControlTab(BaseTab):
             except Exception: return
 
         self.ui.var_config.set(rel)
+        try:
+            self._refresh_precise_classes()
+        except Exception:
+            pass
 
     def _show_profile_info(self) -> None:
         profile_id = self.ui.var_profile.get()
@@ -1555,8 +1771,13 @@ class PipelineControlTab(BaseTab):
     def _selected_dataset_dirs(self) -> list[Path]:
         if self.ui.var_dataset_multi.get():
             paths = self._decode_dataset_paths_json(self.ui.var_dataset_multi_paths.get())
-            return [p for p in paths if p.exists() and p.is_dir()]
+            return [p for p in paths if p.exists() and p.is_dir() and not self._dataset_catalog.is_archived(p)]
         return [ds] if (ds := self._selected_dataset_dir_single()) is not None else []
+
+    def refresh(self) -> None:
+        if not self.initialized:
+            return
+        self._refresh_datasets()
 
     def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
         ds = self._selected_dataset_dir()
@@ -1618,6 +1839,179 @@ class PipelineControlTab(BaseTab):
         try: shutil.rmtree(ds); self._append_log(f"\n[deleted dataset {ds}]\n")
         except Exception as e: self.ui.show_messagebox("error", "Delete failed", str(e))
         self._refresh_datasets()
+
+    def _delete_images_from_dataset(self) -> None:
+        ds = self._selected_dataset_dir()
+        if not ds:
+            self.ui.show_messagebox("info", "Delete images", "No dataset selected.")
+            return
+        if self.logic.is_process_running():
+            self.ui.show_messagebox("warning", "Busy", "Stop the running process before editing datasets.")
+            return
+
+        sample_ids = self._open_sample_selector(ds, title=f"Delete images from {ds.name}", action_text="Delete")
+        if not sample_ids:
+            return
+
+        if not self.ui.ask_yes_no(
+            "Delete images",
+            f"Delete {len(sample_ids)} sample(s) from dataset '{ds.name}'?",
+        ):
+            return
+
+        try:
+            summary = delete_samples(ds, sample_ids)
+            self._append_log(f"[dataset edit] deleted {summary.affected} sample(s) from {ds}\n")
+            self._refresh_datasets()
+            if label := self._dataset_label_for_path(ds):
+                self.ui.var_dataset.set(label)
+            self._on_dataset_selected()
+            try:
+                self.parent.event_generate("<<DatasetChanged>>", when="tail")
+            except Exception:
+                pass
+        except Exception as exc:
+            self.ui.show_messagebox("error", "Delete images failed", str(exc))
+
+    def _move_images_between_datasets(self) -> None:
+        src_ds = self._selected_dataset_dir()
+        if not src_ds:
+            self.ui.show_messagebox("info", "Move images", "No source dataset selected.")
+            return
+        if self.logic.is_process_running():
+            self.ui.show_messagebox("warning", "Busy", "Stop the running process before editing datasets.")
+            return
+
+        target = self._open_target_dataset_selector(src_ds)
+        if target is None:
+            return
+
+        sample_ids = self._open_sample_selector(src_ds, title=f"Move images from {src_ds.name}", action_text="Move")
+        if not sample_ids:
+            return
+
+        if not self.ui.ask_yes_no(
+            "Move images",
+            f"Move {len(sample_ids)} sample(s)\nfrom '{src_ds.name}'\nto '{target.name}'?",
+        ):
+            return
+
+        try:
+            summary = move_samples(src_ds, target, sample_ids, enforce_profile_match=True)
+            self._append_log(
+                f"[dataset edit] moved {summary.affected} sample(s): {src_ds} -> {target}\n"
+            )
+            self._refresh_datasets()
+            if label := self._dataset_label_for_path(src_ds):
+                self.ui.var_dataset.set(label)
+            self._on_dataset_selected()
+            try:
+                self.parent.event_generate("<<DatasetChanged>>", when="tail")
+            except Exception:
+                pass
+        except Exception as exc:
+            self.ui.show_messagebox("error", "Move images failed", str(exc))
+
+    def _open_sample_selector(self, dataset_dir: Path, *, title: str, action_text: str) -> List[str]:
+        try:
+            samples = list_dataset_samples(dataset_dir)
+        except Exception as exc:
+            self.ui.show_messagebox("error", "Dataset read failed", str(exc))
+            return []
+
+        if not samples:
+            self.ui.show_messagebox("info", "Dataset is empty", f"No samples found in '{dataset_dir.name}'.")
+            return []
+
+        samples_sorted = sorted(samples, key=lambda s: s.sample_id)
+        dialog = tk.Toplevel(self.frame.winfo_toplevel())
+        dialog.title(title)
+        dialog.transient(self.frame.winfo_toplevel())
+        dialog.grab_set()
+        dialog.minsize(860, 420)
+
+        selected_ids: List[str] = []
+
+        frm = ttk.Frame(dialog, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Dataset: {dataset_dir.name}").pack(anchor="w")
+        ttk.Label(frm, text="Select one or more samples (Ctrl/Shift for multi-select):").pack(anchor="w", pady=(2, 6))
+
+        list_frame = ttk.Frame(frm)
+        list_frame.pack(fill="both", expand=True)
+        lb = tk.Listbox(list_frame, selectmode="extended")
+        lb.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(list_frame, orient="vertical", command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.configure(yscrollcommand=sb.set)
+
+        for row in samples_sorted:
+            lb.insert("end", self._sample_list_label(row))
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Select all", command=lambda: lb.selection_set(0, "end")).pack(side="left")
+        ttk.Button(btns, text="Clear", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
+
+        def _confirm_selection() -> None:
+            idxs = lb.curselection()
+            if not idxs:
+                self.ui.show_messagebox("info", action_text, "No samples selected.")
+                return
+            selected_ids.extend(samples_sorted[int(i)].sample_id for i in idxs)
+            dialog.destroy()
+
+        ttk.Button(btns, text=action_text, command=_confirm_selection).pack(side="right", padx=(0, 8))
+        lb.bind("<Double-Button-1>", lambda _e: _confirm_selection())
+
+        dialog.wait_window()
+        return selected_ids
+
+    def _open_target_dataset_selector(self, source_dataset: Path) -> Optional[Path]:
+        targets = [p for p in self._dataset_dirs if p.resolve() != source_dataset.resolve()]
+        if not targets:
+            self.ui.show_messagebox("info", "Move images", "No target dataset available.")
+            return None
+
+        targets_sorted = sorted(targets, key=lambda p: self._dataset_label_for_path(p) or p.name)
+        dialog = tk.Toplevel(self.frame.winfo_toplevel())
+        dialog.title("Select target dataset")
+        dialog.transient(self.frame.winfo_toplevel())
+        dialog.grab_set()
+        dialog.minsize(620, 300)
+
+        selected: list[Path] = []
+        frm = ttk.Frame(dialog, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Source dataset: {source_dataset.name}").pack(anchor="w")
+        ttk.Label(frm, text="Choose a target dataset:").pack(anchor="w", pady=(2, 6))
+
+        lb = tk.Listbox(frm, exportselection=False, height=min(18, max(6, len(targets_sorted))))
+        lb.pack(fill="both", expand=True)
+        for p in targets_sorted:
+            lb.insert("end", self._dataset_label_for_path(p) or p.name)
+        lb.selection_set(0)
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
+
+        def _confirm_target() -> None:
+            idxs = lb.curselection()
+            if not idxs:
+                return
+            selected.append(targets_sorted[int(idxs[0])])
+            dialog.destroy()
+
+        ttk.Button(btns, text="Use target", command=_confirm_target).pack(side="right", padx=(0, 8))
+        lb.bind("<Double-Button-1>", lambda _e: _confirm_target())
+
+        dialog.wait_window()
+        return selected[0] if selected else None
+
+    def _sample_list_label(self, sample: DatasetSampleInfo) -> str:
+        return f"{sample.sample_id} | class={sample.class_name} | split={sample.split} | image={Path(sample.image_path).name}"
 
     def _create_new_dataset(self) -> None:
         if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before creating datasets."); return

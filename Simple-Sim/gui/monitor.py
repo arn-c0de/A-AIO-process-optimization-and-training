@@ -38,7 +38,7 @@ except Exception as e:
     )
 
 from gui.state import UiState
-from gui.tabs import PipelineControlTab, AnalysisTab, PredictionsTab, WeightsTab, ValidationTab, MergeTab, BoardDetectionTab, BaseTab
+from gui.tabs import PipelineControlTab, AnalysisTab, PredictionsTab, WeightsTab, ValidationTab, MergeTab, BoardDetectionTab, DatasetsTab, BaseTab
 from gui.utils.settings_store import SettingsStore
 
 
@@ -95,6 +95,7 @@ class MonitorAppTabbed:
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         # Custom app event for dataset selection changes (emitted by PipelineControlTab).
         self.notebook.bind("<<DatasetChanged>>", lambda _e: self._notify_dataset_changed())
+        self.notebook.bind("<<DatasetCatalogChanged>>", lambda _e: self._notify_dataset_catalog_changed())
 
         def on_close() -> None:
             try:
@@ -119,6 +120,13 @@ class MonitorAppTabbed:
             self.state
         )
         self.notebook.add(self.tabs["pipeline"].frame, text="Pipeline Control")
+
+        self.tabs["datasets"] = DatasetsTab(
+            self.notebook,
+            self.sim_root,
+            self.state
+        )
+        self.notebook.add(self.tabs["datasets"].frame, text="Datasets")
 
         self.tabs["analysis"] = AnalysisTab(
             self.notebook,
@@ -179,7 +187,7 @@ class MonitorAppTabbed:
         selected_idx = self.notebook.index(self.notebook.select())
 
         # Map index to tab name
-        tab_names = ["pipeline", "analysis", "predictions", "weights", "validation", "merge", "board_detection"]
+        tab_names = ["pipeline", "datasets", "analysis", "predictions", "weights", "validation", "merge", "board_detection"]
         if selected_idx < len(tab_names):
             tab_name = tab_names[selected_idx]
             self.current_tab = tab_name
@@ -193,6 +201,15 @@ class MonitorAppTabbed:
         for tab in self.tabs.values():
             if tab.initialized:  # Only notify initialized tabs
                 tab.on_dataset_changed()
+
+    def _notify_dataset_catalog_changed(self) -> None:
+        """Notify initialized tabs that dataset catalog metadata changed."""
+        for tab in self.tabs.values():
+            if tab.initialized:
+                try:
+                    tab.refresh()
+                except Exception:
+                    pass
 
 
 def main() -> None:
