@@ -10,7 +10,6 @@ import os
 from PIL import Image, ImageTk
 import cv2
 
-from gui.tabs.core.base import PerformanceWidgets
 from gui.utils.tooltip import ToolTip
 from simple_sim.schema import MetaRow
 
@@ -21,16 +20,9 @@ class PipelineUI:
         self.frame = ttk.Frame(parent, padding=10)
 
         # Stats bar state
-        self.var_cpu: tk.StringVar = tk.StringVar(value="CPU: -")
-        self.var_gpu: tk.StringVar = tk.StringVar(value="GPU: -")
-        self.var_ram: tk.StringVar = tk.StringVar(value="RAM: -")
         self.var_ds_size: tk.StringVar = tk.StringVar(value="DS: -")
         self.var_ds_samples: tk.StringVar = tk.StringVar(value="Samples: -")
-        self.pb_cpu: ttk.Progressbar
-        self.pb_gpu: ttk.Progressbar
-        self.pb_ram: ttk.Progressbar
         self.lbl_ds_samples: ttk.Label
-        self._perf_widgets: Optional[PerformanceWidgets] = None
         
         # UI components
         self.btn_start: ttk.Button
@@ -160,18 +152,9 @@ class PipelineUI:
 
         stats = ttk.Frame(top)
         stats.pack(side="right", padx=(10, 0))
-        stats.columnconfigure(1, weight=1)
-        self._perf_widgets = self.tab.build_performance_widgets(stats, with_bars=True, label_width=12, bar_length=100)
-        self._perf_widgets.frame.grid(row=0, column=0, columnspan=2, sticky="ew")
-        self.var_cpu = self._perf_widgets.var_cpu
-        self.var_gpu = self._perf_widgets.var_gpu
-        self.var_ram = self._perf_widgets.var_ram
-        self.pb_cpu = self._perf_widgets.pb_cpu
-        self.pb_gpu = self._perf_widgets.pb_gpu
-        self.pb_ram = self._perf_widgets.pb_ram
 
         ds_frame = ttk.Frame(stats)
-        ds_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        ds_frame.grid(row=0, column=0, sticky="ew")
         ds_frame.columnconfigure(0, weight=1)
         ds_frame.columnconfigure(1, weight=0)
 
@@ -434,21 +417,7 @@ class PipelineUI:
         self.btn_filters.configure(state="disabled" if running else "normal")
 
     def update_stats_bar(self, cpu_pct: Optional[float], ram_info: Optional[Tuple[float, int, int]], gpu_pct: Optional[float]):
-        if cpu_pct is not None:
-            self.var_cpu.set(f"CPU: {cpu_pct:3.0f}%")
-            self.pb_cpu["value"] = max(0.0, min(100.0, cpu_pct))
-
-        if ram_info is None:
-            self.var_ram.set("RAM: n/a")
-            self.pb_ram["value"] = 0
-        else:
-            ram_pct, used_b, total_b = ram_info
-            self.var_ram.set(f"RAM: {ram_pct:3.0f}% ({self.fmt_bytes(used_b)}/{self.fmt_bytes(total_b)})")
-            self.pb_ram["value"] = max(0.0, min(100.0, ram_pct))
-
-        if gpu_pct is not None:
-            self.var_gpu.set(f"GPU: {gpu_pct:3.0f}%")
-            self.pb_gpu["value"] = max(0.0, min(100.0, gpu_pct))
+        return
 
     def fmt_bytes(self, n: int) -> str:
         if n < 0: return "0 B"

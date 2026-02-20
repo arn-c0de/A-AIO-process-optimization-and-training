@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import queue
-import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
@@ -38,7 +37,6 @@ class PredictionsTab(BaseTab):
         self._dataset_by_label: Dict[str, Path] = {}
 
         self._ui_tick_id: Optional[str] = None
-        self._last_stats_ts: float = 0.0
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -244,16 +242,7 @@ class PredictionsTab(BaseTab):
                     self.ui.var_preds_path.set(f"preds: {p}")
             except queue.Empty:
                 break
-        self._maybe_update_stats()
         self._ui_tick_id = self.frame.after(150, self._tick_ui)
-
-    def _maybe_update_stats(self) -> None:
-        now = time.time()
-        if now - self._last_stats_ts < 1.0:
-            return
-        self._last_stats_ts = now
-        cpu_pct, ram_info, gpu_pct = self.logic.get_system_stats()
-        self.ui.update_stats_bar(cpu_pct, ram_info, gpu_pct)
 
     def _stop_predictions(self) -> None:
         self.logic.stop_predictions()
