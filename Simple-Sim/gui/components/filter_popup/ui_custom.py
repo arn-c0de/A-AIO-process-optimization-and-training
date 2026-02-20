@@ -32,8 +32,14 @@ def build_filter_controls(popup: Any, parent: ttk.Frame) -> None:
     ttk.Radiobutton(mode_row, text="Realism", variable=popup.var_filter_mode, value="realism").pack(side="left", padx=(8, 0))
     ttk.Checkbutton(mode_row, text="Enable realism mode", variable=popup.var_realism_enabled).pack(side="left", padx=(16, 0))
 
-    notebook = ttk.Notebook(parent)
-    notebook.pack(fill="both", expand=True)
+    body = ttk.Frame(parent)
+    body.pack(fill="both", expand=True)
+    body.columnconfigure(0, weight=1)
+    body.columnconfigure(1, minsize=360)
+    body.rowconfigure(0, weight=1)
+
+    notebook = ttk.Notebook(body)
+    notebook.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
     tab_custom = ttk.Frame(notebook)
     tab_realism = ttk.Frame(notebook)
     notebook.add(tab_custom, text="Custom")
@@ -71,6 +77,11 @@ def build_filter_controls(popup: Any, parent: ttk.Frame) -> None:
     popup._update_rotation_row_state()
 
     build_realism_controls(popup, tab_realism, current)
+
+    preview_inline = ttk.Frame(body, width=360)
+    preview_inline.grid(row=0, column=1, sticky="nsew")
+    preview_inline.grid_propagate(False)
+    popup._build_preview_panel(preview_inline)
 
     btns = ttk.Frame(parent)
     btns.pack(fill="x", pady=(10, 0))
