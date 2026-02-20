@@ -11,6 +11,8 @@ def test_normalize_image_filters_has_core_keys() -> None:
     assert "rotation_strength" in out
     assert "rotation_strength_min" in out
     assert "rotation_strength_max" in out
+    assert out["filter_mode"] == "custom"
+    assert "realism_group_G1_prob" in out
 
 
 def test_popup_default_and_clean_presets() -> None:

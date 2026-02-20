@@ -32,6 +32,12 @@ from gui.components.precise_popup import open_precise_popup
 from gui.utils.settings_store import SettingsStore
 from gui.utils.dataset_ops import delete_samples, list_dataset_samples, move_samples, DatasetSampleInfo
 from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, dataset_display_name
+from gui.utils.filter_profile_store import (
+    extract_filter_popup_extras,
+    is_filter_popup_extra_key,
+    load_filter_popup_extras_from_profiles_json,
+    parse_bool_like,
+)
 
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
@@ -40,8 +46,6 @@ from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, w
 
 from .ui import PipelineUI
 from .logic import PipelineLogic
-from .persisted_fields import PERSISTED_FIELD_MAP
-from .dataset_selection import decode_dataset_paths_json, encode_dataset_paths_json
 
 _LOG = logging.getLogger(__name__)
 
@@ -221,8 +225,55 @@ class PipelineControlTab(BaseTab):
         st = self._store()
         if st is None: return
 
-        for key, attr_name in PERSISTED_FIELD_MAP:
-            var = getattr(self.ui, attr_name)
+        for key, var in [
+            ("pipeline.run_mode", self.ui.var_run_mode), ("pipeline.run_count", self.ui.var_run_count),
+            ("pipeline.dataset_mode", self.ui.var_dataset_mode), ("pipeline.config", self.ui.var_config),
+            ("pipeline.out", self.ui.var_out), ("pipeline.model", self.ui.var_model),
+            ("pipeline.autosnap", self.ui.var_autosnap), ("pipeline.snap_every", self.ui.var_snap_every),
+            ("pipeline.snap_keep", self.ui.var_snap_keep), ("pipeline.continue_epochs", self.ui.var_continue_epochs),
+            ("pipeline.continue_out_mode", self.ui.var_continue_out_mode), ("pipeline.name", self.ui.var_name),
+            ("pipeline.name_ts", self.ui.var_name_ts), ("pipeline.dataset_selection", self.ui.var_dataset),
+            ("pipeline.dataset_multi_enabled", self.ui.var_dataset_multi), ("pipeline.dataset_multi_paths", self.ui.var_dataset_multi_paths),
+            ("pipeline.profile_model", self.ui.var_profile_model), ("pipeline.profile_model_locked", self.ui.var_profile_model_lock),
+            ("pipeline.profile_build_preset", self.ui.var_profile_build_preset), ("pipeline.render_backend", self.ui.var_render_backend),
+            ("pipeline.filter.cardinal_rotation_90", self.ui.var_filter_cardinal_rotation_90),
+            ("pipeline.filter.enable_rotation", self.ui.var_filter_enable_rotation),
+            ("pipeline.filter.enable_blur", self.ui.var_filter_enable_blur),
+            ("pipeline.filter.enable_grain", self.ui.var_filter_enable_grain),
+            ("pipeline.filter.enable_brightness", self.ui.var_filter_enable_brightness),
+            ("pipeline.filter.enable_contrast", self.ui.var_filter_enable_contrast),
+            ("pipeline.filter.rotation_strength", self.ui.var_filter_rotation_strength),
+            ("pipeline.filter.blur_strength", self.ui.var_filter_blur_strength),
+            ("pipeline.filter.grain_strength", self.ui.var_filter_grain_strength),
+            ("pipeline.filter.brightness_strength", self.ui.var_filter_brightness_strength),
+            ("pipeline.filter.contrast_strength", self.ui.var_filter_contrast_strength),
+            ("pipeline.filter.enable_perspective", self.ui.var_filter_enable_perspective),
+            ("pipeline.filter.perspective_strength", self.ui.var_filter_perspective_strength),
+            ("pipeline.filter.enable_motion_blur", self.ui.var_filter_enable_motion_blur),
+            ("pipeline.filter.motion_blur_strength", self.ui.var_filter_motion_blur_strength),
+            ("pipeline.filter.enable_saturation", self.ui.var_filter_enable_saturation),
+            ("pipeline.filter.saturation_factor", self.ui.var_filter_saturation_factor),
+            ("pipeline.filter.enable_hue_shift", self.ui.var_filter_enable_hue_shift),
+            ("pipeline.filter.hue_shift_deg", self.ui.var_filter_hue_shift_deg),
+            ("pipeline.filter.enable_shadow", self.ui.var_filter_enable_shadow),
+            ("pipeline.filter.shadow_strength", self.ui.var_filter_shadow_strength),
+            ("pipeline.filter.enable_reflection", self.ui.var_filter_enable_reflection),
+            ("pipeline.filter.reflection_strength", self.ui.var_filter_reflection_strength),
+            ("pipeline.filter.enable_vignetting", self.ui.var_filter_enable_vignetting),
+            ("pipeline.filter.vignetting_strength", self.ui.var_filter_vignetting_strength),
+            ("pipeline.filter.enable_chromatic_aberration", self.ui.var_filter_enable_chromatic_aberration),
+            ("pipeline.filter.chromatic_strength", self.ui.var_filter_chromatic_strength),
+            ("pipeline.filter.enable_jpeg_compression", self.ui.var_filter_enable_jpeg_compression),
+            ("pipeline.filter.jpeg_quality", self.ui.var_filter_jpeg_quality),
+            ("pipeline.filter.enable_color_temperature", self.ui.var_filter_enable_color_temperature),
+            ("pipeline.filter.color_temperature_kelvin", self.ui.var_filter_color_temperature_kelvin),
+            ("pipeline.filter.enable_lens_distortion", self.ui.var_filter_enable_lens_distortion),
+            ("pipeline.filter.distortion_k1", self.ui.var_filter_distortion_k1),
+            ("pipeline.filter.enable_dust", self.ui.var_filter_enable_dust),
+            ("pipeline.filter.dust_density", self.ui.var_filter_dust_density),
+            ("pipeline.filter.enable_sharpen", self.ui.var_filter_enable_sharpen),
+            ("pipeline.filter.sharpen_strength", self.ui.var_filter_sharpen_strength),
+        ]:
             v = st.get(key, None)
             if v is None:
                 continue
@@ -252,44 +303,70 @@ class PipelineControlTab(BaseTab):
 
     @staticmethod
     def _is_filter_popup_extra_key(key: str) -> bool:
-        return key.endswith("_randomize") or key.endswith("_min") or key.endswith("_max")
+        return is_filter_popup_extra_key(key)
 
     @staticmethod
     def _parse_bool_like(value: Any, default: bool = False) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return bool(value)
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-        return default
+        return parse_bool_like(value, default=default)
 
     def _load_filter_popup_extras_from_profiles(self, st: SettingsStore) -> None:
         raw_profiles = str(st.get("pipeline.filter_profiles_json", "") or "").strip()
         raw_active = str(st.get("pipeline.filter_profile_active", "") or "").strip() or "Default"
-        extras: Dict[str, Any] = {}
-        if raw_profiles:
-            try:
-                obj = json.loads(raw_profiles)
-                if isinstance(obj, dict):
-                    active_profile = obj.get(raw_active)
-                    if not isinstance(active_profile, dict) and obj:
-                        first_key = sorted(obj.keys())[0]
-                        active_profile = obj.get(first_key)
-                    if isinstance(active_profile, dict):
-                        for k, v in active_profile.items():
-                            if isinstance(k, str) and self._is_filter_popup_extra_key(k):
-                                extras[k] = v
-            except Exception:
-                extras = {}
-        self._filter_popup_extras = extras
+        self._filter_popup_extras = load_filter_popup_extras_from_profiles_json(raw_profiles, raw_active)
 
     def _wire_settings_autosave(self) -> None:
         st = self._store()
         if st is None: return
 
-        for key, attr_name in PERSISTED_FIELD_MAP:
-            var = getattr(self.ui, attr_name)
+        for var, key in [
+            (self.ui.var_run_mode, "pipeline.run_mode"), (self.ui.var_run_count, "pipeline.run_count"),
+            (self.ui.var_dataset_mode, "pipeline.dataset_mode"), (self.ui.var_config, "pipeline.config"),
+            (self.ui.var_out, "pipeline.out"), (self.ui.var_model, "pipeline.model"),
+            (self.ui.var_autosnap, "pipeline.autosnap"), (self.ui.var_snap_every, "pipeline.snap_every"),
+            (self.ui.var_snap_keep, "pipeline.snap_keep"), (self.ui.var_continue_epochs, "pipeline.continue_epochs"),
+            (self.ui.var_continue_out_mode, "pipeline.continue_out_mode"), (self.ui.var_name, "pipeline.name"),
+            (self.ui.var_name_ts, "pipeline.name_ts"), (self.ui.var_dataset, "pipeline.dataset_selection"),
+            (self.ui.var_dataset_multi, "pipeline.dataset_multi_enabled"), (self.ui.var_dataset_multi_paths, "pipeline.dataset_multi_paths"),
+            (self.ui.var_profile_model, "pipeline.profile_model"), (self.ui.var_profile_model_lock, "pipeline.profile_model_locked"),
+            (self.ui.var_profile_build_preset, "pipeline.profile_build_preset"), (self.ui.var_render_backend, "pipeline.render_backend"),
+            (self.ui.var_filter_cardinal_rotation_90, "pipeline.filter.cardinal_rotation_90"),
+            (self.ui.var_filter_enable_rotation, "pipeline.filter.enable_rotation"),
+            (self.ui.var_filter_enable_blur, "pipeline.filter.enable_blur"),
+            (self.ui.var_filter_enable_grain, "pipeline.filter.enable_grain"),
+            (self.ui.var_filter_enable_brightness, "pipeline.filter.enable_brightness"),
+            (self.ui.var_filter_enable_contrast, "pipeline.filter.enable_contrast"),
+            (self.ui.var_filter_rotation_strength, "pipeline.filter.rotation_strength"),
+            (self.ui.var_filter_blur_strength, "pipeline.filter.blur_strength"),
+            (self.ui.var_filter_grain_strength, "pipeline.filter.grain_strength"),
+            (self.ui.var_filter_brightness_strength, "pipeline.filter.brightness_strength"),
+            (self.ui.var_filter_contrast_strength, "pipeline.filter.contrast_strength"),
+            (self.ui.var_filter_enable_perspective, "pipeline.filter.enable_perspective"),
+            (self.ui.var_filter_perspective_strength, "pipeline.filter.perspective_strength"),
+            (self.ui.var_filter_enable_motion_blur, "pipeline.filter.enable_motion_blur"),
+            (self.ui.var_filter_motion_blur_strength, "pipeline.filter.motion_blur_strength"),
+            (self.ui.var_filter_enable_saturation, "pipeline.filter.enable_saturation"),
+            (self.ui.var_filter_saturation_factor, "pipeline.filter.saturation_factor"),
+            (self.ui.var_filter_enable_hue_shift, "pipeline.filter.enable_hue_shift"),
+            (self.ui.var_filter_hue_shift_deg, "pipeline.filter.hue_shift_deg"),
+            (self.ui.var_filter_enable_shadow, "pipeline.filter.enable_shadow"),
+            (self.ui.var_filter_shadow_strength, "pipeline.filter.shadow_strength"),
+            (self.ui.var_filter_enable_reflection, "pipeline.filter.enable_reflection"),
+            (self.ui.var_filter_reflection_strength, "pipeline.filter.reflection_strength"),
+            (self.ui.var_filter_enable_vignetting, "pipeline.filter.enable_vignetting"),
+            (self.ui.var_filter_vignetting_strength, "pipeline.filter.vignetting_strength"),
+            (self.ui.var_filter_enable_chromatic_aberration, "pipeline.filter.enable_chromatic_aberration"),
+            (self.ui.var_filter_chromatic_strength, "pipeline.filter.chromatic_strength"),
+            (self.ui.var_filter_enable_jpeg_compression, "pipeline.filter.enable_jpeg_compression"),
+            (self.ui.var_filter_jpeg_quality, "pipeline.filter.jpeg_quality"),
+            (self.ui.var_filter_enable_color_temperature, "pipeline.filter.enable_color_temperature"),
+            (self.ui.var_filter_color_temperature_kelvin, "pipeline.filter.color_temperature_kelvin"),
+            (self.ui.var_filter_enable_lens_distortion, "pipeline.filter.enable_lens_distortion"),
+            (self.ui.var_filter_distortion_k1, "pipeline.filter.distortion_k1"),
+            (self.ui.var_filter_enable_dust, "pipeline.filter.enable_dust"),
+            (self.ui.var_filter_dust_density, "pipeline.filter.dust_density"),
+            (self.ui.var_filter_enable_sharpen, "pipeline.filter.enable_sharpen"),
+            (self.ui.var_filter_sharpen_strength, "pipeline.filter.sharpen_strength"),
+        ]:
             var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
 
     def _float_or_default(self, value: str, *, default: float) -> float:
@@ -348,10 +425,7 @@ class PipelineControlTab(BaseTab):
         if not isinstance(data, dict):
             return
         extras: Dict[str, Any] = {}
-        for k, v in data.items():
-            if isinstance(k, str) and self._is_filter_popup_extra_key(k):
-                extras[k] = v
-        self._filter_popup_extras = extras
+        self._filter_popup_extras = extract_filter_popup_extras(data)
         # Existing filters
         self.ui.var_filter_cardinal_rotation_90.set(bool(data.get("cardinal_rotation_90", True)))
         self.ui.var_filter_enable_rotation.set(bool(data.get("enable_rotation", True)))
@@ -547,6 +621,15 @@ class PipelineControlTab(BaseTab):
                 continue
             if k.endswith("_randomize"):
                 payload[k] = self._parse_bool_like(v, default=False)
+            elif k == "filter_mode":
+                payload[k] = str(v)
+            elif k.startswith("realism_"):
+                if k.endswith("_enabled"):
+                    payload[k] = self._parse_bool_like(v, default=False)
+                elif k.endswith("_profile_id"):
+                    payload[k] = str(v)
+                else:
+                    payload[k] = self._float_or_default(str(v), default=0.0)
             else:
                 payload[k] = self._float_or_default(str(v), default=0.0)
         return payload
@@ -1413,12 +1496,22 @@ class PipelineControlTab(BaseTab):
         dialog.destroy()
 
     def _decode_dataset_paths_json(self, s: str) -> list[Path]:
-        out = decode_dataset_paths_json(s, sim_root=self.sim_root)
+        try: arr = json.loads(s or "[]")
+        except Exception: return []
+        if not isinstance(arr, list): return []
+        
+        out: list[Path] = []
+        for it in arr:
+            if not isinstance(it, str): continue
+            p = Path(it)
+            if not p.is_absolute(): p = (self.sim_root / p).resolve()
+            out.append(p)
+        
         seen: set[str] = set()
         return [p for p in out if not (key := str(p.resolve())) in seen and not seen.add(key)]
 
     def _encode_dataset_paths_json(self, paths: list[Path]) -> str:
-        return encode_dataset_paths_json(paths, sim_root=self.sim_root)
+        return json.dumps([str(p.resolve().relative_to(self.sim_root.resolve())) if not p.is_absolute() else str(p) for p in paths])
 
     def _dataset_label_for_path(self, p: Path) -> Optional[str]:
         rp = p.resolve()
