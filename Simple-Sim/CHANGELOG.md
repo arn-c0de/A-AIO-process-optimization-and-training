@@ -2,21 +2,6 @@
 
 All notable changes to **Simple-Sim** are documented in this file.
 
-## [1.0.3] - 2026-02-20
-
-### Summary
-- Refactored generators into structured backend packages:
-  - `simple_sim.generators.opencv2d` split into `augment`, `geometry`, `draw`, `filters`, and `render`.
-  - `simple_sim.generators.blender3d` split into `io` and `runner`.
-- Kept backward compatibility with wrapper/facade modules:
-  - `simple_sim.generator_2d`, `simple_sim.generator_3d`
-  - `simple_sim.generators.opencv_2d`, `simple_sim.generators.blender_3d`
-- Centralized filter defaults/normalization in `simple_sim.generators.filter_settings` and reused them in GUI filter popup.
-- Replaced hardcoded monitor tab wiring with `TabRegistry` and centralized tab order/metadata.
-- Reduced pipeline tab duplication by extracting persisted field mapping and dataset-selection serialization helpers.
-- Added typed config parsing baseline in `simple_sim.config_schema` and integrated it into config validation.
-- Added regression tests for registry, filter settings, config schema, and wrapper compatibility.
-
 ## [1.0.2] - 2026-02-20
 
 ### Summary
@@ -30,6 +15,17 @@ All notable changes to **Simple-Sim** are documented in this file.
 - Added new Datasets tab with dataset catalog management: categories, category rename/delete, archive/unarchive, and filtering.
 - Updated Pipeline and Analysis dataset selectors to show categories and hide archived datasets.
 - Updated multi-dataset selection popup/tooling to use categorized labels and ignore archived datasets.
+- Refactored generators into structured backend packages:
+  - `simple_sim.generators.opencv2d` split into `augment`, `geometry`, `draw`, `filters`, and `render`.
+  - `simple_sim.generators.blender3d` split into `io` and `runner`.
+- Kept backward compatibility with wrapper/facade modules:
+  - `simple_sim.generator_2d`, `simple_sim.generator_3d`
+  - `simple_sim.generators.opencv_2d`, `simple_sim.generators.blender_3d`
+- Centralized filter defaults/normalization in `simple_sim.generators.filter_settings` and reused them in GUI filter popup.
+- Replaced hardcoded monitor tab wiring with `TabRegistry` and centralized tab order/metadata.
+- Reduced pipeline tab duplication by extracting persisted field mapping and dataset-selection serialization helpers.
+- Added typed config parsing baseline in `simple_sim.config_schema` and integrated it into config validation.
+- Added regression tests for registry, filter settings, config schema, and wrapper compatibility.
 
 ### Extension Opportunities
 - Profile diff/compare tooling.
