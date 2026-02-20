@@ -149,12 +149,10 @@ class DatasetsTab(BaseTab):
         if not paths:
             messagebox.showinfo("Datasets", "No dataset selected.")
             return
-        values = self.catalog.all_categories()
-        prompt = (
-            "Category name for selected datasets:\n\n"
-            f"Known categories: {', '.join(values)}"
+        category = self._ask_category_with_list(
+            title="Set category",
+            initial=self.catalog.category_for(paths[0]),
         )
-        category = simpledialog.askstring("Set category", prompt, initialvalue=self.catalog.category_for(paths[0]), parent=self.frame)
         if category is None:
             return
         category = category.strip() or DEFAULT_CATEGORY
@@ -234,3 +232,61 @@ class DatasetsTab(BaseTab):
             if row not in self.tree.selection():
                 self.tree.selection_set(row)
             self._menu.tk_popup(event.x_root, event.y_root)
+
+    def _ask_category_with_list(self, *, title: str, initial: str = "") -> Optional[str]:
+        categories = self.catalog.all_categories()
+        dialog = tk.Toplevel(self.frame.winfo_toplevel())
+        dialog.title(title)
+        dialog.transient(self.frame.winfo_toplevel())
+        dialog.grab_set()
+        dialog.minsize(440, 320)
+
+        chosen: List[str] = []
+        frm = ttk.Frame(dialog, padding=10)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="Available categories (click to use):").pack(anchor="w")
+        lb = tk.Listbox(frm, exportselection=False, height=min(12, max(5, len(categories))))
+        lb.pack(fill="both", expand=True, pady=(6, 8))
+        for cat in categories:
+            lb.insert("end", cat)
+
+        entry_var = tk.StringVar(value=initial)
+        ttk.Label(frm, text="Category name:").pack(anchor="w")
+        ent = ttk.Entry(frm, textvariable=entry_var)
+        ent.pack(fill="x", pady=(4, 8))
+
+        if initial:
+            try:
+                idx = categories.index(initial)
+                lb.selection_set(idx)
+                lb.see(idx)
+            except Exception:
+                pass
+
+        def _pick_selected(_evt=None) -> None:
+            idxs = lb.curselection()
+            if not idxs:
+                return
+            entry_var.set(str(lb.get(int(idxs[0]))))
+
+        lb.bind("<<ListboxSelect>>", _pick_selected)
+        lb.bind("<Double-Button-1>", lambda _e: _confirm())
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
+
+        def _confirm() -> None:
+            value = entry_var.get().strip()
+            if not value:
+                messagebox.showinfo("Category", "Please enter or select a category.", parent=dialog)
+                return
+            chosen.append(value)
+            dialog.destroy()
+
+        ttk.Button(btns, text="Set", command=_confirm).pack(side="right", padx=(0, 8))
+
+        ent.focus_set()
+        dialog.wait_window()
+        return chosen[0] if chosen else None
