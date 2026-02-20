@@ -620,7 +620,7 @@ class PipelineControlTab(BaseTab):
 
         multi_enabled = bool(self.ui.var_profiles_multi.get())
         self._precise_settings["multi_profiles"] = (
-            self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            self._profiles_multi_list(available=self._profiles_multi_available_values())
             if multi_enabled else []
         )
         self._refresh_precise_classes()
@@ -659,7 +659,7 @@ class PipelineControlTab(BaseTab):
 
         multi_enabled = bool(self.ui.var_profiles_multi.get())
         self._precise_settings["multi_profiles"] = (
-            self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            self._profiles_multi_list(available=self._profiles_multi_available_values())
             if multi_enabled else []
         )
 
@@ -867,7 +867,7 @@ class PipelineControlTab(BaseTab):
         
         profile_ids = []
         if multi_enabled:
-            profile_ids = self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            profile_ids = self._profiles_multi_list(available=self._profiles_multi_available_values())
             if not profile_ids:
                 self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\\n\\nClick Pick and select at least 1 profile.")
                 return
@@ -883,6 +883,7 @@ class PipelineControlTab(BaseTab):
 
         run_specs: list[dict[str, str]] = []
         effective_task = task
+        run_complete_callback = None
 
         def _rel_to_sim_root(p: Path) -> str:
             try: return str(p.resolve().relative_to(self.sim_root.resolve()))
@@ -892,47 +893,117 @@ class PipelineControlTab(BaseTab):
             if task != "generate_only":
                 self.ui.show_messagebox("error", "Error", "Multi-profile mode 'mixed' is supported only for Generate Only.")
                 return
-            if render_backend != "opencv_2d":
-                self.ui.show_messagebox("error", "Error", "Multi-profile mode 'mixed' currently supports only Render backend opencv_2d.")
-                return
             if len(profile_ids) < 2:
                 self.ui.show_messagebox("error", "Error", "Mixed dataset mode requires at least 2 selected profiles.")
                 return
-
-            cfg_str = self.ui.var_config.get().strip()
-            cfg_path = (self.sim_root / cfg_str) if cfg_str and not Path(cfg_str).is_absolute() else Path(cfg_str) if cfg_str else None
-            if not cfg_path or not cfg_path.exists():
-                self.ui.show_messagebox("error", "Error", f"Config file not found:\\n{cfg_str}")
-                return
-            try: base_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-            except Exception as e:
-                self.ui.show_messagebox("error", "Error", f"Failed to read config:\\n{cfg_path}\\n\\n{e}")
+            if run_count != 1:
+                self.ui.show_messagebox("error", "Error", "Mixed dataset generation currently supports only a single run.")
                 return
 
-            run_block = dict(base_cfg.get("run") or {})
-            run_block.pop("component_profile", None)
-            run_block["mode"] = "profile_classifier"
-            run_block["schema_version"] = int(run_block.get("schema_version", 2) or 2)
-            run_block["component_profiles"] = list(profile_ids)
-            if not run_block.get("run_id"): run_block["run_id"] = "run_profile_cls_selected"
-            base_cfg["run"] = run_block
-            base_cfg.setdefault("render", {})["backend"] = "opencv_2d"
+            resolved_configs: list[tuple[str, Path, str, str]] = []
+            backends_used: set[str] = set()
+            for pid in profile_ids:
+                cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
+                if not cfg_info:
+                    cfg_info = self.logic.config_for_profile(pid, want_backend=None)
+                if not cfg_info:
+                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\n{pid}\n\nPick or create a config with run.component_profile={pid}.")
+                    return
+                cfg_path = Path(cfg_info["path"])
+                run_id = str(cfg_info.get("run_id") or pid)
+                try:
+                    cfg_data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                except Exception:
+                    cfg_data = {}
+                backend = str(((cfg_data.get("render") or {}).get("backend") or "opencv_2d")).strip() or "opencv_2d"
+                resolved_configs.append((pid, cfg_path, run_id, backend))
+                backends_used.add(backend)
 
-            live_dir = (self.sim_root / "outputs" / "live")
-            live_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml", prefix="run_profile_cls_selected_", dir=str(live_dir), delete=False) as tf:
-                    yaml.safe_dump(base_cfg, tf, sort_keys=False)
-                    tmp_cfg_path = Path(tf.name)
-            except Exception as e:
-                self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\\n\\n{e}")
-                return
+            if backends_used == {"opencv_2d"}:
+                cfg_str = self.ui.var_config.get().strip()
+                cfg_path = (self.sim_root / cfg_str) if cfg_str and not Path(cfg_str).is_absolute() else Path(cfg_str) if cfg_str else None
+                if not cfg_path or not cfg_path.exists():
+                    self.ui.show_messagebox("error", "Error", f"Config file not found:\\n{cfg_str}")
+                    return
+                try: base_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                except Exception as e:
+                    self.ui.show_messagebox("error", "Error", f"Failed to read config:\\n{cfg_path}\\n\\n{e}")
+                    return
 
-            run_specs.append({
-                "profile_id": "multi", "config": _rel_to_sim_root(tmp_cfg_path), "out_dir": out_dir,
-                "model_path": self.ui.var_model.get().strip(),
-            })
-            effective_task = "generate_mixed"
+                run_block = dict(base_cfg.get("run") or {})
+                run_block.pop("component_profile", None)
+                run_block["mode"] = "profile_classifier"
+                run_block["schema_version"] = int(run_block.get("schema_version", 2) or 2)
+                run_block["component_profiles"] = list(profile_ids)
+                if not run_block.get("run_id"): run_block["run_id"] = "run_profile_cls_selected"
+                base_cfg["run"] = run_block
+                base_cfg.setdefault("render", {})["backend"] = "opencv_2d"
+
+                live_dir = (self.sim_root / "outputs" / "live")
+                live_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml", prefix="run_profile_cls_selected_", dir=str(live_dir), delete=False) as tf:
+                        yaml.safe_dump(base_cfg, tf, sort_keys=False)
+                        tmp_cfg_path = Path(tf.name)
+                except Exception as e:
+                    self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\\n\\n{e}")
+                    return
+
+                run_specs.append({
+                    "profile_id": "multi", "config": _rel_to_sim_root(tmp_cfg_path), "out_dir": out_dir,
+                    "model_path": self.ui.var_model.get().strip(),
+                })
+                effective_task = "generate_mixed"
+            else:
+                final_out = self.logic._resolve_out_dir(out_dir)
+                if final_out.exists():
+                    self.ui.show_messagebox("error", "Error", f"Output dataset already exists:\\n{final_out}\\n\\nChoose a new output path for mixed generation.")
+                    return
+
+                live_dir = (self.sim_root / "outputs" / "live")
+                live_dir.mkdir(parents=True, exist_ok=True)
+                tmp_root = live_dir / f"mixed_profile_gen_{int(time.time())}_{os.getpid()}"
+                try:
+                    tmp_root.mkdir(parents=True, exist_ok=False)
+                except Exception as e:
+                    self.ui.show_messagebox("error", "Error", f"Failed to create temporary mixed-generation directory:\\n{tmp_root}\\n\\n{e}")
+                    return
+
+                self._append_log(f"[mixed] Cross-backend profiles detected ({', '.join(sorted(backends_used))}). Generating per profile and auto-merging.\n")
+                for idx, (pid, cfg_path, _run_id, backend) in enumerate(resolved_configs):
+                    tmp_out = tmp_root / f"{idx:02d}_{self.logic.slugify_name(pid)}"
+                    run_specs.append({
+                        "profile_id": pid,
+                        "config": _rel_to_sim_root(cfg_path),
+                        "out_dir": str(tmp_out),
+                        "model_path": self.ui.var_model.get().strip(),
+                    })
+                    self._append_log(f"[mixed] {pid} -> backend={backend} tmp={tmp_out}\n")
+                effective_task = "generate_only"
+
+                def _merge_after_run(_run_i: int, specs: list[dict[str, str]], log_callback) -> bool:
+                    ok = True
+                    src_dirs: list[Path] = []
+                    try:
+                        src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
+                        log_callback(f"[mixed] merging {len(src_dirs)} generated datasets into: {final_out}\n")
+                        self.logic.merge_datasets_for_training(src_dirs, final_out, log_callback, log_callback)
+                        log_callback(f"[mixed] merged dataset ready: {final_out}\n")
+                    except Exception as e:
+                        log_callback(f"[mixed] merge failed: {e}\n")
+                        ok = False
+                    try:
+                        for p in src_dirs:
+                            if p.exists():
+                                shutil.rmtree(p, ignore_errors=True)
+                        if tmp_root.exists():
+                            shutil.rmtree(tmp_root, ignore_errors=True)
+                        log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
+                    except Exception as e:
+                        log_callback(f"[mixed] temp cleanup warning: {e}\n")
+                    return ok
+
+                run_complete_callback = _merge_after_run
         else:
             base_out = Path(out_dir)
             base_model = Path(self.ui.var_model.get().strip())
@@ -1011,7 +1082,8 @@ class PipelineControlTab(BaseTab):
             event_callback=self._handle_event, log_callback=self._append_log,
             ui_update_callback=lambda: self.frame.after(0, self._after_pipeline_run_ui_update),
             ui_reset_callback=lambda: self.frame.after(0, self._reset_ui_on_pipeline_end),
-            status_vars=status_vars
+            status_vars=status_vars,
+            run_complete_callback=run_complete_callback,
         )
 
     def _after_pipeline_run_ui_update(self) -> None:
@@ -1497,8 +1569,15 @@ class PipelineControlTab(BaseTab):
             if "chip_0603_resistor@1" in self.ui.profile_combo["values"]: self.ui.var_profile.set("chip_0603_resistor@1")
             elif self.ui.profile_combo["values"]: self.ui.var_profile.set(self.ui.profile_combo["values"][0])
 
-        if bool(self.ui.var_profiles_multi.get()): self._set_profiles_multi(self._profiles_multi_list(available=list(self.ui.profile_combo["values"])))
+        if bool(self.ui.var_profiles_multi.get()): self._set_profiles_multi(self._profiles_multi_list(available=self._profiles_multi_available_values()))
         self._on_profile_selected()
+
+    def _profiles_multi_available_values(self) -> list[str]:
+        mode = self.ui.var_profiles_multi_mode.get().strip() or "separate"
+        if mode == "mixed":
+            all_profiles = set(self.logic.get_profile_paths("opencv_2d")) | set(self.logic.get_profile_paths("blender_3d"))
+            return sorted(all_profiles)
+        return list(self.ui.profile_combo["values"] or [])
 
     def _profiles_multi_list(self, *, available: Optional[list[str]] = None) -> list[str]:
         available_set = set(available or list(self.ui.profile_combo["values"] or []))
@@ -1523,14 +1602,14 @@ class PipelineControlTab(BaseTab):
         enabled = bool(self.ui.var_profiles_multi.get())
         self.ui.set_profiles_multi_state(enabled)
         if enabled:
-            cur = self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            cur = self._profiles_multi_list(available=self._profiles_multi_available_values())
             if not cur and (pid := self.ui.var_profile.get().strip()): cur = [pid]
             self._set_profiles_multi(cur)
         try: self._refresh_precise_classes()
         except Exception: pass
 
     def _pick_profiles_multi(self) -> None:
-        values = list(self.ui.profile_combo["values"])
+        values = self._profiles_multi_available_values()
         if not values: self.ui.show_messagebox("info", "Profiles", "No profiles available."); return
 
         cur = set(self._profiles_multi_list(available=values))
@@ -1552,7 +1631,7 @@ class PipelineControlTab(BaseTab):
 
     def _on_pick_profiles_multi_ok(self, listbox: tk.Listbox, dialog: tk.Toplevel) -> None:
         idxs = list(listbox.curselection())
-        values = list(self.ui.profile_combo["values"])
+        values = self._profiles_multi_available_values()
         sel = [values[i] for i in idxs if 0 <= i < len(values)]
         self._set_profiles_multi(sel)
         if sel: self.ui.var_profile.set(sel[0])
