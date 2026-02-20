@@ -10,6 +10,7 @@ import os
 from PIL import Image, ImageTk
 import cv2
 
+from gui.tabs.core.base import PerformanceWidgets
 from gui.utils.tooltip import ToolTip
 from simple_sim.schema import MetaRow
 
@@ -29,6 +30,7 @@ class PipelineUI:
         self.pb_gpu: ttk.Progressbar
         self.pb_ram: ttk.Progressbar
         self.lbl_ds_samples: ttk.Label
+        self._perf_widgets: Optional[PerformanceWidgets] = None
         
         # UI components
         self.btn_start: ttk.Button
@@ -159,24 +161,14 @@ class PipelineUI:
         stats = ttk.Frame(top)
         stats.pack(side="right", padx=(10, 0))
         stats.columnconfigure(1, weight=1)
-
-        perf_frame = ttk.Frame(stats)
-        perf_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
-        perf_frame.columnconfigure(0, weight=1)
-        perf_frame.columnconfigure(1, weight=1)
-        perf_frame.columnconfigure(2, weight=1)
-
-        ttk.Label(perf_frame, textvariable=self.var_cpu, width=12).grid(row=0, column=0, sticky="w")
-        self.pb_cpu = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=100)
-        self.pb_cpu.grid(row=1, column=0, sticky="ew")
-
-        ttk.Label(perf_frame, textvariable=self.var_gpu, width=12).grid(row=0, column=1, sticky="w", padx=(6, 0))
-        self.pb_gpu = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=100)
-        self.pb_gpu.grid(row=1, column=1, sticky="ew", padx=(6, 0))
-
-        ttk.Label(perf_frame, textvariable=self.var_ram, width=12).grid(row=0, column=2, sticky="w", padx=(6, 0))
-        self.pb_ram = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=100)
-        self.pb_ram.grid(row=1, column=2, sticky="ew", padx=(6, 0))
+        self._perf_widgets = self.tab.build_performance_widgets(stats, with_bars=True, label_width=12, bar_length=100)
+        self._perf_widgets.frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.var_cpu = self._perf_widgets.var_cpu
+        self.var_gpu = self._perf_widgets.var_gpu
+        self.var_ram = self._perf_widgets.var_ram
+        self.pb_cpu = self._perf_widgets.pb_cpu
+        self.pb_gpu = self._perf_widgets.pb_gpu
+        self.pb_ram = self._perf_widgets.pb_ram
 
         ds_frame = ttk.Frame(stats)
         ds_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
