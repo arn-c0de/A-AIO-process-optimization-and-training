@@ -1,12 +1,13 @@
 # Training Logs Index
 
-Last updated: February 17, 2026
+Last updated: February 20, 2026
 
 Central index of training and research logs.
 
 ## Current Research
 
 - Restart with extended image filters (February 17, 2026): [`Training-Restart-Extended-Image-Filters-2026-02-17.md`](Training-Restart-Extended-Image-Filters-2026-02-17.md)
+- Fine-tuned comparison: default-filter run vs QFN-focused run (February 20, 2026): [`Training-Comparison-FineTuned-vs-QFN-FineTuned-2026-02-20.md`](Training-Comparison-FineTuned-vs-QFN-FineTuned-2026-02-20.md)
 
 ## Completed Testing Research
 
