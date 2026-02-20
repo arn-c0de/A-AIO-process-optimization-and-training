@@ -39,7 +39,8 @@ except Exception as e:
     )
 
 from gui.state import UiState
-from gui.tabs import PipelineControlTab, AnalysisTab, PredictionsTab, WeightsTab, ValidationTab, MergeTab, BoardDetectionTab, DatasetsTab, BaseTab
+from gui.tabs import BaseTab
+from gui.tabs.core.registry import TabRegistry
 from gui.utils.settings_store import SettingsStore
 
 
@@ -61,6 +62,7 @@ class MonitorAppTabbed:
 
         # Tab instances (lazy loaded)
         self.tabs: Dict[str, BaseTab] = {}
+        self._tab_order: list[str] = []
         self.current_tab: str = ""
         self._perf_tick_id: Optional[str] = None
         self._cpu_prev_total: Optional[int] = None
@@ -139,61 +141,11 @@ class MonitorAppTabbed:
         self.root.protocol("WM_DELETE_WINDOW", on_close)
 
         # Create tab frames (but don't build UI yet - lazy loading)
-        self.tabs["pipeline"] = PipelineControlTab(
-            self.notebook,
-            self.sim_root,
-            self.state
-        )
-        self.notebook.add(self.tabs["pipeline"].frame, text="Pipeline Control")
-
-        self.tabs["datasets"] = DatasetsTab(
-            self.notebook,
-            self.sim_root,
-            self.state
-        )
-        self.notebook.add(self.tabs["datasets"].frame, text="Datasets")
-
-        self.tabs["analysis"] = AnalysisTab(
-            self.notebook,
-            self.sim_root,
-            self.state
-        )
-        self.notebook.add(self.tabs["analysis"].frame, text="Analysis")
-
-        self.tabs["validation"] = ValidationTab(
-            self.notebook,
-            self.sim_root,
-            self.state
-        )
-        self.notebook.add(self.tabs["validation"].frame, text="Validation")
-
-        self.tabs["predictions"] = PredictionsTab(
-            self.notebook,
-            self.sim_root,
-            self.state
-        )
-        self.notebook.add(self.tabs["predictions"].frame, text="Predictions")
-
-        self.tabs["weights"] = WeightsTab(
-            self.notebook,
-            self.sim_root,
-            self.state
-        )
-        self.notebook.add(self.tabs["weights"].frame, text="Weights")
-
-        self.tabs["merge"] = MergeTab(
-            self.notebook,
-            self.sim_root,
-            self.state
-        )
-        self.notebook.add(self.tabs["merge"].frame, text="Merge")
-
-        self.tabs["board_detection"] = BoardDetectionTab(
-            self.notebook,
-            self.sim_root,
-            self.state
-        )
-        self.notebook.add(self.tabs["board_detection"].frame, text="Board Detection")
+        self._tab_order = TabRegistry.keys()
+        for spec in TabRegistry.iter_specs():
+            tab = spec.cls(self.notebook, self.sim_root, self.state)
+            self.tabs[spec.key] = tab
+            self.notebook.add(tab.frame, text=spec.title)
 
         # Activate first tab immediately (not lazy for first tab)
         self.current_tab = "pipeline"
@@ -285,9 +237,8 @@ class MonitorAppTabbed:
         selected_idx = self.notebook.index(self.notebook.select())
 
         # Map index to tab name
-        tab_names = ["pipeline", "datasets", "analysis", "validation", "predictions", "weights", "merge", "board_detection"]
-        if selected_idx < len(tab_names):
-            tab_name = tab_names[selected_idx]
+        if selected_idx < len(self._tab_order):
+            tab_name = self._tab_order[selected_idx]
             self.current_tab = tab_name
 
             # Trigger lazy loading
