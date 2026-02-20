@@ -104,6 +104,7 @@ class PipelineControlTab(BaseTab):
     def build_ui(self) -> None:
         self.ui.build_ui()
         self.ui.frame.pack(fill="both", expand=True)
+        self._ensure_initial_placeholder_dataset()
         self._refresh_datasets()
         self._refresh_models()
         self._refresh_profile_models()
@@ -113,6 +114,41 @@ class PipelineControlTab(BaseTab):
         self._apply_profile_model_lock()
         self.ui.var_model.trace("w", lambda *args: self._check_profile_compatibility())
         self._tick_ui()
+
+    def _ensure_initial_placeholder_dataset(self) -> None:
+        runs = self.sim_root / "outputs" / "sim_data" / "runs"
+        versions = self.sim_root / "outputs" / "sim_data" / "versions"
+        runs.mkdir(parents=True, exist_ok=True)
+        versions.mkdir(parents=True, exist_ok=True)
+
+        has_runs = any(p.is_dir() for p in runs.iterdir())
+        has_versions = any(p.is_dir() for p in versions.glob("*/*"))
+        if has_runs or has_versions:
+            return
+
+        placeholder = (runs / "run_placeholder_empty").resolve()
+        profile_id = "chip_0603_resistor@1"
+        cfg_info = self.logic.config_for_profile(profile_id, want_backend="opencv_2d")
+        if not cfg_info:
+            cfg_info = self.logic.config_for_profile(profile_id, want_backend=None)
+
+        cfg_path: Optional[Path] = Path(cfg_info["path"]) if cfg_info and cfg_info.get("path") else None
+        if cfg_path is None or not cfg_path.exists():
+            fallback = self.sim_root / "configs" / "run_0001.yaml"
+            if fallback.exists():
+                cfg_path = fallback
+            else:
+                cfg_path = next((p for p in sorted((self.sim_root / "configs").glob("*.yaml")) if p.is_file()), None)
+
+        if cfg_path is None or not cfg_path.exists():
+            _LOG.warning("No config found to create initial placeholder dataset.")
+            return
+
+        try:
+            if self.logic.ensure_dataset_skeleton(profile_id, cfg_path, placeholder, lambda _msg: None):
+                self._append_log(f"[startup] created placeholder dataset: {placeholder.name}\n")
+        except Exception as exc:
+            _LOG.warning("Failed to create initial placeholder dataset: %s", exc)
 
     def _store(self) -> Optional[SettingsStore]:
         return self.state.settings_store
