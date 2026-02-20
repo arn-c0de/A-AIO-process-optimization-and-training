@@ -341,6 +341,8 @@ class PipelineUI:
         ttk.Button(dsbar, text="Snapshot", command=self.tab._snapshot_dataset_selected).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Rename", command=self.tab._rename_dataset_selected).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Delete", command=self.tab._delete_dataset).pack(side="left", padx=(8, 0))
+        ttk.Button(dsbar, text="Delete Images...", command=self.tab._delete_images_from_dataset).pack(side="left", padx=(8, 0))
+        ttk.Button(dsbar, text="Move Images...", command=self.tab._move_images_between_datasets).pack(side="left", padx=(8, 0))
         ttk.Button(dsbar, text="Create New", command=self.tab._create_new_dataset).pack(side="left", padx=(8, 0))
 
         dsbtns = ttk.Frame(left)

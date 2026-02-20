@@ -29,6 +29,7 @@ from gui.utils.tooltip import ToolTip
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.components.filter_popup import open_filter_popup
 from gui.utils.settings_store import SettingsStore
+from gui.utils.dataset_ops import delete_samples, list_dataset_samples, move_samples, DatasetSampleInfo
 
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
@@ -1619,6 +1620,179 @@ class PipelineControlTab(BaseTab):
         try: shutil.rmtree(ds); self._append_log(f"\n[deleted dataset {ds}]\n")
         except Exception as e: self.ui.show_messagebox("error", "Delete failed", str(e))
         self._refresh_datasets()
+
+    def _delete_images_from_dataset(self) -> None:
+        ds = self._selected_dataset_dir()
+        if not ds:
+            self.ui.show_messagebox("info", "Delete images", "No dataset selected.")
+            return
+        if self.logic.is_process_running():
+            self.ui.show_messagebox("warning", "Busy", "Stop the running process before editing datasets.")
+            return
+
+        sample_ids = self._open_sample_selector(ds, title=f"Delete images from {ds.name}", action_text="Delete")
+        if not sample_ids:
+            return
+
+        if not self.ui.ask_yes_no(
+            "Delete images",
+            f"Delete {len(sample_ids)} sample(s) from dataset '{ds.name}'?",
+        ):
+            return
+
+        try:
+            summary = delete_samples(ds, sample_ids)
+            self._append_log(f"[dataset edit] deleted {summary.affected} sample(s) from {ds}\n")
+            self._refresh_datasets()
+            if label := self._dataset_label_for_path(ds):
+                self.ui.var_dataset.set(label)
+            self._on_dataset_selected()
+            try:
+                self.parent.event_generate("<<DatasetChanged>>", when="tail")
+            except Exception:
+                pass
+        except Exception as exc:
+            self.ui.show_messagebox("error", "Delete images failed", str(exc))
+
+    def _move_images_between_datasets(self) -> None:
+        src_ds = self._selected_dataset_dir()
+        if not src_ds:
+            self.ui.show_messagebox("info", "Move images", "No source dataset selected.")
+            return
+        if self.logic.is_process_running():
+            self.ui.show_messagebox("warning", "Busy", "Stop the running process before editing datasets.")
+            return
+
+        target = self._open_target_dataset_selector(src_ds)
+        if target is None:
+            return
+
+        sample_ids = self._open_sample_selector(src_ds, title=f"Move images from {src_ds.name}", action_text="Move")
+        if not sample_ids:
+            return
+
+        if not self.ui.ask_yes_no(
+            "Move images",
+            f"Move {len(sample_ids)} sample(s)\nfrom '{src_ds.name}'\nto '{target.name}'?",
+        ):
+            return
+
+        try:
+            summary = move_samples(src_ds, target, sample_ids, enforce_profile_match=True)
+            self._append_log(
+                f"[dataset edit] moved {summary.affected} sample(s): {src_ds} -> {target}\n"
+            )
+            self._refresh_datasets()
+            if label := self._dataset_label_for_path(src_ds):
+                self.ui.var_dataset.set(label)
+            self._on_dataset_selected()
+            try:
+                self.parent.event_generate("<<DatasetChanged>>", when="tail")
+            except Exception:
+                pass
+        except Exception as exc:
+            self.ui.show_messagebox("error", "Move images failed", str(exc))
+
+    def _open_sample_selector(self, dataset_dir: Path, *, title: str, action_text: str) -> List[str]:
+        try:
+            samples = list_dataset_samples(dataset_dir)
+        except Exception as exc:
+            self.ui.show_messagebox("error", "Dataset read failed", str(exc))
+            return []
+
+        if not samples:
+            self.ui.show_messagebox("info", "Dataset is empty", f"No samples found in '{dataset_dir.name}'.")
+            return []
+
+        samples_sorted = sorted(samples, key=lambda s: s.sample_id)
+        dialog = tk.Toplevel(self.frame.winfo_toplevel())
+        dialog.title(title)
+        dialog.transient(self.frame.winfo_toplevel())
+        dialog.grab_set()
+        dialog.minsize(860, 420)
+
+        selected_ids: List[str] = []
+
+        frm = ttk.Frame(dialog, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Dataset: {dataset_dir.name}").pack(anchor="w")
+        ttk.Label(frm, text="Select one or more samples (Ctrl/Shift for multi-select):").pack(anchor="w", pady=(2, 6))
+
+        list_frame = ttk.Frame(frm)
+        list_frame.pack(fill="both", expand=True)
+        lb = tk.Listbox(list_frame, selectmode="extended")
+        lb.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(list_frame, orient="vertical", command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.configure(yscrollcommand=sb.set)
+
+        for row in samples_sorted:
+            lb.insert("end", self._sample_list_label(row))
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Select all", command=lambda: lb.selection_set(0, "end")).pack(side="left")
+        ttk.Button(btns, text="Clear", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
+
+        def _confirm_selection() -> None:
+            idxs = lb.curselection()
+            if not idxs:
+                self.ui.show_messagebox("info", action_text, "No samples selected.")
+                return
+            selected_ids.extend(samples_sorted[int(i)].sample_id for i in idxs)
+            dialog.destroy()
+
+        ttk.Button(btns, text=action_text, command=_confirm_selection).pack(side="right", padx=(0, 8))
+        lb.bind("<Double-Button-1>", lambda _e: _confirm_selection())
+
+        dialog.wait_window()
+        return selected_ids
+
+    def _open_target_dataset_selector(self, source_dataset: Path) -> Optional[Path]:
+        targets = [p for p in self._dataset_dirs if p.resolve() != source_dataset.resolve()]
+        if not targets:
+            self.ui.show_messagebox("info", "Move images", "No target dataset available.")
+            return None
+
+        targets_sorted = sorted(targets, key=lambda p: self._dataset_label_for_path(p) or p.name)
+        dialog = tk.Toplevel(self.frame.winfo_toplevel())
+        dialog.title("Select target dataset")
+        dialog.transient(self.frame.winfo_toplevel())
+        dialog.grab_set()
+        dialog.minsize(620, 300)
+
+        selected: list[Path] = []
+        frm = ttk.Frame(dialog, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Source dataset: {source_dataset.name}").pack(anchor="w")
+        ttk.Label(frm, text="Choose a target dataset:").pack(anchor="w", pady=(2, 6))
+
+        lb = tk.Listbox(frm, exportselection=False, height=min(18, max(6, len(targets_sorted))))
+        lb.pack(fill="both", expand=True)
+        for p in targets_sorted:
+            lb.insert("end", self._dataset_label_for_path(p) or p.name)
+        lb.selection_set(0)
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
+
+        def _confirm_target() -> None:
+            idxs = lb.curselection()
+            if not idxs:
+                return
+            selected.append(targets_sorted[int(idxs[0])])
+            dialog.destroy()
+
+        ttk.Button(btns, text="Use target", command=_confirm_target).pack(side="right", padx=(0, 8))
+        lb.bind("<Double-Button-1>", lambda _e: _confirm_target())
+
+        dialog.wait_window()
+        return selected[0] if selected else None
+
+    def _sample_list_label(self, sample: DatasetSampleInfo) -> str:
+        return f"{sample.sample_id} | class={sample.class_name} | split={sample.split} | image={Path(sample.image_path).name}"
 
     def _create_new_dataset(self) -> None:
         if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before creating datasets."); return
