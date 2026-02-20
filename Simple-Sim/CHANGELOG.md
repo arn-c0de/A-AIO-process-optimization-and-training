@@ -2,24 +2,7 @@
 
 All notable changes to **Simple-Sim** are documented in this file.
 
-## [1.0.3] - 2026-02-20
 
-### Summary
-- Added switchable filter modes in the Image Filters popup: `Custom` and `Realism`.
-- Introduced grouped realism augmentation with sparse group mixing (`K=0/1/2`), correlated effects, and compatibility constraints.
-- Added optional YAML-driven realism profile presets via `configs/realism_profiles.yaml`, with runtime override support through `SIMPLE_SIM_REALISM_PRESETS_PATH`.
-- Extended filter normalization and payload handling with realism keys (`filter_mode`, `realism_*`) while preserving backward compatibility.
-- Refactored filter popup into a maintainable package:
-  - `gui/components/filter_popup/popup.py`
-  - `gui/components/filter_popup/ui_custom.py`
-  - `gui/components/filter_popup/ui_realism.py`
-  - `gui/components/filter_popup/preview_panel.py`
-  - `gui/components/filter_popup/controller.py`
-  - `gui/components/filter_popup/models.py`
-  - `gui/components/filter_popup/constants.py`
-- Kept all existing imports and call sites working via backward-compatible package exports (`gui.components.filter_popup`).
-- Added shared persistence helpers for filter profile extra keys in `gui/utils/filter_profile_store.py` and reused them across Pipeline tab and debug preview tooling.
-- Added/updated tests for filter settings and realism behavior (constraints, sparse mode behavior, YAML preset usage).
 
 ## [1.0.2] - 2026-02-20
 
@@ -45,6 +28,21 @@ All notable changes to **Simple-Sim** are documented in this file.
 - Reduced pipeline tab duplication by extracting persisted field mapping and dataset-selection serialization helpers.
 - Added typed config parsing baseline in `simple_sim.config_schema` and integrated it into config validation.
 - Added regression tests for registry, filter settings, config schema, and wrapper compatibility.
+- Added switchable filter modes in the Image Filters popup: `Custom` and `Realism`.
+- Introduced grouped realism augmentation with sparse group mixing (`K=0/1/2`), correlated effects, and compatibility constraints.
+- Added optional YAML-driven realism profile presets via `configs/realism_profiles.yaml`, with runtime override support through `SIMPLE_SIM_REALISM_PRESETS_PATH`.
+- Extended filter normalization and payload handling with realism keys (`filter_mode`, `realism_*`) while preserving backward compatibility.
+- Refactored filter popup into a maintainable package:
+  - `gui/components/filter_popup/popup.py`
+  - `gui/components/filter_popup/ui_custom.py`
+  - `gui/components/filter_popup/ui_realism.py`
+  - `gui/components/filter_popup/preview_panel.py`
+  - `gui/components/filter_popup/controller.py`
+  - `gui/components/filter_popup/models.py`
+  - `gui/components/filter_popup/constants.py`
+- Kept all existing imports and call sites working via backward-compatible package exports (`gui.components.filter_popup`).
+- Added shared persistence helpers for filter profile extra keys in `gui/utils/filter_profile_store.py` and reused them across Pipeline tab and debug preview tooling.
+- Added/updated tests for filter settings and realism behavior (constraints, sparse mode behavior, YAML preset usage).
 
 ### Extension Opportunities
 - Profile diff/compare tooling.
