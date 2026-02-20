@@ -1143,6 +1143,7 @@ def _open_tk_viewer(
                 show_messagebox=show_messagebox,
                 ask_string=ask_string,
                 ask_yes_no=ask_yes_no,
+                sim_root=str(sim_root),
             )
 
         cardinal_rotation_90_var = filter_cardinal_rotation_90_var

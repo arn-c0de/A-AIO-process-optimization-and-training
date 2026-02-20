@@ -36,12 +36,15 @@ from .controller import (
     update_rotation_row_state,
 )
 from .preview_panel import (
-    build_preview_panel,
+    build_left_preview_panel,
     do_render_2d_preview,
     do_render_3d_preview,
     get_preview_filter_values,
+    on_left_preview_profile_selected,
     on_preview_profile_selected,
+    populate_left_filter_profiles,
     populate_preview_profiles,
+    render_left_preview,
     render_preview,
     show_preview_image,
 )
@@ -86,7 +89,8 @@ class FilterPopup:
         self.top.title("Image Filters")
         self.top.transient(parent.winfo_toplevel())
         self.top.resizable(True, True)
-        min_w = 1310 if self._sim_root else 980
+        min_w = 1310
+        self.top.geometry(f"{min_w}x740")
         self.top.minsize(min_w, 640)
 
         self._build_ui()
@@ -105,13 +109,8 @@ class FilterPopup:
 
         right = ttk.Frame(root)
         right.grid(row=0, column=1, sticky="nsew")
+        right.grid_propagate(True)
         self._build_filter_controls(right)
-
-        if self._sim_root:
-            preview_col = ttk.Frame(root)
-            preview_col.grid(row=0, column=2, sticky="nsew", padx=(12, 0))
-            root.columnconfigure(2, minsize=340)
-            self._build_preview_panel(preview_col)
 
     def _build_profile_list(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Filter Profiles", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
@@ -133,6 +132,8 @@ class FilterPopup:
         self._refresh_profile_list(select_name=self.active_profile)
         self.set_current_values(self.profiles.get(self.active_profile, {}))
 
+        self._build_left_preview(parent)
+
     # UI delegates
     def _build_filter_controls(self, parent: ttk.Frame) -> None:
         build_filter_controls(self, parent)
@@ -145,7 +146,57 @@ class FilterPopup:
 
     # Preview delegates
     def _build_preview_panel(self, parent: ttk.Frame) -> None:
-        build_preview_panel(self, parent)
+        lf = ttk.LabelFrame(parent, text="Filter Preview", padding=8)
+        lf.pack(fill="both", expand=True)
+
+        # Always-visible marker to confirm panel construction at runtime.
+        ttk.Label(lf, text="Preview Panel Active", foreground="#0a5").pack(anchor="w", pady=(0, 6))
+
+        sel_row = ttk.Frame(lf)
+        sel_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(sel_row, text="Profile:").pack(side="left")
+        self._preview_profile_var = tk.StringVar()
+        self._preview_profile_combo = ttk.Combobox(
+            sel_row,
+            textvariable=self._preview_profile_var,
+            width=28,
+            state="readonly",
+        )
+        self._preview_profile_combo.pack(side="left", padx=(6, 0), fill="x", expand=True)
+        self._preview_profile_combo.bind("<<ComboboxSelected>>", self._on_preview_profile_selected)
+
+        btn_row = ttk.Frame(lf)
+        btn_row.pack(fill="x", pady=(4, 4))
+        ttk.Button(btn_row, text="Render Preview", command=self._render_preview).pack(side="left")
+
+        self._preview_status_var = tk.StringVar(value="")
+        ttk.Label(
+            lf,
+            textvariable=self._preview_status_var,
+            foreground="#555",
+            wraplength=330,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 6))
+
+        self._preview_img_label = ttk.Label(lf, text="No preview yet", anchor="center")
+        self._preview_img_label.pack(fill="both", expand=True)
+
+        try:
+            self._populate_preview_profiles()
+        except Exception as exc:
+            self._preview_status_var.set(f"Preview init error: {exc}")
+
+    def _build_left_preview(self, parent: ttk.Frame) -> None:
+        build_left_preview_panel(self, parent)
+
+    def _populate_left_filter_profiles(self) -> None:
+        populate_left_filter_profiles(self)
+
+    def _on_left_preview_profile_selected(self, _evt: Optional[tk.Event] = None) -> None:
+        on_left_preview_profile_selected(self, _evt)
+
+    def _render_left_preview(self) -> None:
+        render_left_preview(self)
 
     def _populate_preview_profiles(self) -> None:
         populate_preview_profiles(self)

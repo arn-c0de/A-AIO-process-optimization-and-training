@@ -19,6 +19,8 @@ def refresh_profile_list(popup: Any, select_name: Optional[str] = None) -> None:
         popup.lb_profiles.selection_clear(0, "end")
         popup.lb_profiles.selection_set(idx)
         popup.lb_profiles.activate(idx)
+    if hasattr(popup, "_populate_left_filter_profiles"):
+        popup._populate_left_filter_profiles()
 
 
 def selected_profile_name(popup: Any) -> Optional[str]:
