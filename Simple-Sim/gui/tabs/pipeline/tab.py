@@ -213,6 +213,8 @@ class PipelineControlTab(BaseTab):
             ("pipeline.filter.dust_density", self.ui.var_filter_dust_density),
             ("pipeline.filter.enable_sharpen", self.ui.var_filter_enable_sharpen),
             ("pipeline.filter.sharpen_strength", self.ui.var_filter_sharpen_strength),
+            ("pipeline.precise_total", self.ui.var_precise_total),
+            ("pipeline.precise_per_class", self.ui.var_precise_per_class),
         ]:
             v = st.get(key, None)
             if v is None:
@@ -317,6 +319,8 @@ class PipelineControlTab(BaseTab):
             (self.ui.var_filter_dust_density, "pipeline.filter.dust_density"),
             (self.ui.var_filter_enable_sharpen, "pipeline.filter.enable_sharpen"),
             (self.ui.var_filter_sharpen_strength, "pipeline.filter.sharpen_strength"),
+            (self.ui.var_precise_total, "pipeline.precise_total"),
+            (self.ui.var_precise_per_class, "pipeline.precise_per_class"),
         ]:
             var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
 
@@ -579,6 +583,112 @@ class PipelineControlTab(BaseTab):
                 payload[k] = self._float_or_default(str(v), default=0.0)
         return payload
 
+    # ------------------------------------------------------------------
+    # Precise mode helpers
+    # ------------------------------------------------------------------
+
+    def _refresh_precise_classes(self) -> None:
+        """Read class names from the current config; rebuild single and multi-profile entries."""
+        cfg_str = self.ui.var_config.get().strip()
+        classes: list[str] = []
+        if cfg_str:
+            cfg_path = (self.sim_root / cfg_str) if not Path(cfg_str).is_absolute() else Path(cfg_str)
+            try:
+                data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                classes = list((data.get("classes") or {}).keys())
+            except Exception:
+                pass
+        if not classes:
+            classes = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+        self.ui.update_precise_class_entries(classes)
+        # Update multi-profile table if multi-profile mode is active
+        multi_enabled = bool(self.ui.var_profiles_multi.get())
+        if multi_enabled:
+            profile_ids = self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            self.ui.set_precise_multi_mode(True, profile_ids, classes)
+
+    def _get_precise_counts(self) -> Optional[Dict[str, Any]]:
+        """Return sample-count overrides for precise mode, or None on validation error."""
+        multi_enabled = bool(self.ui.var_profiles_multi.get())
+        per_class = self.ui.var_precise_per_class.get()
+
+        if multi_enabled:
+            profile_ids = self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            per_profile: Dict[str, Any] = {}
+            if per_class:
+                for pid in profile_ids:
+                    cls_dict = self.ui.var_precise_multi_classes.get(pid) or {}
+                    if not cls_dict:
+                        self.ui.show_messagebox("error", "Error", f"Precise mode: no class entries for profile '{pid}'.\nClick ↻ to reload.")
+                        return None
+                    counts: Dict[str, int] = {}
+                    for cls, var in cls_dict.items():
+                        try:
+                            n = int(var.get())
+                            if n < 0: raise ValueError()
+                            counts[cls] = n
+                        except Exception:
+                            self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for '{pid}' / class '{cls}'.")
+                            return None
+                    per_profile[pid] = counts
+            else:
+                for pid in profile_ids:
+                    total_var = self.ui.var_precise_multi_totals.get(pid)
+                    if not total_var:
+                        self.ui.show_messagebox("error", "Error", f"Precise mode: no count entry for profile '{pid}'.\nClick ↻ to reload.")
+                        return None
+                    try:
+                        n = int(total_var.get())
+                        if n < 1: raise ValueError()
+                        per_profile[pid] = {"_total": n}
+                    except Exception:
+                        self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for profile '{pid}'.")
+                        return None
+            return {"_per_profile": per_profile}
+
+        # Single-profile
+        if per_class:
+            if not self.ui.var_precise_classes:
+                self.ui.show_messagebox("error", "Error", "Precise mode: no class entries.\nClick ↻ to load classes from the config.")
+                return None
+            counts = {}
+            for name, var in self.ui.var_precise_classes.items():
+                try:
+                    n = int(var.get())
+                    if n < 0: raise ValueError()
+                    counts[name] = n
+                except Exception:
+                    self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for class '{name}'.")
+                    return None
+            return counts
+        else:
+            try:
+                total = int(self.ui.var_precise_total.get())
+                if total < 1: raise ValueError()
+            except Exception:
+                self.ui.show_messagebox("error", "Error", "Precise mode: invalid sample count.\nEnter a positive integer.")
+                return None
+            return {"_total": total}
+
+    def _write_precise_config(self, cfg_path: Path, counts: Dict[str, Any]) -> Path:
+        """Write a temp config YAML with the classes section overridden by counts."""
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        existing_classes: Dict[str, int] = {str(k): int(v) for k, v in (data.get("classes") or {}).items()}
+        if "_total" in counts:
+            total = int(counts["_total"])
+            new_classes = {cls: total for cls in existing_classes} if existing_classes else {}
+        else:
+            new_classes = {str(k): int(v) for k, v in counts.items()}
+        data["classes"] = new_classes
+        live_dir = self.sim_root / "outputs" / "live"
+        live_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml",
+                                        prefix="precise_", dir=str(live_dir), delete=False) as tf:
+            yaml.safe_dump(data, tf, sort_keys=False)
+            return Path(tf.name)
+
+    # ------------------------------------------------------------------
+
     def _open_image_filters_popup(self) -> None:
         """Open shared image filter popup."""
         profiles, active_profile = self._load_filter_profiles()
@@ -680,6 +790,7 @@ class PipelineControlTab(BaseTab):
                 self.ui.show_messagebox("error", "Error", "Invalid run count. Please enter a positive integer.")
                 return
         elif run_mode == "continuous": run_count = -1
+        elif run_mode == "precise": run_count = 1
 
         self._append_log(f"Run mode: {run_mode}" + (f" ({run_count}x)" if run_count > 0 else " (continuous)") + "\n\n")
 
@@ -787,6 +898,30 @@ class PipelineControlTab(BaseTab):
                     "profile_id": pid, "config": cfg_rel, "out_dir": str(out_i), "model_path": str(model_i),
                 })
         
+        # Precise mode: patch each spec's config with user-specified sample counts
+        if run_mode == "precise":
+            precise_counts = self._get_precise_counts()
+            if precise_counts is None:
+                return
+            per_profile_map: Optional[Dict[str, Any]] = precise_counts.get("_per_profile") if isinstance(precise_counts, dict) else None
+            patched_specs: list[dict[str, str]] = []
+            for spec in run_specs:
+                cfg_rel = spec["config"]
+                cfg_path = (self.sim_root / cfg_rel) if not Path(cfg_rel).is_absolute() else Path(cfg_rel)
+                # Use profile-specific counts when available
+                if per_profile_map is not None:
+                    pid = spec.get("profile_id", "")
+                    spec_counts = per_profile_map.get(pid) or next(iter(per_profile_map.values()), {})
+                else:
+                    spec_counts = precise_counts
+                try:
+                    patched_path = self._write_precise_config(cfg_path, spec_counts)
+                    patched_specs.append({**spec, "config": _rel_to_sim_root(patched_path)})
+                except Exception as e:
+                    self.ui.show_messagebox("error", "Error", f"Failed to write precise config:\n\n{e}")
+                    return
+            run_specs = patched_specs
+
         image_filters = self._image_filters_payload()
 
         if not self._confirm_pipeline_start(
@@ -1320,6 +1455,12 @@ class PipelineControlTab(BaseTab):
             cur = self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
             if not cur and (pid := self.ui.var_profile.get().strip()): cur = [pid]
             self._set_profiles_multi(cur)
+        if self.ui.var_run_mode.get() == "precise":
+            try: self._refresh_precise_classes()
+            except Exception: pass
+        if not enabled:
+            try: self.ui.set_precise_multi_mode(False, [], [])
+            except Exception: pass
 
     def _pick_profiles_multi(self) -> None:
         values = list(self.ui.profile_combo["values"])
@@ -1349,6 +1490,9 @@ class PipelineControlTab(BaseTab):
         self._set_profiles_multi(sel)
         if sel: self.ui.var_profile.set(sel[0])
         dialog.destroy()
+        if self.ui.var_run_mode.get() == "precise":
+            try: self._refresh_precise_classes()
+            except Exception: pass
 
     def _on_render_backend_changed(self, _event: Optional[object] = None) -> None:
         try:
@@ -1453,6 +1597,10 @@ class PipelineControlTab(BaseTab):
             except Exception: return
 
         self.ui.var_config.set(rel)
+        try:
+            self._refresh_precise_classes()
+        except Exception:
+            pass
 
     def _show_profile_info(self) -> None:
         profile_id = self.ui.var_profile.get()

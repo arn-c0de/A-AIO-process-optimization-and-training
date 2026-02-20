@@ -149,6 +149,18 @@ class PipelineUI:
         
         self._thumb_refs: List[ImageTk.PhotoImage] = []
 
+        # Precise mode
+        self.var_precise_total: tk.StringVar = tk.StringVar(value="100")
+        self.var_precise_per_class: tk.BooleanVar = tk.BooleanVar(value=False)
+        self.var_precise_classes: Dict[str, tk.StringVar] = {}
+        self.var_precise_multi_totals: Dict[str, tk.StringVar] = {}
+        self.var_precise_multi_classes: Dict[str, Dict[str, tk.StringVar]] = {}
+        self._precise_row: Optional[ttk.Frame] = None
+        self._precise_total_frame: Optional[ttk.Frame] = None
+        self._precise_per_class_frame: Optional[ttk.Frame] = None
+        self._precise_multi_frame: Optional[ttk.Frame] = None
+        self._top2_ref: Optional[ttk.Frame] = None
+
     def build_ui(self) -> None:
         top = ttk.Frame(self.frame)
         top.pack(fill="x", pady=(0, 5))
@@ -212,14 +224,23 @@ class PipelineUI:
         ttk.Radiobutton(run_mode_frame, text="Single", variable=self.var_run_mode, value="single").pack(side="left")
         ttk.Radiobutton(run_mode_frame, text="Multiple", variable=self.var_run_mode, value="multiple").pack(side="left", padx=(5, 0))
         ttk.Radiobutton(run_mode_frame, text="Continuous", variable=self.var_run_mode, value="continuous").pack(side="left", padx=(5, 0))
+        ttk.Radiobutton(run_mode_frame, text="Precise", variable=self.var_run_mode, value="precise").pack(side="left", padx=(5, 0))
 
         ttk.Label(top, text="Count:").pack(side="left", padx=(10, 6))
         self.run_count_entry = ttk.Entry(top, textvariable=self.var_run_count, width=5)
         self.run_count_entry.pack(side="left")
 
         def on_run_mode_change(*args):
-            if self.var_run_mode.get() == "multiple": self.run_count_entry.configure(state="normal")
-            else: self.run_count_entry.configure(state="disabled")
+            mode = self.var_run_mode.get()
+            if mode == "multiple":
+                self.run_count_entry.configure(state="normal")
+            else:
+                self.run_count_entry.configure(state="disabled")
+            if self._precise_row is not None and self._top2_ref is not None:
+                if mode == "precise":
+                    self._precise_row.pack(fill="x", pady=(0, 5), before=self._top2_ref)
+                else:
+                    self._precise_row.pack_forget()
         self.var_run_mode.trace("w", on_run_mode_change)
         on_run_mode_change()
 
@@ -229,7 +250,40 @@ class PipelineUI:
         ttk.Radiobutton(top, text="Create New", variable=self.var_dataset_mode, value="new").pack(side="left")
         ttk.Radiobutton(top, text="Extend Existing", variable=self.var_dataset_mode, value="extend").pack(side="left", padx=(5, 0))
 
+        # Precise mode panel (hidden by default, shown when run_mode == "precise")
+        precise_row = ttk.LabelFrame(self.frame, text="Precise Mode", padding=4)
+        self._precise_row = precise_row
+
+        pr_top = ttk.Frame(precise_row)
+        pr_top.pack(fill="x")
+
+        # "Samples per class: [N]" — hidden in multi-profile mode
+        precise_total_frame = ttk.Frame(pr_top)
+        precise_total_frame.pack(side="left")
+        self._precise_total_frame = precise_total_frame
+        ttk.Label(precise_total_frame, text="Samples per class:").pack(side="left")
+        ttk.Entry(precise_total_frame, textvariable=self.var_precise_total, width=7).pack(side="left", padx=(4, 0))
+        ToolTip(precise_total_frame.winfo_children()[-1], text_func=lambda: "Number of samples generated per class (uniform for all classes)")
+
+        ttk.Checkbutton(
+            pr_top, text="Per class", variable=self.var_precise_per_class,
+            command=self._on_precise_per_class_toggle,
+        ).pack(side="left", padx=(12, 0))
+        ToolTip(pr_top.winfo_children()[-1], text_func=lambda: "Set individual sample counts per class")
+
+        ttk.Button(pr_top, text="↻", width=3, command=self.tab._refresh_precise_classes).pack(side="left", padx=(8, 0))
+        ToolTip(pr_top.winfo_children()[-1], text_func=lambda: "Reload class names from the current config")
+
+        # Single-profile per-class row (shown when per_class=True and single-profile mode)
+        self._precise_per_class_frame = ttk.Frame(precise_row)
+        # not packed yet — shown when "Per class" checkbox is ticked
+
+        # Multi-profile table (shown when multi-profile mode is active)
+        self._precise_multi_frame = ttk.Frame(precise_row)
+        # not packed yet — shown via set_precise_multi_mode()
+
         top2 = ttk.Frame(self.frame)
+        self._top2_ref = top2
         top2.pack(fill="x", pady=(0, 5))
 
         ttk.Label(top2, text="Config:").pack(side="left", padx=(0, 6))
@@ -528,6 +582,112 @@ class PipelineUI:
     
     def set_dataset_combo_values(self, values: List[str]) -> None:
         self.dataset_combo["values"] = values
+
+    def _on_precise_per_class_toggle(self) -> None:
+        per_class = self.var_precise_per_class.get()
+        multi_visible = (
+            self._precise_multi_frame is not None
+            and self._precise_multi_frame.winfo_ismapped()
+        )
+        if multi_visible:
+            # Rebuild multi-profile table with new column layout
+            self.tab._refresh_precise_classes()
+            return
+        # Single-profile mode
+        if self._precise_per_class_frame is None:
+            return
+        if per_class:
+            # Auto-load classes if not yet populated
+            if not self.var_precise_classes:
+                self.tab._refresh_precise_classes()
+            self._precise_per_class_frame.pack(fill="x", pady=(4, 0))
+        else:
+            self._precise_per_class_frame.pack_forget()
+
+    def update_precise_class_entries(self, class_names: List[str]) -> None:
+        """Rebuild single-profile per-class entries. Called by tab when config changes."""
+        if self._precise_per_class_frame is None:
+            return
+        old_values = {k: v.get() for k, v in self.var_precise_classes.items()}
+        self.var_precise_classes.clear()
+        for w in self._precise_per_class_frame.winfo_children():
+            w.destroy()
+        default = self.var_precise_total.get() or "100"
+        for cls in class_names:
+            val = old_values.get(cls, default)
+            var = tk.StringVar(value=val)
+            self.var_precise_classes[cls] = var
+            ttk.Label(self._precise_per_class_frame, text=f"{cls}:").pack(side="left")
+            ttk.Entry(self._precise_per_class_frame, textvariable=var, width=6).pack(side="left", padx=(2, 8))
+        # Re-show if the checkbox is still ticked
+        if self.var_precise_per_class.get():
+            self._precise_per_class_frame.pack(fill="x", pady=(4, 0))
+
+    def set_precise_multi_mode(self, enabled: bool, profile_ids: List[str], class_names: List[str]) -> None:
+        """Switch precise panel between single-profile and multi-profile layout."""
+        if self._precise_total_frame is None or self._precise_multi_frame is None:
+            return
+        if enabled:
+            # Hide single-profile total widget; show multi-profile table
+            self._precise_total_frame.pack_forget()
+            self._precise_per_class_frame.pack_forget() if self._precise_per_class_frame else None
+            self._build_precise_multi_table(profile_ids, class_names)
+            self._precise_multi_frame.pack(fill="x", pady=(4, 0))
+        else:
+            # Restore single-profile layout
+            self._precise_multi_frame.pack_forget()
+            self._precise_total_frame.pack(side="left", before=self._precise_total_frame.master.winfo_children()[1])
+            # Re-show per-class frame if checked
+            if self.var_precise_per_class.get() and self._precise_per_class_frame:
+                self._precise_per_class_frame.pack(fill="x", pady=(4, 0))
+
+    def _build_precise_multi_table(self, profile_ids: List[str], class_names: List[str]) -> None:
+        """Rebuild the per-profile counts table inside _precise_multi_frame."""
+        if self._precise_multi_frame is None:
+            return
+        per_class = self.var_precise_per_class.get()
+        default = self.var_precise_total.get() or "100"
+
+        # Preserve existing values
+        old_totals = {pid: v.get() for pid, v in self.var_precise_multi_totals.items()}
+        old_classes = {pid: {c: v.get() for c, v in d.items()} for pid, d in self.var_precise_multi_classes.items()}
+
+        self.var_precise_multi_totals.clear()
+        self.var_precise_multi_classes.clear()
+        for w in self._precise_multi_frame.winfo_children():
+            w.destroy()
+
+        # Header
+        ttk.Label(self._precise_multi_frame, text="Profile", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=0, sticky="w", padx=(0, 12), pady=(0, 2))
+        if per_class:
+            for c, cls in enumerate(class_names):
+                ttk.Label(self._precise_multi_frame, text=cls, font=("TkDefaultFont", 9, "bold")).grid(
+                    row=0, column=c + 1, padx=(0, 6), pady=(0, 2))
+        else:
+            ttk.Label(self._precise_multi_frame, text="Count", font=("TkDefaultFont", 9, "bold")).grid(
+                row=0, column=1, padx=(0, 6), pady=(0, 2))
+
+        # One row per profile
+        for r, pid in enumerate(profile_ids):
+            label = pid.split("@")[0] if len(pid) > 24 else pid
+            ttk.Label(self._precise_multi_frame, text=label).grid(
+                row=r + 1, column=0, sticky="w", padx=(0, 12), pady=(1, 0))
+            if per_class:
+                cls_dict: Dict[str, tk.StringVar] = {}
+                for c, cls in enumerate(class_names):
+                    val = (old_classes.get(pid) or {}).get(cls, default)
+                    var = tk.StringVar(value=val)
+                    cls_dict[cls] = var
+                    ttk.Entry(self._precise_multi_frame, textvariable=var, width=6).grid(
+                        row=r + 1, column=c + 1, padx=(0, 6), pady=(1, 0))
+                self.var_precise_multi_classes[pid] = cls_dict
+            else:
+                val = old_totals.get(pid, default)
+                var = tk.StringVar(value=val)
+                self.var_precise_multi_totals[pid] = var
+                ttk.Entry(self._precise_multi_frame, textvariable=var, width=7).grid(
+                    row=r + 1, column=1, padx=(0, 6), pady=(1, 0))
 
     def toggle_dataset_multi_widgets(self, enabled: bool, tooltip_text_func: Callable[[], str]) -> None:
         if enabled:
