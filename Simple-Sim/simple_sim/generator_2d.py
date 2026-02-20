@@ -143,6 +143,34 @@ def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optio
     aug = dict(augment or {})
     filt_base = normalize_image_filters(image_filters)
     if not filt_base.get("enable", True):
+        # Global-off must produce a true no-op image pipeline.
+        aug["blur_sigma"] = 0.0
+        aug["noise_stddev"] = 0.0
+        aug["brightness_factor"] = 1.0
+        aug["contrast_factor"] = 1.0
+        aug["rotation_deg"] = 0.0
+
+        # Extended filter keys
+        aug["perspective_strength"] = 0.0
+        aug["perspective_angle_x"] = 0.0
+        aug["perspective_angle_y"] = 0.0
+        aug["motion_blur_strength"] = 0.0
+        aug["motion_blur_angle"] = 0.0
+        aug["saturation_factor"] = 1.0
+        aug["hue_shift_deg"] = 0.0
+        aug["shadow_strength"] = 0.0
+        aug["shadow_size"] = 0.2
+        aug["reflection_strength"] = 0.0
+        aug["reflection_size"] = 0.15
+        aug["vignetting_strength"] = 0.0
+        aug["chromatic_strength"] = 0.0
+        aug["jpeg_quality"] = 100
+        aug["color_temperature_kelvin"] = 5500
+        aug["distortion_k1"] = 0.0
+        aug["distortion_k2"] = 0.0
+        aug["dust_density"] = 0.0
+        aug["dust_size"] = 2.0
+        aug["sharpen_strength"] = 0.0
         return aug
     filt = dict(filt_base)
 
