@@ -1,0 +1,28 @@
+profiles:
+  profile_industrial_cam:
+    k0: 0.60
+    k1: 0.35
+    k2: 0.05
+    groups:
+      G1: 0.35
+      G2: 0.15
+      G3: 0.20
+      G4: 0.25
+      G5: 0.12
+      G6: 0.18
+      G7: 0.10
+      G8: 0.08
+
+  profile_mobile_phone:
+    k0: 0.52
+    k1: 0.40
+    k2: 0.08
+    groups:
+      G1: 0.30
+      G2: 0.20
+      G3: 0.16
+      G4: 0.30
+      G5: 0.10
+      G6: 0.25
+      G7: 0.14
+      G8: 0.12

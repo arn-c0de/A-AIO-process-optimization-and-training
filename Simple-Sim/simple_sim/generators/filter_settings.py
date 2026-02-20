@@ -57,6 +57,27 @@ _BOOL_DEFAULTS: Dict[str, bool] = {
     "enable_lens_distortion": False,
     "enable_dust": False,
     "enable_sharpen": False,
+    "realism_enabled": False,
+    "realism_constraints_enabled": True,
+}
+
+_STR_DEFAULTS: Dict[str, str] = {
+    "filter_mode": "custom",
+    "realism_profile_id": "profile_industrial_cam",
+}
+
+_REALISM_FLOAT_RANGES: Dict[str, tuple[float, float, float]] = {
+    "realism_k_prob_0": (0.60, 0.0, 1.0),
+    "realism_k_prob_1": (0.35, 0.0, 1.0),
+    "realism_k_prob_2": (0.05, 0.0, 1.0),
+    "realism_group_G1_prob": (0.35, 0.0, 1.0),
+    "realism_group_G2_prob": (0.15, 0.0, 1.0),
+    "realism_group_G3_prob": (0.20, 0.0, 1.0),
+    "realism_group_G4_prob": (0.25, 0.0, 1.0),
+    "realism_group_G5_prob": (0.12, 0.0, 1.0),
+    "realism_group_G6_prob": (0.18, 0.0, 1.0),
+    "realism_group_G7_prob": (0.10, 0.0, 1.0),
+    "realism_group_G8_prob": (0.08, 0.0, 1.0),
 }
 
 _RANDOMIZABLE_FLOAT_RANGES: Dict[str, tuple[float, float]] = {
@@ -123,7 +144,13 @@ def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str
     for key, default in _BOOL_DEFAULTS.items():
         out[key] = _to_bool(src, key, default)
 
+    for key, default in _STR_DEFAULTS.items():
+        out[key] = str(src.get(key, default) or default)
+
     for key, (default, lo, hi) in _FLOAT_RANGES.items():
+        out[key] = _to_float(src, key, default, lo, hi)
+
+    for key, (default, lo, hi) in _REALISM_FLOAT_RANGES.items():
         out[key] = _to_float(src, key, default, lo, hi)
 
     for key, (default, lo, hi) in _INT_RANGES.items():
@@ -140,6 +167,25 @@ def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str
         out[f"{key}_randomize"] = _to_bool(src, f"{key}_randomize", False)
         out[f"{key}_min"] = _to_int(src, f"{key}_min", base, lo, hi)
         out[f"{key}_max"] = _to_int(src, f"{key}_max", base, lo, hi)
+
+    mode = str(out.get("filter_mode", "custom")).strip().lower()
+    if mode not in {"custom", "realism"}:
+        out["filter_mode"] = "custom"
+    else:
+        out["filter_mode"] = mode
+
+    k0 = float(out.get("realism_k_prob_0", 0.60))
+    k1 = float(out.get("realism_k_prob_1", 0.35))
+    k2 = float(out.get("realism_k_prob_2", 0.05))
+    s = k0 + k1 + k2
+    if s > 1e-9:
+        out["realism_k_prob_0"] = k0 / s
+        out["realism_k_prob_1"] = k1 / s
+        out["realism_k_prob_2"] = k2 / s
+    else:
+        out["realism_k_prob_0"] = 0.60
+        out["realism_k_prob_1"] = 0.35
+        out["realism_k_prob_2"] = 0.05
 
     return out
 
