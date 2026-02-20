@@ -37,13 +37,15 @@ def _open_zoom_image_popup(popup: Any, pil_img: Any, title: str) -> None:
         scale = min(max_w / float(w), max_h / float(h))
         img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
 
-    photo = ImageTk.PhotoImage(img)
-    lbl = ttk.Label(win, image=photo, anchor="center")
+    photo = ImageTk.PhotoImage(img, master=win)
+    lbl = tk.Label(win, image=photo, anchor="center", bd=0, highlightthickness=0)
     lbl.image = photo  # keep reference
     lbl.pack(fill="both", expand=True, padx=8, pady=8)
     lbl.bind("<Double-Button-1>", lambda _evt: win.destroy())
     win.bind("<Escape>", lambda _evt: win.destroy())
 
+    popup._zoom_photo = photo
+    popup._zoom_pil = img
     popup._zoom_img_window = win
 
 
