@@ -20,7 +20,7 @@ def build_realism_controls(popup: Any, parent: ttk.Frame, current: Dict[str, Any
     grid.pack(fill="x", pady=(0, 8))
 
     def _f(key: str, default: float) -> tk.DoubleVar:
-        return tk.DoubleVar(value=popup.float_or_default(str(current.get(key, default)), default))
+        return tk.DoubleVar(value=popup.float_or_default(str(current.get(key, default)), default=default))
 
     def _add_row(row: int, label: str, key: str, var: tk.DoubleVar) -> None:
         ttk.Label(grid, text=label, width=24).grid(row=row, column=0, sticky="w", pady=2)
