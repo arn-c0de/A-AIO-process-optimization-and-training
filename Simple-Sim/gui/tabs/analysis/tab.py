@@ -323,6 +323,7 @@ class AnalysisTab(BaseTab):
             self.feedback_manager = None
             self.feedback_latest_by_sample = {}
             self.effective_label_dict = dict(self.label_dict)
+            self.ui.refresh_feedback_history([])
             return
         self.feedback_manager = FeedbackManager(self.state.dataset_dir)
         self.feedback_latest_by_sample = self.feedback_manager.latest_feedback_by_sample()
@@ -330,6 +331,7 @@ class AnalysisTab(BaseTab):
             sid: self.feedback_manager.effective_label(sid, self.label_dict.get(sid, "?"))
             for sid in self.sample_ids
         }
+        self.ui.refresh_feedback_history(self.feedback_manager.history(limit=200))
 
     def _feedback_thumbs_up(self) -> None:
         self._save_feedback(verdict=VERDICT_THUMBS_UP)
@@ -364,6 +366,7 @@ class AnalysisTab(BaseTab):
                 self.current_sample_id,
                 self.label_dict.get(self.current_sample_id, "?"),
             )
+            self.ui.refresh_feedback_history(self.feedback_manager.history(limit=200))
             self._filter_images(display_first=False)
             self._display_image(self.current_sample_id)
         except Exception as exc:
@@ -391,6 +394,17 @@ class AnalysisTab(BaseTab):
         if ts:
             status += f" @ {ts}"
         self.ui.set_feedback_status(status)
+
+    def _on_feedback_history_select(self, _event: Optional[object] = None) -> None:
+        sid = self.ui.selected_feedback_sample_id()
+        if not sid:
+            return
+        if sid not in self.meta_dict:
+            messagebox.showinfo("Feedback History", f"Sample not found in current dataset:\n{sid}")
+            return
+        self._set_search("")
+        self._filter_images(display_first=False)
+        self._select_sample_id(sid, display=True)
 
     def _selected_sample_ids(self) -> List[str]:
         selected: List[str] = []

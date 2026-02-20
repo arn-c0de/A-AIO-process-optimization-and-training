@@ -129,3 +129,9 @@ class FeedbackManager:
             "corrected_entries": corrected,
             "latest_timestamp": latest_ts,
         }
+
+    def history(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Return newest feedback entries first."""
+        if limit <= 0:
+            return []
+        return list(reversed(self._entries[-limit:]))

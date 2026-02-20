@@ -38,6 +38,7 @@ class AnalysisUI:
         self.sample_menu: tk.Menu
         self.var_feedback_status: tk.StringVar
         self._feedback_class_values: List[str]
+        self.feedback_history_tree: ttk.Treeview
 
     def build_ui(self):
         top = ttk.Frame(self.frame)
@@ -179,6 +180,29 @@ class AnalysisUI:
         ).pack(side="left", padx=6, pady=8)
         self._feedback_class_values = []
 
+        ttk.Label(feedback_frame, text="Recent feedback").pack(anchor="w", pady=(6, 2))
+        hist_frame = ttk.Frame(feedback_frame)
+        hist_frame.pack(fill="x")
+        self.feedback_history_tree = ttk.Treeview(
+            hist_frame,
+            columns=("Time", "Sample", "Action", "To"),
+            show="headings",
+            height=6,
+        )
+        self.feedback_history_tree.heading("Time", text="Time")
+        self.feedback_history_tree.heading("Sample", text="Sample")
+        self.feedback_history_tree.heading("Action", text="Action")
+        self.feedback_history_tree.heading("To", text="To")
+        self.feedback_history_tree.column("Time", width=130, anchor="w")
+        self.feedback_history_tree.column("Sample", width=240, anchor="w")
+        self.feedback_history_tree.column("Action", width=90, anchor="center")
+        self.feedback_history_tree.column("To", width=110, anchor="center")
+        hist_scroll = ttk.Scrollbar(hist_frame, orient="vertical", command=self.feedback_history_tree.yview)
+        self.feedback_history_tree.configure(yscrollcommand=hist_scroll.set)
+        self.feedback_history_tree.pack(side="left", fill="x", expand=True)
+        hist_scroll.pack(side="right", fill="y")
+        self.feedback_history_tree.bind("<<TreeviewSelect>>", self.tab._on_feedback_history_select)
+
     def display_image(
         self,
         image_path: str,
@@ -302,6 +326,28 @@ class AnalysisUI:
 
     def set_feedback_status(self, text: str) -> None:
         self.var_feedback_status.set(text)
+
+    def refresh_feedback_history(self, entries: List[Dict]) -> None:
+        self.feedback_history_tree.delete(*self.feedback_history_tree.get_children())
+        for idx, entry in enumerate(entries):
+            ts = str(entry.get("timestamp") or "")
+            ts_short = ts.replace("T", " ")[:19] if ts else "-"
+            sample_id = str(entry.get("id") or "")
+            verdict = str(entry.get("verdict") or "")
+            action = "👍" if verdict == "thumbs_up" else "👎"
+            corrected = str(entry.get("corrected_class") or "").strip() or "-"
+            iid = f"fb::{idx}"
+            self.feedback_history_tree.insert("", "end", iid=iid, values=(ts_short, sample_id, action, corrected))
+
+    def selected_feedback_sample_id(self) -> Optional[str]:
+        sel = self.feedback_history_tree.selection()
+        if not sel:
+            return None
+        vals = self.feedback_history_tree.item(sel[0], "values")
+        if not vals or len(vals) < 2:
+            return None
+        sid = str(vals[1]).strip()
+        return sid or None
 
     def prompt_thumbs_down_feedback(self) -> Optional[Tuple[str, str]]:
         """Ask user for corrected class and optional note on thumbs-down."""
