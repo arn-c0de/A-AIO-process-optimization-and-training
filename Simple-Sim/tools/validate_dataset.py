@@ -13,6 +13,7 @@ from simple_sim.schema import read_jsonl, MetaRow, LabelRow, validate_jsonl_pair
 from simple_sim.splits import read_split, assert_no_overlap
 from simple_sim.rng import derive_sample_seed, parse_sample_id
 from simple_sim.telemetry import emit
+from simple_sim.manifest import read_dataset_manifest
 
 
 def validate_dataset(data_dir: Path) -> bool:
@@ -186,6 +187,23 @@ def validate_dataset(data_dir: Path) -> bool:
     checked = 0
     mismatches = 0
 
+    manifest_version = None
+    extend_len = 0
+    manifest_path = data_dir / "dataset_manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = read_dataset_manifest(manifest_path)
+            manifest_version = int(manifest.get("manifest_version", 1))
+            extend_hist = manifest.get("extend_history") or []
+            if isinstance(extend_hist, list):
+                extend_len = len(extend_hist)
+        except Exception:
+            pass
+
+    # Extended and/or multi-profile datasets can contain historical rows generated
+    # with previous configs/seeds, so strict per-row seed replay can yield false negatives.
+    strict_determinism = not ((manifest_version == 2) or (extend_len > 1))
+
     for meta_row in meta_rows[:20]:  # Check first 20 samples
         try:
             run_id, domain, split, index = parse_sample_id(meta_row.id)
@@ -203,8 +221,14 @@ def validate_dataset(data_dir: Path) -> bool:
     if mismatches == 0:
         print(f"  ✓ Determinism verified ({checked} samples checked)")
     else:
-        print(f"  ✗ FAIL: {mismatches}/{checked} samples have seed mismatches")
-        all_checks_passed = False
+        if strict_determinism:
+            print(f"  ✗ FAIL: {mismatches}/{checked} samples have seed mismatches")
+            all_checks_passed = False
+        else:
+            print(
+                f"  ⚠ WARNING: {mismatches}/{checked} sampled rows have seed mismatches "
+                "(non-strict mode for multi/extended dataset)"
+            )
 
     # Final summary
     print("\n" + "="*60)

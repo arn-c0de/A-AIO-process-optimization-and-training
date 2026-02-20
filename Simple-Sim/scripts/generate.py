@@ -47,7 +47,7 @@ from simple_sim.dataset_store import write_dataset
 from simple_sim.splits import generate_splits, assert_no_overlap, write_splits, check_class_coverage
 from simple_sim.telemetry import emit
 from simple_sim.profile_hash import load_profile, hash_profile
-from simple_sim.manifest import write_dataset_manifest, read_dataset_manifest
+from simple_sim.manifest import write_dataset_manifest, write_multi_profile_manifest, read_dataset_manifest
 from simple_sim.generator_3d import write_jobs_jsonl, render_blender_batch
 
 
@@ -263,6 +263,11 @@ def generate_dataset(
     existing_meta_rows: list[MetaRow] = []
     existing_label_rows: list[LabelRow] = []
     existing_splits: dict[str, list[str]] = {"train": [], "val": [], "test": []}
+    existing_manifest: dict | None = None
+    target_manifest_version = 1
+    target_profiles: list[dict[str, str]] = []
+    labels_schema_version = 1
+    labels_profile_id = ""
     start_index = 0
     if extend and output_dir.exists():
         meta_path = output_dir / "meta.jsonl"
@@ -283,8 +288,72 @@ def generate_dataset(
 
         # GUARD: Load and validate component profile match
         manifest = read_dataset_manifest(manifest_path)
-        existing_profile_id = manifest['component_profile']['profile_id']
-        existing_profile_hash = manifest['component_profile']['profile_hash']
+        existing_manifest = manifest
+        manifest_version = int(manifest.get("manifest_version", 1))
+        target_manifest_version = manifest_version
+        existing_profile_id: str
+        existing_profile_hash: str
+
+        if "component_profile" in manifest:
+            cp = manifest.get("component_profile") or {}
+            existing_profile_id = str(cp.get("profile_id") or "").strip()
+            existing_profile_hash = str(cp.get("profile_hash") or "").strip()
+        elif "component_profiles" in manifest:
+            profiles = manifest.get("component_profiles") or []
+            if not isinstance(profiles, list) or not profiles:
+                raise ValueError(
+                    f"Invalid dataset manifest (manifest_version={manifest_version}): "
+                    "missing usable component profile information."
+                )
+            target_profiles = []
+            by_id: dict[str, dict[str, str]] = {}
+            for p in profiles:
+                pobj = p or {}
+                pid = str(pobj.get("profile_id") or "").strip()
+                ph = str(pobj.get("profile_hash") or "").strip()
+                pp = str(pobj.get("profile_path") or "").strip()
+                if not pid or not ph:
+                    continue
+                row = {"profile_id": pid, "profile_hash": ph, "profile_path": pp}
+                by_id[pid] = row
+                target_profiles.append(row)
+
+            if not target_profiles:
+                raise ValueError(
+                    f"Invalid dataset manifest (manifest_version={manifest_version}): "
+                    "component_profiles has no valid profile_id/profile_hash entries."
+                )
+
+            if profile_id in by_id:
+                existing_profile_id = profile_id
+                existing_profile_hash = str(by_id[profile_id].get("profile_hash") or "").strip()
+            else:
+                # Allow adding a new single profile to an existing multi-profile dataset.
+                existing_profile_id = profile_id
+                existing_profile_hash = profile_hash_str
+                try:
+                    rel_profile_path = str(profile_path.relative_to(project_root))
+                except Exception:
+                    rel_profile_path = str(profile_path.absolute())
+                target_profiles.append(
+                    {
+                        "profile_id": profile_id,
+                        "profile_hash": profile_hash_str,
+                        "profile_path": rel_profile_path,
+                    }
+                )
+                print(f"✓ Extending multi-profile dataset with new profile: {profile_id}")
+        else:
+            raise ValueError(
+                f"Invalid dataset manifest (manifest_version={manifest_version}): "
+                "missing component_profile/component_profiles."
+            )
+
+        if not existing_profile_id or not existing_profile_hash:
+            raise ValueError(
+                "Invalid dataset manifest: component profile metadata is incomplete "
+                "(profile_id/profile_hash required)."
+            )
 
         # HARD FAIL: Profile ID mismatch
         if existing_profile_id != profile_id:
@@ -313,8 +382,15 @@ def generate_dataset(
         validate_jsonl_pair(meta_path, labels_path)
         existing_meta_rows = read_jsonl(meta_path, MetaRow)
         existing_label_rows = read_jsonl(labels_path, LabelRow)
-        if existing_meta_rows and existing_meta_rows[0].run_id != run_id:
-            raise ValueError(f"Run ID mismatch for --extend.\n  dataset run_id: {existing_meta_rows[0].run_id}\n  config run_id:   {run_id}")
+        dataset_run_id = str(manifest.get("run_id") or "").strip()
+        if not dataset_run_id and existing_meta_rows:
+            dataset_run_id = str(existing_meta_rows[0].run_id or "").strip()
+        if dataset_run_id and dataset_run_id != run_id:
+            print(
+                "✓ Extend mode: using existing dataset run_id "
+                f"'{dataset_run_id}' (config had '{run_id}')"
+            )
+            run_id = dataset_run_id
 
         start_index = _read_existing_max_index(existing_meta_rows) + 1
         print(f"\nExtending dataset: {output_dir}")
@@ -324,6 +400,13 @@ def generate_dataset(
             p = output_dir / "splits" / f"{s}.txt"
             if p.exists():
                 existing_splits[s] = read_split(p)
+
+        if target_manifest_version == 2:
+            labels_schema_version = 2
+            labels_profile_id = profile_id
+    else:
+        labels_schema_version = 1
+        labels_profile_id = ""
 
     print(f"\nGenerating dataset: {run_id}")
     print(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
@@ -435,7 +518,14 @@ def generate_dataset(
                 "image_filters": dict(image_filters),
             },
         ))
-        tmp_label_rows.append(LabelRow(schema_version=1, id=tmp_id, class_name=r['class_name']))
+        tmp_label_rows.append(
+            LabelRow(
+                schema_version=labels_schema_version,
+                id=tmp_id,
+                class_name=r['class_name'],
+                profile_id=labels_profile_id,
+            )
+        )
 
     splits = _assign_splits_for_new_samples(tmp_meta_rows, tmp_label_rows, config, run_seed, salt=start_index)
 
@@ -484,7 +574,14 @@ def generate_dataset(
             augment=_augment_for_meta(r['augment']),
             render_meta=render_meta,
         ))
-        label_rows.append(LabelRow(schema_version=1, id=sample_id, class_name=r['class_name']))
+        label_rows.append(
+            LabelRow(
+                schema_version=labels_schema_version,
+                id=sample_id,
+                class_name=r['class_name'],
+                profile_id=labels_profile_id,
+            )
+        )
         updated_splits[split_name].append(sample_id)
 
     # Sort split files for determinism.
@@ -568,6 +665,7 @@ def generate_dataset(
             merged[k] = sorted(set(merged[k]))
         assert_no_overlap(merged)
         write_splits(output_dir, merged)
+        updated_splits = merged
     else:
         if backend == "opencv_2d":
             # Keep existing atomic writer for 2D.
@@ -664,22 +762,6 @@ def generate_dataset(
         else:
             raise ValueError(f"Unsupported render backend: {backend}")
 
-    # Validate splits
-    assert_no_overlap(updated_splits)
-    print("✓ No split overlap detected")
-
-    # Check class coverage
-    warnings = check_class_coverage(updated_splits, label_rows)
-    if warnings:
-        print("\nWARNINGS:")
-        for warning in warnings:
-            print(f"  - {warning}")
-    else:
-        print("✓ All splits contain all classes")
-
-    # Write split files
-    write_splits(output_dir, updated_splits)
-
     # Merge splits for manifest (include existing samples in extend mode)
     if extend and existing_meta_rows:
         all_meta_rows = existing_meta_rows + meta_rows
@@ -690,6 +772,22 @@ def generate_dataset(
         all_label_rows = label_rows
         final_splits = updated_splits
 
+    # Validate splits
+    assert_no_overlap(final_splits)
+    print("✓ No split overlap detected")
+
+    # Check class coverage
+    warnings = check_class_coverage(final_splits, all_label_rows)
+    if warnings:
+        print("\nWARNINGS:")
+        for warning in warnings:
+            print(f"  - {warning}")
+    else:
+        print("✓ All splits contain all classes")
+
+    # Write split files
+    write_splits(output_dir, final_splits)
+
     # Write dataset manifest
     # Store profile path relative to Simple-Sim root
     try:
@@ -698,17 +796,53 @@ def generate_dataset(
         # If profile_path is not under project_root, use absolute path
         relative_profile_path = str(profile_path.absolute())
 
-    write_dataset_manifest(
-        output_dir=output_dir,
-        run_id=run_id,
-        profile_id=profile_id,
-        profile_hash=profile_hash_str,
-        profile_path=relative_profile_path,
-        meta_rows=meta_rows,  # Only new samples for extend history
-        label_rows=label_rows,
-        splits=final_splits,
-        extend=extend
-    )
+    if target_manifest_version == 2 or (existing_manifest and "component_profiles" in existing_manifest):
+        if not target_profiles:
+            # Fallback for defensive safety; should already be populated for v2 extend.
+            target_profiles = [
+                {
+                    "profile_id": profile_id,
+                    "profile_hash": profile_hash_str,
+                    "profile_path": relative_profile_path,
+                }
+            ]
+        # Keep profile list unique and deterministic.
+        seen_pid: set[str] = set()
+        dedup_profiles: list[dict[str, str]] = []
+        for p in sorted(target_profiles, key=lambda x: str(x.get("profile_id") or "")):
+            pid = str(p.get("profile_id") or "").strip()
+            if not pid or pid in seen_pid:
+                continue
+            seen_pid.add(pid)
+            dedup_profiles.append(
+                {
+                    "profile_id": pid,
+                    "profile_hash": str(p.get("profile_hash") or "").strip(),
+                    "profile_path": str(p.get("profile_path") or "").strip(),
+                }
+            )
+
+        write_multi_profile_manifest(
+            output_dir=output_dir,
+            run_id=run_id,
+            profiles=dedup_profiles,
+            meta_rows=all_meta_rows,
+            label_rows=all_label_rows,
+            splits=final_splits,
+            script_name="scripts/generate.py",
+        )
+    else:
+        write_dataset_manifest(
+            output_dir=output_dir,
+            run_id=run_id,
+            profile_id=profile_id,
+            profile_hash=profile_hash_str,
+            profile_path=relative_profile_path,
+            meta_rows=meta_rows,  # Only new samples for extend history
+            label_rows=label_rows,
+            splits=final_splits,
+            extend=extend
+        )
 
     # Print summary
     print("\n" + "="*60)
