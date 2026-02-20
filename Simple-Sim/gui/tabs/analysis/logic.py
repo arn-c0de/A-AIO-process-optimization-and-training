@@ -32,13 +32,14 @@ class AnalysisLogic:
         cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
         return cand
 
-    def load_dataset(self, dataset_dir: Path) -> Tuple[Dict[str, MetaRow], Dict[str, str], List[str]]:
+    def load_dataset(self, dataset_dir: Path) -> Tuple[Dict[str, MetaRow], Dict[str, str], Dict[str, str], List[str]]:
         meta_rows = read_jsonl(dataset_dir / "meta.jsonl", MetaRow)
         label_rows = read_jsonl(dataset_dir / "labels.jsonl", LabelRow)
         meta_dict = {row.id: row for row in meta_rows}
         label_dict = {row.id: row.class_name for row in label_rows}
+        profile_dict = {row.id: row.profile_id for row in label_rows}
         sample_ids = [row.id for row in meta_rows]
-        return meta_dict, label_dict, sample_ids
+        return meta_dict, label_dict, profile_dict, sample_ids
 
     def try_load_model(self, dataset_dir: Path, current_model_path: Optional[Path]) -> Optional[ModelWrapper]:
         self.model = None

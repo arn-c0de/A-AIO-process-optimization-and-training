@@ -20,6 +20,7 @@ class AnalysisUI:
         self.tab = tab
         self.frame = ttk.Frame(parent, padding=10)
         self.var_dataset: tk.StringVar
+        self.var_dataset_stats: tk.StringVar
         self.dataset_combo: ttk.Combobox
         self.var_filter: tk.StringVar
         self.var_search: tk.StringVar
@@ -53,6 +54,11 @@ class AnalysisUI:
         ttk.Button(top, text="Delete Image", command=self.tab._delete_current_image).pack(side="left", padx=(10, 0))
         ttk.Button(top, text="Move To...", command=self.tab._move_current_image).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Analyze Dataset", command=self.tab._analyze_dataset).pack(side="left", padx=(15, 0))
+        
+        stats_row = ttk.Frame(self.frame)
+        stats_row.pack(fill="x", pady=(0, 8))
+        self.var_dataset_stats = tk.StringVar(value="Dataset Stats: -")
+        ttk.Label(stats_row, textvariable=self.var_dataset_stats).pack(side="left")
 
         main = ttk.Panedwindow(self.frame, orient="horizontal")
         main.pack(fill="both", expand=True)

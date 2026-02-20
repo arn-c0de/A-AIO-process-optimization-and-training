@@ -6,6 +6,7 @@ import json
 import os
 import tkinter as tk
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 from typing import Dict, List, Optional
@@ -54,17 +55,19 @@ class DatasetsTab(BaseTab):
         self.combo_category_filter.pack(side="left")
         self.combo_category_filter.bind("<<ComboboxSelected>>", lambda _e: self.refresh())
 
-        cols = ("dataset", "category", "archived", "location")
+        cols = ("dataset", "category", "created", "archived", "location")
         self.tree = ttk.Treeview(self.frame, columns=cols, show="headings", selectmode="extended")
         self.tree.pack(fill="both", expand=True)
         self.tree.heading("dataset", text="Dataset")
         self.tree.heading("category", text="Category")
+        self.tree.heading("created", text="Created")
         self.tree.heading("archived", text="Archived")
         self.tree.heading("location", text="Location")
         self.tree.column("dataset", width=280, anchor="w")
         self.tree.column("category", width=170, anchor="w")
+        self.tree.column("created", width=170, anchor="w")
         self.tree.column("archived", width=90, anchor="center")
-        self.tree.column("location", width=500, anchor="w")
+        self.tree.column("location", width=360, anchor="w")
         self.tree.bind("<Button-3>", self._on_right_click)
         self.tree.bind("<Button-2>", self._on_right_click)
 
@@ -114,6 +117,7 @@ class DatasetsTab(BaseTab):
                 values=(
                     dataset_display_name(ds, runs_root=runs, versions_root=versions),
                     cat,
+                    self._dataset_created_display(ds),
                     "yes" if archived else "no",
                     str(ds),
                 ),
@@ -139,6 +143,24 @@ class DatasetsTab(BaseTab):
     def _sim_data_roots(self) -> tuple[Path, Path]:
         base = self.sim_root / "outputs" / "sim_data"
         return base / "runs", base / "versions"
+
+    def _dataset_created_display(self, ds: Path) -> str:
+        manifest_path = ds / "dataset_manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                created = str(manifest.get("created_at") or "").strip()
+                if created:
+                    # Supports ISO "....Z" format from manifests.
+                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    return dt.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                pass
+        try:
+            dt = datetime.fromtimestamp(ds.stat().st_mtime)
+            return dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return "-"
 
     def _path_key_for(self, ds: Path) -> str:
         try:

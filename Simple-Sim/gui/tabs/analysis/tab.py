@@ -6,6 +6,7 @@ from tkinter import ttk, messagebox
 from pathlib import Path
 from typing import Optional, Dict, List
 import threading
+from collections import Counter
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
@@ -25,6 +26,7 @@ class AnalysisTab(BaseTab):
         self.sample_ids: list[str] = []
         self.meta_dict: dict[str, MetaRow] = {}
         self.label_dict: dict[str, str] = {}
+        self.profile_dict: dict[str, str] = {}
         self.current_sample_id: Optional[str] = None
         self.visible_sample_ids: list[str] = []
         self.visible_sample_item_by_id: dict[str, str] = {}
@@ -142,7 +144,7 @@ class AnalysisTab(BaseTab):
     def _load_dataset(self) -> None:
         if not self.state.dataset_dir: return
         try:
-            self.meta_dict, self.label_dict, self.sample_ids = self.logic.load_dataset(self.state.dataset_dir)
+            self.meta_dict, self.label_dict, self.profile_dict, self.sample_ids = self.logic.load_dataset(self.state.dataset_dir)
             
             run_ids = {"All"} | {sid.split('/')[0] for sid in self.sample_ids if '/' in sid}
             domains = {"All"} | {sid.split('/')[1] for sid in self.sample_ids if len(sid.split('/')) > 1}
@@ -153,6 +155,7 @@ class AnalysisTab(BaseTab):
             self.ui.combo_class.configure(values=["All"] + self._sorted_class_values(classes - {"All"}))
 
             self._filter_images()
+            self._update_dataset_stats_label()
         except Exception as e:
             messagebox.showerror("Load Error", f"Failed to load dataset:\\n{e}")
 
@@ -183,11 +186,39 @@ class AnalysisTab(BaseTab):
                 hierarchy.setdefault(run, {}).setdefault(domain, {}).setdefault(split, []).append(sid)
         
         self.ui.populate_tree(hierarchy, self.label_dict, self.visible_sample_ids, self.visible_sample_item_by_id, query)
+        self._update_dataset_stats_label()
         
         if self.current_sample_id not in self.visible_sample_item_by_id:
             if self.visible_sample_ids: self._select_sample_id(self.visible_sample_ids[0], display=display_first)
         else:
             self._select_sample_id(self.current_sample_id, display=False)
+
+    def _update_dataset_stats_label(self) -> None:
+        if not self.sample_ids:
+            self.ui.var_dataset_stats.set("Dataset Stats: -")
+            return
+
+        total = len(self.sample_ids)
+        split_counts = Counter()
+        for sid in self.sample_ids:
+            parts = sid.split("/")
+            split = parts[2] if len(parts) > 2 else "unknown"
+            split_counts[split] += 1
+
+        profile_counts = Counter()
+        for sid in self.sample_ids:
+            pid = str(self.profile_dict.get(sid, "")).strip() or "unknown_or_legacy"
+            profile_counts[pid] += 1
+
+        split_text = (
+            f"train={split_counts.get('train', 0)}, "
+            f"val={split_counts.get('val', 0)}, "
+            f"test={split_counts.get('test', 0)}"
+        )
+        profiles_text = ", ".join(
+            f"{pid}:{cnt}" for pid, cnt in sorted(profile_counts.items(), key=lambda x: (-x[1], x[0]))
+        )
+        self.ui.var_dataset_stats.set(f"Dataset Stats: total={total} | {split_text} | profiles: {profiles_text}")
 
     def _schedule_filter_images(self) -> None:
         if self._filter_after_id: self.frame.after_cancel(self._filter_after_id)
