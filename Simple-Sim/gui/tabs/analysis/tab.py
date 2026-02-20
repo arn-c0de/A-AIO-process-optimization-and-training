@@ -406,6 +406,72 @@ class AnalysisTab(BaseTab):
         self._filter_images(display_first=False)
         self._select_sample_id(sid, display=True)
 
+    def _open_feedback_history(self) -> None:
+        if not self.feedback_manager:
+            messagebox.showinfo("Feedback History", "No dataset selected.")
+            return
+        entries = self.feedback_manager.history(limit=500)
+        if not entries:
+            messagebox.showinfo("Feedback History", "No feedback entries yet.")
+            return
+
+        dlg = tk.Toplevel(self.frame.winfo_toplevel())
+        dlg.title("Feedback History")
+        dlg.transient(self.frame.winfo_toplevel())
+        dlg.geometry("860x360")
+        frm = ttk.Frame(dlg, padding=10)
+        frm.pack(fill="both", expand=True)
+
+        tree = ttk.Treeview(frm, columns=("Time", "Sample", "Action", "To", "Note"), show="headings")
+        tree.heading("Time", text="Time")
+        tree.heading("Sample", text="Sample")
+        tree.heading("Action", text="Action")
+        tree.heading("To", text="To")
+        tree.heading("Note", text="Note")
+        tree.column("Time", width=140, anchor="w")
+        tree.column("Sample", width=300, anchor="w")
+        tree.column("Action", width=80, anchor="center")
+        tree.column("To", width=120, anchor="center")
+        tree.column("Note", width=180, anchor="w")
+        scroll = ttk.Scrollbar(frm, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        for idx, entry in enumerate(entries):
+            ts = str(entry.get("timestamp") or "")
+            ts_short = ts.replace("T", " ")[:19] if ts else "-"
+            sid = str(entry.get("id") or "")
+            verdict = str(entry.get("verdict") or "")
+            action = "👍" if verdict == VERDICT_THUMBS_UP else "👎"
+            corrected = str(entry.get("corrected_class") or "").strip() or "-"
+            note = str(entry.get("note") or "").strip()
+            tree.insert("", "end", iid=f"h::{idx}", values=(ts_short, sid, action, corrected, note))
+
+        def _open_selected(_event: Optional[object] = None) -> None:
+            sel = tree.selection()
+            if not sel:
+                return
+            vals = tree.item(sel[0], "values")
+            if not vals or len(vals) < 2:
+                return
+            sid = str(vals[1]).strip()
+            if not sid:
+                return
+            if sid not in self.meta_dict:
+                messagebox.showinfo("Feedback History", f"Sample not found in current dataset:\n{sid}")
+                return
+            self._set_search("")
+            self._filter_images(display_first=False)
+            self._select_sample_id(sid, display=True)
+            dlg.destroy()
+
+        tree.bind("<Double-1>", _open_selected)
+        btns = ttk.Frame(dlg, padding=(10, 0, 10, 10))
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="right")
+        ttk.Button(btns, text="Open Selected", command=_open_selected).pack(side="right", padx=(0, 8))
+
     def _selected_sample_ids(self) -> List[str]:
         selected: List[str] = []
         try:

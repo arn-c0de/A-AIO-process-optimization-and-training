@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
+from gui.tabs.core.base import PerformanceWidgets
 from gui.components.chart_widgets import create_confusion_matrix_widget
 from gui.components.overlay_renderer import draw_prediction_overlay, draw_two_stage_overlay
 from gui.utils.tooltip import ToolTip
@@ -47,6 +48,10 @@ class PredictionsUI:
         self.var_cpu: tk.StringVar
         self.var_gpu: tk.StringVar
         self.var_ram: tk.StringVar
+        self.pb_cpu: Optional[ttk.Progressbar] = None
+        self.pb_gpu: Optional[ttk.Progressbar] = None
+        self.pb_ram: Optional[ttk.Progressbar] = None
+        self._perf_widgets: Optional[PerformanceWidgets] = None
 
         self.tree: ttk.Treeview
         self.tree_ds: ttk.Treeview
@@ -128,14 +133,14 @@ class PredictionsUI:
 
         stats = ttk.Frame(status)
         stats.pack(side="right")
-
-        self.var_cpu = tk.StringVar(value="CPU: -")
-        self.var_gpu = tk.StringVar(value="GPU: -")
-        self.var_ram = tk.StringVar(value="RAM: -")
-
-        ttk.Label(stats, textvariable=self.var_cpu, width=9).pack(side="left")
-        ttk.Label(stats, textvariable=self.var_gpu, width=9).pack(side="left", padx=(4, 0))
-        ttk.Label(stats, textvariable=self.var_ram, width=9).pack(side="left", padx=(4, 0))
+        self._perf_widgets = self.tab.build_performance_widgets(stats, with_bars=True, label_width=9, bar_length=80)
+        self._perf_widgets.frame.pack(side="right")
+        self.var_cpu = self._perf_widgets.var_cpu
+        self.var_gpu = self._perf_widgets.var_gpu
+        self.var_ram = self._perf_widgets.var_ram
+        self.pb_cpu = self._perf_widgets.pb_cpu
+        self.pb_gpu = self._perf_widgets.pb_gpu
+        self.pb_ram = self._perf_widgets.pb_ram
 
         paths = ttk.Frame(self.frame)
         paths.pack(fill="x", pady=(0, 10))
@@ -258,15 +263,23 @@ class PredictionsUI:
     def update_stats_bar(self, cpu_pct: Optional[float], ram_info: Optional[tuple[float, int, int]], gpu_pct: Optional[float]) -> None:
         if cpu_pct is not None:
             self.var_cpu.set(f"CPU: {cpu_pct:3.0f}%")
+            if self.pb_cpu is not None:
+                self.pb_cpu["value"] = max(0.0, min(100.0, cpu_pct))
 
         if ram_info is None:
             self.var_ram.set("RAM: n/a")
+            if self.pb_ram is not None:
+                self.pb_ram["value"] = 0
         else:
             ram_pct, _used_b, _total_b = ram_info
             self.var_ram.set(f"RAM: {ram_pct:3.0f}%")
+            if self.pb_ram is not None:
+                self.pb_ram["value"] = max(0.0, min(100.0, ram_pct))
 
         if gpu_pct is not None:
             self.var_gpu.set(f"GPU: {gpu_pct:3.0f}%")
+            if self.pb_gpu is not None:
+                self.pb_gpu["value"] = max(0.0, min(100.0, gpu_pct))
 
     def clear_confusion_matrix(self) -> None:
         for w in list(self._cm_parent.winfo_children()):

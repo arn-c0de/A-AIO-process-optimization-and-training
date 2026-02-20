@@ -178,6 +178,20 @@ class AnalysisUI:
             pady=8,
             cursor="hand2",
         ).pack(side="left", padx=6, pady=8)
+        tk.Button(
+            action_row,
+            text="History",
+            command=self.tab._open_feedback_history,
+            bd=0,
+            relief="flat",
+            bg="#9ca3af",
+            fg="white",
+            activebackground="#6b7280",
+            activeforeground="white",
+            padx=14,
+            pady=8,
+            cursor="hand2",
+        ).pack(side="left", padx=(6, 8), pady=8)
         self._feedback_class_values = []
 
         ttk.Label(feedback_frame, text="Recent feedback").pack(anchor="w", pady=(6, 2))
