@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Dict, List
 import threading
 from collections import Counter
+from datetime import datetime
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
@@ -34,6 +35,7 @@ class AnalysisTab(BaseTab):
         self.label_dict: dict[str, str] = {}
         self.effective_label_dict: dict[str, str] = {}
         self.profile_dict: dict[str, str] = {}
+        self.sample_date_dict: dict[str, str] = {}
         self.feedback_manager: Optional[FeedbackManager] = None
         self.feedback_latest_by_sample: dict[str, dict] = {}
         self.current_sample_id: Optional[str] = None
@@ -176,6 +178,7 @@ class AnalysisTab(BaseTab):
         try:
             self.meta_dict, self.label_dict, self.profile_dict, self.sample_ids = self.logic.load_dataset(self.state.dataset_dir)
             self._reload_feedback()
+            self.sample_date_dict = self._build_sample_date_dict()
             
             run_ids = {"All"} | {sid.split('/')[0] for sid in self.sample_ids if '/' in sid}
             domains = {"All"} | {sid.split('/')[1] for sid in self.sample_ids if len(sid.split('/')) > 1}
@@ -241,7 +244,14 @@ class AnalysisTab(BaseTab):
                 for split, sample_list in domain.items():
                     domain[split] = self._sorted_sample_ids(sample_list, sort_mode)
         
-        self.ui.populate_tree(hierarchy, self.effective_label_dict, self.visible_sample_ids, self.visible_sample_item_by_id, query)
+        self.ui.populate_tree(
+            hierarchy,
+            self.effective_label_dict,
+            self.visible_sample_ids,
+            self.visible_sample_item_by_id,
+            query,
+            sample_date_dict=self.sample_date_dict,
+        )
         self._update_dataset_stats_label()
         
         if self.current_sample_id not in self.visible_sample_item_by_id:
@@ -512,6 +522,15 @@ class AnalysisTab(BaseTab):
             return path.stat().st_mtime if path.exists() else 0.0
         except Exception:
             return 0.0
+
+    def _build_sample_date_dict(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if not self.state.dataset_dir:
+            return out
+        for sid in self.sample_ids:
+            ts = self._sample_mtime_key(sid)
+            out[sid] = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts > 0 else "-"
+        return out
 
     def _on_feedback_history_select(self, _event: Optional[object] = None) -> None:
         sid = self.ui.selected_feedback_sample_id()
