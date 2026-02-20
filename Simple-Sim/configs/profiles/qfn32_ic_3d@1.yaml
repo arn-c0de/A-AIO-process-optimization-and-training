@@ -17,15 +17,15 @@ component:
     height: 0.85
 
 geometry_ranges:
-  pad_width: [45.0, 55.0]
-  pad_height: [110.0, 130.0]
-  pad_spacing: [250.0, 280.0]
-  pad_spacing_y: [180.0, 210.0]
-  component_length: [485.0, 515.0]
-  component_width: [400.0, 430.0]
+  pad_width: [15.0, 18.0]
+  pad_height: [37.0, 43.0]
+  pad_spacing: [83.0, 93.0]
+  pad_spacing_y: [60.0, 70.0]
+  component_length: [162.0, 172.0]
+  component_width: [133.0, 143.0]
 
 tolerances:
-  ok_shift_px: 5.0
+  ok_shift_px: 2.0
   ok_rotation_deg: 3.0
   tombstone_tilt_deg: 70.0
 

@@ -7,9 +7,9 @@ run:
   component_profile: "qfn32_ic_3d@1"
 
 roi:
-  width_px: 768
-  height_px: 768
-  mm_per_px: 0.01
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.03
 
 classes:
   OK: 200

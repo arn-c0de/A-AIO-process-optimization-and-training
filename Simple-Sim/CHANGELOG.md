@@ -10,6 +10,7 @@ All notable changes to **Simple-Sim** are documented in this file.
 - Refactored core modules and GUI tabs for better maintainability.
 - Improved pipeline stability and responsiveness during training.
 - Fixed path persistence, preview reload, filter popup persistence, and key 3D geometry issues.
+- Added live filter preview panel to the Image Filters popup: profile dropdown (categorized 2D/3D), one-click render, and inline image display using current filter settings.
 
 ### Extension Opportunities
 - Profile diff/compare tooling.
