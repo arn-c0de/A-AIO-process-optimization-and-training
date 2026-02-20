@@ -6,13 +6,14 @@ Central index of training and research logs.
 
 ## Current Research
 
-- Restart with extended image filters (February 17, 2026): [`Training-Restart-Extended-Image-Filters-2026-02-17.md`](Training-Restart-Extended-Image-Filters-2026-02-17.md)
-- Fine-tuned comparison: default-filter run vs QFN-focused run (February 20, 2026): [`Training-Comparison-FineTuned-vs-QFN-FineTuned-2026-02-20.md`](Training-Comparison-FineTuned-vs-QFN-FineTuned-2026-02-20.md)
+- Fine-tuned comparison: default-filter run vs QFN-focused run (February 20, 2026): [`2026-02-20-Training-Comparison-FineTuned-vs-QFN-FineTuned.md`](2026-02-20-Training-Comparison-FineTuned-vs-QFN-FineTuned.md)
+- QFN crawler boost with no-image-filter samples (February 20, 2026): [`2026-02-20-Training-QFN-Crawler-NoImageFilter-Boost.md`](2026-02-20-Training-QFN-Crawler-NoImageFilter-Boost.md)
+- Restart with extended image filters (February 17, 2026): [`2026-02-17-Training-Restart-Extended-Image-Filters.md`](2026-02-17-Training-Restart-Extended-Image-Filters.md)
 
 ## Completed Testing Research
 
-- Restart with random 90-degree orientation + SOIC16 profile testing (February 16, 2026): [`Training-Restart-90deg-SOIC16-2026-02-16.md`](Training-Restart-90deg-SOIC16-2026-02-16.md)
-- Final conclusion phase 1: [`Final-Conclusion-Training-Phase1.md`](Final-Conclusion-Training-Phase1.md)
+- Restart with random 90-degree orientation + SOIC16 profile testing (February 16, 2026): [`2026-02-16-Training-Restart-90deg-SOIC16.md`](2026-02-16-Training-Restart-90deg-SOIC16.md)
+- Final conclusion phase 1: [`2026-02-16-Training-Final-Conclusion-Phase1.md`](2026-02-16-Training-Final-Conclusion-Phase1.md)
 
 ## Templates
 

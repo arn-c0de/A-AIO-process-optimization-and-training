@@ -28,24 +28,26 @@ A sandbox environment for pre-training and specializing models on synthetic data
 
 ---
 
-## Current Research 2026-02-20
-Fine-tuned comparison run (default-filter fine-tune vs QFN-focused fine-tune), including detected QFN32 regression and next-run validation steps: [`Simple-Sim/docs/training_logs/Training-Comparison-FineTuned-vs-QFN-FineTuned-2026-02-20.md`](Simple-Sim/docs/training_logs/Training-Comparison-FineTuned-vs-QFN-FineTuned-2026-02-20.md)
+## 2026-02-20 Current Research
+Latest update: QFN crawler fine-tune boost with additional clean no-image-filter samples (`QFN32-2D +50`, `QFN-3D +50`), resulting in current top arena ranking: [`Simple-Sim/docs/training_logs/2026-02-20-Training-QFN-Crawler-NoImageFilter-Boost.md`](Simple-Sim/docs/training_logs/2026-02-20-Training-QFN-Crawler-NoImageFilter-Boost.md)
 
-Renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`Simple-Sim/docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md`](Simple-Sim/docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md)
+Fine-tuned comparison run (default-filter fine-tune vs QFN-focused fine-tune) as baseline reference for the previous state: [`Simple-Sim/docs/training_logs/2026-02-20-Training-Comparison-FineTuned-vs-QFN-FineTuned.md`](Simple-Sim/docs/training_logs/2026-02-20-Training-Comparison-FineTuned-vs-QFN-FineTuned.md)
+
+Renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`Simple-Sim/docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md`](Simple-Sim/docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md)
 
 Filter configuration and implementation reference: [`Simple-Sim/docs/guides/FILTER_SETTINGS.md`](Simple-Sim/docs/guides/FILTER_SETTINGS.md)
 
 Training logs index: [`Simple-Sim/docs/training_logs/INDEX.md`](Simple-Sim/docs/training_logs/INDEX.md)
 
 ### Completed Testing Research
-- Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md`](Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md)
+- Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`Simple-Sim/docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md`](Simple-Sim/docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md)
 
 ---
 
 ## Production Notes: Bundled vs Single Models
 > **📌 Current Conclusions 2026-02**
 >
-> [Final Verdict](Simple-Sim/docs/training_logs/Final-Conclusion-Training-Phase1.md)
+> [Final Verdict](Simple-Sim/docs/training_logs/2026-02-16-Training-Final-Conclusion-Phase1.md)
 > [Training Conclusions](Simple-Sim/docs/guides/knowledge/ModelTrainingConclusions-2D-3D%20Mixed-vs.-Staged-Approach.md)
 > 
 > **Bundled Models** (multi-profile, per-component-type):

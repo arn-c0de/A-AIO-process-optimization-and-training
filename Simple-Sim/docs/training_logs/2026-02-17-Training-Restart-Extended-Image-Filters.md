@@ -3,7 +3,7 @@
 **Research Type:** Current / ongoing (extendable log)  
 **Status:** Restart initiated  
 **Base Reference:** Previous restart with random 90-degree orientation + SOIC16 testing  
-`Simple-Sim/docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md`
+`Simple-Sim/docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md`
 
 ## Research Goal
 
@@ -57,7 +57,7 @@ Use this section for incremental updates so this document remains a living resea
 
 | Run ID | Date | Filter Profile | Avg Arena Acc | IC-16-3D Acc | QFN-3D Acc | Delta vs Baseline | Notes |
 |--------|------|----------------|---------------|--------------|------------|-------------------|-------|
-| Baseline-90deg-SOIC16 | 2026-02-16 | Random 90-degree orientation baseline | TBD | TBD | TBD | 0.0000 | Reference run (`Training-Restart-90deg-SOIC16-2026-02-16.md`) |
+| Baseline-90deg-SOIC16 | 2026-02-16 | Random 90-degree orientation baseline | TBD | TBD | TBD | 0.0000 | Reference run (`2026-02-16-Training-Restart-90deg-SOIC16.md`) |
 | FilterRun-01 | TBD | Perspective only | TBD | TBD | TBD | TBD | |
 | FilterRun-02 | TBD | Motion blur only | TBD | TBD | TBD | TBD | |
 | FilterRun-03 | TBD | Saturation + Hue shift only | TBD | TBD | TBD | TBD | |

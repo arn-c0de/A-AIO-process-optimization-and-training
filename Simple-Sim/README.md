@@ -17,8 +17,8 @@ See [`Changelog`](CHANGELOG.md) for a version-by-version overview of changes.
 See Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 
 ### Completed Testing Research
-- Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md`](docs/training_logs/Training-Restart-90deg-SOIC16-2026-02-16.md)
-- Current research: renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md`](docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md)  
+- Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md`](docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md)
+- Current research: renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md`](docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md)  
   Filter configuration and implementation reference: [`docs/guides/FILTER_SETTINGS.md`](docs/guides/FILTER_SETTINGS.md)
 - Training logs index: [`docs/training_logs/INDEX.md`](docs/training_logs/INDEX.md)
 
@@ -91,7 +91,7 @@ Each filter supports:
 
 Reference:
 - Filter keys, parameter ranges, priority, and integration notes: [`docs/guides/FILTER_SETTINGS.md`](docs/guides/FILTER_SETTINGS.md)
-- Current restart research log using these filters: [`docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md`](docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md)
+- Current restart research log using these filters: [`docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md`](docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md)
 
 ## Quick Start
 
