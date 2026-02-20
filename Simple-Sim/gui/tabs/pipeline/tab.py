@@ -31,6 +31,7 @@ from gui.components.filter_popup import open_filter_popup
 from gui.components.precise_popup import open_precise_popup
 from gui.utils.settings_store import SettingsStore
 from gui.utils.dataset_ops import delete_samples, list_dataset_samples, move_samples, DatasetSampleInfo
+from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, dataset_display_name
 
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
@@ -98,6 +99,7 @@ class PipelineControlTab(BaseTab):
         self._profile_paths: list[Path] = []
         self._dataset_milestones: dict[str, int] = {}
         self._filter_popup_extras: Dict[str, Any] = {}
+        self._dataset_catalog = DatasetCatalog(sim_root, state.settings_store)
         
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -1277,17 +1279,24 @@ class PipelineControlTab(BaseTab):
         self._last_profile_id = profile_id
 
     def _refresh_datasets(self) -> None:
+        self._dataset_catalog.reload()
         sim_data, runs, versions = self.sim_root / "outputs" / "sim_data", self.sim_root / "outputs" / "sim_data" / "runs", self.sim_root / "outputs" / "sim_data" / "versions"
         runs.mkdir(parents=True, exist_ok=True); versions.mkdir(parents=True, exist_ok=True)
 
         cand: list[Path] = [p for p in runs.iterdir() if p.is_dir()]
         cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
         cand.sort(key=lambda p: (1, -p.stat().st_mtime, p.name) if str(p.resolve()).startswith(str(versions.resolve()) + os.sep) else (0, p.name))
+        self._dataset_catalog.prune_unknown(cand)
+        self._dataset_catalog.save(self.frame)
+        cand = [p for p in cand if not self._dataset_catalog.is_archived(p)]
 
         self._dataset_dirs, self._dataset_labels, self._dataset_by_label = cand, [], {}
         seen: dict[str, int] = {}
         for p in cand:
             base_label = self._display_for_dataset(p, runs=runs, versions=versions)
+            category = self._dataset_catalog.category_for(p)
+            cat_prefix = f"[{category}] " if category and category != DEFAULT_CATEGORY else ""
+            base_label = f"{cat_prefix}{base_label}"
             n = seen.get(base_label, 0) + 1; seen[base_label] = n
             label = base_label if n == 1 else f"{base_label} ({n})"
             self._dataset_labels.append(label); self._dataset_by_label[label] = p
@@ -1298,6 +1307,9 @@ class PipelineControlTab(BaseTab):
         if (cur := self.ui.var_dataset.get().strip()) and cur in self._dataset_by_label: return
         if self.state.dataset_dir:
             want = self._display_for_dataset(self.state.dataset_dir, runs=runs, versions=versions)
+            cat = self._dataset_catalog.category_for(self.state.dataset_dir)
+            if cat and cat != DEFAULT_CATEGORY:
+                want = f"[{cat}] {want}"
             for label, p in self._dataset_by_label.items():
                 if p == self.state.dataset_dir or label == want: self.ui.var_dataset.set(label); return
         if self._dataset_labels: self.ui.var_dataset.set(self._dataset_labels[0]); self._on_dataset_selected()
@@ -1411,12 +1423,7 @@ class PipelineControlTab(BaseTab):
         self._sync_multi_summary()
 
     def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
-        try:
-            rp = p.resolve()
-            if str(rp).startswith(str(runs.resolve()) + os.sep): return rp.name
-            if str(rp).startswith(str(versions.resolve()) + os.sep): return f"{rp.parent.name}:{rp.name}"
-        except Exception: pass
-        return p.name
+        return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
     def _refresh_models(self) -> None:
         paths = self.logic.get_all_model_paths()
@@ -1764,8 +1771,13 @@ class PipelineControlTab(BaseTab):
     def _selected_dataset_dirs(self) -> list[Path]:
         if self.ui.var_dataset_multi.get():
             paths = self._decode_dataset_paths_json(self.ui.var_dataset_multi_paths.get())
-            return [p for p in paths if p.exists() and p.is_dir()]
+            return [p for p in paths if p.exists() and p.is_dir() and not self._dataset_catalog.is_archived(p)]
         return [ds] if (ds := self._selected_dataset_dir_single()) is not None else []
+
+    def refresh(self) -> None:
+        if not self.initialized:
+            return
+        self._refresh_datasets()
 
     def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
         ds = self._selected_dataset_dir()
