@@ -16,7 +16,7 @@ from simple_sim.telemetry import emit
 from simple_sim.manifest import read_dataset_manifest
 
 
-def validate_dataset(data_dir: Path) -> bool:
+def validate_dataset(data_dir: Path, seed_mismatch_log_limit: int = 5) -> bool:
     """Validate complete dataset.
 
     Args:
@@ -204,6 +204,7 @@ def validate_dataset(data_dir: Path) -> bool:
     # with previous configs/seeds, so strict per-row seed replay can yield false negatives.
     strict_determinism = not ((manifest_version == 2) or (extend_len > 1))
 
+    logged_mismatch_examples = 0
     for meta_row in meta_rows[:20]:  # Check first 20 samples
         try:
             run_id, domain, split, index = parse_sample_id(meta_row.id)
@@ -211,7 +212,9 @@ def validate_dataset(data_dir: Path) -> bool:
 
             if meta_row.seed != expected_seed:
                 mismatches += 1
-                print(f"  ✗ Seed mismatch for {meta_row.id}")
+                if logged_mismatch_examples < max(0, seed_mismatch_log_limit):
+                    print(f"  ✗ Seed mismatch for {meta_row.id}")
+                    logged_mismatch_examples += 1
 
             checked += 1
         except Exception as e:
@@ -221,6 +224,9 @@ def validate_dataset(data_dir: Path) -> bool:
     if mismatches == 0:
         print(f"  ✓ Determinism verified ({checked} samples checked)")
     else:
+        suppressed = max(0, mismatches - logged_mismatch_examples)
+        if suppressed > 0:
+            print(f"  … {suppressed} additional seed mismatches suppressed")
         if strict_determinism:
             print(f"  ✗ FAIL: {mismatches}/{checked} samples have seed mismatches")
             all_checks_passed = False
@@ -247,11 +253,17 @@ def validate_dataset(data_dir: Path) -> bool:
 def main():
     parser = argparse.ArgumentParser(description='Validate dataset quality')
     parser.add_argument('--data', type=str, required=True, help='Path to dataset directory')
+    parser.add_argument(
+        '--seed-mismatch-log-limit',
+        type=int,
+        default=5,
+        help='How many individual seed mismatch rows to print (default: 5)',
+    )
 
     args = parser.parse_args()
     data_dir = Path(args.data)
 
-    success = validate_dataset(data_dir)
+    success = validate_dataset(data_dir, seed_mismatch_log_limit=args.seed_mismatch_log_limit)
     sys.exit(0 if success else 1)
 
 

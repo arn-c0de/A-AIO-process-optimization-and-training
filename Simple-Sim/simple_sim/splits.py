@@ -155,7 +155,23 @@ def check_class_coverage(splits: Dict[str, List[str]], label_rows: List[LabelRow
 
     warnings = []
     for split_name, sample_ids in splits.items():
-        split_classes = set(id_to_label[sid] for sid in sample_ids)
+        split_classes = set()
+        missing_ids: list[str] = []
+        for sid in sample_ids:
+            lbl = id_to_label.get(sid)
+            if lbl is None:
+                missing_ids.append(sid)
+                continue
+            split_classes.add(lbl)
+
+        if missing_ids:
+            examples = ", ".join(missing_ids[:3])
+            suffix = "..." if len(missing_ids) > 3 else ""
+            warnings.append(
+                f"{split_name} split contains {len(missing_ids)} sample IDs not present in labels.jsonl "
+                f"(e.g. {examples}{suffix})"
+            )
+
         missing_classes = all_classes - split_classes
         if missing_classes:
             warnings.append(f"{split_name} split missing classes: {missing_classes}")
