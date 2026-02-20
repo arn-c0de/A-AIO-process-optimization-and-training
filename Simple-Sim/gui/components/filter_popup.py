@@ -14,6 +14,10 @@ from tkinter import ttk
 from pathlib import Path
 from typing import Any, Dict, Optional, Callable, Set
 
+from simple_sim.generators.filter_settings import (
+    clean_filter_values_for_popup,
+    default_filter_values_for_popup,
+)
 
 class FilterPopup:
     """Image filter configuration popup with profile management."""
@@ -344,7 +348,7 @@ class FilterPopup:
                 sys.path.insert(0, str(sim_root))
 
             from simple_sim.profile_hash import load_profile  # type: ignore
-            from simple_sim.generator_2d import (  # type: ignore
+            from simple_sim.generators.opencv_2d import (  # type: ignore
                 render_roi,
                 apply_image_filter_overrides,
                 sample_nominal_geometry,
@@ -420,8 +424,8 @@ class FilterPopup:
             from simple_sim.profile_hash import load_profile  # type: ignore
             from simple_sim.config import load_config  # type: ignore
             from simple_sim.defects import sample_defect_params  # type: ignore
-            from simple_sim.generator_3d import write_jobs_jsonl, render_blender_batch  # type: ignore
-            from simple_sim.generator_2d import (  # type: ignore
+            from simple_sim.generators.blender_3d import write_jobs_jsonl, render_blender_batch  # type: ignore
+            from simple_sim.generators.opencv_2d import (  # type: ignore
                 apply_image_filter_overrides,
                 sample_nominal_geometry,
             )
@@ -527,7 +531,7 @@ class FilterPopup:
             if img_bgr is None:
                 raise RuntimeError(f"Failed to read rendered image: {out_img_path}")
 
-            from simple_sim.generator_2d import (  # type: ignore
+            from simple_sim.generators.opencv_2d import (  # type: ignore
                 apply_blur,
                 apply_noise,
                 apply_brightness,
@@ -952,113 +956,11 @@ class FilterPopup:
 
     def _get_default_values(self) -> Dict[str, Any]:
         """Get default filter values."""
-        defaults = {
-            # Existing filters
-            "cardinal_rotation_90": True,
-            "enable_rotation": True,
-            "enable_blur": True,
-            "enable_grain": True,
-            "enable_brightness": True,
-            "enable_contrast": True,
-            "rotation_strength": "1.00",
-            "blur_strength": "1.00",
-            "grain_strength": "1.00",
-            "brightness_strength": "1.00",
-            "contrast_strength": "1.00",
-            # High priority (enabled)
-            "enable_perspective": False,
-            "perspective_strength": "1.00",
-            "enable_motion_blur": True,
-            "motion_blur_strength": "1.00",
-            "enable_saturation": True,
-            "saturation_factor": "1.00",
-            "enable_hue_shift": True,
-            "hue_shift_deg": "0.00",
-            "enable_shadow": True,
-            "shadow_strength": "0.30",
-            "enable_reflection": False,
-            "reflection_strength": "0.50",
-            # Medium/Low priority (disabled)
-            "enable_vignetting": False,
-            "vignetting_strength": "1.00",
-            "enable_chromatic_aberration": False,
-            "chromatic_strength": "1.00",
-            "enable_jpeg_compression": False,
-            "jpeg_quality": "85",
-            "enable_color_temperature": False,
-            "color_temperature_kelvin": "5500",
-            "enable_lens_distortion": False,
-            "distortion_k1": "0.00",
-            "enable_dust": False,
-            "dust_density": "0.30",
-            "enable_sharpen": False,
-            "sharpen_strength": "1.00",
-        }
-        randomizable_defaults = {
-            "rotation_strength": "1.00",
-            "blur_strength": "1.00",
-            "grain_strength": "1.00",
-            "brightness_strength": "1.00",
-            "contrast_strength": "1.00",
-            "perspective_strength": "1.00",
-            "motion_blur_strength": "1.00",
-            "saturation_factor": "1.00",
-            "hue_shift_deg": "0.00",
-            "shadow_strength": "0.30",
-            "reflection_strength": "0.50",
-            "vignetting_strength": "1.00",
-            "chromatic_strength": "1.00",
-            "jpeg_quality": "85",
-            "color_temperature_kelvin": "5500",
-            "distortion_k1": "0.00",
-            "dust_density": "0.30",
-            "sharpen_strength": "1.00",
-        }
-        for key, value in randomizable_defaults.items():
-            defaults[f"{key}_randomize"] = False
-            defaults[f"{key}_min"] = value
-            defaults[f"{key}_max"] = value
-        return defaults
+        return default_filter_values_for_popup()
 
     def _get_clean_values(self) -> Dict[str, Any]:
         """Get a neutral preset with all filters disabled."""
-        clean = self._get_default_values()
-
-        # Disable every boolean filter switch, including rotation modes.
-        for key in list(clean.keys()):
-            if key.startswith("enable_") or key == "cardinal_rotation_90":
-                clean[key] = False
-
-        # Neutral/no-op values.
-        neutral_values = {
-            "rotation_strength": "0.00",
-            "blur_strength": "0.00",
-            "grain_strength": "0.00",
-            "brightness_strength": "1.00",
-            "contrast_strength": "1.00",
-            "perspective_strength": "0.00",
-            "motion_blur_strength": "0.00",
-            "saturation_factor": "1.00",
-            "hue_shift_deg": "0.00",
-            "shadow_strength": "0.00",
-            "reflection_strength": "0.00",
-            "vignetting_strength": "0.00",
-            "chromatic_strength": "0.00",
-            "jpeg_quality": "100",
-            "color_temperature_kelvin": "5500",
-            "distortion_k1": "0.00",
-            "dust_density": "0.00",
-            "sharpen_strength": "0.00",
-        }
-        clean.update(neutral_values)
-
-        # Keep per-filter randomization disabled and lock ranges to neutral values.
-        for key, value in neutral_values.items():
-            clean[f"{key}_randomize"] = False
-            clean[f"{key}_min"] = value
-            clean[f"{key}_max"] = value
-
-        return clean
+        return clean_filter_values_for_popup()
 
     def _update_rotation_row_state(self) -> None:
         """Enforce 90-degree-only mode when cardinal rotation is enabled."""

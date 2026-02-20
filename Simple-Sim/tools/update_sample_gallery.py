@@ -31,8 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gui.components.overlay_renderer import draw_defect_overlay
 from simple_sim.config import load_config, validate_config
 from simple_sim.defects import sample_defect_params
-from simple_sim.generator_2d import render_roi, sample_nominal_geometry
-from simple_sim.generator_3d import render_blender_batch, write_jobs_jsonl
+from simple_sim.generators.opencv_2d import render_roi, sample_nominal_geometry
+from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
 
 # Standard defect classes for PCB components
 STANDARD_CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]

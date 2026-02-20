@@ -39,7 +39,7 @@ from gui.components.filter_popup import open_filter_popup
 
 from simple_sim.config import load_config, validate_config
 from simple_sim.defects import sample_defect_params
-from simple_sim.generator_3d import write_jobs_jsonl, render_blender_batch
+from simple_sim.generators.blender_3d import write_jobs_jsonl, render_blender_batch
 from simple_sim.profile_hash import load_profile
 
 
@@ -327,7 +327,7 @@ def _save_shared_filter_profiles(settings_path: Path, profiles: Dict[str, Dict[s
 
 
 def _apply_filter_overrides_to_augment(augment: Dict[str, float], image_filters: Optional[Dict[str, Any]]) -> Dict[str, float]:
-    from simple_sim.generator_2d import apply_image_filter_overrides  # type: ignore
+    from simple_sim.generators.opencv_2d import apply_image_filter_overrides  # type: ignore
 
     # Debug preview uses clean base augment values (blur/noise=0, brightness/contrast=1).
     # To make filter toggles visibly testable, inject a small baseline when a filter
@@ -351,7 +351,7 @@ def _apply_filter_overrides_to_augment(augment: Dict[str, float], image_filters:
 
 def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[Dict[str, Any]]) -> None:
     import cv2  # type: ignore
-    from simple_sim.generator_2d import (  # type: ignore
+    from simple_sim.generators.opencv_2d import (  # type: ignore
         apply_blur,
         apply_noise,
         apply_brightness,
@@ -1271,7 +1271,7 @@ def _open_tk_viewer(
                         else:
                             # 2D OpenCV render
                             import cv2  # type: ignore
-                            from simple_sim.generator_2d import render_roi  # type: ignore
+                            from simple_sim.generators.opencv_2d import render_roi  # type: ignore
 
                             roi = cfg["roi"]
                             w = int(roi["width_px"])
@@ -1496,7 +1496,7 @@ def _open_tk_viewer(
                                 all_new_previews.extend(new_previews)
                             else:
                                 import cv2  # type: ignore
-                                from simple_sim.generator_2d import render_roi  # type: ignore
+                                from simple_sim.generators.opencv_2d import render_roi  # type: ignore
 
                                 roi = cfg["roi"]
                                 w = int(roi["width_px"])
@@ -2040,7 +2040,7 @@ def main() -> None:
                     continue
 
                 import cv2  # type: ignore
-                from simple_sim.generator_2d import render_roi  # type: ignore
+                from simple_sim.generators.opencv_2d import render_roi  # type: ignore
 
                 roi_cfg = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
                 render_cfg = dict(cfg["render"])

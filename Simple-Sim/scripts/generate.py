@@ -19,7 +19,7 @@ from simple_sim.config import load_config, validate_config
 from simple_sim.schema import MetaRow, LabelRow
 from simple_sim.rng import derive_sample_seed, make_sample_id
 from simple_sim.defects import sample_defect_params, classify_defect
-from simple_sim.generator_2d import (
+from simple_sim.generators.opencv_2d import (
     sample_nominal_geometry,
     sample_augment_params,
     apply_image_filter_overrides,
@@ -48,7 +48,7 @@ from simple_sim.splits import generate_splits, assert_no_overlap, write_splits, 
 from simple_sim.telemetry import emit
 from simple_sim.profile_hash import load_profile, hash_profile
 from simple_sim.manifest import write_dataset_manifest, write_multi_profile_manifest, read_dataset_manifest
-from simple_sim.generator_3d import write_jobs_jsonl, render_blender_batch
+from simple_sim.generators.blender_3d import write_jobs_jsonl, render_blender_batch
 
 
 def _append_jsonl(path: Path, rows) -> None:

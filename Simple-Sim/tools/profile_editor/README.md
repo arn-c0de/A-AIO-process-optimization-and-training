@@ -166,7 +166,7 @@ Or:
 ## HQ Render: Technical Details
 
 - Worker hashes current state (`profile + run`) to derive output filenames.
-- Each render writes a job JSONL and calls `simple_sim.generator_3d.render_blender_batch(...)`.
+- Each render writes a job JSONL and calls `simple_sim.generators.blender_3d.render_blender_batch(...)`.
 - Current preview job renders an `OK` sample (no defect).
 - Used run parameters:
   - `roi.width_px`, `roi.height_px`, `roi.mm_per_px`
