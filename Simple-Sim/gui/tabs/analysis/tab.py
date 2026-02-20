@@ -10,6 +10,7 @@ import threading
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.settings_store import SettingsStore
+from gui.utils.dataset_ops import delete_samples, move_samples
 from .ui import AnalysisUI
 from .logic import AnalysisLogic
 from simple_sim.schema import MetaRow
@@ -226,3 +227,87 @@ class AnalysisTab(BaseTab):
                 messagebox.showerror("Error", f"Analysis failed:\\n{e}")
 
         threading.Thread(target=analyze, daemon=True).start()
+
+    def _selected_sample_id(self) -> Optional[str]:
+        if self.current_sample_id in self.meta_dict:
+            return self.current_sample_id
+        if self.visible_sample_ids:
+            return self.visible_sample_ids[0]
+        return None
+
+    def _delete_current_image(self) -> None:
+        if not self.state.dataset_dir:
+            return
+        sample_id = self._selected_sample_id()
+        if not sample_id:
+            messagebox.showinfo("Info", "No sample selected.")
+            return
+        if not messagebox.askyesno("Delete image", f"Delete sample '{sample_id}' from dataset '{self.state.dataset_dir.name}'?"):
+            return
+
+        try:
+            delete_samples(self.state.dataset_dir, [sample_id])
+            self._refresh_datasets()
+            self._load_dataset()
+            self._try_load_model()
+            try:
+                self.parent.event_generate("<<DatasetChanged>>", when="tail")
+            except Exception:
+                pass
+        except Exception as exc:
+            messagebox.showerror("Delete failed", str(exc))
+
+    def _move_current_image(self) -> None:
+        if not self.state.dataset_dir:
+            return
+        sample_id = self._selected_sample_id()
+        if not sample_id:
+            messagebox.showinfo("Info", "No sample selected.")
+            return
+
+        source_ds = self.state.dataset_dir
+        targets = [(display, path) for display, path in self._dataset_by_display.items() if path.resolve() != source_ds.resolve()]
+        if not targets:
+            messagebox.showinfo("Move image", "No target dataset available.")
+            return
+
+        dialog = tk.Toplevel(self.frame.winfo_toplevel())
+        dialog.title("Move Image")
+        dialog.transient(self.frame.winfo_toplevel())
+        dialog.grab_set()
+        frm = ttk.Frame(dialog, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=f"Select target dataset for '{sample_id}':").pack(anchor="w")
+        lb = tk.Listbox(frm, height=min(12, max(5, len(targets))), exportselection=False)
+        lb.pack(fill="both", expand=True, pady=(6, 8))
+        for label, _ in targets:
+            lb.insert("end", label)
+        lb.selection_set(0)
+
+        def _confirm_move() -> None:
+            idxs = lb.curselection()
+            if not idxs:
+                return
+            target_display, target_dir = targets[int(idxs[0])]
+            if not messagebox.askyesno(
+                "Move image",
+                f"Move sample '{sample_id}'\nfrom '{source_ds.name}'\nto '{target_display}'?",
+            ):
+                return
+            try:
+                move_samples(source_ds, target_dir, [sample_id], enforce_profile_match=True)
+                dialog.destroy()
+                self._refresh_datasets()
+                self._load_dataset()
+                self._try_load_model()
+                try:
+                    self.parent.event_generate("<<DatasetChanged>>", when="tail")
+                except Exception:
+                    pass
+            except Exception as exc:
+                messagebox.showerror("Move failed", str(exc))
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
+        ttk.Button(btns, text="Move", command=_confirm_move).pack(side="right", padx=(0, 8))

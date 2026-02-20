@@ -3,7 +3,7 @@
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from PIL import Image, ImageTk
 import cv2
 
@@ -34,6 +34,7 @@ class AnalysisUI:
         self.combo_class: ttk.Combobox
         self.photo: Optional[ImageTk.PhotoImage] = None
         self._preview_max_px: int = 420
+        self.sample_menu: tk.Menu
 
     def build_ui(self):
         top = ttk.Frame(self.frame)
@@ -49,6 +50,8 @@ class AnalysisUI:
 
         ttk.Button(top, text="←", command=self.tab._prev_image, width=3).pack(side="left", padx=2)
         ttk.Button(top, text="→", command=self.tab._next_image, width=3).pack(side="left", padx=2)
+        ttk.Button(top, text="Delete Image", command=self.tab._delete_current_image).pack(side="left", padx=(10, 0))
+        ttk.Button(top, text="Move To...", command=self.tab._move_current_image).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Analyze Dataset", command=self.tab._analyze_dataset).pack(side="left", padx=(15, 0))
 
         main = ttk.Panedwindow(self.frame, orient="horizontal")
@@ -108,6 +111,12 @@ class AnalysisUI:
         self.tree.pack(side="left", fill="both", expand=True)
         tree_scroll.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", self.tab._on_tree_select)
+        self.tree.bind("<Button-3>", self._on_tree_right_click)
+        self.tree.bind("<Delete>", lambda _e: self.tab._delete_current_image())
+
+        self.sample_menu = tk.Menu(self.tree, tearoff=0)
+        self.sample_menu.add_command(label="Delete Image", command=self.tab._delete_current_image)
+        self.sample_menu.add_command(label="Move To...", command=self.tab._move_current_image)
 
         right = ttk.Frame(main, padding=5)
         main.add(right, weight=3)
@@ -202,3 +211,12 @@ class AnalysisUI:
     def select_sample_in_tree(self, sample_id: str):
         self.tree.selection_set(sample_id)
         self.tree.see(sample_id)
+
+    def _on_tree_right_click(self, event) -> None:
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        if "sample" not in self.tree.item(item, "tags"):
+            return
+        self.tree.selection_set(item)
+        self.sample_menu.tk_popup(event.x_root, event.y_root)

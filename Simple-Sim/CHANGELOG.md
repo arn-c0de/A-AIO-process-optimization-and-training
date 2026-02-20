@@ -11,6 +11,7 @@ All notable changes to **Simple-Sim** are documented in this file.
 - Improved pipeline stability and responsiveness during training.
 - Fixed path persistence, preview reload, filter popup persistence, and key 3D geometry issues.
 - Added live filter preview panel to the Image Filters popup: profile dropdown (categorized 2D/3D), one-click render, and inline image display using current filter settings.
+- Added dataset customization in GUI: delete single images and move images between datasets from Analyze and Datasets views.
 
 ### Extension Opportunities
 - Profile diff/compare tooling.
