@@ -28,6 +28,7 @@ from gui.state import UiState
 from gui.utils.tooltip import ToolTip
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.components.filter_popup import open_filter_popup
+from gui.components.precise_popup import open_precise_popup
 from gui.utils.settings_store import SettingsStore
 from gui.utils.dataset_ops import delete_samples, list_dataset_samples, move_samples, DatasetSampleInfo
 
@@ -67,6 +68,17 @@ class PipelineControlTab(BaseTab):
         
         self._last_profile_id: str = "chip_0603_resistor@1"
         self._suspend_profile_event: bool = False
+
+        self._precise_settings: Dict[str, Any] = {
+            "total": 100,
+            "per_class": False,
+            "class_names": ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
+            "classes": {},
+            "multi_profiles": [],
+            "multi_totals": {},
+            "multi_classes": {},
+        }
+        self._precise_popup_ref: Any = None  # PrecisePopup instance while open
 
         self._last_stats_ts: float = 0.0
         self._last_gpu_ts: float = 0.0
@@ -213,8 +225,6 @@ class PipelineControlTab(BaseTab):
             ("pipeline.filter.dust_density", self.ui.var_filter_dust_density),
             ("pipeline.filter.enable_sharpen", self.ui.var_filter_enable_sharpen),
             ("pipeline.filter.sharpen_strength", self.ui.var_filter_sharpen_strength),
-            ("pipeline.precise_total", self.ui.var_precise_total),
-            ("pipeline.precise_per_class", self.ui.var_precise_per_class),
         ]:
             v = st.get(key, None)
             if v is None:
@@ -225,6 +235,16 @@ class PipelineControlTab(BaseTab):
                 var.set(v)
             except Exception:
                 pass
+        try:
+            raw = str(st.get("pipeline.precise_settings_json", "") or "").strip()
+            if raw:
+                loaded = json.loads(raw)
+                if isinstance(loaded, dict):
+                    for k, v in loaded.items():
+                        if k in self._precise_settings:
+                            self._precise_settings[k] = v
+        except Exception:
+            pass
 
         try: self._refresh_datasets(); self._on_dataset_multi_toggle(); self._on_dataset_selected()
         except Exception: pass
@@ -319,8 +339,6 @@ class PipelineControlTab(BaseTab):
             (self.ui.var_filter_dust_density, "pipeline.filter.dust_density"),
             (self.ui.var_filter_enable_sharpen, "pipeline.filter.enable_sharpen"),
             (self.ui.var_filter_sharpen_strength, "pipeline.filter.sharpen_strength"),
-            (self.ui.var_precise_total, "pipeline.precise_total"),
-            (self.ui.var_precise_per_class, "pipeline.precise_per_class"),
         ]:
             var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
 
@@ -587,58 +605,103 @@ class PipelineControlTab(BaseTab):
     # Precise mode helpers
     # ------------------------------------------------------------------
 
-    def _refresh_precise_classes(self) -> None:
-        """Read class names from the current config; rebuild single and multi-profile entries."""
+    def _open_precise_popup(self) -> None:
+        """Open the precise mode settings popup (non-modal)."""
+        # If already open, just bring it to front
+        if self._precise_popup_ref is not None and self._precise_popup_ref.is_open():
+            try:
+                self._precise_popup_ref._win.lift()
+                self._precise_popup_ref._win.focus_set()
+            except Exception:
+                pass
+            return
+
+        multi_enabled = bool(self.ui.var_profiles_multi.get())
+        self._precise_settings["multi_profiles"] = (
+            self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            if multi_enabled else []
+        )
+        self._refresh_precise_classes()
+
+        def on_apply(updated: Dict[str, Any]) -> None:
+            self._precise_settings.update(updated)
+            self._save_precise_settings()
+
+        self._precise_popup_ref = open_precise_popup(
+            parent=self.frame,
+            settings=self._precise_settings,
+            on_apply=on_apply,
+            get_class_names_func=self._get_precise_class_names_from_config,
+        )
+
+    def _get_precise_class_names_from_config(self) -> List[str]:
         cfg_str = self.ui.var_config.get().strip()
-        classes: list[str] = []
         if cfg_str:
             cfg_path = (self.sim_root / cfg_str) if not Path(cfg_str).is_absolute() else Path(cfg_str)
             try:
                 data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-                classes = list((data.get("classes") or {}).keys())
+                names = list((data.get("classes") or {}).keys())
+                if names:
+                    return names
             except Exception:
                 pass
-        if not classes:
-            classes = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
-        self.ui.update_precise_class_entries(classes)
-        # Update multi-profile table if multi-profile mode is active
+        return ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+
+    def _refresh_precise_classes(self) -> None:
+        """Sync class names and multi-profile list into _precise_settings; push to open popup."""
+        names = self._get_precise_class_names_from_config()
+        self._precise_settings["class_names"] = names
+        default = int(self._precise_settings.get("total", 100))
+        for cls in names:
+            self._precise_settings["classes"].setdefault(cls, default)
+
         multi_enabled = bool(self.ui.var_profiles_multi.get())
-        if multi_enabled:
-            profile_ids = self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
-            self.ui.set_precise_multi_mode(True, profile_ids, classes)
+        self._precise_settings["multi_profiles"] = (
+            self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+            if multi_enabled else []
+        )
+
+        # Live-update the popup if it is currently open
+        if self._precise_popup_ref is not None and self._precise_popup_ref.is_open():
+            try:
+                self._precise_popup_ref.refresh(self._precise_settings)
+            except Exception:
+                pass
+
+    def _save_precise_settings(self) -> None:
+        st = self._store()
+        if st is not None:
+            st.set("pipeline.precise_settings_json", json.dumps(self._precise_settings, ensure_ascii=True))
+            st.schedule_save(self.frame)
 
     def _get_precise_counts(self) -> Optional[Dict[str, Any]]:
         """Return sample-count overrides for precise mode, or None on validation error."""
-        multi_enabled = bool(self.ui.var_profiles_multi.get())
-        per_class = self.ui.var_precise_per_class.get()
+        s = self._precise_settings
+        multi_profiles: List[str] = s.get("multi_profiles") or []
+        per_class = bool(s.get("per_class", False))
 
-        if multi_enabled:
-            profile_ids = self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
+        if multi_profiles:
             per_profile: Dict[str, Any] = {}
             if per_class:
-                for pid in profile_ids:
-                    cls_dict = self.ui.var_precise_multi_classes.get(pid) or {}
+                for pid in multi_profiles:
+                    cls_dict: Dict[str, Any] = (s.get("multi_classes") or {}).get(pid) or {}
                     if not cls_dict:
-                        self.ui.show_messagebox("error", "Error", f"Precise mode: no class entries for profile '{pid}'.\nClick ↻ to reload.")
+                        self.ui.show_messagebox("error", "Error", f"Precise mode: no class entries for '{pid}'.\nOpen Precise Settings and click ↻.")
                         return None
                     counts: Dict[str, int] = {}
-                    for cls, var in cls_dict.items():
+                    for cls, val in cls_dict.items():
                         try:
-                            n = int(var.get())
+                            n = int(val)
                             if n < 0: raise ValueError()
                             counts[cls] = n
                         except Exception:
-                            self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for '{pid}' / class '{cls}'.")
+                            self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for '{pid}' / '{cls}'.")
                             return None
                     per_profile[pid] = counts
             else:
-                for pid in profile_ids:
-                    total_var = self.ui.var_precise_multi_totals.get(pid)
-                    if not total_var:
-                        self.ui.show_messagebox("error", "Error", f"Precise mode: no count entry for profile '{pid}'.\nClick ↻ to reload.")
-                        return None
+                for pid in multi_profiles:
                     try:
-                        n = int(total_var.get())
+                        n = int((s.get("multi_totals") or {}).get(pid, s.get("total", 100)))
                         if n < 1: raise ValueError()
                         per_profile[pid] = {"_total": n}
                     except Exception:
@@ -646,27 +709,28 @@ class PipelineControlTab(BaseTab):
                         return None
             return {"_per_profile": per_profile}
 
-        # Single-profile
+        # Single profile
         if per_class:
-            if not self.ui.var_precise_classes:
-                self.ui.show_messagebox("error", "Error", "Precise mode: no class entries.\nClick ↻ to load classes from the config.")
+            classes: Dict[str, Any] = s.get("classes") or {}
+            if not classes:
+                self.ui.show_messagebox("error", "Error", "Precise mode: no class entries.\nOpen Precise Settings and click ↻.")
                 return None
-            counts = {}
-            for name, var in self.ui.var_precise_classes.items():
+            counts2: Dict[str, int] = {}
+            for cls, val in classes.items():
                 try:
-                    n = int(var.get())
+                    n = int(val)
                     if n < 0: raise ValueError()
-                    counts[name] = n
+                    counts2[cls] = n
                 except Exception:
-                    self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for class '{name}'.")
+                    self.ui.show_messagebox("error", "Error", f"Precise mode: invalid count for class '{cls}'.")
                     return None
-            return counts
+            return counts2
         else:
             try:
-                total = int(self.ui.var_precise_total.get())
+                total = int(s.get("total", 100))
                 if total < 1: raise ValueError()
             except Exception:
-                self.ui.show_messagebox("error", "Error", "Precise mode: invalid sample count.\nEnter a positive integer.")
+                self.ui.show_messagebox("error", "Error", "Precise mode: invalid total count.\nOpen Precise Settings.")
                 return None
             return {"_total": total}
 
@@ -1455,12 +1519,8 @@ class PipelineControlTab(BaseTab):
             cur = self._profiles_multi_list(available=list(self.ui.profile_combo["values"]))
             if not cur and (pid := self.ui.var_profile.get().strip()): cur = [pid]
             self._set_profiles_multi(cur)
-        if self.ui.var_run_mode.get() == "precise":
-            try: self._refresh_precise_classes()
-            except Exception: pass
-        if not enabled:
-            try: self.ui.set_precise_multi_mode(False, [], [])
-            except Exception: pass
+        try: self._refresh_precise_classes()
+        except Exception: pass
 
     def _pick_profiles_multi(self) -> None:
         values = list(self.ui.profile_combo["values"])
@@ -1490,9 +1550,8 @@ class PipelineControlTab(BaseTab):
         self._set_profiles_multi(sel)
         if sel: self.ui.var_profile.set(sel[0])
         dialog.destroy()
-        if self.ui.var_run_mode.get() == "precise":
-            try: self._refresh_precise_classes()
-            except Exception: pass
+        try: self._refresh_precise_classes()
+        except Exception: pass
 
     def _on_render_backend_changed(self, _event: Optional[object] = None) -> None:
         try:
