@@ -478,7 +478,7 @@ class PipelineUI:
 
                 img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
                 img_pil = Image.fromarray(img_rgb)
-                img_pil.thumbnail((280, 180))
+                img_pil.thumbnail((120, 90))
                 tkimg = ImageTk.PhotoImage(img_pil)
                 self._thumb_refs.append(tkimg)
 
