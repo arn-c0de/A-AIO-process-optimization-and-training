@@ -71,7 +71,8 @@ class PipelineLogic:
                        image_filters: Dict[str, Any],
                        event_callback: Callable[[Dict[str, Any]], None], log_callback: Callable[[str], None],
                        ui_update_callback: Callable[[], None], ui_reset_callback: Callable[[], None],
-                       status_vars: dict) -> None:
+                       status_vars: dict,
+                       run_complete_callback: Optional[Callable[[int, list[dict[str, str]], Callable[[str], None]], bool]] = None) -> None:
         self.stop_evt.clear()
         self.current_run_iteration = 0
         self.total_run_count = run_count
@@ -137,6 +138,12 @@ class PipelineLogic:
                         except Exception: pass
 
                 success = overall_ok
+                if success and run_complete_callback is not None:
+                    try:
+                        success = bool(run_complete_callback(self.current_run_iteration, run_specs, log_callback))
+                    except Exception as e:
+                        log_callback(f"[post-run] failed: {e}\n")
+                        success = False
 
                 if not success and run_count > 1: log_callback(f"\n⚠ Run {self.current_run_iteration} failed, but continuing...\n")
 
