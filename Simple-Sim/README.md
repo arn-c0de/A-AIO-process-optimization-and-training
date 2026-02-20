@@ -12,6 +12,7 @@ Synthetic AOI-style ROI generation + training/evaluation pipeline for PCB compon
 *Note:* Weight merge view to combine per-profile checkpoints into a bundle directory or a single-file ensemble model.
 
 See [`Sample Gallery`](SAMPLE_GALLERY.md) for auto-generated reference images with defect overlays from all available datasets and profiles.
+See [`Changelog`](CHANGELOG.md) for a version-by-version overview of changes.
 
 See Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 
