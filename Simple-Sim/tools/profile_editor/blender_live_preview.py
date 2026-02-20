@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from simple_sim.generator_3d import render_blender_batch, write_jobs_jsonl
+from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
 
 
 StatusCallback = Callable[[str, Optional[Path]], None]

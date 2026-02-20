@@ -4,6 +4,8 @@ import yaml
 from pathlib import Path
 from typing import Any, Dict, List
 
+from simple_sim.config_schema import parse_config_typed
+
 VALID_CLASSES = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT'}
 
 _SUPPORTED_SCHEMA_VERSIONS = (1, 2)
@@ -46,6 +48,8 @@ def validate_config(cfg: Dict[str, Any]) -> None:
     Raises:
         ValueError: If validation fails
     """
+    # Typed baseline parse keeps core sections/primitive casts explicit.
+    parse_config_typed(cfg)
     schema_version, mode = _validate_run(cfg)
     required_sections = _required_sections(schema_version, mode)
 

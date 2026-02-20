@@ -25,7 +25,7 @@ from simple_sim.config import load_config, validate_config
 from simple_sim.schema import MetaRow, LabelRow
 from simple_sim.rng import derive_sample_seed, make_sample_id
 from simple_sim.defects import sample_defect_params, classify_defect
-from simple_sim.generator_2d import (
+from simple_sim.generators.opencv_2d import (
     sample_nominal_geometry,
     sample_augment_params,
     apply_image_filter_overrides,
