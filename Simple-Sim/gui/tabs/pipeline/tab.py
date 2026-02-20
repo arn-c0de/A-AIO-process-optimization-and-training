@@ -596,6 +596,7 @@ class PipelineControlTab(BaseTab):
             show_messagebox=self.ui.show_messagebox,
             ask_string=self.ui.ask_string,
             ask_yes_no=self.ui.ask_yes_no,
+            sim_root=str(self.sim_root),
         )
 
     def _refresh_profile_models(self) -> None:
