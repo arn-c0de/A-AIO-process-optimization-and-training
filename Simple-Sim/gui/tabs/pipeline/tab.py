@@ -912,8 +912,14 @@ class PipelineControlTab(BaseTab):
                 self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\\n\\nClick Pick and select at least 1 profile.")
                 return
             if dataset_mode == "extend":
-                self.ui.show_messagebox("error", "Error", "Multi-profile generation does not support Extend Existing.\\n\\nSwitch Dataset mode to 'Create New'.")
-                return
+                dataset_mode = "new"
+                self.ui.var_dataset_mode.set("new")
+                out_dir = self.ui.var_out.get().strip()
+                if not out_dir:
+                    fallback = self.sim_root / "outputs" / "sim_data" / "runs" / "run_multi_profile"
+                    out_dir = str(fallback)
+                    self.ui.var_out.set(out_dir)
+                self._append_log("[multi-profile] switched dataset mode to Create New (Extend Existing is not supported).\n")
         else:
             if p := self.ui.var_profile.get().strip(): profile_ids = [p]
 
@@ -997,8 +1003,22 @@ class PipelineControlTab(BaseTab):
             else:
                 final_out = self.logic._resolve_out_dir(out_dir)
                 if final_out.exists():
-                    self.ui.show_messagebox("error", "Error", f"Output dataset already exists:\\n{final_out}\\n\\nChoose a new output path for mixed generation.")
-                    return
+                    ts = time.strftime("%Y%m%d_%H%M%S")
+                    base_name = final_out.name
+                    parent = final_out.parent
+                    cand = parent / f"{base_name}_{ts}"
+                    i = 1
+                    while cand.exists():
+                        cand = parent / f"{base_name}_{ts}_{i:02d}"
+                        i += 1
+                    final_out = cand
+                    out_dir = str(final_out)
+                    try:
+                        rel_out = str(final_out.resolve().relative_to(self.sim_root.resolve()))
+                        self.ui.var_out.set(rel_out)
+                    except Exception:
+                        self.ui.var_out.set(str(final_out))
+                    self._append_log(f"[mixed] output exists, using new dataset path: {final_out}\n")
 
                 live_dir = (self.sim_root / "outputs" / "live")
                 live_dir.mkdir(parents=True, exist_ok=True)
@@ -1382,7 +1402,8 @@ class PipelineControlTab(BaseTab):
         model_path = self.sim_root / "outputs" / "models" / f"{ds.name}.pt"
         try: self.ui.var_model.set(str(model_path.resolve()))
         except Exception: self.ui.var_model.set(str(model_path))
-        self.ui.var_dataset_mode.set("extend")
+        if not bool(self.ui.var_profiles_multi.get()):
+            self.ui.var_dataset_mode.set("extend")
         self._update_model_dropdown_for_dataset()
 
     def _set_profile_value(self, profile_id: str) -> None:
@@ -1642,6 +1663,7 @@ class PipelineControlTab(BaseTab):
         enabled = bool(self.ui.var_profiles_multi.get())
         self.ui.set_profiles_multi_state(enabled)
         if enabled:
+            self.ui.var_dataset_mode.set("new")
             cur = self._profiles_multi_list(available=self._profiles_multi_available_values())
             if not cur and (pid := self.ui.var_profile.get().strip()): cur = [pid]
             self._set_profiles_multi(cur)

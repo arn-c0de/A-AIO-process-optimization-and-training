@@ -101,6 +101,17 @@ def _load_image_filters_env() -> dict:
     return normalize_image_filters(parsed if isinstance(parsed, dict) else None)
 
 
+def _augment_for_meta(augment: dict) -> dict:
+    """Return schema-compatible augment payload for MetaRow."""
+    return {
+        "blur_sigma": float(augment.get("blur_sigma", 0.0) or 0.0),
+        "noise_stddev": float(augment.get("noise_stddev", 0.0) or 0.0),
+        "brightness_factor": float(augment.get("brightness_factor", 1.0) or 1.0),
+        "contrast_factor": float(augment.get("contrast_factor", 1.0) or 1.0),
+        "rotation_deg": float(augment.get("rotation_deg", 0.0) or 0.0),
+    }
+
+
 def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
     import cv2
 
@@ -418,8 +429,11 @@ def generate_dataset(
             footprint=footprint,
             nominal=r['nominal'],
             defect=r['defect'],
-            augment=r['augment'],
-            render_meta={},
+            augment=_augment_for_meta(r['augment']),
+            render_meta={
+                "augment_full": dict(r["augment"]),
+                "image_filters": dict(image_filters),
+            },
         ))
         tmp_label_rows.append(LabelRow(schema_version=1, id=tmp_id, class_name=r['class_name']))
 
@@ -441,16 +455,19 @@ def generate_dataset(
         split_name = id_to_split[tmp_id]
         sample_id = make_sample_id(run_id, domain_name, split_name, r['index'])
 
-        render_meta: dict = {}
+        render_meta: dict = {
+            "augment_full": dict(r["augment"]),
+            "image_filters": dict(image_filters),
+        }
         if backend == "blender_3d":
             blender_cfg = (config.get("render") or {}).get("blender") or {}
-            render_meta = {
+            render_meta.update({
                 "backend": "blender_3d",
                 "mm_per_px": float(config["roi"]["mm_per_px"]),
                 "cycles_samples": int(blender_cfg.get("samples", 0) or 0),
                 "device": str(blender_cfg.get("device", "CPU")),
                 "profile_render_3d": profile_render_3d,
-            }
+            })
 
         meta_rows.append(MetaRow(
             schema_version=2,
@@ -464,7 +481,7 @@ def generate_dataset(
             footprint=footprint,
             nominal=r['nominal'],
             defect=r['defect'],
-            augment=r['augment'],
+            augment=_augment_for_meta(r['augment']),
             render_meta=render_meta,
         ))
         label_rows.append(LabelRow(schema_version=1, id=sample_id, class_name=r['class_name']))

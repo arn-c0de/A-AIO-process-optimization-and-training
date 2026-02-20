@@ -525,7 +525,13 @@ class PipelineUI:
         self.model_combo["values"] = values
 
     def show_messagebox(self, type: str, title: str, message: str) -> None:
-        if type == "error": messagebox.showerror(title, message)
+        if type == "error":
+            try:
+                msg_log = str(message).replace("\\n", "\n")
+                self.tab._append_log(f"[popup error] {title}\n{msg_log}\n")
+            except Exception:
+                pass
+            messagebox.showerror(title, message)
         elif type == "warning": messagebox.showwarning(title, message)
         else: messagebox.showinfo(title, message)
     

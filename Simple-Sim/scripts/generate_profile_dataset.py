@@ -39,6 +39,17 @@ from simple_sim.profile_hash import load_profile, hash_profile
 from simple_sim.manifest import write_multi_profile_manifest
 
 
+def _augment_for_meta(augment: dict) -> dict:
+    """Return schema-compatible augment payload for MetaRow."""
+    return {
+        "blur_sigma": float(augment.get("blur_sigma", 0.0) or 0.0),
+        "noise_stddev": float(augment.get("noise_stddev", 0.0) or 0.0),
+        "brightness_factor": float(augment.get("brightness_factor", 1.0) or 1.0),
+        "contrast_factor": float(augment.get("contrast_factor", 1.0) or 1.0),
+        "rotation_deg": float(augment.get("rotation_deg", 0.0) or 0.0),
+    }
+
+
 def generate_profile_dataset(
     config_path: Path,
     output_dir: Path,
@@ -180,8 +191,11 @@ def generate_profile_dataset(
             footprint=r['footprint'],
             nominal=r['nominal'],
             defect=r['defect'],
-            augment=r['augment'],
-            render_meta={},
+            augment=_augment_for_meta(r['augment']),
+            render_meta={
+                "augment_full": dict(r["augment"]),
+                "image_filters": dict(image_filters),
+            },
         ))
         tmp_label_rows.append(LabelRow(schema_version=2, id=tmp_id, class_name=r['class_name'], profile_id=r['profile_id']))
 
@@ -214,8 +228,11 @@ def generate_profile_dataset(
             footprint=r['footprint'],
             nominal=r['nominal'],
             defect=r['defect'],
-            augment=r['augment'],
-            render_meta={},
+            augment=_augment_for_meta(r['augment']),
+            render_meta={
+                "augment_full": dict(r["augment"]),
+                "image_filters": dict(image_filters),
+            },
         ))
         label_rows.append(LabelRow(
             schema_version=2,
