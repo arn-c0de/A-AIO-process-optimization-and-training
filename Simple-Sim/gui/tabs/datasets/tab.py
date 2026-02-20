@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tkinter as tk
+from collections import Counter
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 from typing import Dict, List, Optional
@@ -33,6 +35,7 @@ class DatasetsTab(BaseTab):
         top.pack(fill="x", pady=(0, 8))
 
         ttk.Button(top, text="Refresh", command=self.refresh).pack(side="left")
+        ttk.Button(top, text="Show Details", command=self._show_details_selected).pack(side="left", padx=(6, 0))
         ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=8)
 
         ttk.Button(top, text="Set Category...", command=self._set_category_for_selected).pack(side="left")
@@ -66,6 +69,8 @@ class DatasetsTab(BaseTab):
         self.tree.bind("<Button-2>", self._on_right_click)
 
         self._menu = tk.Menu(self.frame, tearoff=0)
+        self._menu.add_command(label="Show details", command=self._show_details_selected)
+        self._menu.add_separator()
         self._menu.add_command(label="Set category...", command=self._set_category_for_selected)
         self._menu.add_separator()
         self._menu.add_command(label="Archive selected", command=lambda: self._set_archive_for_selected(True))
@@ -232,6 +237,118 @@ class DatasetsTab(BaseTab):
             if row not in self.tree.selection():
                 self.tree.selection_set(row)
             self._menu.tk_popup(event.x_root, event.y_root)
+
+    def _show_details_selected(self) -> None:
+        paths = self._selected_dataset_paths()
+        if not paths:
+            messagebox.showinfo("Datasets", "No dataset selected.")
+            return
+        if len(paths) > 1:
+            messagebox.showinfo("Datasets", "Please select exactly one dataset.")
+            return
+
+        ds = paths[0]
+        try:
+            details = self._dataset_details_text(ds)
+        except Exception as exc:
+            messagebox.showerror("Dataset Details", f"Failed to load details:\n{exc}")
+            return
+
+        dialog = tk.Toplevel(self.frame.winfo_toplevel())
+        dialog.title(f"Dataset Details: {ds.name}")
+        dialog.transient(self.frame.winfo_toplevel())
+        dialog.grab_set()
+        dialog.geometry("760x560")
+
+        frm = ttk.Frame(dialog, padding=10)
+        frm.pack(fill="both", expand=True)
+        txt = tk.Text(frm, wrap="word")
+        txt.pack(fill="both", expand=True)
+        txt.insert("1.0", details)
+        txt.configure(state="disabled")
+        ttk.Button(frm, text="Close", command=dialog.destroy).pack(anchor="e", pady=(8, 0))
+
+    def _dataset_details_text(self, ds: Path) -> str:
+        lines: List[str] = []
+        lines.append(f"Dataset: {ds.name}")
+        lines.append(f"Path: {ds}")
+        lines.append("")
+
+        manifest = {}
+        manifest_path = ds / "dataset_manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                manifest = {}
+
+        total_samples = None
+        split_stats = {}
+        if isinstance(manifest, dict):
+            ds_stats = manifest.get("dataset_stats") or {}
+            if isinstance(ds_stats, dict):
+                total_samples = ds_stats.get("total_samples")
+                split_stats = ds_stats.get("splits") or {}
+
+        if total_samples is None:
+            labels_path = ds / "labels.jsonl"
+            if labels_path.exists():
+                try:
+                    total_samples = sum(1 for _ in labels_path.open("r", encoding="utf-8") if _.strip())
+                except Exception:
+                    total_samples = None
+
+        lines.append(f"Total samples: {total_samples if total_samples is not None else 'unknown'}")
+
+        if isinstance(split_stats, dict) and split_stats:
+            tr = int(split_stats.get("train", 0) or 0)
+            va = int(split_stats.get("val", 0) or 0)
+            te = int(split_stats.get("test", 0) or 0)
+            lines.append(f"Splits: train={tr}, val={va}, test={te}")
+        lines.append("")
+
+        profile_counts = Counter()
+        labels_path = ds / "labels.jsonl"
+        if labels_path.exists():
+            with labels_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    pid = str(row.get("profile_id") or "").strip()
+                    if not pid:
+                        pid = "unknown_or_legacy"
+                    profile_counts[pid] += 1
+
+        if not profile_counts:
+            comp = manifest.get("component_profile") if isinstance(manifest, dict) else None
+            if isinstance(comp, dict):
+                pid = str(comp.get("profile_id") or "").strip()
+                if pid:
+                    if isinstance(total_samples, int) and total_samples >= 0:
+                        profile_counts[pid] = total_samples
+                    else:
+                        profile_counts[pid] = 0
+            profiles = manifest.get("profiles") if isinstance(manifest, dict) else None
+            if isinstance(profiles, list):
+                for p in profiles:
+                    if isinstance(p, dict):
+                        pid = str(p.get("profile_id") or "").strip()
+                        if pid and pid not in profile_counts:
+                            profile_counts[pid] = 0
+
+        lines.append("Samples per profile:")
+        if profile_counts:
+            for pid, cnt in sorted(profile_counts.items(), key=lambda x: (-x[1], x[0])):
+                lines.append(f"- {pid}: {cnt}")
+        else:
+            lines.append("- (no profile data found)")
+
+        return "\n".join(lines)
 
     def _ask_category_with_list(self, *, title: str, initial: str = "") -> Optional[str]:
         categories = self.catalog.all_categories()
