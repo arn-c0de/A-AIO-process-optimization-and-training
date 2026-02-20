@@ -137,11 +137,13 @@ class AnalysisUI:
 
         tree_frame = ttk.Frame(left)
         tree_frame.pack(fill="both", expand=True, pady=(5, 0))
-        self.tree = ttk.Treeview(tree_frame, columns=("Class",), show="tree headings", height=20, selectmode="extended")
+        self.tree = ttk.Treeview(tree_frame, columns=("Class", "Date"), show="tree headings", height=20, selectmode="extended")
         self.tree.heading("#0", text="ID")
         self.tree.column("#0", width=200)
         self.tree.heading("Class", text="Class")
         self.tree.column("Class", width=100)
+        self.tree.heading("Date", text="Added")
+        self.tree.column("Date", width=145, anchor="w")
         tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=tree_scroll.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -319,14 +321,22 @@ class AnalysisUI:
         self.info_text.insert("1.0", info)
         self.info_text.configure(state="disabled")
 
-    def populate_tree(self, hierarchy: Dict, label_dict: Dict, visible_sample_ids: List[str], visible_sample_item_by_id: Dict[str, str], query: str):
+    def populate_tree(
+        self,
+        hierarchy: Dict,
+        label_dict: Dict,
+        visible_sample_ids: List[str],
+        visible_sample_item_by_id: Dict[str, str],
+        query: str,
+        sample_date_dict: Optional[Dict[str, str]] = None,
+    ):
         self.tree.delete(*self.tree.get_children())
         open_nodes = bool(query)
         
         for run_id in sorted(hierarchy.keys()):
-            run_node = self.tree.insert("", "end", text=f"📁 {run_id}", values=("",), open=open_nodes)
+            run_node = self.tree.insert("", "end", text=f"📁 {run_id}", values=("", ""), open=open_nodes)
             for domain in sorted(hierarchy[run_id].keys()):
-                domain_node = self.tree.insert(run_node, "end", text=f"🌐 {domain}", values=("",), open=open_nodes)
+                domain_node = self.tree.insert(run_node, "end", text=f"🌐 {domain}", values=("", ""), open=open_nodes)
                 for split in sorted(hierarchy[run_id][domain].keys(), key=lambda x: {"train": 0, "val": 1, "test": 2}.get(x, 3)):
                     samples = hierarchy[run_id][domain][split]
                     class_counts: Dict[str, int] = {}
@@ -337,12 +347,22 @@ class AnalysisUI:
                         class_counts[cls] = class_counts.get(cls, 0) + 1
                     count_str = ", ".join(f"{cls}:{cnt}" for cls, cnt in sorted(class_counts.items()))
                     split_icon = {"train": "🔧", "val": "✓", "test": "🧪"}.get(split, "📂")
-                    split_node = self.tree.insert(domain_node, "end", text=f"{split_icon} {split} ({len(samples)})", values=(count_str,), open=open_nodes)
+                    split_node = self.tree.insert(
+                        domain_node, "end", text=f"{split_icon} {split} ({len(samples)})", values=(count_str, ""), open=open_nodes
+                    )
                     
                     for sample_id in samples:
                         sample_idx = sample_id.split('/')[-1]
                         item_iid = sample_id
-                        self.tree.insert(split_node, "end", iid=item_iid, text=f"  {sample_idx}", values=(label_dict.get(sample_id, "?"),), tags=("sample",))
+                        sample_date = (sample_date_dict or {}).get(sample_id, "-")
+                        self.tree.insert(
+                            split_node,
+                            "end",
+                            iid=item_iid,
+                            text=f"  {sample_idx}",
+                            values=(label_dict.get(sample_id, "?"), sample_date),
+                            tags=("sample",),
+                        )
                         visible_sample_ids.append(sample_id)
                         visible_sample_item_by_id[sample_id] = item_iid
                         
