@@ -42,6 +42,8 @@ class AnalysisTab(BaseTab):
         self._filter_after_id: Optional[str] = None
         self._dataset_by_display: dict[str, Path] = {}
         self._dataset_catalog = DatasetCatalog(sim_root, state.settings_store)
+        self._selected_profiles: set[str] = set()
+        self._profile_options: list[str] = []
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -81,20 +83,39 @@ class AnalysisTab(BaseTab):
                 self.ui.var_dataset.set(v)
                 self._on_dataset_selected()
             except Exception: pass
-        for key, var in [("analysis.search", self.ui.var_search), ("analysis.class", self.ui.var_filter), 
-                         ("analysis.run", self.ui.var_run), ("analysis.domain", self.ui.var_domain), 
-                         ("analysis.split", self.ui.var_split)]:
+        for key, var in [
+            ("analysis.search", self.ui.var_search),
+            ("analysis.class", self.ui.var_filter),
+            ("analysis.run", self.ui.var_run),
+            ("analysis.domain", self.ui.var_domain),
+            ("analysis.split", self.ui.var_split),
+            ("analysis.profile", self.ui.var_profile),
+            ("analysis.sort", self.ui.var_sort),
+        ]:
             if vv := st.get(key):
                 try: var.set(vv)
                 except Exception: pass
+        if vv := st.get("analysis.profile_multi"):
+            try:
+                self._selected_profiles = {p for p in str(vv).split(",") if p.strip()}
+            except Exception:
+                self._selected_profiles = set()
+        self._update_profile_multi_label()
         self._filter_images(display_first=False)
 
     def _wire_settings_autosave(self) -> None:
         st = self._store()
         if st is None: return
-        for var, key in [(self.ui.var_dataset, "analysis.dataset_selection"), (self.ui.var_search, "analysis.search"),
-                         (self.ui.var_filter, "analysis.class"), (self.ui.var_run, "analysis.run"),
-                         (self.ui.var_domain, "analysis.domain"), (self.ui.var_split, "analysis.split")]:
+        for var, key in [
+            (self.ui.var_dataset, "analysis.dataset_selection"),
+            (self.ui.var_search, "analysis.search"),
+            (self.ui.var_filter, "analysis.class"),
+            (self.ui.var_run, "analysis.run"),
+            (self.ui.var_domain, "analysis.domain"),
+            (self.ui.var_split, "analysis.split"),
+            (self.ui.var_profile, "analysis.profile"),
+            (self.ui.var_sort, "analysis.sort"),
+        ]:
             var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
 
     def _display_for_dataset(self, p: Path) -> str:
@@ -164,6 +185,16 @@ class AnalysisTab(BaseTab):
             self.ui.combo_domain.configure(values=sorted(list(domains)))
             self.ui.combo_class.configure(values=["All"] + self._sorted_class_values(classes - {"All"}))
             self.ui.set_feedback_class_values(self._sorted_class_values(set(VALID_CLASSES) | (classes - {"All"})))
+            profiles = sorted({str(v).strip() for v in self.profile_dict.values() if str(v).strip()})
+            self._profile_options = profiles
+            self.ui.combo_profile.configure(values=["All"] + profiles)
+            if self.ui.var_profile.get().strip() not in ({"All"} | set(profiles)):
+                self.ui.var_profile.set("All")
+            self.ui.combo_sort.configure(values=["Default", "Newest first", "Oldest first", "ID A-Z", "ID Z-A"])
+            if self.ui.var_sort.get().strip() not in {"Default", "Newest first", "Oldest first", "ID A-Z", "ID Z-A"}:
+                self.ui.var_sort.set("Default")
+            self._selected_profiles = {p for p in self._selected_profiles if p in set(profiles)}
+            self._update_profile_multi_label()
 
             self._filter_images()
             self._update_dataset_stats_label()
@@ -182,11 +213,18 @@ class AnalysisTab(BaseTab):
             'class': self.ui.var_filter.get().strip(),
             'run': self.ui.var_run.get().strip(),
             'domain': self.ui.var_domain.get().strip(),
-            'split': self.ui.var_split.get().strip()
+            'split': self.ui.var_split.get().strip(),
+            'profile': self.ui.var_profile.get().strip(),
         }
 
         for sid in self.sample_ids:
             if filters['class'] != "All" and self.effective_label_dict.get(sid, "?") != filters['class']: continue
+            sid_profile = str(self.profile_dict.get(sid, "")).strip() or "unknown_or_legacy"
+            if self._selected_profiles:
+                if sid_profile not in self._selected_profiles:
+                    continue
+            elif filters['profile'] != "All" and sid_profile != filters['profile']:
+                continue
             parts = sid.split('/')
             if len(parts) >= 3:
                 run, domain, split = parts[0], parts[1], parts[2]
@@ -196,6 +234,12 @@ class AnalysisTab(BaseTab):
                 if query and query not in f"{sid} {sid.split('/')[-1]} {self.effective_label_dict.get(sid, '?')}".lower(): continue
 
                 hierarchy.setdefault(run, {}).setdefault(domain, {}).setdefault(split, []).append(sid)
+
+        sort_mode = self.ui.var_sort.get().strip() or "Default"
+        for run in hierarchy.values():
+            for domain in run.values():
+                for split, sample_list in domain.items():
+                    domain[split] = self._sorted_sample_ids(sample_list, sort_mode)
         
         self.ui.populate_tree(hierarchy, self.effective_label_dict, self.visible_sample_ids, self.visible_sample_item_by_id, query)
         self._update_dataset_stats_label()
@@ -394,6 +438,80 @@ class AnalysisTab(BaseTab):
         if ts:
             status += f" @ {ts}"
         self.ui.set_feedback_status(status)
+
+    def _on_profile_filter_selected(self, _evt: Optional[object] = None) -> None:
+        self._selected_profiles = set()
+        self._update_profile_multi_label()
+        st = self._store()
+        if st is not None:
+            st.set("analysis.profile_multi", "")
+            st.schedule_save(self.frame)
+        self._filter_images(display_first=True)
+
+    def _open_profile_multi_select(self) -> None:
+        if not self._profile_options:
+            messagebox.showinfo("Profile Filter", "No profiles available in current dataset.")
+            return
+        dlg = tk.Toplevel(self.frame.winfo_toplevel())
+        dlg.title("Select Multiple Profiles")
+        dlg.transient(self.frame.winfo_toplevel())
+        dlg.grab_set()
+        frm = ttk.Frame(dlg, padding=10)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Select one or more profiles:").pack(anchor="w")
+        lb = tk.Listbox(frm, selectmode="multiple", exportselection=False, height=min(14, max(5, len(self._profile_options))))
+        lb.pack(fill="both", expand=True, pady=(6, 8))
+        for p in self._profile_options:
+            lb.insert("end", p)
+        for i, p in enumerate(self._profile_options):
+            if p in self._selected_profiles:
+                lb.selection_set(i)
+
+        def _apply() -> None:
+            picked = {self._profile_options[int(i)] for i in lb.curselection()}
+            self._selected_profiles = picked
+            self.ui.var_profile.set("All")
+            self._update_profile_multi_label()
+            st = self._store()
+            if st is not None:
+                st.set("analysis.profile_multi", ",".join(sorted(self._selected_profiles)))
+                st.schedule_save(self.frame)
+            dlg.destroy()
+            self._filter_images(display_first=True)
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Clear", command=lambda: [lb.selection_clear(0, "end")]).pack(side="left")
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side="right")
+        ttk.Button(btns, text="Apply", command=_apply).pack(side="right", padx=(0, 8))
+
+    def _update_profile_multi_label(self) -> None:
+        if not self._selected_profiles:
+            self.ui.var_profile_multi.set("multi: off")
+            return
+        self.ui.var_profile_multi.set(f"multi: {len(self._selected_profiles)} selected")
+
+    def _sorted_sample_ids(self, sample_ids: list[str], sort_mode: str) -> list[str]:
+        if sort_mode == "ID A-Z":
+            return sorted(sample_ids)
+        if sort_mode == "ID Z-A":
+            return sorted(sample_ids, reverse=True)
+        if sort_mode in {"Newest first", "Oldest first"}:
+            reverse = sort_mode == "Newest first"
+            return sorted(sample_ids, key=self._sample_mtime_key, reverse=reverse)
+        return list(sample_ids)
+
+    def _sample_mtime_key(self, sample_id: str) -> float:
+        if not self.state.dataset_dir:
+            return 0.0
+        try:
+            meta = self.meta_dict.get(sample_id)
+            if not meta:
+                return 0.0
+            path = self.state.dataset_dir / meta.image_path
+            return path.stat().st_mtime if path.exists() else 0.0
+        except Exception:
+            return 0.0
 
     def _on_feedback_history_select(self, _event: Optional[object] = None) -> None:
         sid = self.ui.selected_feedback_sample_id()

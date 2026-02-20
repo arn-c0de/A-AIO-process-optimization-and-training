@@ -27,12 +27,17 @@ class AnalysisUI:
         self.var_run: tk.StringVar
         self.var_domain: tk.StringVar
         self.var_split: tk.StringVar
+        self.var_profile: tk.StringVar
+        self.var_profile_multi: tk.StringVar
+        self.var_sort: tk.StringVar
         self.tree: ttk.Treeview
         self.canvas: tk.Canvas
         self.info_text: tk.Text
         self.combo_run: ttk.Combobox
         self.combo_domain: ttk.Combobox
         self.combo_class: ttk.Combobox
+        self.combo_profile: ttk.Combobox
+        self.combo_sort: ttk.Combobox
         self.photo: Optional[ImageTk.PhotoImage] = None
         self._preview_max_px: int = 420
         self.sample_menu: tk.Menu
@@ -108,6 +113,27 @@ class AnalysisUI:
         self.combo_class = ttk.Combobox(row2, textvariable=self.var_filter, values=["All"], state="readonly", width=12)
         self.combo_class.pack(side="left", padx=(4, 0))
         self.combo_class.bind("<<ComboboxSelected>>", lambda e: self.tab._filter_images(display_first=True))
+
+        self.var_sort = tk.StringVar(value="Default")
+        ttk.Label(row2, text="Sort").pack(side="left", padx=(10, 0))
+        self.combo_sort = ttk.Combobox(
+            row2,
+            textvariable=self.var_sort,
+            values=["Default", "Newest first", "Oldest first", "ID A-Z", "ID Z-A"],
+            state="readonly",
+            width=12,
+        )
+        self.combo_sort.pack(side="left", padx=(4, 0))
+        self.combo_sort.bind("<<ComboboxSelected>>", lambda e: self.tab._filter_images(display_first=True))
+
+        self.var_profile = tk.StringVar(value="All")
+        ttk.Label(row2, text="Profile").pack(side="left", padx=(10, 0))
+        self.combo_profile = ttk.Combobox(row2, textvariable=self.var_profile, values=["All"], state="readonly", width=16)
+        self.combo_profile.pack(side="left", padx=(4, 4))
+        self.combo_profile.bind("<<ComboboxSelected>>", self.tab._on_profile_filter_selected)
+        ttk.Button(row2, text="Multi...", command=self.tab._open_profile_multi_select).pack(side="left")
+        self.var_profile_multi = tk.StringVar(value="multi: off")
+        ttk.Label(row2, textvariable=self.var_profile_multi).pack(side="left", padx=(6, 0))
 
         tree_frame = ttk.Frame(left)
         tree_frame.pack(fill="both", expand=True, pady=(5, 0))
@@ -313,7 +339,7 @@ class AnalysisUI:
                     split_icon = {"train": "🔧", "val": "✓", "test": "🧪"}.get(split, "📂")
                     split_node = self.tree.insert(domain_node, "end", text=f"{split_icon} {split} ({len(samples)})", values=(count_str,), open=open_nodes)
                     
-                    for sample_id in sorted(samples):
+                    for sample_id in samples:
                         sample_idx = sample_id.split('/')[-1]
                         item_iid = sample_id
                         self.tree.insert(split_node, "end", iid=item_iid, text=f"  {sample_idx}", values=(label_dict.get(sample_id, "?"),), tags=("sample",))
