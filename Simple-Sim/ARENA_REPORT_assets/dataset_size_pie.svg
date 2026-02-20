@@ -2,31 +2,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="420" viewBox="0 0 980 420">
 <rect x="0" y="0" width="980" height="420" fill="#0b0f14"/>
 <text x="260" y="34" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="20" font-weight="700" fill="#f0f6fc">Dataset Storage Breakdown</text>
-<path d="M 250.0 230.0 L 250.0 90.0 A 140.0 140.0 0 0 1 328.0 346.3 Z" fill="#0969da" stroke="#0b0f14" stroke-width="2"/>
-<path d="M 250.0 230.0 L 328.0 346.3 A 140.0 140.0 0 0 1 158.2 335.7 Z" fill="#1f883d" stroke="#0b0f14" stroke-width="2"/>
-<path d="M 250.0 230.0 L 158.2 335.7 A 140.0 140.0 0 0 1 117.6 184.5 Z" fill="#bf8700" stroke="#0b0f14" stroke-width="2"/>
-<path d="M 250.0 230.0 L 117.6 184.5 A 140.0 140.0 0 0 1 153.2 128.9 Z" fill="#cf222e" stroke="#0b0f14" stroke-width="2"/>
-<path d="M 250.0 230.0 L 153.2 128.9 A 140.0 140.0 0 0 1 183.7 106.7 Z" fill="#8250df" stroke="#0b0f14" stroke-width="2"/>
+<path d="M 250.0 230.0 L 250.0 90.0 A 140.0 140.0 0 0 1 328.7 345.8 Z" fill="#0969da" stroke="#0b0f14" stroke-width="2"/>
+<path d="M 250.0 230.0 L 328.7 345.8 A 140.0 140.0 0 0 1 158.1 335.6 Z" fill="#1f883d" stroke="#0b0f14" stroke-width="2"/>
+<path d="M 250.0 230.0 L 158.1 335.6 A 140.0 140.0 0 0 1 117.5 184.7 Z" fill="#bf8700" stroke="#0b0f14" stroke-width="2"/>
+<path d="M 250.0 230.0 L 117.5 184.7 A 140.0 140.0 0 0 1 153.0 129.0 Z" fill="#cf222e" stroke="#0b0f14" stroke-width="2"/>
+<path d="M 250.0 230.0 L 153.0 129.0 A 140.0 140.0 0 0 1 183.7 106.7 Z" fill="#8250df" stroke="#0b0f14" stroke-width="2"/>
 <path d="M 250.0 230.0 L 183.7 106.7 A 140.0 140.0 0 0 1 212.6 95.1 Z" fill="#d4a72c" stroke="#0b0f14" stroke-width="2"/>
 <path d="M 250.0 230.0 L 212.6 95.1 A 140.0 140.0 0 0 1 234.5 90.9 Z" fill="#0f766e" stroke="#0b0f14" stroke-width="2"/>
 <path d="M 250.0 230.0 L 234.5 90.9 A 140.0 140.0 0 0 1 250.0 90.0 Z" fill="#fb7185" stroke="#0b0f14" stroke-width="2"/>
 <circle cx="250.0" cy="230.0" r="140.0" fill="none" stroke="#30363d" stroke-width="1"/>
 <text x="520.0" y="68.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" font-weight="700" fill="#f0f6fc">Legend (size, %)</text>
 <rect x="520.0" y="82.0" width="12" height="12" rx="2" fill="#0969da"/>
-<text x="538.0" y="92.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-QFN32-2D (800 samples)  1.30 GB  (40.6%)</text>
+<text x="538.0" y="92.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-QFN32-2D (800 samples)  1.30 GB  (40.5%)</text>
 <rect x="520.0" y="104.0" width="12" height="12" rx="2" fill="#1f883d"/>
-<text x="538.0" y="114.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-All-90degree-profile-database (11200 samples)  680.46 MB  (20.8%)</text>
+<text x="538.0" y="114.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-All-90degree-profile-database (11200 samples)  685.49 MB  (20.9%)</text>
 <rect x="520.0" y="126.0" width="12" height="12" rx="2" fill="#bf8700"/>
-<text x="538.0" y="136.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-QFN-3D (800 samples)  618.07 MB  (18.9%)</text>
+<text x="538.0" y="136.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-QFN-3D (800 samples)  618.41 MB  (18.8%)</text>
 <rect x="520.0" y="148.0" width="12" height="12" rx="2" fill="#cf222e"/>
-<text x="538.0" y="158.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-Transistor-2D (800 samples)  248.25 MB  (7.6%)</text>
+<text x="538.0" y="158.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-Transistor-2D (800 samples)  248.59 MB  (7.6%)</text>
 <rect x="520.0" y="170.0" width="12" height="12" rx="2" fill="#8250df"/>
-<text x="538.0" y="180.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Filter-Default-Mixed-ALL_20260220_131657 (2800 samples)  140.65 MB  (4.3%)</text>
+<text x="538.0" y="180.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Filter-Default-Mixed-ALL_20260220_131657 (2800 samples)  141.91 MB  (4.3%)</text>
 <rect x="520.0" y="192.0" width="12" height="12" rx="2" fill="#d4a72c"/>
-<text x="538.0" y="202.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-Resistor-2D (400 samples)  116.35 MB  (3.6%)</text>
+<text x="538.0" y="202.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-Resistor-2D (400 samples)  116.52 MB  (3.6%)</text>
 <rect x="520.0" y="214.0" width="12" height="12" rx="2" fill="#0f766e"/>
-<text x="538.0" y="224.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-Transistor-3D (800 samples)  83.09 MB  (2.5%)</text>
+<text x="538.0" y="224.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-Transistor-3D (800 samples)  83.43 MB  (2.5%)</text>
 <rect x="520.0" y="236.0" width="12" height="12" rx="2" fill="#fb7185"/>
-<text x="538.0" y="246.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-Resistor-3D (400 samples)  57.61 MB  (1.8%)</text>
+<text x="538.0" y="246.0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">CLEAN-Resistor-3D (400 samples)  57.78 MB  (1.8%)</text>
 <text x="520.0" y="398" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="12" fill="#f0f6fc">Total: 3.20 GB</text>
 </svg>
