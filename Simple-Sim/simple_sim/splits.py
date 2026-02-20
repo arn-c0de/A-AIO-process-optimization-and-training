@@ -1,5 +1,6 @@
 """Stratified dataset splitting."""
 
+import itertools
 import random
 from collections import defaultdict
 from pathlib import Path
@@ -84,27 +85,21 @@ def generate_splits(
 def assert_no_overlap(splits: Dict[str, List[str]]) -> None:
     """Verify that splits have no overlapping sample IDs.
 
+    Works for any number of named splits.
+
     Args:
         splits: Dictionary of split name to sample ID lists
 
     Raises:
         ValueError: If any overlap is detected
     """
-    train_set = set(splits['train'])
-    val_set = set(splits['val'])
-    test_set = set(splits['test'])
-
-    train_val = train_set & val_set
-    train_test = train_set & test_set
-    val_test = val_set & test_set
-
+    split_sets = {name: set(ids) for name, ids in splits.items()}
     errors = []
-    if train_val:
-        errors.append(f"Train/val overlap: {len(train_val)} samples")
-    if train_test:
-        errors.append(f"Train/test overlap: {len(train_test)} samples")
-    if val_test:
-        errors.append(f"Val/test overlap: {len(val_test)} samples")
+
+    for (name_a, set_a), (name_b, set_b) in itertools.combinations(split_sets.items(), 2):
+        overlap = set_a & set_b
+        if overlap:
+            errors.append(f"{name_a}/{name_b} overlap: {len(overlap)} samples")
 
     if errors:
         raise ValueError("Split overlap detected: " + ", ".join(errors))

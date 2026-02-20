@@ -14,7 +14,13 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 
+from simple_sim.data_loader import IMAGENET_MEAN, IMAGENET_STD
 from simple_sim.model_bundle import bundle_checkpoint_path
+
+_PREPROCESS_TRANSFORM = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+])
 
 
 @dataclass
@@ -48,11 +54,7 @@ def _load_model(checkpoint_path: Path, device: torch.device):
 def _preprocess(img_bgr: np.ndarray) -> torch.Tensor:
     """Preprocess a BGR image to a normalized tensor."""
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    tfm = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    return tfm(img_rgb)
+    return _PREPROCESS_TRANSFORM(img_rgb)
 
 
 class TwoStageClassifier:

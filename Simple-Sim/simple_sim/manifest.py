@@ -11,7 +11,9 @@ import hashlib
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
+from simple_sim import __version__ as _VERSION
 
 
 def hash_file(file_path: Path) -> str:
@@ -59,6 +61,22 @@ def _get_git_commit() -> Optional[str]:
     return None
 
 
+def _compute_class_counts(label_rows: List[Any]) -> Dict[str, int]:
+    """Return class_name → count mapping for a list of LabelRow instances."""
+    counts: Dict[str, int] = {}
+    for row in label_rows:
+        counts[row.class_name] = counts.get(row.class_name, 0) + 1
+    return counts
+
+
+def _atomic_json_write(path: Path, obj: Any) -> None:
+    """Write JSON to *path* atomically via a .tmp rename."""
+    temp_path = path.with_suffix('.tmp')
+    with open(temp_path, 'w') as f:
+        json.dump(obj, f, indent=2)
+    temp_path.replace(path)
+
+
 def write_dataset_manifest(
     output_dir: Path,
     run_id: str,
@@ -90,16 +108,8 @@ def write_dataset_manifest(
     output_dir = Path(output_dir)
     manifest_path = output_dir / "dataset_manifest.json"
 
-    # Get git commit
     git_commit = _get_git_commit()
-
-    # Compute class counts
-    class_counts = {}
-    for label_row in label_rows:
-        class_name = label_row.class_name
-        class_counts[class_name] = class_counts.get(class_name, 0) + 1
-
-    # Compute split stats
+    class_counts = _compute_class_counts(label_rows)
     split_counts = {k: len(v) for k, v in splits.items()}
 
     if extend and manifest_path.exists():
@@ -163,7 +173,7 @@ def write_dataset_manifest(
             },
 
             'generator': {
-                'version': '1.0.1',
+                'version': _VERSION,
                 'git_commit': git_commit,
                 'script': 'scripts/generate.py'
             },
@@ -181,12 +191,7 @@ def write_dataset_manifest(
             }]
         }
 
-    # Atomic write
-    temp_path = manifest_path.with_suffix('.tmp')
-    with open(temp_path, 'w') as f:
-        json.dump(manifest, f, indent=2)
-    temp_path.replace(manifest_path)
-
+    _atomic_json_write(manifest_path, manifest)
     print(f"✓ Dataset manifest written: {manifest_path}")
 
 
@@ -322,11 +327,7 @@ def write_multi_profile_manifest(
     manifest_path = output_dir / "dataset_manifest.json"
 
     git_commit = _get_git_commit()
-
-    class_counts: Dict[str, int] = {}
-    for label_row in label_rows:
-        class_counts[label_row.class_name] = class_counts.get(label_row.class_name, 0) + 1
-
+    class_counts = _compute_class_counts(label_rows)
     split_counts = {k: len(v) for k, v in splits.items()}
 
     # Profile sample counts
@@ -344,7 +345,7 @@ def write_multi_profile_manifest(
         'component_profiles': profiles,
 
         'generator': {
-            'version': '1.0.1',
+            'version': _VERSION,
             'git_commit': git_commit,
             'script': script_name,
         },
@@ -363,9 +364,5 @@ def write_multi_profile_manifest(
         }],
     }
 
-    temp_path = manifest_path.with_suffix('.tmp')
-    with open(temp_path, 'w') as f:
-        json.dump(manifest, f, indent=2)
-    temp_path.replace(manifest_path)
-
+    _atomic_json_write(manifest_path, manifest)
     print(f"✓ Multi-profile dataset manifest written: {manifest_path}")

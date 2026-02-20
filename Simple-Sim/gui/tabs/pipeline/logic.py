@@ -6,7 +6,6 @@ import os
 import queue
 import signal
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -15,7 +14,6 @@ import shutil
 from datetime import datetime
 import re
 import shlex
-import tempfile
 
 import torch
 import cv2
@@ -623,12 +621,6 @@ class PipelineLogic:
         try: return model_path.exists() and model_path.is_dir() or str(model_path).endswith(".bundle")
         except Exception: return False
         
-    def _slugify_name(self, s: str) -> str:
-        s = (s or "").strip().lower()
-        s = re.sub(r"[^a-z0-9]+", "_", s)
-        s = re.sub(r"_+", "_", s).strip("_")
-        return s or "unnamed"
-
     def merge_datasets_for_training(self, sources: List[Path], out_dir: Path, log_callback: Callable[[str], None], log_error_callback: Callable[[str], None]) -> None:
         out_dir = Path(out_dir)
         if out_dir.exists(): raise FileExistsError(f"Output directory already exists: {out_dir}")
