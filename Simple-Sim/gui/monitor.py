@@ -285,7 +285,7 @@ class MonitorAppTabbed:
         selected_idx = self.notebook.index(self.notebook.select())
 
         # Map index to tab name
-        tab_names = ["pipeline", "datasets", "analysis", "predictions", "weights", "validation", "merge", "board_detection"]
+        tab_names = ["pipeline", "datasets", "analysis", "validation", "predictions", "weights", "merge", "board_detection"]
         if selected_idx < len(tab_names):
             tab_name = tab_names[selected_idx]
             self.current_tab = tab_name
