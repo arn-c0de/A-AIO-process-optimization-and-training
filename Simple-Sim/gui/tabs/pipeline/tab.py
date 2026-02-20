@@ -1297,9 +1297,6 @@ class PipelineControlTab(BaseTab):
         if now - self._last_stats_ts < 1.0: return
         self._last_stats_ts = now
 
-        cpu_pct, ram_info, gpu_pct = self.logic.get_system_stats()
-        self.ui.update_stats_bar(cpu_pct, ram_info, gpu_pct)
-
         proc_running = self.logic.is_process_running()
         if self._prev_proc_running and not proc_running:
             if self.state.dataset_dir: self._start_dataset_size_calc(self.state.dataset_dir)
