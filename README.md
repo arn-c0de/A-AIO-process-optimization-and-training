@@ -28,7 +28,9 @@ A sandbox environment for pre-training and specializing models on synthetic data
 
 ---
 
-## Current Research 2026-02-17
+## Current Research 2026-02-20
+Fine-tuned comparison run (default-filter fine-tune vs QFN-focused fine-tune), including detected QFN32 regression and next-run validation steps: [`Simple-Sim/docs/training_logs/Training-Comparison-FineTuned-vs-QFN-FineTuned-2026-02-20.md`](Simple-Sim/docs/training_logs/Training-Comparison-FineTuned-vs-QFN-FineTuned-2026-02-20.md)
+
 Renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`Simple-Sim/docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md`](Simple-Sim/docs/training_logs/Training-Restart-Extended-Image-Filters-2026-02-17.md)
 
 Filter configuration and implementation reference: [`Simple-Sim/docs/guides/FILTER_SETTINGS.md`](Simple-Sim/docs/guides/FILTER_SETTINGS.md)
