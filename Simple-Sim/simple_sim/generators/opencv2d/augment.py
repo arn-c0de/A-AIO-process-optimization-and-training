@@ -7,11 +7,13 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from simple_sim.generators.filter_settings import normalize_image_filters
+from .realism import apply_realism_groups
 
 
 def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optional[Dict[str, Any]]) -> Dict[str, float]:
     """Apply toggle + strength overrides to sampled augment params."""
     aug = dict(augment or {})
+    src_keys = set(image_filters.keys()) if isinstance(image_filters, dict) else set()
     filt_base = normalize_image_filters(image_filters)
     if not filt_base.get("enable", True):
         aug["blur_sigma"] = 0.0
@@ -42,6 +44,9 @@ def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optio
         return aug
 
     filt = dict(filt_base)
+    filt["__source_keys"] = src_keys
+    if str(filt.get("filter_mode", "custom")).strip().lower() == "realism" and bool(filt.get("realism_enabled", False)):
+        return apply_realism_groups(aug, filt)
 
     def _rand_float(base_key: str, default_value: float) -> float:
         base = float(filt.get(base_key, default_value))

@@ -36,6 +36,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gui.components.filter_popup import open_filter_popup
+from gui.utils.filter_profile_store import is_filter_popup_extra_key, parse_bool_like
 
 from simple_sim.config import load_config, validate_config
 from simple_sim.defects import sample_defect_params
@@ -104,6 +105,9 @@ def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, 
             x = float(default)
         return max(lo, min(hi, x))
 
+    def _s(name: str, default: str) -> str:
+        return str(src.get(name, default) or default)
+
     return {
         # Existing filters
         "cardinal_rotation_90": _bool("cardinal_rotation_90", True),
@@ -145,6 +149,22 @@ def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, 
         "dust_density": _f("dust_density", 0.3, 0.0, 1.0),
         "enable_sharpen": _bool("enable_sharpen", False),
         "sharpen_strength": _f("sharpen_strength", 1.0, 0.0, 2.0),
+        # Realism mode
+        "filter_mode": _s("filter_mode", "custom"),
+        "realism_enabled": _bool("realism_enabled", False),
+        "realism_constraints_enabled": _bool("realism_constraints_enabled", True),
+        "realism_profile_id": _s("realism_profile_id", "profile_industrial_cam"),
+        "realism_k_prob_0": _f("realism_k_prob_0", 0.60, 0.0, 1.0),
+        "realism_k_prob_1": _f("realism_k_prob_1", 0.35, 0.0, 1.0),
+        "realism_k_prob_2": _f("realism_k_prob_2", 0.05, 0.0, 1.0),
+        "realism_group_G1_prob": _f("realism_group_G1_prob", 0.35, 0.0, 1.0),
+        "realism_group_G2_prob": _f("realism_group_G2_prob", 0.15, 0.0, 1.0),
+        "realism_group_G3_prob": _f("realism_group_G3_prob", 0.20, 0.0, 1.0),
+        "realism_group_G4_prob": _f("realism_group_G4_prob", 0.25, 0.0, 1.0),
+        "realism_group_G5_prob": _f("realism_group_G5_prob", 0.12, 0.0, 1.0),
+        "realism_group_G6_prob": _f("realism_group_G6_prob", 0.18, 0.0, 1.0),
+        "realism_group_G7_prob": _f("realism_group_G7_prob", 0.10, 0.0, 1.0),
+        "realism_group_G8_prob": _f("realism_group_G8_prob", 0.08, 0.0, 1.0),
     }
 
 
@@ -195,11 +215,20 @@ def _filter_settings_to_profile_store(d: Dict[str, Any]) -> Dict[str, Any]:
     for k, v in d.items():
         if not isinstance(k, str):
             continue
-        if k.endswith("_randomize"):
-            out[k] = bool(v) if isinstance(v, bool) else str(v).strip().lower() in {"1", "true", "yes", "on"}
+        if not is_filter_popup_extra_key(k):
+            continue
+        if k.endswith("_randomize") or k.endswith("_enabled"):
+            out[k] = parse_bool_like(v, default=False)
+        elif k == "filter_mode" or k.endswith("_profile_id"):
+            out[k] = str(v)
         elif k.endswith("_min") or k.endswith("_max"):
             try:
                 out[k] = f"{float(v):.2f}"
+            except Exception:
+                pass
+        elif k.startswith("realism_"):
+            try:
+                out[k] = f"{float(v):.4f}"
             except Exception:
                 pass
     return out
@@ -273,7 +302,7 @@ def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[st
     current = _normalize_filter_settings(active_profile)
     if isinstance(active_profile, dict):
         for k, v in active_profile.items():
-            if isinstance(k, str) and (k.endswith("_randomize") or k.endswith("_min") or k.endswith("_max")):
+            if isinstance(k, str) and is_filter_popup_extra_key(k):
                 current[k] = v
     return profiles, active, current
 
@@ -919,7 +948,7 @@ def _open_tk_viewer(
         current_image_filters = dict(shared_current_filter)
         extra_filter_values: Dict[str, Any] = {
             k: v for k, v in current_image_filters.items()
-            if isinstance(k, str) and (k.endswith("_randomize") or k.endswith("_min") or k.endswith("_max"))
+            if isinstance(k, str) and is_filter_popup_extra_key(k)
         }
 
         filter_cardinal_rotation_90_var = tk.BooleanVar(value=bool(current_image_filters.get("cardinal_rotation_90", True)))
@@ -1013,7 +1042,7 @@ def _open_tk_viewer(
             x = _normalize_filter_settings(d)
             extra_filter_values.clear()
             for k, v in d.items():
-                if isinstance(k, str) and (k.endswith("_randomize") or k.endswith("_min") or k.endswith("_max")):
+                if isinstance(k, str) and is_filter_popup_extra_key(k):
                     extra_filter_values[k] = v
             filter_cardinal_rotation_90_var.set(bool(x["cardinal_rotation_90"]))
             filter_enable_rotation_var.set(bool(x["enable_rotation"]))
@@ -1114,6 +1143,7 @@ def _open_tk_viewer(
                 show_messagebox=show_messagebox,
                 ask_string=ask_string,
                 ask_yes_no=ask_yes_no,
+                sim_root=str(sim_root),
             )
 
         cardinal_rotation_90_var = filter_cardinal_rotation_90_var
