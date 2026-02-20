@@ -27,7 +27,8 @@ def _open_zoom_image_popup(popup: Any, pil_img: Any, title: str) -> None:
     win = tk.Toplevel(popup.top)
     win.title(title)
     win.transient(popup.top)
-    win.grab_set()
+    win.lift()
+    win.focus_force()
 
     max_w = max(240, int(win.winfo_screenwidth() * 0.9))
     max_h = max(240, int(win.winfo_screenheight() * 0.85))
@@ -47,6 +48,16 @@ def _open_zoom_image_popup(popup: Any, pil_img: Any, title: str) -> None:
     popup._zoom_photo = photo
     popup._zoom_pil = img
     popup._zoom_img_window = win
+
+    # Grab can fail if called before the window is viewable on some Tk backends.
+    def _safe_grab() -> None:
+        try:
+            if win.winfo_exists():
+                win.grab_set()
+        except tk.TclError:
+            pass
+
+    win.after_idle(_safe_grab)
 
 
 def build_preview_panel(popup: Any, parent: ttk.Frame) -> None:
