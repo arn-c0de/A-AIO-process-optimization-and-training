@@ -4,9 +4,9 @@
 Professional GUI with:
 - Tab 1: Pipeline Control - Enhanced pipeline monitoring
 - Tab 2: Analysis - Interactive image browser with defect overlays
-- Tab 3: Predictions - Batch predict/evaluate (predict.sh)
-- Tab 4: Weights - Model versioning/backup/export + comparisons
-- Tab 5: Validation - Advanced dataset testing with automated flagging
+- Tab 3: Validation - Advanced dataset testing with automated flagging
+- Tab 4: Predictions - Batch predict/evaluate (predict.sh)
+- Tab 5: Weights - Model versioning/backup/export + comparisons
 """
 
 from __future__ import annotations
@@ -160,6 +160,13 @@ class MonitorAppTabbed:
         )
         self.notebook.add(self.tabs["analysis"].frame, text="Analysis")
 
+        self.tabs["validation"] = ValidationTab(
+            self.notebook,
+            self.sim_root,
+            self.state
+        )
+        self.notebook.add(self.tabs["validation"].frame, text="Validation")
+
         self.tabs["predictions"] = PredictionsTab(
             self.notebook,
             self.sim_root,
@@ -173,13 +180,6 @@ class MonitorAppTabbed:
             self.state
         )
         self.notebook.add(self.tabs["weights"].frame, text="Weights")
-
-        self.tabs["validation"] = ValidationTab(
-            self.notebook,
-            self.sim_root,
-            self.state
-        )
-        self.notebook.add(self.tabs["validation"].frame, text="Validation")
 
         self.tabs["merge"] = MergeTab(
             self.notebook,
