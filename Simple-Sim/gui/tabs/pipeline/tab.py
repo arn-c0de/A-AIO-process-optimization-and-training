@@ -100,8 +100,12 @@ class PipelineControlTab(BaseTab):
         self._dataset_milestones: dict[str, int] = {}
         self._filter_popup_extras: Dict[str, Any] = {}
         self._dataset_catalog = DatasetCatalog(sim_root, state.settings_store)
+        self._ui_built: bool = False
         
     def build_ui(self) -> None:
+        if self._ui_built:
+            return
+        self._ui_built = True
         self.ui.build_ui()
         self.ui.frame.pack(fill="both", expand=True)
         self._ensure_initial_placeholder_dataset()
@@ -1688,20 +1692,9 @@ class PipelineControlTab(BaseTab):
         try: self._autoselect_config_for_profile(profile_id, prefer_quiet=True)
         except Exception: pass
 
-        if (ds := self._selected_dataset_dir()) and self.logic.get_dataset_profile_id(ds) == profile_id:
-            self._last_profile_id = profile_id
-            return
-
-        if (candidate := self._find_dataset_for_profile(profile_id)):
-            if self.ui.ask_yes_no("Switch dataset", f"A dataset for profile '{profile_id}' already exists:\\n{candidate}\\n\\nSwitch to it so profiles stay separated?"):
-                self._select_dataset(candidate); self._last_profile_id = profile_id; return
-            self._revert_profile_selection(); return
-
-        if self.ui.ask_yes_no("Create dataset", f"No dataset currently matches profile '{profile_id}'.\\nWould you like to prepare a new out path for this profile?"):
-            self._prepare_dataset_for_profile(profile_id, self.logic.config_for_profile(profile_id, want_backend=(self.ui.var_render_backend.get().strip() or None)))
-            self._last_profile_id = profile_id; return
-
-        self._revert_profile_selection()
+        # Do not open profile-switch/create popups automatically.
+        # Keep profile selection passive and only update state.
+        self._last_profile_id = profile_id
 
     def _find_dataset_for_profile(self, profile_id: str) -> Optional[Path]:
         runs_root = self.sim_root / "outputs" / "sim_data" / "runs"
