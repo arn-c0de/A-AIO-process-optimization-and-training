@@ -12,6 +12,9 @@ All notable changes to **Simple-Sim** are documented in this file.
 - Fixed path persistence, preview reload, filter popup persistence, and key 3D geometry issues.
 - Added live filter preview panel to the Image Filters popup: profile dropdown (categorized 2D/3D), one-click render, and inline image display using current filter settings.
 - Added dataset customization in GUI: delete single images and move images between datasets from Analyze and Datasets views.
+- Added new Datasets tab with dataset catalog management: categories, category rename/delete, archive/unarchive, and filtering.
+- Updated Pipeline and Analysis dataset selectors to show categories and hide archived datasets.
+- Updated multi-dataset selection popup/tooling to use categorized labels and ignore archived datasets.
 
 ### Extension Opportunities
 - Profile diff/compare tooling.

@@ -11,6 +11,7 @@ from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.settings_store import SettingsStore
 from gui.utils.dataset_ops import delete_samples, move_samples
+from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, dataset_display_name
 from .ui import AnalysisUI
 from .logic import AnalysisLogic
 from simple_sim.schema import MetaRow
@@ -29,6 +30,7 @@ class AnalysisTab(BaseTab):
         self.visible_sample_item_by_id: dict[str, str] = {}
         self._filter_after_id: Optional[str] = None
         self._dataset_by_display: dict[str, Path] = {}
+        self._dataset_catalog = DatasetCatalog(sim_root, state.settings_store)
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -41,11 +43,19 @@ class AnalysisTab(BaseTab):
     def on_dataset_changed(self) -> None:
         if not self.state.dataset_dir: return
         display = self._display_for_dataset(self.state.dataset_dir)
+        cat = self._dataset_catalog.category_for(self.state.dataset_dir)
+        if cat and cat != DEFAULT_CATEGORY:
+            display = f"[{cat}] {display}"
         if display in self._dataset_by_display:
             self.ui.var_dataset.set(display)
         else:
             self._refresh_datasets()
-            self.ui.var_dataset.set(self._display_for_dataset(self.state.dataset_dir))
+            if display in self._dataset_by_display:
+                self.ui.var_dataset.set(display)
+            elif values := list(self.ui.dataset_combo["values"]):
+                self.ui.var_dataset.set(values[0])
+                self._on_dataset_selected()
+                return
         self._load_dataset()
         self._try_load_model()
 
@@ -77,24 +87,28 @@ class AnalysisTab(BaseTab):
             var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
 
     def _display_for_dataset(self, p: Path) -> str:
-        try:
-            runs, versions = self.logic.sim_data_roots()
-            rp = p.resolve()
-            if str(rp).startswith(str(runs.resolve()) + "/"): return rp.name
-            if str(rp).startswith(str(versions.resolve()) + "/"): return f"{rp.parent.name}:{rp.name}"
-        except Exception: pass
-        return p.name
+        runs, versions = self.logic.sim_data_roots()
+        return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
     def _refresh_datasets(self) -> None:
+        self._dataset_catalog.reload()
         cand = self.logic.get_datasets()
         cand.sort(key=lambda p: (1, -p.stat().st_mtime, p.name) if "versions" in str(p) else (0, p.name, -p.stat().st_mtime))
+        self._dataset_catalog.prune_unknown(cand)
+        self._dataset_catalog.save(self.frame)
+        cand = [p for p in cand if not self._dataset_catalog.is_archived(p)]
         
         self._dataset_by_display.clear()
         displays: list[str] = []
         seen: dict[str, int] = {}
         for p in cand:
             base = self._display_for_dataset(p)
-            disp = f"{base} ({seen.get(base, 0)})" if (seen.update({base: seen.get(base, 0) + 1})) else base
+            category = self._dataset_catalog.category_for(p)
+            if category and category != DEFAULT_CATEGORY:
+                base = f"[{category}] {base}"
+            n = seen.get(base, 0) + 1
+            seen[base] = n
+            disp = base if n == 1 else f"{base} ({n})"
             self._dataset_by_display[disp] = p
             displays.append(disp)
         
@@ -103,11 +117,19 @@ class AnalysisTab(BaseTab):
         
         if self.state.dataset_dir:
             want = self._display_for_dataset(self.state.dataset_dir)
+            cat = self._dataset_catalog.category_for(self.state.dataset_dir)
+            if cat and cat != DEFAULT_CATEGORY:
+                want = f"[{cat}] {want}"
             for d, pp in self._dataset_by_display.items():
                 if pp == self.state.dataset_dir or d == want:
                     self.ui.var_dataset.set(d)
                     return
         if displays: self.ui.var_dataset.set(displays[0])
+
+    def refresh(self) -> None:
+        if not self.initialized:
+            return
+        self._refresh_datasets()
 
     def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
         if not (ds := self._dataset_by_display.get(self.ui.var_dataset.get().strip())): return
