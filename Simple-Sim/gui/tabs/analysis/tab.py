@@ -228,25 +228,46 @@ class AnalysisTab(BaseTab):
 
         threading.Thread(target=analyze, daemon=True).start()
 
-    def _selected_sample_id(self) -> Optional[str]:
+    def _selected_sample_ids(self) -> List[str]:
+        selected: List[str] = []
+        try:
+            for item in self.ui.tree.selection():
+                if item in self.meta_dict:
+                    selected.append(item)
+        except Exception:
+            selected = []
+
+        if selected:
+            seen = set()
+            ordered: List[str] = []
+            for sample_id in selected:
+                if sample_id in seen:
+                    continue
+                seen.add(sample_id)
+                ordered.append(sample_id)
+            return ordered
+
         if self.current_sample_id in self.meta_dict:
-            return self.current_sample_id
+            return [self.current_sample_id]
         if self.visible_sample_ids:
-            return self.visible_sample_ids[0]
-        return None
+            return [self.visible_sample_ids[0]]
+        return []
 
     def _delete_current_image(self) -> None:
         if not self.state.dataset_dir:
             return
-        sample_id = self._selected_sample_id()
-        if not sample_id:
+        sample_ids = self._selected_sample_ids()
+        if not sample_ids:
             messagebox.showinfo("Info", "No sample selected.")
             return
-        if not messagebox.askyesno("Delete image", f"Delete sample '{sample_id}' from dataset '{self.state.dataset_dir.name}'?"):
+        if not messagebox.askyesno(
+            "Delete image",
+            f"Delete {len(sample_ids)} sample(s) from dataset '{self.state.dataset_dir.name}'?",
+        ):
             return
 
         try:
-            delete_samples(self.state.dataset_dir, [sample_id])
+            delete_samples(self.state.dataset_dir, sample_ids)
             self._refresh_datasets()
             self._load_dataset()
             self._try_load_model()
@@ -260,8 +281,8 @@ class AnalysisTab(BaseTab):
     def _move_current_image(self) -> None:
         if not self.state.dataset_dir:
             return
-        sample_id = self._selected_sample_id()
-        if not sample_id:
+        sample_ids = self._selected_sample_ids()
+        if not sample_ids:
             messagebox.showinfo("Info", "No sample selected.")
             return
 
@@ -277,7 +298,7 @@ class AnalysisTab(BaseTab):
         dialog.grab_set()
         frm = ttk.Frame(dialog, padding=10)
         frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text=f"Select target dataset for '{sample_id}':").pack(anchor="w")
+        ttk.Label(frm, text=f"Select target dataset for {len(sample_ids)} selected sample(s):").pack(anchor="w")
         lb = tk.Listbox(frm, height=min(12, max(5, len(targets))), exportselection=False)
         lb.pack(fill="both", expand=True, pady=(6, 8))
         for label, _ in targets:
@@ -291,11 +312,11 @@ class AnalysisTab(BaseTab):
             target_display, target_dir = targets[int(idxs[0])]
             if not messagebox.askyesno(
                 "Move image",
-                f"Move sample '{sample_id}'\nfrom '{source_ds.name}'\nto '{target_display}'?",
+                f"Move {len(sample_ids)} sample(s)\nfrom '{source_ds.name}'\nto '{target_display}'?",
             ):
                 return
             try:
-                move_samples(source_ds, target_dir, [sample_id], enforce_profile_match=True)
+                move_samples(source_ds, target_dir, sample_ids, enforce_profile_match=True)
                 dialog.destroy()
                 self._refresh_datasets()
                 self._load_dataset()

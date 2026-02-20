@@ -101,7 +101,7 @@ class AnalysisUI:
 
         tree_frame = ttk.Frame(left)
         tree_frame.pack(fill="both", expand=True, pady=(5, 0))
-        self.tree = ttk.Treeview(tree_frame, columns=("Class",), show="tree headings", height=20)
+        self.tree = ttk.Treeview(tree_frame, columns=("Class",), show="tree headings", height=20, selectmode="extended")
         self.tree.heading("#0", text="ID")
         self.tree.column("#0", width=200)
         self.tree.heading("Class", text="Class")
