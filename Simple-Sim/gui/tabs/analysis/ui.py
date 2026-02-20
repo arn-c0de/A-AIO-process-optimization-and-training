@@ -36,6 +36,8 @@ class AnalysisUI:
         self.photo: Optional[ImageTk.PhotoImage] = None
         self._preview_max_px: int = 420
         self.sample_menu: tk.Menu
+        self.var_feedback_status: tk.StringVar
+        self._feedback_class_values: List[str]
 
     def build_ui(self):
         top = ttk.Frame(self.frame)
@@ -54,6 +56,7 @@ class AnalysisUI:
         ttk.Button(top, text="Delete Image", command=self.tab._delete_current_image).pack(side="left", padx=(10, 0))
         ttk.Button(top, text="Move To...", command=self.tab._move_current_image).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Analyze Dataset", command=self.tab._analyze_dataset).pack(side="left", padx=(15, 0))
+        ttk.Button(top, text="Recompute with Feedback", command=self.tab._recompute_with_feedback).pack(side="left", padx=(6, 0))
         
         stats_row = ttk.Frame(self.frame)
         stats_row.pack(fill="x", pady=(0, 8))
@@ -138,8 +141,53 @@ class AnalysisUI:
         info_frame.pack(fill="both", expand=True, pady=(5, 0))
         self.info_text = tk.Text(info_frame, height=12, wrap="word", state="disabled")
         self.info_text.pack(fill="both", expand=True)
-        
-    def display_image(self, image_path: str, meta_row: MetaRow, label: str, prediction: Optional[Tuple[str, float, dict]]):
+
+        feedback_frame = ttk.LabelFrame(right, text="User Feedback", padding=10)
+        feedback_frame.pack(fill="x", pady=(10, 0))
+        self.var_feedback_status = tk.StringVar(value="No manual feedback yet.")
+        ttk.Label(feedback_frame, textvariable=self.var_feedback_status).pack(anchor="w")
+
+        action_row = tk.Frame(feedback_frame, bg="#d4d7db")
+        action_row.pack(fill="x", pady=(8, 4))
+        tk.Button(
+            action_row,
+            text="👍 Correct",
+            command=self.tab._feedback_thumbs_up,
+            bd=0,
+            relief="flat",
+            bg="#4b5563",
+            fg="white",
+            activebackground="#374151",
+            activeforeground="white",
+            padx=16,
+            pady=8,
+            cursor="hand2",
+        ).pack(side="left", padx=(8, 6), pady=8)
+        tk.Button(
+            action_row,
+            text="👎 Wrong",
+            command=self.tab._feedback_thumbs_down,
+            bd=0,
+            relief="flat",
+            bg="#6b7280",
+            fg="white",
+            activebackground="#4b5563",
+            activeforeground="white",
+            padx=16,
+            pady=8,
+            cursor="hand2",
+        ).pack(side="left", padx=6, pady=8)
+        self._feedback_class_values = []
+
+    def display_image(
+        self,
+        image_path: str,
+        meta_row: MetaRow,
+        label: str,
+        prediction: Optional[Tuple[str, float, dict]],
+        original_label: Optional[str] = None,
+        feedback: Optional[Dict] = None,
+    ):
         try:
             img = cv2.imread(image_path)
             if img is None:
@@ -159,21 +207,43 @@ class AnalysisUI:
             cy = max(1, int(self.canvas.winfo_height() / 2))
             self.canvas.create_image(cx, cy, image=self.photo, anchor="center")
             
-            self.update_metadata_panel(meta_row, label, prediction)
+            self.update_metadata_panel(meta_row, label, prediction, original_label=original_label, feedback=feedback)
         except Exception as e:
             raise RuntimeError(f"Failed to display image: {e}")
 
-    def update_metadata_panel(self, meta_row: MetaRow, ground_truth: str, prediction: Optional[Tuple[str, float, dict]]):
+    def update_metadata_panel(
+        self,
+        meta_row: MetaRow,
+        ground_truth: str,
+        prediction: Optional[Tuple[str, float, dict]],
+        original_label: Optional[str] = None,
+        feedback: Optional[Dict] = None,
+    ):
         self.info_text.configure(state="normal")
         self.info_text.delete("1.0", "end")
         
-        info = f"Sample ID: {meta_row.id}\\nGround Truth: {ground_truth}\\n"
+        info = f"Sample ID: {meta_row.id}\\nGround Truth (effective): {ground_truth}\\n"
+        if original_label and original_label != ground_truth:
+            info += f"Ground Truth (original): {original_label}\\n"
         if prediction:
             predicted, confidence, _ = prediction
             status = "✓ CORRECT" if predicted == ground_truth else "✗ WRONG"
             info += f"Predicted: {predicted} ({confidence:.1%}) {status}\\n"
         else:
             info += "Predicted: (no model loaded)\\n"
+        if feedback:
+            verdict = str(feedback.get("verdict") or "")
+            corrected = str(feedback.get("corrected_class") or "").strip()
+            note = str(feedback.get("note") or "").strip()
+            ts = str(feedback.get("timestamp") or "")
+            info += f"Feedback: {verdict}"
+            if corrected:
+                info += f" -> {corrected}"
+            if ts:
+                info += f" @ {ts}"
+            info += "\\n"
+            if note:
+                info += f"Feedback note: {note}\\n"
         
         info += f"\\nDefect Parameters:\\n"
         for key, value in meta_row.defect.items():
@@ -226,3 +296,53 @@ class AnalysisUI:
             return
         self.tree.selection_set(item)
         self.sample_menu.tk_popup(event.x_root, event.y_root)
+
+    def set_feedback_class_values(self, values: List[str]) -> None:
+        self._feedback_class_values = list(values)
+
+    def set_feedback_status(self, text: str) -> None:
+        self.var_feedback_status.set(text)
+
+    def prompt_thumbs_down_feedback(self) -> Optional[Tuple[str, str]]:
+        """Ask user for corrected class and optional note on thumbs-down."""
+        if not self._feedback_class_values:
+            return None
+        dlg = tk.Toplevel(self.frame.winfo_toplevel())
+        dlg.title("Mark As Wrong")
+        dlg.transient(self.frame.winfo_toplevel())
+        dlg.grab_set()
+        dlg.configure(bg="#d4d7db")
+
+        wrap = ttk.Frame(dlg, padding=12)
+        wrap.pack(fill="both", expand=True)
+        ttk.Label(wrap, text="Select correct class (required):").pack(anchor="w")
+
+        var_class = tk.StringVar(value=self._feedback_class_values[0])
+        combo = ttk.Combobox(wrap, textvariable=var_class, values=self._feedback_class_values, state="readonly", width=18)
+        combo.pack(anchor="w", pady=(4, 10))
+        combo.focus_set()
+
+        ttk.Label(wrap, text="Note (optional):").pack(anchor="w")
+        var_note = tk.StringVar(value="")
+        entry = ttk.Entry(wrap, textvariable=var_note, width=42)
+        entry.pack(fill="x", pady=(4, 12))
+
+        result: dict[str, str] = {}
+
+        def _save() -> None:
+            cls = var_class.get().strip()
+            if not cls:
+                return
+            result["class"] = cls
+            result["note"] = var_note.get().strip()
+            dlg.destroy()
+
+        btn_row = ttk.Frame(wrap)
+        btn_row.pack(fill="x")
+        ttk.Button(btn_row, text="Cancel", command=dlg.destroy).pack(side="right")
+        ttk.Button(btn_row, text="Save", command=_save).pack(side="right", padx=(0, 8))
+
+        dlg.wait_window()
+        if "class" not in result:
+            return None
+        return result["class"], result.get("note", "")

@@ -5,10 +5,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import torch
 import json
+import numpy as np
 
 from gui.utils.model_inference import load_model, ModelWrapper
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from simple_sim.manifest import hash_file
+from simple_sim.metrics import compute_metrics
 
 
 class AnalysisLogic:
@@ -102,30 +104,95 @@ class AnalysisLogic:
             print(f"Failed to read checkpoint metadata {path}: {exc}")
             return None
 
-    def analyze_dataset(self, dataset_dir: Path, sample_ids: List[str], meta_dict: Dict[str, MetaRow], label_dict: Dict[str, str]) -> Dict:
+    def analyze_dataset(
+        self,
+        dataset_dir: Path,
+        sample_ids: List[str],
+        meta_dict: Dict[str, MetaRow],
+        label_dict: Dict[str, str],
+        effective_label_dict: Optional[Dict[str, str]] = None,
+        feedback_summary: Optional[Dict] = None,
+    ) -> Dict:
         if not self.model:
             raise ValueError("No model loaded.")
 
-        results = {'dataset_path': str(dataset_dir), 'model_path': str(self.model.model_path), 'samples': [], 'summary': {}}
+        results = {
+            'dataset_path': str(dataset_dir),
+            'model_path': str(self.model.model_path),
+            'samples': [],
+            'summary': {},
+        }
         correct_count = 0
-        
+        failed_count = 0
+        y_true_labels: list[str] = []
+        y_pred_labels: list[str] = []
+
         for sample_id in sample_ids:
             meta_row = meta_dict[sample_id]
-            ground_truth = label_dict[sample_id]
+            original_ground_truth = label_dict[sample_id]
+            ground_truth = (
+                effective_label_dict.get(sample_id, original_ground_truth)
+                if effective_label_dict
+                else original_ground_truth
+            )
             image_path = dataset_dir / meta_row.image_path
             try:
                 predicted, confidence, _ = self.model.predict(image_path)
                 is_correct = (predicted == ground_truth)
                 if is_correct:
                     correct_count += 1
-                results['samples'].append({'id': sample_id, 'ground_truth': ground_truth, 'predicted': predicted, 'confidence': confidence, 'correct': is_correct})
+                y_true_labels.append(ground_truth)
+                y_pred_labels.append(predicted)
+                results['samples'].append({
+                    'id': sample_id,
+                    'ground_truth': ground_truth,
+                    'ground_truth_original': original_ground_truth,
+                    'predicted': predicted,
+                    'confidence': confidence,
+                    'correct': is_correct,
+                })
             except Exception as e:
                 print(f"Failed to analyze {sample_id}: {e}")
+                failed_count += 1
 
-        total_count = len(sample_ids)
-        results['summary'] = {'total': total_count, 'correct': correct_count, 'accuracy': correct_count / total_count if total_count > 0 else 0}
-        
+        analyzed_count = len(y_true_labels)
+        class_names = self._ordered_class_names(set(y_true_labels) | set(y_pred_labels))
+        metrics = self._compute_metrics(y_true_labels, y_pred_labels, class_names)
+
+        results['summary'] = {
+            'total_requested': len(sample_ids),
+            'analyzed': analyzed_count,
+            'failed': failed_count,
+            'correct': correct_count,
+            'accuracy': (correct_count / analyzed_count) if analyzed_count > 0 else 0.0,
+        }
+        results['metrics'] = metrics
+        results['class_names'] = class_names
+        results['used_feedback'] = bool(effective_label_dict)
+        if feedback_summary:
+            results['feedback_summary'] = feedback_summary
+
         output_path = dataset_dir / "analysis_results.json"
-        with open(output_path, 'w') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2)
         return results
+
+    def _ordered_class_names(self, classes: set[str]) -> list[str]:
+        priority = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+        ordered = [p for p in priority if p in classes]
+        ordered.extend(sorted([c for c in classes if c and c not in priority]))
+        return ordered
+
+    def _compute_metrics(self, y_true_labels: list[str], y_pred_labels: list[str], class_names: list[str]) -> Dict:
+        if not y_true_labels or not y_pred_labels or not class_names:
+            return {
+                "accuracy": 0.0,
+                "macro_f1": 0.0,
+                "per_class": {},
+                "confusion_matrix": [],
+                "critical_fn_rates": {},
+            }
+        idx = {name: i for i, name in enumerate(class_names)}
+        y_true = np.array([idx[s] for s in y_true_labels], dtype=np.int64)
+        y_pred = np.array([idx[s] for s in y_pred_labels], dtype=np.int64)
+        return compute_metrics(y_true, y_pred, class_names)

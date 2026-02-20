@@ -13,9 +13,15 @@ from gui.state import UiState
 from gui.utils.settings_store import SettingsStore
 from gui.utils.dataset_ops import delete_samples, move_samples
 from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, dataset_display_name
+from gui.utils.feedback_manager import (
+    FeedbackManager,
+    VERDICT_THUMBS_DOWN,
+    VERDICT_THUMBS_UP,
+)
 from .ui import AnalysisUI
 from .logic import AnalysisLogic
 from simple_sim.schema import MetaRow
+from simple_sim.config import VALID_CLASSES
 
 
 class AnalysisTab(BaseTab):
@@ -26,7 +32,10 @@ class AnalysisTab(BaseTab):
         self.sample_ids: list[str] = []
         self.meta_dict: dict[str, MetaRow] = {}
         self.label_dict: dict[str, str] = {}
+        self.effective_label_dict: dict[str, str] = {}
         self.profile_dict: dict[str, str] = {}
+        self.feedback_manager: Optional[FeedbackManager] = None
+        self.feedback_latest_by_sample: dict[str, dict] = {}
         self.current_sample_id: Optional[str] = None
         self.visible_sample_ids: list[str] = []
         self.visible_sample_item_by_id: dict[str, str] = {}
@@ -145,17 +154,20 @@ class AnalysisTab(BaseTab):
         if not self.state.dataset_dir: return
         try:
             self.meta_dict, self.label_dict, self.profile_dict, self.sample_ids = self.logic.load_dataset(self.state.dataset_dir)
+            self._reload_feedback()
             
             run_ids = {"All"} | {sid.split('/')[0] for sid in self.sample_ids if '/' in sid}
             domains = {"All"} | {sid.split('/')[1] for sid in self.sample_ids if len(sid.split('/')) > 1}
-            classes = {"All"} | {c for c in self.label_dict.values() if c and c != "?"}
+            classes = {"All"} | {c for c in self.effective_label_dict.values() if c and c != "?"}
             
             self.ui.combo_run.configure(values=sorted(list(run_ids)))
             self.ui.combo_domain.configure(values=sorted(list(domains)))
             self.ui.combo_class.configure(values=["All"] + self._sorted_class_values(classes - {"All"}))
+            self.ui.set_feedback_class_values(self._sorted_class_values(set(VALID_CLASSES) | (classes - {"All"})))
 
             self._filter_images()
             self._update_dataset_stats_label()
+            self._update_feedback_panel()
         except Exception as e:
             messagebox.showerror("Load Error", f"Failed to load dataset:\\n{e}")
 
@@ -174,18 +186,18 @@ class AnalysisTab(BaseTab):
         }
 
         for sid in self.sample_ids:
-            if filters['class'] != "All" and self.label_dict.get(sid, "?") != filters['class']: continue
+            if filters['class'] != "All" and self.effective_label_dict.get(sid, "?") != filters['class']: continue
             parts = sid.split('/')
             if len(parts) >= 3:
                 run, domain, split = parts[0], parts[1], parts[2]
                 if filters['run'] != "All" and run != filters['run']: continue
                 if filters['domain'] != "All" and domain != filters['domain']: continue
                 if filters['split'] != "All" and split != filters['split']: continue
-                if query and query not in f"{sid} {sid.split('/')[-1]} {self.label_dict.get(sid, '?')}".lower(): continue
+                if query and query not in f"{sid} {sid.split('/')[-1]} {self.effective_label_dict.get(sid, '?')}".lower(): continue
 
                 hierarchy.setdefault(run, {}).setdefault(domain, {}).setdefault(split, []).append(sid)
         
-        self.ui.populate_tree(hierarchy, self.label_dict, self.visible_sample_ids, self.visible_sample_item_by_id, query)
+        self.ui.populate_tree(hierarchy, self.effective_label_dict, self.visible_sample_ids, self.visible_sample_item_by_id, query)
         self._update_dataset_stats_label()
         
         if self.current_sample_id not in self.visible_sample_item_by_id:
@@ -242,8 +254,13 @@ class AnalysisTab(BaseTab):
             except Exception as e: print(f"Prediction failed: {e}")
         
         try:
+            original_label = self.label_dict.get(sample_id, "?")
+            effective_label = self.effective_label_dict.get(sample_id, original_label)
+            feedback = self.feedback_latest_by_sample.get(sample_id)
             self.ui.display_image(str(self.state.dataset_dir / self.meta_dict[sample_id].image_path),
-                                  self.meta_dict[sample_id], self.label_dict.get(sample_id, "?"), prediction)
+                                  self.meta_dict[sample_id], effective_label, prediction,
+                                  original_label=original_label, feedback=feedback)
+            self._update_feedback_panel()
         except Exception as e:
             messagebox.showerror("Display Error", str(e))
 
@@ -268,18 +285,112 @@ class AnalysisTab(BaseTab):
         self.state.current_model_path = self.logic.model.model_path if self.logic.model else None
 
     def _analyze_dataset(self) -> None:
+        self._run_analysis(use_feedback=False)
+
+    def _recompute_with_feedback(self) -> None:
+        self._run_analysis(use_feedback=True)
+
+    def _run_analysis(self, use_feedback: bool) -> None:
         if not self.state.dataset_dir or not self.logic.model:
             messagebox.showinfo("Info", "No model loaded. Train a model first.")
             return
 
         def analyze():
             try:
-                results = self.logic.analyze_dataset(self.state.dataset_dir, self.sample_ids, self.meta_dict, self.label_dict)
-                messagebox.showinfo("Success", f"Analysis complete!\\n\\nAccuracy: {results['summary']['accuracy']:.1%}\\nResults saved to:\\n{self.state.dataset_dir / 'analysis_results.json'}")
+                effective = self.effective_label_dict if use_feedback else None
+                feedback_summary = self.feedback_manager.summary() if (use_feedback and self.feedback_manager) else None
+                results = self.logic.analyze_dataset(
+                    self.state.dataset_dir,
+                    self.sample_ids,
+                    self.meta_dict,
+                    self.label_dict,
+                    effective_label_dict=effective,
+                    feedback_summary=feedback_summary,
+                )
+                mode = "with feedback" if use_feedback else "baseline"
+                messagebox.showinfo(
+                    "Success",
+                    f"Analysis complete ({mode})!\\n\\nAccuracy: {results['summary']['accuracy']:.1%}"
+                    f"\\nResults saved to:\\n{self.state.dataset_dir / 'analysis_results.json'}",
+                )
             except Exception as e:
                 messagebox.showerror("Error", f"Analysis failed:\\n{e}")
 
         threading.Thread(target=analyze, daemon=True).start()
+
+    def _reload_feedback(self) -> None:
+        if not self.state.dataset_dir:
+            self.feedback_manager = None
+            self.feedback_latest_by_sample = {}
+            self.effective_label_dict = dict(self.label_dict)
+            return
+        self.feedback_manager = FeedbackManager(self.state.dataset_dir)
+        self.feedback_latest_by_sample = self.feedback_manager.latest_feedback_by_sample()
+        self.effective_label_dict = {
+            sid: self.feedback_manager.effective_label(sid, self.label_dict.get(sid, "?"))
+            for sid in self.sample_ids
+        }
+
+    def _feedback_thumbs_up(self) -> None:
+        self._save_feedback(verdict=VERDICT_THUMBS_UP)
+
+    def _feedback_thumbs_down(self) -> None:
+        picked = self.ui.prompt_thumbs_down_feedback()
+        if not picked:
+            return
+        corrected_class, note = picked
+        self._save_feedback(verdict=VERDICT_THUMBS_DOWN, corrected_class=corrected_class, note=note)
+
+    def _save_feedback(self, verdict: str, corrected_class: str = "", note: str = "") -> None:
+        if not self.current_sample_id:
+            messagebox.showinfo("Feedback", "No sample selected.")
+            return
+        if not self.feedback_manager:
+            messagebox.showerror("Feedback", "Feedback manager not available.")
+            return
+        if verdict == VERDICT_THUMBS_DOWN and not corrected_class:
+            messagebox.showinfo("Feedback", "Select the correct class for thumbs down.")
+            return
+
+        try:
+            self.feedback_manager.append_feedback(
+                sample_id=self.current_sample_id,
+                verdict=verdict,
+                corrected_class=corrected_class if verdict == VERDICT_THUMBS_DOWN else None,
+                note=note,
+            )
+            self.feedback_latest_by_sample = self.feedback_manager.latest_feedback_by_sample()
+            self.effective_label_dict[self.current_sample_id] = self.feedback_manager.effective_label(
+                self.current_sample_id,
+                self.label_dict.get(self.current_sample_id, "?"),
+            )
+            self._filter_images(display_first=False)
+            self._display_image(self.current_sample_id)
+        except Exception as exc:
+            messagebox.showerror("Feedback", f"Failed to save feedback:\\n{exc}")
+
+    def _update_feedback_panel(self) -> None:
+        if not self.current_sample_id:
+            self.ui.set_feedback_status("Feedback: no sample selected")
+            return
+        sid = self.current_sample_id
+        original = self.label_dict.get(sid, "?")
+        effective = self.effective_label_dict.get(sid, original)
+        latest = self.feedback_latest_by_sample.get(sid)
+        if not latest:
+            self.ui.set_feedback_status(f"Feedback: none | label={effective}")
+            return
+        verdict = str(latest.get("verdict") or "")
+        corrected = str(latest.get("corrected_class") or "").strip()
+        ts = str(latest.get("timestamp") or "")
+        status = f"Feedback: {verdict}"
+        if corrected:
+            status += f" -> {corrected}"
+        if original != effective:
+            status += f" (original: {original})"
+        if ts:
+            status += f" @ {ts}"
+        self.ui.set_feedback_status(status)
 
     def _selected_sample_ids(self) -> List[str]:
         selected: List[str] = []
