@@ -446,7 +446,7 @@ def _write_svg_heatmap(
     cell_w = 90
     cell_h = 30
     left_pad = 260
-    top_pad = 190
+    top_pad = 290
     right_pad = 40
     bottom_pad = 36
     w = left_pad + cols * cell_w + right_pad
@@ -498,8 +498,8 @@ def _write_svg_heatmap(
     for j, col in enumerate(col_labels):
         x = left_pad + j * cell_w + cell_w * 0.5
         lines.append(
-            f'<text x="{x:.1f}" y="{top_pad - 10}" text-anchor="end" '
-            f'transform="rotate(-36 {x:.1f},{top_pad - 10})" '
+            f'<text x="{x:.1f}" y="{top_pad - 26}" text-anchor="end" '
+            f'transform="rotate(-42 {x:.1f},{top_pad - 26})" '
             f'font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
             f'font-size="12" fill="{text}">{_xml_escape(_short(col, 26))}</text>'
         )
