@@ -126,14 +126,17 @@ class PrecisePopup:
         outer.pack(fill="both", expand=True)
 
         multi = bool(self._s["multi_profiles"])
+        per_class = bool(self._var_per_class.get())
 
         # Controls row ---------------------------------------------------
         ctrl = ttk.Frame(outer)
         ctrl.pack(fill="x", pady=(0, 8))
 
         if not multi:
-            ttk.Label(ctrl, text="Samples per class:").pack(side="left")
+            label = "Samples per class:" if not per_class else "Set all class counts:"
+            ttk.Label(ctrl, text=label).pack(side="left")
             ttk.Entry(ctrl, textvariable=self._var_total, width=7).pack(side="left", padx=(4, 0))
+            self._var_total.trace_add("write", lambda *_args: self._on_total_changed())
 
         ttk.Checkbutton(
             ctrl, text="Per class",
@@ -241,6 +244,14 @@ class PrecisePopup:
     def _on_per_class_toggle(self) -> None:
         self._flush_widget_values()
         self._s["per_class"] = self._var_per_class.get()
+        if self._s["per_class"] and not bool(self._s.get("multi_profiles")):
+            try:
+                n = int(self._var_total.get())
+                if n >= 0:
+                    for cls in (self._s.get("class_names") or []):
+                        self._s["classes"][cls] = n
+            except Exception:
+                pass
         self._rebuild_content()
 
     def _on_reload(self) -> None:
@@ -254,6 +265,17 @@ class PrecisePopup:
         self._flush_widget_values()
         self._on_apply(dict(self._s))
         self._win.destroy()
+
+    def _on_total_changed(self) -> None:
+        """In single-profile per-class mode, mirror the top value into all class rows."""
+        if bool(self._s.get("multi_profiles")):
+            return
+        if not bool(self._var_per_class.get()):
+            return
+        value = self._var_total.get()
+        for var in self._class_vars.values():
+            if var.get() != value:
+                var.set(value)
 
     # ------------------------------------------------------------------
     # Helpers
