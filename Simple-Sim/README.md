@@ -14,9 +14,31 @@ Synthetic AOI-style ROI generation + training/evaluation pipeline for PCB compon
 See [`Sample Gallery`](SAMPLE_GALLERY.md) for auto-generated reference images with defect overlays from all available datasets and profiles.
 See [`Changelog`](CHANGELOG.md) for a version-by-version overview of changes.
 
-See Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
+See latest Arena stats: [`ARENA_REPORT.md`](ARENA_REPORT.md)
 
-### Completed Testing Research
+## Contents
+
+- [Completed Testing Research](#completed-testing-research)
+- [Documentation](#documentation)
+- [Overview](#overview)
+- [Features](#features)
+- [Extended Image Filters (Current Research)](#extended-image-filters-current-research)
+- [Quick Start](#quick-start)
+- [Component Profiles](#component-profiles)
+- [Manifests and Pipeline Guards](#manifests-and-pipeline-guards)
+- [Bundles vs Ensembles](#bundles-vs-ensembles)
+- [Production Deployment: Bundles vs Single Models](#production-deployment-bundles-vs-single-models)
+- [Configuration](#configuration)
+- [Dataset Schema](#dataset-schema)
+- [Project Structure](#project-structure)
+- [GUI Tabs](#gui-tabs)
+- [Success Criteria](#success-criteria)
+- [Troubleshooting](#troubleshooting)
+- [Deferred to M1+](#deferred-to-m1)
+- [Testing](#testing)
+- [License](#license)
+
+## Completed Testing Research
 - Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md`](docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md)
 - Current research: renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md`](docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md)  
   Filter configuration and implementation reference: [`docs/guides/FILTER_SETTINGS.md`](docs/guides/FILTER_SETTINGS.md)
@@ -50,21 +72,20 @@ Defect classes are **component-dependent**; common classes include:
 
 ## Features
 
-- **Deterministic generation**: Every sample reproducible from (run_seed, domain, index)
-- **Contract-based design**: Strict JSONL/YAML schemas with validation
-- **Quality gates**: Validation at each pipeline stage
-- **Modular structure**: Training/eval code decoupled from generation
-- **Comprehensive metrics**: Accuracy, precision, recall, F1, confusion matrix, FN rates
-- **Multi-component profiles (v1.0.1)**: Versioned profiles in `configs/profiles/` (resistor/SOT-23/QFN-32 included)
-- **Footprint-aware rendering**: 2-pad (chip), 3-pad (SOT-23), and 4-pad (QFN) layouts driven by the component profile
-- **Provenance + safety (v1.0.1)**: Dataset manifests + profile hashing + pipeline guards to prevent profile/class mismatches
-- **GUI profile awareness (v1.0.1)**: Profile dropdown, compatibility indicators, dataset/model profile display, info dialogs
-- **Batch scoring with history (v1.0.1)**: `scripts/batch_predict.py` with report history compare and class-mismatch guards
-- **Profile-filtered model selection (v1.0.1)**: Pipeline model dropdown only shows checkpoints matching the dataset profile
-- **Multi-profile bundles**: Merge per-profile checkpoints into a single `.bundle` directory. A bundle is a *container* of per-profile checkpoints named `<profile_id>.pt`. Training into a bundle adds/updates the checkpoint for the dataset profile. Prediction/eval with a bundle resolves the dataset's `component_profile.profile_id` and loads that checkpoint.
-- **Single-file ensemble models (new)**: Merge multiple profile checkpoints into one `.pt` that contains an ensemble (multiple sub-models). At inference time, logits are averaged across sub-models. This is useful for quick cross-profile scoring without bundle dispatch, but it is not a replacement for true multi-profile training.
-- **Bundle metadata**: Each bundle stores `bundle_details.json` with per-model source info (accuracy, F1, profile hash, source path, size)
-- **Extended image filters (new research track)**: Advanced filter pipeline with GUI/profile persistence and randomized per-filter ranges for robust synthetic-domain variation
+- **Data reliability**: Deterministic generation from `(run_seed, domain, index)`.
+- **Data contracts**: Strict JSONL/YAML validation and pipeline quality gates.
+- **Pipeline design**: Generation, training, and evaluation are cleanly separated.
+- **Metrics**: Accuracy, precision, recall, F1, confusion matrix, and FN rates.
+- **Profiles (v1.0.1)**: Versioned component profiles in `configs/profiles/` (e.g. resistor, SOT-23, QFN-32).
+- **Footprint-aware rendering**: 2-pad (chip), 3-pad (SOT-23), and 4-pad (QFN) layouts from profile definitions.
+- **Provenance + safety (v1.0.1)**: `dataset_manifest.json`, profile hashing, and mismatch guards.
+- **GUI profile awareness (v1.0.1)**: Profile compatibility indicators for datasets/models.
+- **Batch scoring history (v1.0.1)**: `scripts/batch_predict.py` with report history and class-mismatch guards.
+- **Profile-filtered model selection (v1.0.1)**: Pipeline model list prioritizes compatible checkpoints.
+- **Multi-profile bundles**: `.bundle` directories with one checkpoint per profile (`<profile_id>.pt`) and automatic profile dispatch.
+- **Single-file ensembles**: One `.pt` with multiple sub-models; inference averages logits across members.
+- **Bundle metadata**: `bundle_details.json` with source path, profile hash, size, and key metrics.
+- **Extended filter research**: Advanced image filter pipeline with persisted profiles and randomized ranges.
 
 ## Extended Image Filters (Current Research)
 
@@ -116,7 +137,27 @@ cd Simple-Sim
 ./tools/build_wheelhouse.sh wheelhouse
 ```
 
-## Component Profiles (New)
+### 2. Update Architecture Documentation
+
+```bash
+cd Simple-Sim
+./tools/update_architektur_md.sh
+```
+
+### 3. Evaluate a Trained Model
+
+```bash
+.venv/bin/python scripts/eval.py \
+  --data outputs/sim_data/runs/run_0001 \
+  --model outputs/models/run_0001.pt
+```
+
+**Outputs:**
+- Console: Formatted metrics table
+- File: `outputs/models/report_run_0001.json`
+- Success criteria check results
+
+## Component Profiles
 
 Profiles live in `configs/profiles/` and are versioned via `profile_id` like `chip_0603_resistor@1`.
 
@@ -140,19 +181,7 @@ Reference run configs you can start from:
 - `configs/run_sot23_3d.yaml`
 - `configs/run_qfn32_3d.yaml`
 
-
-```bash
-.venv/bin/python scripts/eval.py \
-  --data outputs/sim_data/runs/run_0001 \
-  --model outputs/models/run_0001.pt
-```
-
-**Outputs:**
-- Console: Formatted metrics table
-- File: `outputs/models/report_run_0001.json`
-- Success criteria check results
-
-## Manifests + Pipeline Guards (New)
+## Manifests and Pipeline Guards
 
 Each generated dataset includes a `dataset_manifest.json` with provenance (profile id/hash/path, generator version, git commit) and extend history.
 
@@ -169,7 +198,7 @@ cd Simple-Sim
 
 Implementation notes: `PROFILE_SYSTEM_IMPLEMENTATION.md`.
 
-## Bundles vs Ensembles (New)
+## Bundles vs Ensembles
 
 Simple-Sim supports two ways to "combine" multiple profile-specific checkpoints:
 
@@ -265,55 +294,22 @@ One row per sample with class label:
 
 ```
 Simple-Sim/
-├── README.md
-├── requirements.txt
-├── configs/
-│   ├── profiles/              # Versioned component profiles (YAML)
-│   ├── run_0001.yaml          # 0603 resistor reference (schema v2 + profile)
-│   ├── run_sot23.yaml         # SOT-23 transistor example
-│   └── run_qfn32.yaml         # QFN-32 example (larger ROI + extra defect classes)
-├── simple_sim/                # Core package
-│   ├── schema.py              # Data contracts
-│   ├── config.py              # Config validation
-│   ├── rng.py                 # Deterministic seeding
-│   ├── dataset_store.py       # Atomic dataset writing
-│   ├── defects.py             # Defect classification
-│   ├── generator_2d.py        # OpenCV rendering
-│   ├── generator_3d.py        # Blender/Cycles batch rendering (invokes Blender once per dataset)
-│   ├── blender/               # Blender Python scripts (headless batch renderer)
-│   ├── splits.py              # Stratified splitting
-│   ├── metrics.py             # Evaluation metrics
-│   ├── data_loader.py         # PyTorch Dataset
-│   ├── manifest.py            # dataset_manifest.json read/write
-│   ├── profile_hash.py        # Deterministic profile hashing + loading
-│   └── model_bundle.py         # Multi-model bundle support
-├── scripts/
-│   ├── generate.py            # Dataset generation
-│   ├── train.py               # Model training
-│   ├── eval.py                # Test evaluation
-│   ├── predict.py             # Single-image prediction
-│   └── batch_predict.py       # Batch scoring + report history
-├── tools/
-│   ├── validate_dataset.py    # Dataset validation
-│   ├── backfill_manifest.py   # Add manifest to legacy datasets
-│   └── create_multi_dataset.py # Helper for multi-dataset workflows
-├── gui/                       # Tkinter multi-tab GUI
-│   ├── monitor.py             # Main application (MonitorAppTabbed)
-│   ├── state.py               # Shared UI state
-│   ├── tabs/
-│   │   ├── pipeline_tab.py    # Pipeline control with profile-filtered model selection
-│   │   ├── analysis_tab.py    # Image browser with defect overlays
-│   │   ├── predictions_tab.py # Batch prediction interface
-│   │   ├── weights_tab.py     # Checkpoint management and evaluation
-│   │   ├── validation_tab.py  # Automated dataset validation
-│   │   └── merge_tab.py       # Multi-profile weight merging into bundles
-│   ├── components/            # Reusable UI components
-│   └── utils/                 # Settings, tooltips, inference helpers
-├── tests/                     # Unit tests
+├── configs/       # Run-Configs + Profile-YAMLs
+├── simple_sim/    # Core package (generation/training/eval helpers)
+├── scripts/       # CLI entrypoints (generate/train/eval/predict)
+├── tools/         # Validation, migration, profile-editor utilities
+├── gui/           # Tkinter app (tabs/components/utils)
+├── tests/         # Unit + integration tests
+├── docs/          # Guides, logs, technical notes
+├── images/        # README/UI screenshots + sample galleries
+├── third_party/   # Third-party notices
+├── wheelhouse/    # Offline dependency wheels
 └── outputs/
-    ├── sim_data/runs/         # Generated datasets
-    └── models/                # Trained models and .bundle directories
+    ├── sim_data/runs/  # Generated datasets
+    └── models/         # Trained models + .bundle directories
 ```
+
+Full architecture (detailed folder/file structure + `Last update`): [`architektur.md`](architektur.md)
 
 ## GUI Tabs
 
@@ -321,31 +317,40 @@ The GUI is a multi-tab Tkinter application launched via `./gui/run.sh`.
 
 ### Pipeline Control
 
-Runs the generation/training/evaluation pipeline. Supports single, multiple, and continuous run modes. Dataset and model selection are profile-aware: the model dropdown only shows checkpoints and bundles whose embedded profile matches the selected dataset. Legacy checkpoints (no profile metadata) are listed at the bottom of the dropdown. Profile compatibility is checked and displayed next to the dataset info. When no compatible model exists (e.g. after switching to a new profile), the "+" button creates a new model entry by name for training.
-
-The tab also exposes a `Render:` selector (`opencv_2d` vs `blender_3d`). The Profile dropdown is filtered based on the selected render backend, and the GUI auto-selects a matching config when possible (based on `run.component_profile` + `render.backend`).
+- Starts generation/training/evaluation in single, multi, or continuous mode.
+- Model picker is profile-aware; it shows only compatible checkpoints/bundles first.
+- Legacy checkpoints (without profile metadata) are listed separately.
+- If no compatible model exists, `+` creates a new model entry.
+- `Render:` selector (`opencv_2d` / `blender_3d`) filters profile choices and auto-selects matching configs.
 
 ### Analysis
 
-Interactive image browser with defect overlays. Allows browsing generated samples, viewing metadata, and inspecting per-sample defect parameters.
+- Browse generated images with defect overlays.
+- Inspect metadata and per-sample defect parameters.
 
 ### Predictions
 
-Batch prediction interface. Runs `predict.sh` against a dataset with a selected model and displays per-sample results with confidence scores.
+- Run batch prediction with selected dataset/model.
+- Shows per-sample class predictions and confidence values.
 
 ### Weights
 
-Model checkpoint management. Lists all checkpoints (active, snapshots, imports) and multi-profile bundles grouped into categories. Supports snapshot, import, export, rename, duplicate, delete, favorites, and drag-and-drop grouping. Bundles appear with a `[Bundle]` marker and aggregated size. Includes an evaluation runner to score any checkpoint against the current dataset and a compare mode to run two checkpoints side-by-side with a winner summary. Report history is searchable by scope, split, and sort order.
+- Manage checkpoints and bundles (active, snapshots, imports, custom groups).
+- Actions: snapshot/import/export/rename/duplicate/delete/favorites/drag-and-drop grouping.
+- Includes evaluation runner and side-by-side compare mode.
+- Report history is filterable/searchable (scope, split, sort).
 
 ### Validation
 
-Automated dataset validation with flagging. Runs structural and semantic checks on the selected dataset and reports issues.
+- Runs structural and semantic dataset checks.
+- Reports findings and flags inconsistencies.
 
 ### Merge
 
-Combines profile-specific weights into a single multi-profile bundle. The tab scans all checkpoints under `outputs/models/`, groups them by their embedded `profile_id`, and organizes them into the same group categories as the Weights tab (Favorites, Snapshots, Imports, custom groups). Each model shows accuracy, F1, size, modification date, and profile hash. For each profile type, exactly one checkpoint can be selected. The merge operation copies the selected checkpoints into a `.bundle` directory and writes both `bundle.json` metadata and `bundle_details.json` with detailed per-model information (source path, accuracy, F1, profile hash, size, modification date). Existing bundles are listed with their included profiles and creation date, and can be inspected or deleted.
-
-A merged bundle appears as a first-class entry in the Weights tab and can be selected as a model in the Pipeline Control tab. When a bundle is used for training, evaluation, or prediction, the pipeline automatically resolves the correct per-profile checkpoint based on the dataset profile.
+- Merges profile-specific checkpoints into one `.bundle`.
+- Scans `outputs/models/`, groups by `profile_id`, and lets you pick one checkpoint per profile.
+- Writes `bundle.json` and `bundle_details.json` (source, metrics, hash, size, date).
+- Bundles are selectable in Weights and Pipeline tabs; runtime auto-resolves the matching profile checkpoint.
 
 ## Success Criteria
 
@@ -365,12 +370,12 @@ A merged bundle appears as a first-class entry in the Weights tab and can be sel
 
 ## Troubleshooting
 
-### Training not converging (val acc < 70%)
+### Training accuracy not converging (`val_acc < 70%`)
 - Increase dataset size: 200 samples per class (800 total)
 - Add dropout or increase L2 regularization
 - Check class distribution in splits
 
-### TOMBSTONE not distinguishable
+### `TOMBSTONE` class not distinguishable
 - Increase tilt threshold to 80-85°
 - Enhance visual difference (thinner vertical rectangle)
 - Add shadows for depth cues
@@ -381,11 +386,11 @@ A merged bundle appears as a first-class entry in the Weights tab and can be sel
 - Check random seed propagation
 
 ### CUDA out of memory
-- Reduce batch size in config
-- Use `--device cpu` flag
-- Reduce image resolution in ROI config
+- Reduce `train.batch_size` in config
+- Use CPU mode with `--device cpu`
+- Reduce ROI image resolution in config
 
-## What's Deferred to M1+
+## Deferred to M1+
 
 - Multi-domain generation (MVP: single domain_A)
 - Challenge sets (MVP: train/val/test only)
