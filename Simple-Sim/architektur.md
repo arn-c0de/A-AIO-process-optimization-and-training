@@ -1,0 +1,310 @@
+# Architecture
+
+Last update: 2026-02-21 13:30:19 CET (+0100)
+
+Note: Auto-generated structure snapshot. Temporary artifacts such as `__pycache__/`, `.venv/`, `.venv-wheelhouse/`, and `.pytest_cache/` are hidden.
+
+## Project Structure (Auto)
+
+```text
+Simple-Sim/
+- ARENA_REPORT.md
+- ARENA_REPORT_assets/
+- CHANGELOG.md
+- PROFILE_SYSTEM_IMPLEMENTATION.md
+- QUICKSTART.md
+- README.md
+- SAMPLE_GALLERY.md
+- THIRD_PARTY_LICENSES.md
+- architektur.md
+- configs/
+  - profiles/
+    - chip_0603_resistor@1.yaml
+    - chip_0603_resistor_3d@1.yaml
+    - qfn32_ic@1.yaml
+    - qfn32_ic_3d@1.yaml
+    - soic16_ic_3d@1.yaml
+    - sot23_transistor@1.yaml
+    - sot23_transistor_3d@1.yaml
+  - realism_profiles.yaml
+  - run_0001.yaml
+  - run_0001_3d.yaml
+  - run_0500.yaml
+  - run_profile_cls.yaml
+  - run_profile_cls_quick.yaml
+  - run_qfn32.yaml
+  - run_qfn32_3d.yaml
+  - run_soic16_3d.yaml
+  - run_sot23.yaml
+  - run_sot23_3d.yaml
+- docs/
+  - INDEX.md
+  - arena-reports-historie/
+    - 2026-02-90degree-ARENA_REPORT.md
+    - 2026-02-ARENA_REPORT.md
+    - INDEX.md
+  - guides/
+    - 3D_RENDERING_QUICKSTART.md
+    - CHEATSHEET.md
+    - FILTER_SETTINGS.md
+    - MODEL_MERGE_BUNDLES_ENSEMBLES.md
+    - knowledge/
+      - ModelTrainingConclusions-2D-3D Mixed-vs.-Staged-Approach.md
+  - refactoring/
+    - gui_utils_refactor.md
+    - summary.md
+  - technical/
+  - training_logs/
+    - 2026-02-16-Training-Final-Conclusion-Phase1.md
+    - 2026-02-16-Training-Restart-90deg-SOIC16.md
+    - 2026-02-17-Training-Restart-Extended-Image-Filters.md
+    - 2026-02-20-Training-Comparison-FineTuned-vs-QFN-FineTuned.md
+    - 2026-02-20-Training-QFN-Crawler-NoImageFilter-Boost.md
+    - INDEX.md
+    - TEMPLATE.md
+- gui/
+  - README.md
+  - components/
+    - __init__.py
+    - chart_widgets.py
+    - filter_popup/
+      - __init__.py
+      - constants.py
+      - controller.py
+      - models.py
+      - popup.py
+      - preview_panel.py
+      - ui_custom.py
+      - ui_realism.py
+    - image_cache.py
+    - overlay_renderer.py
+    - precise_popup.py
+  - monitor.py
+  - run.sh
+  - state.py
+  - tabs/
+    - __init__.py
+    - analysis/
+      - __init__.py
+      - logic.py
+      - tab.py
+      - ui.py
+    - base_tab.py
+    - board_detection/
+      - __init__.py
+      - logic.py
+      - tab.py
+      - ui.py
+    - core/
+      - base.py
+      - registry.py
+    - datasets/
+      - __init__.py
+      - tab.py
+    - merge/
+      - __init__.py
+      - logic.py
+      - tab.py
+      - ui.py
+    - pipeline/
+      - __init__.py
+      - dataset_selection.py
+      - logic.py
+      - persisted_fields.py
+      - tab.py
+      - ui.py
+      - utils/
+    - predictions/
+      - __init__.py
+      - logic.py
+      - tab.py
+      - ui.py
+    - validation/
+      - __init__.py
+      - logic.py
+      - tab.py
+      - ui.py
+    - weights/
+      - __init__.py
+      - logic.py
+      - tab.py
+      - ui.py
+  - utils/
+    - __init__.py
+    - dataset_catalog.py
+    - dataset_ops.py
+    - feedback_manager.py
+    - filter_profile_store.py
+    - flag_manager.py
+    - model_inference.py
+    - settings_store.py
+    - tooltip.py
+    - validation_suite.py
+- images/
+  - pipeline-dashboard-simple-sim-v1.0.png
+  - samples/
+    - chip_0603_resistor@1/
+      - MISALIGNED.png
+      - MISSING.png
+      - OK.png
+      - TOMBSTONE.png
+    - chip_0603_resistor_3d@1/
+      - MISALIGNED.png
+      - MISSING.png
+      - OK.png
+      - TOMBSTONE.png
+    - qfn32_ic@1/
+      - MISALIGNED.png
+      - MISSING.png
+      - OK.png
+      - TOMBSTONE.png
+    - qfn32_ic_3d@1/
+      - MISALIGNED.png
+      - MISSING.png
+      - OK.png
+      - TOMBSTONE.png
+    - soic16_ic_3d@1/
+      - MISALIGNED.png
+      - MISSING.png
+      - OK.png
+      - TOMBSTONE.png
+    - sot23_transistor@1/
+      - MISALIGNED.png
+      - MISSING.png
+      - OK.png
+      - TOMBSTONE.png
+    - sot23_transistor_3d@1/
+      - MISALIGNED.png
+      - MISSING.png
+      - OK.png
+      - TOMBSTONE.png
+  - simlesim-prediction-tab.png
+  - simple-sim-a-b-testing.png
+  - simple-sim-weight-merge.png
+- outputs/
+  - debug_previews/
+    - previews/
+  - filter_preview_3d/
+  - filter_preview_left/
+  - gui/
+  - live/
+    - mixed_profile_gen_1771589611_74105/
+    - mixed_profile_gen_1771589740_75243/
+  - models/
+    - versions/
+  - profile_editor/
+    - hq_preview/
+  - sample_gallery_jobs.jsonl
+  - sample_gallery_jobs_01.jsonl
+  - sample_gallery_jobs_02.jsonl
+  - sample_gallery_jobs_03.jsonl
+  - sim_data/
+    - runs/
+    - versions/
+  - torch_cache/
+    - hub/
+- predict.sh
+- requirements.txt
+- run.sh
+- run_pipeline.sh
+- run_render_debug.sh
+- sample_predict.sh
+- scripts/
+  - arena_report.py
+  - batch_predict.py
+  - eval.py
+  - eval_profile.py
+  - generate.py
+  - generate_profile_dataset.py
+  - predict.py
+  - predict_two_stage.py
+  - render_debug_previews.py
+  - sample_check.py
+  - train.py
+  - train_profile.py
+- simple-sim-plan.md
+- simple_sim/
+  - __init__.py
+  - blender/
+    - render_batch.py
+  - config.py
+  - config_schema.py
+  - data_loader.py
+  - dataset_store.py
+  - defects.py
+  - generator_2d.py
+  - generator_3d.py
+  - generators/
+    - __init__.py
+    - blender3d/
+      - __init__.py
+      - io.py
+      - runner.py
+    - blender_3d.py
+    - filter_settings.py
+    - opencv2d/
+      - __init__.py
+      - augment.py
+      - draw.py
+      - filters.py
+      - geometry.py
+      - realism.py
+      - render.py
+    - opencv_2d.py
+  - manifest.py
+  - metrics.py
+  - model_bundle.py
+  - profile_hash.py
+  - rng.py
+  - schema.py
+  - splits.py
+  - telemetry.py
+  - two_stage.py
+- tests/
+  - __init__.py
+  - test_config_schema.py
+  - test_dataset_ops.py
+  - test_filter_settings.py
+  - test_generator_wrappers.py
+  - test_pipeline_e2e.py
+  - test_realism_mode.py
+  - test_rng.py
+  - test_schema.py
+  - test_splits.py
+  - test_tab_registry.py
+- third_party/
+  - README.md
+  - licenses/
+    - Apache-2.0.txt
+    - BSD-3-Clause.txt
+    - MIT.txt
+    - MPL-2.0.txt
+- tools/
+  - backfill_labels_v2.py
+  - backfill_manifest.py
+  - build_wheelhouse.sh
+  - create_multi_dataset.py
+  - profile_editor/
+    - README.md
+    - __init__.py
+    - app.py
+    - blender_live_preview.py
+    - form_renderer.py
+    - hq_preview_panel.py
+    - preview_3d.py
+    - profile_registry.py
+    - state_store.py
+    - sync_controller.py
+    - system_monitor.py
+    - yaml_editor.py
+    - yaml_io.py
+  - run_profile_editor.sh
+  - update_architektur_md.sh
+  - update_sample_gallery.py
+  - update_sample_gallery.sh
+  - validate_dataset.py
+- wheelhouse/
+- wipe-all-data.sh
+```
+
+Generated with: `tools/update_architektur_md.sh`
