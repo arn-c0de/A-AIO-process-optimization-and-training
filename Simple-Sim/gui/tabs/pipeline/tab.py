@@ -435,6 +435,25 @@ class PipelineControlTab(BaseTab):
         top.wait_window()
         return bool(result["ok"])
 
+    def _confirm_overwrite_existing_new_dataset(self, out_dir: str) -> bool:
+        """Double confirmation before overwriting an existing dataset in Create New mode."""
+        out_path = self.logic._resolve_out_dir(out_dir)
+        if not out_path.exists():
+            return True
+        if not self.ui.ask_yes_no(
+            "Output already exists",
+            "Dataset Mode is 'Create New', but the output folder already exists.\n\n"
+            f"{out_path}\n\n"
+            "Continuing can overwrite existing dataset contents.\n\nContinue?",
+        ):
+            return False
+        return self.ui.ask_yes_no(
+            "Confirm overwrite",
+            "Final confirmation:\n\n"
+            f"Overwrite existing dataset at:\n{out_path}\n\n"
+            "Proceed?",
+        )
+
     def _ask_multi_dataset_train_strategy(self, dss: list[Path]) -> Optional[str]:
         msg = (
             f"{len(dss)} datasets selected.\n\n"
@@ -706,6 +725,11 @@ class PipelineControlTab(BaseTab):
                     payload[k] = self._float_or_default(str(v), default=0.0)
             else:
                 payload[k] = self._float_or_default(str(v), default=0.0)
+
+        # Realism mode must not be blocked by custom enable_* toggles.
+        mode = str(payload.get("filter_mode", "custom") or "custom").strip().lower()
+        if mode == "realism" and bool(payload.get("realism_enabled", False)):
+            payload["enable"] = True
         return payload
 
     # ------------------------------------------------------------------
@@ -1023,17 +1047,7 @@ class PipelineControlTab(BaseTab):
             else:
                 final_out = self.logic._resolve_out_dir(out_dir)
                 replace_existing_final_out = False
-                selected_ds = self._selected_dataset_dir()
-                selected_matches_out = False
-                try:
-                    selected_matches_out = (
-                        selected_ds is not None
-                        and str(selected_ds.resolve()) == str(final_out.resolve())
-                    )
-                except Exception:
-                    selected_matches_out = False
-
-                if final_out.exists() and (dataset_mode == "extend" or selected_matches_out):
+                if final_out.exists() and dataset_mode == "extend":
                     replace_existing_final_out = True
                     self._append_log(f"[mixed] reusing selected output path: {final_out}\n")
                 elif final_out.exists():
@@ -1242,6 +1256,9 @@ class PipelineControlTab(BaseTab):
         if built_specs is None:
             return
         run_specs, effective_task, run_complete_callback, out_dir = built_specs
+
+        if dataset_mode == "new" and not self._confirm_overwrite_existing_new_dataset(out_dir):
+            return
         
         # Precise mode: patch each spec's config with user-specified sample counts
         if run_mode == "precise":
