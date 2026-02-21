@@ -1,230 +1,131 @@
-# Filter Settings (Short)
+# Filter Settings
 
 ## Where settings are saved
 - Shared file: `outputs/gui/settings.json`
-- This is used by both:
+- Used by:
   - Main GUI pipeline tab (`gui/tabs/pipeline/tab.py`)
-  - Debug preview tool (`scripts/render_debug_previews.py`, via `run_render_debug.sh`)
+  - Debug preview tool (`scripts/render_debug_previews.py`)
 
-## Main keys in `settings.json`
-- `pipeline.filter_profiles_json`
-  - JSON string map: profile name -> filter values
-- `pipeline.filter_profile_active`
-  - active profile name
-- `pipeline.filter.cardinal_rotation_90`
-- `pipeline.filter.enable_rotation`
-- `pipeline.filter.enable_blur`
-- `pipeline.filter.enable_grain`
-- `pipeline.filter.enable_brightness`
-- `pipeline.filter.enable_contrast`
-- `pipeline.filter.rotation_strength`
-- `pipeline.filter.blur_strength`
-- `pipeline.filter.grain_strength`
-- `pipeline.filter.brightness_strength`
-- `pipeline.filter.contrast_strength`
-- Plus all new filter keys (high/medium/low priority), e.g.:
-  - `pipeline.filter.enable_perspective`, `pipeline.filter.perspective_strength`
-  - `pipeline.filter.enable_motion_blur`, `pipeline.filter.motion_blur_strength`
-  - `pipeline.filter.enable_saturation`, `pipeline.filter.saturation_factor`
-  - `pipeline.filter.enable_hue_shift`, `pipeline.filter.hue_shift_deg`
-  - `pipeline.filter.enable_shadow`, `pipeline.filter.shadow_strength`
-  - `pipeline.filter.enable_reflection`, `pipeline.filter.reflection_strength`
-  - `pipeline.filter.enable_vignetting`, `pipeline.filter.vignetting_strength`
-  - `pipeline.filter.enable_chromatic_aberration`, `pipeline.filter.chromatic_strength`
-  - `pipeline.filter.enable_jpeg_compression`, `pipeline.filter.jpeg_quality`
-  - `pipeline.filter.enable_color_temperature`, `pipeline.filter.color_temperature_kelvin`
-- `pipeline.filter.enable_lens_distortion`, `pipeline.filter.distortion_k1`
-- `pipeline.filter.enable_dust`, `pipeline.filter.dust_density`
-- `pipeline.filter.enable_sharpen`, `pipeline.filter.sharpen_strength`
-- Per-filter random controls (stored in profile JSON):
-  - `<filter_key>_randomize` (bool)
-  - `<filter_key>_min` (float/int)
-  - `<filter_key>_max` (float/int)
-  - Example: `blur_strength_randomize`, `blur_strength_min`, `blur_strength_max`
+## Profile storage keys in `settings.json`
+- `pipeline.filter_profiles_json`: JSON map `profile_name -> filter values`
+- `pipeline.filter_profile_active`: active profile name
 
-## Which filters exist
-- `90° base rotation` (cardinal: 0/90/180/270)
-- `Rotation` (jitter)
-- `Blur`
-- `Grain` (noise)
-- `Brightness`
-- `Contrast`
+All filter values are stored inside each profile map.
 
-Each filter has:
-- enable toggle (`enable_*`)
-- strength value (`*_strength`)
+## Modes
+- `filter_mode`:
+  - `custom`: classic per-filter toggles + strengths
+  - `realism`: grouped realism sampling mode
+- `realism_enabled`: additional explicit enable switch for realism mode
 
-## How loading/saving works
-- On startup, active profile and filter values are loaded from `settings.json`.
-- In popup/profile actions (new/save/rename/delete/select/close), active profile values are persisted.
-- Debug preview and main GUI are synchronized through the same file.
-- `render_debug_previews.py` persists the full filter set (not only legacy blur/grain/brightness/contrast keys).
+Realism mode is active only when:
+- `filter_mode == "realism"`
+- `realism_enabled == true`
 
-## Runtime transfer into generation
-- Pipeline run passes filter config through environment variable: `IMAGE_FILTERS` (JSON).
-- Generator applies these values in:
-  - `scripts/generate.py`
-  - `scripts/generate_profile_dataset.py`
-  - `simple_sim/generator_2d.py`
-- For 3D previews, Blender output is post-processed for blur/grain/brightness/contrast in `scripts/render_debug_previews.py`.
+## Custom mode keys
+Base toggles:
+- `cardinal_rotation_90`
+- `enable_rotation`
+- `enable_blur`
+- `enable_grain`
+- `enable_brightness`
+- `enable_contrast`
+- `enable_perspective`
+- `enable_motion_blur`
+- `enable_saturation`
+- `enable_hue_shift`
+- `enable_shadow`
+- `enable_reflection`
+- `enable_vignetting`
+- `enable_chromatic_aberration`
+- `enable_jpeg_compression`
+- `enable_color_temperature`
+- `enable_lens_distortion`
+- `enable_dust`
+- `enable_sharpen`
 
----
+Main numeric keys:
+- `rotation_strength`
+- `blur_strength`
+- `grain_strength`
+- `brightness_strength`
+- `contrast_strength`
+- `perspective_strength`
+- `motion_blur_strength`
+- `saturation_factor`
+- `hue_shift_deg`
+- `shadow_strength`
+- `reflection_strength`
+- `vignetting_strength`
+- `chromatic_strength`
+- `jpeg_quality`
+- `color_temperature_kelvin`
+- `distortion_k1`
+- `dust_density`
+- `sharpen_strength`
 
-# Recommended Additional Filters
+Per-filter randomization keys (for supported numeric keys):
+- `<key>_randomize` (bool)
+- `<key>_min` (float/int)
+- `<key>_max` (float/int)
+- Example: `blur_strength_randomize`, `blur_strength_min`, `blur_strength_max`
 
-The following filters can significantly improve the quality and robustness of your synthetic PCB dataset:
+## Realism mode keys
+- `realism_constraints_enabled` (default `true`)
+- `realism_profile_id` (default `profile_industrial_cam`)
+- `realism_k_prob_0`
+- `realism_k_prob_1`
+- `realism_k_prob_2`
+- `realism_group_G1_prob`
+- `realism_group_G2_prob`
+- `realism_group_G3_prob`
+- `realism_group_G4_prob`
+- `realism_group_G5_prob`
+- `realism_group_G6_prob`
+- `realism_group_G7_prob`
+- `realism_group_G8_prob`
 
-## 1. **Perspective Transform / Skew**
-**Purpose:** Simulates different camera angles and perspectives
-- Important for real inspection systems that are not always perfectly perpendicular to the PCB
-- Helps the model recognize components from various viewing angles
-- **Parameters:**
-  - `enable_perspective`: bool
-  - `perspective_strength`: float (0.0-2.0) - strength of perspective distortion
-  - `perspective_angle_x`: float (-15° to +15°) - tilt around X-axis
-  - `perspective_angle_y`: float (-15° to +15°) - tilt around Y-axis
+Current defaults (`gui/components/filter_popup/constants.py`):
+- `K`: 0.60 / 0.35 / 0.05
+- `G1..G8`: 0.35, 0.15, 0.20, 0.25, 0.12, 0.18, 0.10, 0.08
 
-## 2. **Motion Blur**
-**Purpose:** Simulates motion blur in high-speed inspection systems
-- Realistic for conveyor belt inspection systems
-- Differs from Gaussian blur by having a directional component
-- **Parameters:**
-  - `enable_motion_blur`: bool
-  - `motion_blur_strength`: float (0.0-3.0)
-  - `motion_blur_angle`: float (0°-360°) - direction of motion
+## Realism group semantics (runtime)
+From `simple_sim/generators/opencv2d/realism.py`:
+- `G0` (always active baseline): mild blur/noise/brightness/contrast/rotation drift
+- `G1`: focus/optics softness
+- `G2`: motion/conveyor blur
+- `G3`: geometry/mounting (perspective)
+- `G4`: illumination non-uniformity (shadow/vignetting)
+- `G5`: specular/glare reflection
+- `G6`: color pipeline/white balance
+- `G7`: compression/transport artifacts
+- `G8`: contamination (dust)
 
-## 3. **Chromatic Aberration**
-**Purpose:** Simulates color fringing from optical system lens errors
-- Typical for lower-cost camera systems
-- Especially visible at high-contrast edges
-- **Parameters:**
-  - `enable_chromatic_aberration`: bool
-  - `chromatic_strength`: float (0.0-2.0) - color channel displacement
+Selection logic:
+- Sample `K in {0,1,2}` using `realism_k_prob_*`
+- Choose `K` groups from `G1..G8` via group probabilities
+- If constraints enabled:
+  - `G5 + G7` conflict resolved by removing `G7`
+  - At most one heavy group among `{G2, G5, G7}`
 
-## 4. **Vignetting**
-**Purpose:** Darkening towards image edges
-- Realistic effect in camera optics
-- Helps the model handle uneven illumination
-- **Parameters:**
-  - `enable_vignetting`: bool
-  - `vignetting_strength`: float (0.0-2.0) - strength of edge darkening
+## Normalization and ranges
+Central normalization is in `simple_sim/generators/filter_settings.py`:
+- clamps numeric values to safe ranges
+- normalizes `realism_k_prob_0/1/2` to sum to `1.0`
+- invalid `filter_mode` falls back to `custom`
 
-## 5. **Saturation / Hue Shift**
-**Purpose:** Color variation from different lighting and camera systems
-- Simulates different white balance settings
-- Important for robustness against various light sources (LED, halogen, daylight)
-- **Parameters:**
-  - `enable_saturation`: bool
-  - `saturation_factor`: float (0.5-1.5) - saturation (1.0 = neutral)
-  - `enable_hue_shift`: bool
-  - `hue_shift_deg`: float (-30° to +30°) - hue shift in HSV space
+## UI grouping in popup
+`gui/components/filter_popup/ui_custom.py` groups custom filters into:
+- Existing Filters
+- High Priority
+- Medium Priority (disabled)
+- Low Priority (disabled)
 
-## 6. **Sharpen**
-**Purpose:** Controlled sharpening to simulate different camera settings
-- Compensates for natural blur
-- Useful for high-resolution inspection systems
-- **Parameters:**
-  - `enable_sharpen`: bool
-  - `sharpen_strength`: float (0.0-2.0)
+The Realism tab is built by `gui/components/filter_popup/ui_realism.py`.
 
-## 7. **Lens Distortion**
-**Purpose:** Simulates barrel or pincushion distortion
-- Typical for wide-angle or telephoto lenses
-- Important for systems with overview cameras
-- **Parameters:**
-  - `enable_lens_distortion`: bool
-  - `distortion_k1`: float (-0.3 to +0.3) - radial distortion 1st order
-  - `distortion_k2`: float (-0.1 to +0.1) - radial distortion 2nd order
-
-## 8. **JPEG Compression Artifacts**
-**Purpose:** Simulates compression artifacts in JPEG-stored images
-- Realistic for systems that compress for performance reasons
-- Makes the model more robust against compression losses
-- **Parameters:**
-  - `enable_jpeg_compression`: bool
-  - `jpeg_quality`: int (50-95) - JPEG quality (lower values = more artifacts)
-
-## 9. **Shadow / Occlusion**
-**Purpose:** Simulates shadows from equipment, grippers, or other components
-- Very important for real production environments
-- Can occlude parts of the component
-- **Parameters:**
-  - `enable_shadow`: bool
-  - `shadow_strength`: float (0.0-0.8) - darkness of shadow
-  - `shadow_size`: float (0.1-0.5) - size/extent relative to ROI
-
-## 10. **Reflection / Glare**
-**Purpose:** Simulates reflections and overexposure from glossy surfaces
-- Common with metallic components or fresh solder
-- Can obscure important features
-- **Parameters:**
-  - `enable_reflection`: bool
-  - `reflection_strength`: float (0.0-1.0)
-  - `reflection_size`: float (0.05-0.3) - size of reflection
-
-## 11. **Dust / Dirt Particles**
-**Purpose:** Simulates dust and contamination on lens or PCB
-- Very realistic for production environments
-- Can be added as noise/texture overlay
-- **Parameters:**
-  - `enable_dust`: bool
-  - `dust_density`: float (0.0-1.0) - number of particles
-  - `dust_size`: float (1-5) - average particle size in pixels
-
-## 12. **Color Temperature Variation**
-**Purpose:** Simulates different color temperatures of lighting
-- More important than simple hue shift
-- Models difference between warm white/cool white LEDs
-- **Parameters:**
-  - `enable_color_temperature`: bool
-  - `color_temperature_kelvin`: int (2500K-7500K) - light color
-
-## Implementation Priority
-
-**High Priority** (greatest impact on model robustness):
-1. Perspective Transform
-2. Motion Blur
-3. Saturation / Hue Shift
-4. Shadow / Occlusion
-5. Reflection / Glare
-
-**Medium Priority** (useful for specific scenarios):
-6. Vignetting
-7. Chromatic Aberration
-8. JPEG Compression
-9. Color Temperature
-
-**Low Priority** (fine-tuning):
-10. Lens Distortion
-11. Dust Particles
-12. Sharpen
-
-## Integration into Existing Architecture
-
-All new filters should follow the same pattern as existing ones:
-
-```python
-# In generator_2d.py
-def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    # Add new filters:
-    "enable_perspective": _bool("enable_perspective", False),
-    "perspective_strength": _float("perspective_strength", 1.0, 0.0, 2.0),
-    # ...
-```
-
-```python
-# In generator_2d.py
-def apply_perspective_transform(img: np.ndarray, strength: float, angle_x: float, angle_y: float) -> np.ndarray:
-    """Apply perspective transformation."""
-    # Implementation here
-    pass
-```
-
-```python
-# In gui/tabs/pipeline/ui.py
-# New Tkinter variables and UI elements for each filter
-self.var_filter_enable_perspective: tk.BooleanVar = tk.BooleanVar(value=False)
-self.var_filter_perspective_strength: tk.StringVar = tk.StringVar(value="1.0")
-```
-
-Each new filter is then applied in the `render_roi()` function in `generator_2d.py`, after the existing filters.
+## Runtime usage
+- Pipeline passes filter config via `IMAGE_FILTERS` JSON.
+- 2D generation uses normalized values and applies:
+  - custom augmentation chain, or
+  - realism grouped sampling (`apply_realism_groups`) when realism mode is active.
+- Debug previews read/write the same keys, so GUI and preview stay synchronized.
