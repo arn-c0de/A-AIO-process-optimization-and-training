@@ -1,7 +1,7 @@
 # Documentation Index
 
 Simple-Sim comprehensive documentation organized by topic and use case.
-Last updated: February 17, 2026
+Last updated: February 21, 2026
 
 ## Guides
 
@@ -13,6 +13,16 @@ Practical how-to guides for common tasks and workflows.
 | [3D Rendering Quickstart](guides/3D_RENDERING_QUICKSTART.md) | Guide to setting up and customizing 3D rendering with Blender |
 | [Filter Settings](guides/FILTER_SETTINGS.md) | Guide to configuring filter settings for image processing |
 | [Model Merge: Bundles vs Ensembles](guides/MODEL_MERGE_BUNDLES_ENSEMBLES.md) | Bundles vs ensembles, and what you need for unknown images (profile dispatch vs general models) |
+
+## Architecture
+
+Architecture-oriented overviews of package modules, scripts, and GUI tabs.
+
+| Document | Purpose |
+|----------|---------|
+| [simple_sim Package Overview](architekture/simple_sim-Overview.md) | Architecture and responsibilities of all modules in `simple_sim` |
+| [Scripts Overview](architekture/scripts-Overview.md) | Architecture and behavior of all executable scripts in `scripts/` |
+| [Tabs Overview](architekture/Tabs-Overview.md) | Architecture and responsibilities of all GUI tabs in `gui/tabs` |
 
 ## Technical Reference
 
@@ -31,6 +41,7 @@ In-depth technical documentation for advanced topics and system design.
 
 - **Get started quickly**: Read [Command Cheatsheet](guides/CHEATSHEET.md)
 - **Set up 3D rendering**: Read [3D Rendering Quickstart](guides/3D_RENDERING_QUICKSTART.md)
+- **Understand architecture**: Read [simple_sim Package Overview](architekture/simple_sim-Overview.md), [Scripts Overview](architekture/scripts-Overview.md), and [Tabs Overview](architekture/Tabs-Overview.md)
 - **Understand component profiles**: Read [Profile System Implementation](../PROFILE_SYSTEM_IMPLEMENTATION.md)
 - **See example outputs**: View [Sample Gallery](../SAMPLE_GALLERY.md)
 - **Check performance benchmarks**: Review [Arena Report](../Simple-Sim/ARENA_REPORT.md)
@@ -50,6 +61,17 @@ Complete guide to the Blender 3D rendering backend, including:
 - Pad positioning and component modifications
 - Materials, lighting, and camera setup
 - Debugging and testing workflows
+
+### Architecture
+
+#### simple_sim Package Overview
+Architecture and module responsibilities of the core `simple_sim` package, including config/schema handling, generation backends, manifest/profile logic, and model/inference helpers.
+
+#### Scripts Overview
+Overview of all CLI scripts, including generation, training, evaluation, prediction, reporting, and how each script integrates with `simple_sim`.
+
+#### Tabs Overview
+Overview of all GUI tabs and their responsibilities, including data flow, side effects, and key logic in each tab module.
 
 ### Technical Reference
 
