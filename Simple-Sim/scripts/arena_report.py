@@ -351,13 +351,15 @@ def _write_svg_barh(
         vv = max(0.0, float(v))
         return left_pad + (vv / (vmax)) * plot_w
 
-    # Dark theme: readable on typical Git markdown (light background) without needing CSS/JS.
-    # Background is black, text is white.
+    # Keep dark chart style for consistency with existing Arena visuals.
     bg = "#0b0f14"
     axis = "#30363d"
     text = "#f0f6fc"
     bar = "#2f81f7"
     bar2 = "#79c0ff"
+    top1 = "#f2cc60"
+    top2 = "#b1bac4"
+    top3 = "#c69063"
 
     lines: List[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
@@ -389,12 +391,20 @@ def _write_svg_barh(
             f'font-size="12" fill="{text}">{_xml_escape(lab)}</text>'
         )
 
-        # Bar
+        # Bar (Top-3 highlighted)
         x_end = x_for(val)
         bw = max(0.0, x_end - left_pad)
         y_bar = y + (row_h - bar_h) / 2.0
+        if i == 0:
+            bar_color = top1
+        elif i == 1:
+            bar_color = top2
+        elif i == 2:
+            bar_color = top3
+        else:
+            bar_color = bar if i % 2 == 0 else bar2
         lines.append(
-            f'<rect x="{left_pad}" y="{y_bar:.1f}" width="{bw:.1f}" height="{bar_h}" rx="3" fill="{bar if i % 2 == 0 else bar2}"/>'
+            f'<rect x="{left_pad}" y="{y_bar:.1f}" width="{bw:.1f}" height="{bar_h}" rx="3" fill="{bar_color}"/>'
         )
 
         # Value
@@ -407,6 +417,120 @@ def _write_svg_barh(
             f'font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
             f'font-size="12" fill="{text}">{_xml_escape(vs)}</text>'
         )
+
+    lines.append("</svg>")
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_svg_heatmap(
+    out_path: Path,
+    *,
+    title: str,
+    row_labels: List[str],
+    col_labels: List[str],
+    values: List[List[Optional[float]]],
+) -> None:
+    """Write a dark-theme heatmap SVG for model x dataset accuracy."""
+    if not row_labels or not col_labels or not values:
+        return
+
+    rows = len(row_labels)
+    cols = len(col_labels)
+    if len(values) != rows:
+        return
+
+    for r in values:
+        if len(r) != cols:
+            return
+
+    cell_w = 62
+    cell_h = 28
+    left_pad = 260
+    top_pad = 126
+    right_pad = 40
+    bottom_pad = 36
+    w = left_pad + cols * cell_w + right_pad
+    h = top_pad + rows * cell_h + bottom_pad
+
+    bg = "#0b0f14"
+    text = "#f0f6fc"
+    axis = "#30363d"
+    na_fill = "#161b22"
+
+    def _short(s: str, limit: int = 22) -> str:
+        t = str(s or "").strip()
+        if len(t) <= limit:
+            return t
+        return t[: max(0, limit - 3)] + "..."
+
+    def _heat(v: float) -> str:
+        # Dark-theme friendly blue->cyan scale for [0,1].
+        vv = max(0.0, min(1.0, float(v)))
+        c0 = (28, 46, 74)      # low
+        c1 = (47, 129, 247)    # mid
+        c2 = (121, 192, 255)   # high
+        if vv < 0.5:
+            t = vv / 0.5
+            r = int(c0[0] + (c1[0] - c0[0]) * t)
+            g = int(c0[1] + (c1[1] - c0[1]) * t)
+            b = int(c0[2] + (c1[2] - c0[2]) * t)
+        else:
+            t = (vv - 0.5) / 0.5
+            r = int(c1[0] + (c2[0] - c1[0]) * t)
+            g = int(c1[1] + (c2[1] - c1[1]) * t)
+            b = int(c1[2] + (c2[2] - c1[2]) * t)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    lines: List[str] = []
+    lines.append('<?xml version="1.0" encoding="UTF-8"?>')
+    lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">')
+    lines.append(f'<rect x="0" y="0" width="{w}" height="{h}" fill="{bg}"/>')
+    lines.append(
+        f'<text x="{left_pad}" y="34" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
+        f'font-size="20" font-weight="700" fill="{text}">{_xml_escape(title)}</text>'
+    )
+    lines.append(
+        f'<text x="{left_pad}" y="54" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
+        f'font-size="11" fill="{text}" opacity="0.82">Cells show Accuracy per model/dataset (N/A if no run found).</text>'
+    )
+
+    # Column labels
+    for j, col in enumerate(col_labels):
+        x = left_pad + j * cell_w + cell_w * 0.5
+        lines.append(
+            f'<text x="{x:.1f}" y="{top_pad - 14}" text-anchor="end" '
+            f'transform="rotate(-30 {x:.1f},{top_pad - 14})" '
+            f'font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
+            f'font-size="11" fill="{text}">{_xml_escape(_short(col, 20))}</text>'
+        )
+
+    # Row labels + cells
+    for i, row in enumerate(row_labels):
+        y = top_pad + i * cell_h
+        lines.append(
+            f'<text x="{left_pad - 10}" y="{y + 18}" text-anchor="end" '
+            f'font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
+            f'font-size="11" fill="{text}">{_xml_escape(_short(row, 30))}</text>'
+        )
+        for j in range(cols):
+            x = left_pad + j * cell_w
+            v = values[i][j]
+            fill = na_fill if v is None else _heat(float(v))
+            lines.append(
+                f'<rect x="{x}" y="{y}" width="{cell_w - 2}" height="{cell_h - 2}" rx="3" fill="{fill}" stroke="{axis}" stroke-width="1"/>'
+            )
+            if v is not None:
+                lines.append(
+                    f'<text x="{x + (cell_w - 2) * 0.5:.1f}" y="{y + 17}" text-anchor="middle" '
+                    f'font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
+                    f'font-size="10" fill="{text}">{float(v):.3f}</text>'
+                )
+            else:
+                lines.append(
+                    f'<text x="{x + (cell_w - 2) * 0.5:.1f}" y="{y + 17}" text-anchor="middle" '
+                    f'font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" '
+                    f'font-size="10" fill="{text}" opacity="0.7">-</text>'
+                )
 
     lines.append("</svg>")
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -561,6 +685,9 @@ def _write_charts(
     overall: List[Dict[str, Any]],
     *,
     dataset_sizes: Optional[List[Tuple[str, int]]] = None,
+    heatmap_models: Optional[List[str]] = None,
+    heatmap_datasets: Optional[List[str]] = None,
+    heatmap_values: Optional[List[List[Optional[float]]]] = None,
 ) -> List[Tuple[str, str]]:
     """Write SVG charts and return markdown-relative paths to embed."""
     assets_dir = sim_root / "ARENA_REPORT_assets"
@@ -625,6 +752,18 @@ def _write_charts(
         p = assets_dir / "dataset_size_pie.svg"
         _write_svg_pie_with_legend(p, title="Dataset Storage Breakdown", items=ds_items)
         charts.append(("Dataset Storage Breakdown", "ARENA_REPORT_assets/dataset_size_pie.svg"))
+
+    # Accuracy heatmap (model x dataset)
+    if heatmap_models and heatmap_datasets and heatmap_values:
+        p = assets_dir / "accuracy_heatmap.svg"
+        _write_svg_heatmap(
+            p,
+            title="Accuracy Heatmap (Top Models x Datasets)",
+            row_labels=list(heatmap_models),
+            col_labels=list(heatmap_datasets),
+            values=list(heatmap_values),
+        )
+        charts.append(("Accuracy Heatmap", "ARENA_REPORT_assets/accuracy_heatmap.svg"))
 
     return charts
 
@@ -771,10 +910,35 @@ def _render(
         label = f"{ds_name} ({samples} samples)" if samples > 0 else ds_name
         dataset_chart_items.append((label, int(size_b)))
 
+    # Build heatmap data (top models by overall ranking x top datasets by sample count).
+    top_model_abs = [str(it["model_abs"]) for it in overall[:12]]
+    top_model_names = [str(Path(m).name) for m in top_model_abs]
+    top_datasets = [
+        ds for ds, _cnt in sorted(dataset_samples_map.items(), key=lambda t: -int(t[1]))
+    ]
+    if not top_datasets:
+        top_datasets = sorted(dataset_to_models.keys())
+    top_datasets = top_datasets[:12]
+
+    model_dataset_acc: Dict[Tuple[str, str], Optional[float]] = {}
+    for model_abs, rows in model_to_rows.items():
+        for r in rows:
+            model_dataset_acc[(model_abs, r.dataset_name)] = r.accuracy
+
+    heatmap_values: List[List[Optional[float]]] = []
+    for model_abs in top_model_abs:
+        row_vals: List[Optional[float]] = []
+        for ds in top_datasets:
+            row_vals.append(model_dataset_acc.get((model_abs, ds)))
+        heatmap_values.append(row_vals)
+
     charts = _write_charts(
         sim_root,
         overall,
         dataset_sizes=dataset_chart_items,
+        heatmap_models=top_model_names,
+        heatmap_datasets=top_datasets,
+        heatmap_values=heatmap_values,
     )
 
     dataset_order = sorted(dataset_to_models.keys())
@@ -875,12 +1039,16 @@ def _render(
     for i, it in enumerate(overall, start=1):
         avg_acc = f"{it['avg_acc']:.4f}" if it["avg_acc"] is not None else "-"
         avg_f1 = f"{it['avg_f1']:.4f}" if it["avg_f1"] is not None else "-"
+        rank_s = f"Top-{i}" if i <= 3 else str(i)
+        model_s = _md_escape(str(it["model_name"]))
+        if i <= 3:
+            model_s = f"**{model_s}**"
         lines.append(
             "| "
             + " | ".join(
                 [
-                    str(i),
-                    _md_escape(str(it["model_name"])),
+                    rank_s,
+                    model_s,
                     str(it["type"]),
                     avg_acc,
                     avg_f1,
@@ -920,12 +1088,16 @@ def _render(
             f1_s = f"{r.f1:.4f}" if r.f1 is not None else "-"
             seen_s = str(r.seen) if r.seen is not None else "-"
             ds_size_row_s = _format_bytes(int(r.dataset_size_bytes)) if r.dataset_size_bytes is not None else "-"
+            rank_s = f"Top-{i}" if i <= 3 else str(i)
+            model_s = _md_escape(Path(model_abs).name)
+            if i <= 3:
+                model_s = f"**{model_s}**"
             lines.append(
                 "| "
                 + " | ".join(
                     [
-                        str(i),
-                        _md_escape(Path(model_abs).name),
+                        rank_s,
+                        model_s,
                         acc_s,
                         f1_s,
                         _md_escape(r.split),
