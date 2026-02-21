@@ -631,7 +631,7 @@ class PipelineLogic:
     def _prepare_merge_sources(
         self,
         sources: List[Path],
-    ) -> tuple[str, Dict[str, Dict[str, str]], dict, str, tuple[str, ...], int, int]:
+    ) -> tuple[str, Dict[str, Dict[str, str]], Dict[str, Dict[str, str]], dict, str, tuple[str, ...], int, int]:
         cfg0_path = sources[0] / "config.yaml"
         if not cfg0_path.exists():
             raise FileNotFoundError(f"Missing config.yaml in {sources[0]}")
@@ -645,23 +645,43 @@ class PipelineLogic:
         roi0 = cfg0.get("roi") or {}
         roi0_w, roi0_h = int(roi0.get("width_px") or 0), int(roi0.get("height_px") or 0)
 
-        src_profiles: Dict[str, Dict[str, str]] = {}
+        src_default_profiles: Dict[str, Dict[str, str]] = {}
+        all_profiles: Dict[str, Dict[str, str]] = {}
         run_id = sources[0].name
         for ds in sources:
             manifest_path = ds / "dataset_manifest.json"
             if not manifest_path.exists():
                 raise FileNotFoundError(f"Missing dataset_manifest.json in {ds}")
             manifest = read_dataset_manifest(manifest_path)
-            if (mver := int(manifest.get("manifest_version", 1) or 1)) != 1:
-                raise ValueError(f"Only manifest_version=1 source datasets are supported for merge (got {mver} in {ds})")
+            mver = int(manifest.get("manifest_version", 1) or 1)
             run_id = str(manifest.get("run_id") or run_id)
-            comp = manifest.get("component_profile") or {}
-            pid = str(comp.get("profile_id") or "")
-            phash = str(comp.get("profile_hash") or "")
-            ppath = str(comp.get("profile_path") or "")
-            if not pid or not phash:
-                raise ValueError(f"Invalid manifest in {ds}: missing profile_id/profile_hash")
-            src_profiles[str(ds.resolve())] = {"profile_id": pid, "profile_hash": phash, "profile_path": ppath}
+            if mver == 1:
+                comp = manifest.get("component_profile") or {}
+                pid = str(comp.get("profile_id") or "")
+                phash = str(comp.get("profile_hash") or "")
+                ppath = str(comp.get("profile_path") or "")
+                if not pid:
+                    raise ValueError(f"Invalid manifest in {ds}: missing profile_id")
+                default_prof = {"profile_id": pid, "profile_hash": phash, "profile_path": ppath}
+                src_default_profiles[str(ds.resolve())] = default_prof
+                all_profiles[pid] = default_prof
+            elif mver == 2:
+                profs = manifest.get("component_profiles") or []
+                if not isinstance(profs, list) or not profs:
+                    raise ValueError(f"Invalid manifest in {ds}: component_profiles missing/empty")
+                for p in profs:
+                    if not isinstance(p, dict):
+                        continue
+                    pid = str(p.get("profile_id") or "").strip()
+                    if not pid:
+                        continue
+                    all_profiles[pid] = {
+                        "profile_id": pid,
+                        "profile_hash": str(p.get("profile_hash") or ""),
+                        "profile_path": str(p.get("profile_path") or ""),
+                    }
+            else:
+                raise ValueError(f"Unsupported manifest_version in {ds}: {mver}")
 
         target_w, target_h = (roi0_w if roi0_w > 0 else None), (roi0_h if roi0_h > 0 else None)
         for ds in sources[1:]:
@@ -685,14 +705,14 @@ class PipelineLogic:
 
         if target_w is None or target_h is None or target_w <= 0 or target_h <= 0:
             raise ValueError("Cannot determine target ROI size for merged dataset (missing roi.width_px/height_px).")
-        return str(run_id), src_profiles, cfg0, cfg0_text, class_keys0, int(target_w), int(target_h)
+        return str(run_id), src_default_profiles, all_profiles, cfg0, cfg0_text, class_keys0, int(target_w), int(target_h)
 
     def _merge_source_rows(
         self,
         *,
         sources: List[Path],
         run_id: str,
-        src_profiles: Dict[str, Dict[str, str]],
+        src_default_profiles: Dict[str, Dict[str, str]],
         images_dir: Path,
         target_w: int,
         target_h: int,
@@ -711,13 +731,15 @@ class PipelineLogic:
 
         for ds in sources:
             meta_rows = read_jsonl(ds / "meta.jsonl", MetaRow)
-            label_map = {row.id: row.class_name for row in read_jsonl(ds / "labels.jsonl", LabelRow)}
-            prof = src_profiles.get(str(ds.resolve())) or {}
-            pid = prof.get("profile_id") or ""
+            label_map = {row.id: row for row in read_jsonl(ds / "labels.jsonl", LabelRow)}
+            prof = src_default_profiles.get(str(ds.resolve())) or {}
+            default_pid = str(prof.get("profile_id") or "")
 
             for row in meta_rows:
-                if not (class_name := label_map.get(row.id)):
+                label_row = label_map.get(row.id)
+                if label_row is None:
                     continue
+                class_name = str(label_row.class_name)
                 split = row.split
                 idx = split_counters.setdefault(split, 0)
                 new_id = f"{run_id}/{row.domain}/{split}/{idx:06d}"
@@ -760,6 +782,7 @@ class PipelineLogic:
                         render_meta=getattr(row, "render_meta", {}) or {},
                     )
                 )
+                pid = str(getattr(label_row, "profile_id", "") or default_pid)
                 label_out.append(LabelRow(schema_version=2, id=new_id, class_name=class_name, profile_id=pid))
                 splits[split].append(new_id)
 
@@ -775,11 +798,11 @@ class PipelineLogic:
 
         if not sources: raise ValueError("No sources provided")
 
-        run_id, src_profiles, cfg0, cfg0_text, _class_keys0, target_w, target_h = self._prepare_merge_sources(sources)
+        run_id, src_default_profiles, all_profiles, cfg0, cfg0_text, _class_keys0, target_w, target_h = self._prepare_merge_sources(sources)
         meta_out, label_out, splits = self._merge_source_rows(
             sources=sources,
             run_id=run_id,
-            src_profiles=src_profiles,
+            src_default_profiles=src_default_profiles,
             images_dir=images_dir,
             target_w=target_w,
             target_h=target_h,
@@ -797,7 +820,11 @@ class PipelineLogic:
             Path(out_dir / "config.yaml").write_text(yaml.safe_dump(cfg_out, sort_keys=False), encoding="utf-8")
         except Exception: Path(out_dir / "config.yaml").write_text(cfg0_text, encoding="utf-8")
 
-        uniq_profiles: Dict[str, Dict[str, str]] = {prof["profile_id"]: prof for prof in src_profiles.values()}
+        uniq_profiles: Dict[str, Dict[str, str]] = dict(all_profiles)
+        for row in label_out:
+            pid = str(getattr(row, "profile_id", "") or "").strip()
+            if pid and pid not in uniq_profiles:
+                uniq_profiles[pid] = {"profile_id": pid, "profile_hash": "", "profile_path": ""}
         if len(uniq_profiles) == 1:
             only = next(iter(uniq_profiles.values()))
             write_dataset_manifest(out_dir, run_id=str(run_id), profile_id=str(only["profile_id"]), profile_hash=str(only["profile_hash"]), profile_path=str(only["profile_path"]), meta_rows=meta_out, label_rows=label_out, splits=splits, extend=False)

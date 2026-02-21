@@ -1080,11 +1080,30 @@ class PipelineControlTab(BaseTab):
                     src_dirs: list[Path] = []
                     try:
                         src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
+                        merge_sources = list(src_dirs)
+                        merge_target = final_out
+                        tmp_target: Optional[Path] = None
+
                         if replace_existing_final_out and final_out.exists():
-                            shutil.rmtree(final_out, ignore_errors=True)
-                            log_callback(f"[mixed] removed previous dataset at target: {final_out}\n")
-                        log_callback(f"[mixed] merging {len(src_dirs)} generated datasets into: {final_out}\n")
-                        self.logic.merge_datasets_for_training(src_dirs, final_out, log_callback, log_callback)
+                            if dataset_mode == "extend":
+                                merge_sources = [final_out] + merge_sources
+                                tmp_target = final_out.parent / f"{final_out.name}.__merge_tmp_{int(time.time())}_{os.getpid()}"
+                                if tmp_target.exists():
+                                    shutil.rmtree(tmp_target, ignore_errors=True)
+                                merge_target = tmp_target
+                                log_callback(f"[mixed] extend mode: including existing dataset as merge source: {final_out}\n")
+                            else:
+                                shutil.rmtree(final_out, ignore_errors=True)
+                                log_callback(f"[mixed] removed previous dataset at target: {final_out}\n")
+
+                        log_callback(f"[mixed] merging {len(merge_sources)} source datasets into: {merge_target}\n")
+                        self.logic.merge_datasets_for_training(merge_sources, merge_target, log_callback, log_callback)
+                        if tmp_target is not None and merge_target == tmp_target:
+                            if final_out.exists():
+                                shutil.rmtree(final_out, ignore_errors=True)
+                            tmp_target.rename(final_out)
+                            merge_target = final_out
+                            log_callback(f"[mixed] extend mode: replaced target dataset with merged result: {final_out}\n")
                         log_callback(f"[mixed] merged dataset ready: {final_out}\n")
                     except Exception as e:
                         log_callback(f"[mixed] merge failed: {e}\n")
@@ -1202,14 +1221,6 @@ class PipelineControlTab(BaseTab):
             profile_ids = self._profiles_multi_list(available=self._profiles_multi_available_values())
             if not profile_ids:
                 self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\\n\\nClick Pick and select at least 1 profile.")
-                return
-            if dataset_mode == "extend":
-                self.ui.show_messagebox(
-                    "error",
-                    "Error",
-                    "Extend Existing is not supported while Multi-profile is enabled.\n\n"
-                    "Disable Multi-profile or switch Dataset Mode to Create New.",
-                )
                 return
         else:
             if p := self.ui.var_profile.get().strip(): profile_ids = [p]
