@@ -281,6 +281,81 @@ def _as_rgb(v) -> Tuple[float, float, float]:
     return (float(v[0]), float(v[1]), float(v[2]))
 
 
+def _build_material_set(render_3d: Dict[str, Any]) -> tuple[bpy.types.Material, bpy.types.Material, bpy.types.Material, bpy.types.Material]:
+    mats_cfg = (render_3d.get("materials") or {})
+
+    solder_col_raw = _as_rgb(mats_cfg.get("solder", {}).get("base_color", [0.7, 0.7, 0.72]))
+    solder_col = (
+        min(1.0, solder_col_raw[0] * 1.0),
+        min(1.0, solder_col_raw[1] * 1.0),
+        min(1.0, solder_col_raw[2] * 1.0),
+    )
+    m_solder = _new_material(
+        "mat_solder",
+        base_color=solder_col,
+        roughness=float(mats_cfg.get("solder", {}).get("roughness", 0.15)),
+        metallic=float(mats_cfg.get("solder", {}).get("metallic", 1.0)),
+    )
+
+    sub_col_raw = _as_rgb(mats_cfg.get("substrate", {}).get("base_color", [0.05, 0.2, 0.05]))
+    sub_col = (
+        min(0.6, sub_col_raw[0] * 1.8),
+        min(0.6, sub_col_raw[1] * 2.8),
+        min(0.6, sub_col_raw[2] * 1.6),
+    )
+    m_sub = _new_material(
+        "mat_substrate",
+        base_color=sub_col,
+        roughness=float(mats_cfg.get("substrate", {}).get("roughness", 0.8)),
+        metallic=float(mats_cfg.get("substrate", {}).get("metallic", 0.0)),
+    )
+
+    cu_col_raw = _as_rgb(mats_cfg.get("copper", {}).get("base_color", [0.8, 0.45, 0.1]))
+    cu_col = (
+        min(0.9, cu_col_raw[0] * 1.0),
+        min(0.7, cu_col_raw[1] * 1.0),
+        min(0.3, cu_col_raw[2] * 0.5),
+    )
+    m_cu = _new_material(
+        "mat_copper",
+        base_color=cu_col,
+        roughness=float(mats_cfg.get("copper", {}).get("roughness", 0.15)),
+        metallic=float(mats_cfg.get("copper", {}).get("metallic", 0.9)),
+    )
+
+    body_col_raw = _as_rgb(mats_cfg.get("body", {}).get("base_color", [0.02, 0.02, 0.02]))
+    body_col = (
+        min(0.15, body_col_raw[0] * 4.0),
+        min(0.15, body_col_raw[1] * 4.0),
+        min(0.15, body_col_raw[2] * 4.0),
+    )
+    m_body = _new_material(
+        "mat_body",
+        base_color=body_col,
+        roughness=float(mats_cfg.get("body", {}).get("roughness", 0.75)),
+        metallic=float(mats_cfg.get("body", {}).get("metallic", 0.0)),
+    )
+    return m_solder, m_sub, m_cu, m_body
+
+
+def _normalize_qfn_pad_spacing(footprint: str, nominal: Dict[str, Any]) -> Dict[str, Any]:
+    nominal_pads = dict(nominal)
+    if not footprint.startswith("qfn"):
+        return nominal_pads
+    pad_spacing_px = float(nominal_pads["pad_spacing"])
+    pad_spacing_y_px = float(nominal_pads.get("pad_spacing_y", pad_spacing_px))
+    pad_radial_px = float(nominal_pads["pad_height"])
+    comp_l_px = float(nominal_pads["component_length"])
+    comp_w_px = float(nominal_pads["component_width"])
+    desired_spacing_px = comp_l_px - pad_radial_px
+    desired_spacing_y_px = comp_w_px - pad_radial_px
+    nominal_pads["pad_spacing"] = min(pad_spacing_px, desired_spacing_px)
+    nominal_pads["pad_spacing_y"] = min(pad_spacing_y_px, desired_spacing_y_px)
+    print(f"[QFN] YAML pad_spacing={pad_spacing_px:.1f}px, desired={desired_spacing_px:.1f}px, FINAL={nominal_pads['pad_spacing']:.1f}px")
+    print(f"[QFN] YAML pad_spacing_y={pad_spacing_y_px:.1f}px, desired={desired_spacing_y_px:.1f}px, FINAL={nominal_pads['pad_spacing_y']:.1f}px")
+    return nominal_pads
+
+
 def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> None:
     seed = int(job.get("seed", 0))
     random.seed(seed)
@@ -296,55 +371,7 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
 
     _configure_cycles(width_px=width_px, height_px=height_px, samples=samples, seed=seed, device=device)
 
-    # Materials (defaults if missing)
-    mats_cfg = (render_3d.get("materials") or {})
-
-    # Solder material: shiny metallic silver (for solder joints)
-    solder_col_raw = _as_rgb(mats_cfg.get("solder", {}).get("base_color", [0.7, 0.7, 0.72]))
-    solder_col = (
-        min(1.0, solder_col_raw[0] * 1.0),
-        min(1.0, solder_col_raw[1] * 1.0),
-        min(1.0, solder_col_raw[2] * 1.0)
-    )
-    m_solder = _new_material("mat_solder", base_color=solder_col,
-                             roughness=float(mats_cfg.get("solder", {}).get("roughness", 0.15)),
-                             metallic=float(mats_cfg.get("solder", {}).get("metallic", 1.0)))
-
-    # Substrate: Authentic PCB green solder mask (darker, realistic)
-    sub_col_raw = _as_rgb(mats_cfg.get("substrate", {}).get("base_color", [0.05, 0.2, 0.05]))
-    # Realistic PCB green: darker but visible under AOI lighting
-    sub_col = (
-        min(0.6, sub_col_raw[0] * 1.8),   # R: limited to avoid oversaturation
-        min(0.6, sub_col_raw[1] * 2.8),   # G: dominant but not neon
-        min(0.6, sub_col_raw[2] * 1.6)    # B: minimal for true green
-    )
-    m_sub = _new_material("mat_substrate", base_color=sub_col,
-                          roughness=float(mats_cfg.get("substrate", {}).get("roughness", 0.8)),
-                          metallic=float(mats_cfg.get("substrate", {}).get("metallic", 0.0)))
-
-    # Copper pads: Authentic copper/gold finish - warm metallic
-    cu_col_raw = _as_rgb(mats_cfg.get("copper", {}).get("base_color", [0.8, 0.45, 0.1]))
-    # Real copper/ENIG finish color
-    cu_col = (
-        min(0.9, cu_col_raw[0] * 1.0),    # R: copper orange
-        min(0.7, cu_col_raw[1] * 1.0),    # G: reduce for warmer tone
-        min(0.3, cu_col_raw[2] * 0.5)     # B: minimal for copper look
-    )
-    m_cu = _new_material("mat_copper", base_color=cu_col,
-                         roughness=float(mats_cfg.get("copper", {}).get("roughness", 0.15)),
-                         metallic=float(mats_cfg.get("copper", {}).get("metallic", 0.9)))
-
-    # Component body: Realistic dark component (SMD resistor/IC black)
-    body_col_raw = _as_rgb(mats_cfg.get("body", {}).get("base_color", [0.02, 0.02, 0.02]))
-    # Real component body: very dark but not pure black
-    body_col = (
-        min(0.15, body_col_raw[0] * 4.0),
-        min(0.15, body_col_raw[1] * 4.0),
-        min(0.15, body_col_raw[2] * 4.0)
-    )
-    m_body = _new_material("mat_body", base_color=body_col,
-                           roughness=float(mats_cfg.get("body", {}).get("roughness", 0.75)),
-                           metallic=float(mats_cfg.get("body", {}).get("metallic", 0.0)))
+    m_solder, m_sub, m_cu, m_body = _build_material_set(render_3d)
 
     # Pad thickness and component dims (used for sizing + placement)
     pad_th = 0.05
@@ -358,24 +385,7 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
 
     # For QFN, keep pads close to the body. Some configs sample pad_spacing larger than
     # the body size, which looks like pads "floating away".
-    nominal_pads = dict(nominal)
-    if footprint.startswith("qfn"):
-        pad_spacing_px = float(nominal_pads["pad_spacing"])
-        pad_spacing_y_px = float(nominal_pads.get("pad_spacing_y", pad_spacing_px))
-        pad_radial_px = float(nominal_pads["pad_height"])
-        comp_l_px = float(nominal_pads["component_length"])
-        comp_w_px = float(nominal_pads["component_width"])
-
-        # Keep pads directly at the package edges for QFN.
-        # pad_spacing is center-to-center distance between opposite pads.
-        # For pads to align with package edge: spacing = component_size - pad_radial_length
-        # This positions pad outer edges exactly at the component edges.
-        desired_spacing_px = comp_l_px - pad_radial_px
-        desired_spacing_y_px = comp_w_px - pad_radial_px
-        nominal_pads["pad_spacing"] = min(pad_spacing_px, desired_spacing_px)
-        nominal_pads["pad_spacing_y"] = min(pad_spacing_y_px, desired_spacing_y_px)
-        print(f"[QFN] YAML pad_spacing={pad_spacing_px:.1f}px, desired={desired_spacing_px:.1f}px, FINAL={nominal_pads['pad_spacing']:.1f}px")
-        print(f"[QFN] YAML pad_spacing_y={pad_spacing_y_px:.1f}px, desired={desired_spacing_y_px:.1f}px, FINAL={nominal_pads['pad_spacing_y']:.1f}px")
+    nominal_pads = _normalize_qfn_pad_spacing(footprint, nominal)
 
     # Pre-compute pad positions and ensure the board (substrate) is large enough.
     # Some profiles use large geometry ranges relative to ROI; if we keep the board

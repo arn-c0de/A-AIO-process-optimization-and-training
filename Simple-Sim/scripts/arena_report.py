@@ -695,26 +695,40 @@ def _write_charts(
 
     charts: List[Tuple[str, str]] = []
 
+    def _append_top_metric_chart(
+        *,
+        metric_key: str,
+        title: str,
+        filename: str,
+        sort_desc: bool,
+    ) -> None:
+        items = [(it["model_name"], it[metric_key]) for it in overall if it.get(metric_key) is not None]
+        if sort_desc:
+            items.sort(key=lambda t: -float(t[1]))
+        items = items[:15]
+        if not items:
+            return
+        labels = [str(name) for name, _ in items]
+        values = [float(value) for _name, value in items]
+        chart_path = assets_dir / filename
+        _write_svg_barh(chart_path, title=f"{title} (Top 15)", labels=labels, values=values, value_fmt="{:.4f}")
+        charts.append((title, f"ARENA_REPORT_assets/{filename}"))
+
     # Top-N by avg accuracy (overall is already sorted by avg_acc desc).
-    acc_items = [(it["model_name"], it["avg_acc"]) for it in overall if it.get("avg_acc") is not None]
-    acc_items = acc_items[:15]
-    if acc_items:
-        labels = [str(a[0]) for a in acc_items]
-        values = [float(a[1]) for a in acc_items]
-        p = assets_dir / "top_avg_accuracy.svg"
-        _write_svg_barh(p, title="Top Avg Accuracy (Top 15)", labels=labels, values=values, value_fmt="{:.4f}")
-        charts.append(("Top Avg Accuracy", "ARENA_REPORT_assets/top_avg_accuracy.svg"))
+    _append_top_metric_chart(
+        metric_key="avg_acc",
+        title="Top Avg Accuracy",
+        filename="top_avg_accuracy.svg",
+        sort_desc=False,
+    )
 
     # Top-N by avg F1.
-    f1_items = [(it["model_name"], it["avg_f1"]) for it in overall if it.get("avg_f1") is not None]
-    f1_items.sort(key=lambda t: -float(t[1]))
-    f1_items = f1_items[:15]
-    if f1_items:
-        labels = [str(a[0]) for a in f1_items]
-        values = [float(a[1]) for a in f1_items]
-        p = assets_dir / "top_avg_f1.svg"
-        _write_svg_barh(p, title="Top Avg F1 (Top 15)", labels=labels, values=values, value_fmt="{:.4f}")
-        charts.append(("Top Avg F1", "ARENA_REPORT_assets/top_avg_f1.svg"))
+    _append_top_metric_chart(
+        metric_key="avg_f1",
+        title="Top Avg F1",
+        filename="top_avg_f1.svg",
+        sort_desc=True,
+    )
 
     # Model storage breakdown (pie chart).
     size_items: List[Tuple[str, int]] = []

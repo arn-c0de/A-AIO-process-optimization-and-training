@@ -627,7 +627,144 @@ class PipelineLogic:
     def _is_model_bundle_target(self, model_path: Path) -> bool:
         try: return model_path.exists() and model_path.is_dir() or str(model_path).endswith(".bundle")
         except Exception: return False
-        
+
+    def _prepare_merge_sources(
+        self,
+        sources: List[Path],
+    ) -> tuple[str, Dict[str, Dict[str, str]], dict, str, tuple[str, ...], int, int]:
+        cfg0_path = sources[0] / "config.yaml"
+        if not cfg0_path.exists():
+            raise FileNotFoundError(f"Missing config.yaml in {sources[0]}")
+        cfg0_text = cfg0_path.read_text(encoding="utf-8")
+        try:
+            cfg0 = yaml.safe_load(cfg0_text) or {}
+        except Exception:
+            cfg0 = {}
+        classes0 = cfg0.get("classes") or {}
+        class_keys0 = tuple(sorted((classes0.keys() if isinstance(classes0, dict) else [])))
+        roi0 = cfg0.get("roi") or {}
+        roi0_w, roi0_h = int(roi0.get("width_px") or 0), int(roi0.get("height_px") or 0)
+
+        src_profiles: Dict[str, Dict[str, str]] = {}
+        run_id = sources[0].name
+        for ds in sources:
+            manifest_path = ds / "dataset_manifest.json"
+            if not manifest_path.exists():
+                raise FileNotFoundError(f"Missing dataset_manifest.json in {ds}")
+            manifest = read_dataset_manifest(manifest_path)
+            if (mver := int(manifest.get("manifest_version", 1) or 1)) != 1:
+                raise ValueError(f"Only manifest_version=1 source datasets are supported for merge (got {mver} in {ds})")
+            run_id = str(manifest.get("run_id") or run_id)
+            comp = manifest.get("component_profile") or {}
+            pid = str(comp.get("profile_id") or "")
+            phash = str(comp.get("profile_hash") or "")
+            ppath = str(comp.get("profile_path") or "")
+            if not pid or not phash:
+                raise ValueError(f"Invalid manifest in {ds}: missing profile_id/profile_hash")
+            src_profiles[str(ds.resolve())] = {"profile_id": pid, "profile_hash": phash, "profile_path": ppath}
+
+        target_w, target_h = (roi0_w if roi0_w > 0 else None), (roi0_h if roi0_h > 0 else None)
+        for ds in sources[1:]:
+            cfg_path = ds / "config.yaml"
+            if not cfg_path.exists():
+                raise FileNotFoundError(f"Missing config.yaml in {ds}")
+            try:
+                cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                cfg = {}
+            classes = cfg.get("classes") or {}
+            class_keys = tuple(sorted((classes.keys() if isinstance(classes, dict) else [])))
+            if class_keys != class_keys0:
+                raise ValueError(f"Cannot merge datasets with different class sets.\\n  first: {class_keys0}\\n  {ds.name}: {class_keys}")
+            roi = cfg.get("roi") or {}
+            w, h = int(roi.get("width_px") or 0), int(roi.get("height_px") or 0)
+            if w > 0:
+                target_w = w if target_w is None else min(target_w, w)
+            if h > 0:
+                target_h = h if target_h is None else min(target_h, h)
+
+        if target_w is None or target_h is None or target_w <= 0 or target_h <= 0:
+            raise ValueError("Cannot determine target ROI size for merged dataset (missing roi.width_px/height_px).")
+        return str(run_id), src_profiles, cfg0, cfg0_text, class_keys0, int(target_w), int(target_h)
+
+    def _merge_source_rows(
+        self,
+        *,
+        sources: List[Path],
+        run_id: str,
+        src_profiles: Dict[str, Dict[str, str]],
+        images_dir: Path,
+        target_w: int,
+        target_h: int,
+    ) -> tuple[list[MetaRow], list[LabelRow], Dict[str, List[str]]]:
+        meta_out: list[MetaRow] = []
+        label_out: list[LabelRow] = []
+        split_counters: Dict[str, int] = {}
+        splits: Dict[str, List[str]] = {"train": [], "val": [], "test": []}
+
+        def link_or_copy(src: Path, dst: Path) -> None:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(src, dst)
+            except Exception:
+                shutil.copy2(src, dst)
+
+        for ds in sources:
+            meta_rows = read_jsonl(ds / "meta.jsonl", MetaRow)
+            label_map = {row.id: row.class_name for row in read_jsonl(ds / "labels.jsonl", LabelRow)}
+            prof = src_profiles.get(str(ds.resolve())) or {}
+            pid = prof.get("profile_id") or ""
+
+            for row in meta_rows:
+                if not (class_name := label_map.get(row.id)):
+                    continue
+                split = row.split
+                idx = split_counters.setdefault(split, 0)
+                new_id = f"{run_id}/{row.domain}/{split}/{idx:06d}"
+                split_counters[split] = idx + 1
+                new_image_name = f"{split}_{idx:06d}.png"
+                dst_image, src_image = Path(images_dir) / new_image_name, ds / row.image_path
+                try:
+                    img = cv2.imread(str(src_image))
+                    if img is None:
+                        raise ValueError("imread returned None")
+                    h_src, w_src = img.shape[:2]
+                    if w_src != target_w or h_src != target_h:
+                        img = cv2.resize(
+                            img,
+                            (target_w, target_h),
+                            interpolation=cv2.INTER_AREA if (w_src > target_w or h_src > target_h) else cv2.INTER_LINEAR,
+                        )
+                        dst_image.parent.mkdir(parents=True, exist_ok=True)
+                        if not cv2.imwrite(str(dst_image), img):
+                            raise IOError("imwrite failed")
+                    else:
+                        link_or_copy(src_image, dst_image)
+                except Exception:
+                    link_or_copy(src_image, dst_image)
+
+                meta_out.append(
+                    MetaRow(
+                        schema_version=int(row.schema_version),
+                        id=new_id,
+                        run_id=str(run_id),
+                        domain=row.domain,
+                        split=split,
+                        seed=int(row.seed),
+                        image_path=str(Path("images") / new_image_name),
+                        render_backend=row.render_backend,
+                        footprint=row.footprint,
+                        nominal=row.nominal,
+                        defect=row.defect,
+                        augment=row.augment,
+                        render_meta=getattr(row, "render_meta", {}) or {},
+                    )
+                )
+                label_out.append(LabelRow(schema_version=2, id=new_id, class_name=class_name, profile_id=pid))
+                splits[split].append(new_id)
+
+        return meta_out, label_out, splits
+
     def merge_datasets_for_training(self, sources: List[Path], out_dir: Path, log_callback: Callable[[str], None], log_error_callback: Callable[[str], None]) -> None:
         out_dir = Path(out_dir)
         if out_dir.exists(): raise FileExistsError(f"Output directory already exists: {out_dir}")
@@ -638,81 +775,15 @@ class PipelineLogic:
 
         if not sources: raise ValueError("No sources provided")
 
-        cfg0_path = sources[0] / "config.yaml"
-        if not cfg0_path.exists(): raise FileNotFoundError(f"Missing config.yaml in {sources[0]}")
-        cfg0_text = cfg0_path.read_text(encoding="utf-8")
-        try: cfg0 = yaml.safe_load(cfg0_text) or {}
-        except Exception: cfg0 = {}
-        classes0 = cfg0.get("classes") or {}
-        class_keys0 = tuple(sorted((classes0.keys() if isinstance(classes0, dict) else [])))
-        roi0 = cfg0.get("roi") or {}
-        roi0_w, roi0_h = int(roi0.get("width_px") or 0), int(roi0.get("height_px") or 0)
-
-        src_profiles: Dict[str, Dict[str, str]] = {}
-        run_id = sources[0].name
-        for ds in sources:
-            manifest_path = ds / "dataset_manifest.json"
-            if not manifest_path.exists(): raise FileNotFoundError(f"Missing dataset_manifest.json in {ds}")
-            manifest = read_dataset_manifest(manifest_path)
-            if (mver := int(manifest.get("manifest_version", 1) or 1)) != 1: raise ValueError(f"Only manifest_version=1 source datasets are supported for merge (got {mver} in {ds})")
-            run_id = str(manifest.get("run_id") or run_id)
-            comp = manifest.get("component_profile") or {}
-            pid, phash, ppath = str(comp.get("profile_id") or ""), str(comp.get("profile_hash") or ""), str(comp.get("profile_path") or "")
-            if not pid or not phash: raise ValueError(f"Invalid manifest in {ds}: missing profile_id/profile_hash")
-            src_profiles[str(ds.resolve())] = {"profile_id": pid, "profile_hash": phash, "profile_path": ppath}
-
-        target_w, target_h = (roi0_w if roi0_w > 0 else None), (roi0_h if roi0_h > 0 else None)
-        for ds in sources[1:]:
-            cfg_path = ds / "config.yaml"
-            if not cfg_path.exists(): raise FileNotFoundError(f"Missing config.yaml in {ds}")
-            try: cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-            except Exception: cfg = {}
-            classes = cfg.get("classes") or {}
-            if (class_keys := tuple(sorted((classes.keys() if isinstance(classes, dict) else [])))) != class_keys0:
-                raise ValueError(f"Cannot merge datasets with different class sets.\\n  first: {class_keys0}\\n  {ds.name}: {class_keys}")
-            roi = cfg.get("roi") or {}
-            w, h = int(roi.get("width_px") or 0), int(roi.get("height_px") or 0)
-            if w > 0: target_w = w if target_w is None else min(target_w, w)
-            if h > 0: target_h = h if target_h is None else min(target_h, h)
-
-        if target_w is None or target_h is None or target_w <= 0 or target_h <= 0: raise ValueError("Cannot determine target ROI size for merged dataset (missing roi.width_px/height_px).")
-        target_w, target_h = int(target_w), int(target_h)
-
-        meta_out, label_out = [], []
-        split_counters: Dict[str, int] = {}
-        splits: Dict[str, List[str]] = {"train": [], "val": [], "test": []}
-
-        def link_or_copy(src: Path, dst: Path) -> None:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            try: os.link(src, dst)
-            except Exception: shutil.copy2(src, dst)
-
-        for ds in sources:
-            meta_rows = read_jsonl(ds / "meta.jsonl", MetaRow)
-            label_map = {row.id: row.class_name for row in read_jsonl(ds / "labels.jsonl", LabelRow)}
-            prof = src_profiles.get(str(ds.resolve())) or {}
-            pid = prof.get("profile_id") or ""
-
-            for row in meta_rows:
-                if not (class_name := label_map.get(row.id)): continue
-                split = row.split
-                idx = split_counters.setdefault(split, 0)
-                new_id, split_counters[split] = f"{run_id}/{row.domain}/{split}/{idx:06d}", idx + 1
-                new_image_name = f"{split}_{idx:06d}.png"
-                dst_image, src_image = Path(images_dir) / new_image_name, ds / row.image_path
-                try:
-                    if (img := cv2.imread(str(src_image))) is None: raise ValueError("imread returned None")
-                    h_src, w_src = img.shape[:2]
-                    if w_src != target_w or h_src != target_h:
-                        img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_AREA if (w_src > target_w or h_src > target_h) else cv2.INTER_LINEAR)
-                        dst_image.parent.mkdir(parents=True, exist_ok=True)
-                        if not cv2.imwrite(str(dst_image), img): raise IOError("imwrite failed")
-                    else: link_or_copy(src_image, dst_image)
-                except Exception: link_or_copy(src_image, dst_image)
-
-                meta_out.append(MetaRow(schema_version=int(row.schema_version), id=new_id, run_id=str(run_id), domain=row.domain, split=split, seed=int(row.seed), image_path=str(Path("images") / new_image_name), render_backend=row.render_backend, footprint=row.footprint, nominal=row.nominal, defect=row.defect, augment=row.augment, render_meta=getattr(row, "render_meta", {}) or {}))
-                label_out.append(LabelRow(schema_version=2, id=new_id, class_name=class_name, profile_id=pid))
-                splits[split].append(new_id)
+        run_id, src_profiles, cfg0, cfg0_text, _class_keys0, target_w, target_h = self._prepare_merge_sources(sources)
+        meta_out, label_out, splits = self._merge_source_rows(
+            sources=sources,
+            run_id=run_id,
+            src_profiles=src_profiles,
+            images_dir=images_dir,
+            target_w=target_w,
+            target_h=target_h,
+        )
 
         write_jsonl(out_dir / "meta.jsonl", meta_out)
         write_jsonl(out_dir / "labels.jsonl", label_out)

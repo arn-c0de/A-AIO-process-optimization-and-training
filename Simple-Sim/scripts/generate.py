@@ -198,6 +198,113 @@ def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
             raise IOError(f"Failed to write filtered Blender image: {path}")
 
 
+def _render_opencv_image(
+    record: dict,
+    *,
+    roi_width: int,
+    roi_height: int,
+    config: dict,
+    tolerances: dict | None,
+    footprint: str,
+):
+    seed = int(record["seed"])
+    rng = np.random.default_rng(seed)
+    return render_roi(
+        nominal=record["nominal"],
+        defect_params=record["defect"],
+        augment=record["augment"],
+        roi_size=(roi_width, roi_height),
+        config=config["render"],
+        tolerances=tolerances,
+        rng=rng,
+        footprint=footprint,
+    )
+
+
+def _build_blender_jobs(
+    records: list[dict],
+    *,
+    config: dict,
+    roi_width: int,
+    roi_height: int,
+    footprint: str,
+    component_height_mm: float,
+    profile_render_3d: dict,
+) -> list[dict]:
+    jobs: list[dict] = []
+    for r in records:
+        jobs.append({
+            "image_path": r["image_path"],
+            "seed": int(r["seed"]),
+            "mm_per_px": float(config["roi"]["mm_per_px"]),
+            "roi_width_px": int(roi_width),
+            "roi_height_px": int(roi_height),
+            "footprint": str(footprint),
+            "component_height_mm": float(component_height_mm),
+            "nominal": r["nominal"],
+            "defect": r["defect"],
+            "augment": r["augment"],
+            "render_3d": profile_render_3d,
+        })
+    return jobs
+
+
+def _render_blender_records(
+    *,
+    records: list[dict],
+    config: dict,
+    roi_width: int,
+    roi_height: int,
+    footprint: str,
+    component_height_mm: float,
+    profile_render_3d: dict,
+    project_root: Path,
+    output_root: Path,
+    jobs_filename: str,
+    expected_count_check: str,
+) -> None:
+    blender_cfg = (config.get("render") or {}).get("blender") or {}
+    exe = str(blender_cfg.get("executable", "blender"))
+    samples = int(blender_cfg.get("samples", 64))
+    device = str(blender_cfg.get("device", "CPU"))
+
+    jobs = _build_blender_jobs(
+        records,
+        config=config,
+        roi_width=roi_width,
+        roi_height=roi_height,
+        footprint=footprint,
+        component_height_mm=component_height_mm,
+        profile_render_3d=profile_render_3d,
+    )
+    jobs_path = output_root / jobs_filename
+    write_jobs_jsonl(jobs_path, jobs)
+    render_blender_batch(
+        sim_root=project_root,
+        jobs_path=jobs_path,
+        output_root=output_root,
+        blender_executable=exe,
+        cycles_samples=samples,
+        device=device,
+    )
+    _postprocess_blender_images(records, output_root)
+
+    try:
+        img_count = len(list((output_root / "images").glob("*.png")))
+    except Exception:
+        img_count = 0
+    expected = len(records)
+    if expected_count_check == "at_least":
+        if img_count < expected:
+            raise RuntimeError(
+                f"Blender render incomplete (extend): expected >= {expected} images, found {img_count} under {output_root / 'images'}"
+            )
+    elif img_count != expected:
+        raise RuntimeError(
+            f"Blender render incomplete: expected {expected} images, found {img_count} under {output_root / 'images'}"
+        )
+
+
 def generate_dataset(
     config_path: Path,
     output_dir: Path,
@@ -597,16 +704,12 @@ def generate_dataset(
         if backend == "opencv_2d":
             import cv2
             for r in records:
-                seed = int(r["seed"])
-                rng = np.random.default_rng(seed)
-                img = render_roi(
-                    nominal=r["nominal"],
-                    defect_params=r["defect"],
-                    augment=r["augment"],
-                    roi_size=(roi_width, roi_height),
-                    config=config["render"],
+                img = _render_opencv_image(
+                    r,
+                    roi_width=roi_width,
+                    roi_height=roi_height,
+                    config=config,
                     tolerances=tolerances,
-                    rng=rng,
                     footprint=footprint,
                 )
                 full_path = output_dir / r["image_path"]
@@ -615,43 +718,19 @@ def generate_dataset(
                 if not ok:
                     raise IOError(f"Failed to write image: {r['image_path']}")
         elif backend == "blender_3d":
-            blender_cfg = (config.get("render") or {}).get("blender") or {}
-            exe = str(blender_cfg.get("executable", "blender"))
-            samples = int(blender_cfg.get("samples", 64))
-            device = str(blender_cfg.get("device", "CPU"))
-            jobs = []
-            for r in records:
-                jobs.append({
-                    "image_path": r["image_path"],
-                    "seed": int(r["seed"]),
-                    "mm_per_px": float(config["roi"]["mm_per_px"]),
-                    "roi_width_px": int(roi_width),
-                    "roi_height_px": int(roi_height),
-                    "footprint": str(footprint),
-                    "component_height_mm": float(component_height_mm),
-                    "nominal": r["nominal"],
-                    "defect": r["defect"],
-                    "augment": r["augment"],
-                    "render_3d": profile_render_3d,
-                })
-            jobs_path = output_dir / "blender_jobs_extend.jsonl"
-            write_jobs_jsonl(jobs_path, jobs)
-            render_blender_batch(
-                sim_root=project_root,
-                jobs_path=jobs_path,
+            _render_blender_records(
+                records=records,
+                config=config,
+                roi_width=roi_width,
+                roi_height=roi_height,
+                footprint=footprint,
+                component_height_mm=component_height_mm,
+                profile_render_3d=profile_render_3d,
+                project_root=project_root,
                 output_root=output_dir,
-                blender_executable=exe,
-                cycles_samples=samples,
-                device=device,
+                jobs_filename="blender_jobs_extend.jsonl",
+                expected_count_check="at_least",
             )
-            _postprocess_blender_images(records, output_dir)
-            # Sanity check: ensure Blender produced the expected images.
-            try:
-                img_count = len(list((output_dir / "images").glob("*.png")))
-            except Exception:
-                img_count = 0
-            if img_count < len(records):
-                raise RuntimeError(f"Blender render incomplete (extend): expected >= {len(records)} images, found {img_count} under {output_dir / 'images'}")
         else:
             raise ValueError(f"Unsupported render backend: {backend}")
 
@@ -671,16 +750,12 @@ def generate_dataset(
             # Keep existing atomic writer for 2D.
             all_images = {}
             for r in records:
-                seed = int(r["seed"])
-                rng = np.random.default_rng(seed)
-                img = render_roi(
-                    nominal=r["nominal"],
-                    defect_params=r["defect"],
-                    augment=r["augment"],
-                    roi_size=(roi_width, roi_height),
-                    config=config["render"],
+                img = _render_opencv_image(
+                    r,
+                    roi_width=roi_width,
+                    roi_height=roi_height,
+                    config=config,
                     tolerances=tolerances,
-                    rng=rng,
                     footprint=footprint,
                 )
                 all_images[r["image_path"]] = img
@@ -702,46 +777,19 @@ def generate_dataset(
             try:
                 (temp_dir / "images").mkdir(parents=True, exist_ok=True)
 
-                blender_cfg = (config.get("render") or {}).get("blender") or {}
-                exe = str(blender_cfg.get("executable", "blender"))
-                samples = int(blender_cfg.get("samples", 64))
-                device = str(blender_cfg.get("device", "CPU"))
-
-                jobs = []
-                for r in records:
-                    jobs.append({
-                        "image_path": r["image_path"],
-                        "seed": int(r["seed"]),
-                        "mm_per_px": float(config["roi"]["mm_per_px"]),
-                        "roi_width_px": int(roi_width),
-                        "roi_height_px": int(roi_height),
-                        "footprint": str(footprint),
-                        "component_height_mm": float(component_height_mm),
-                        "nominal": r["nominal"],
-                        "defect": r["defect"],
-                        "augment": r["augment"],
-                        "render_3d": profile_render_3d,
-                    })
-
-                jobs_path = temp_dir / "blender_jobs.jsonl"
-                write_jobs_jsonl(jobs_path, jobs)
-                render_blender_batch(
-                    sim_root=project_root,
-                    jobs_path=jobs_path,
+                _render_blender_records(
+                    records=records,
+                    config=config,
+                    roi_width=roi_width,
+                    roi_height=roi_height,
+                    footprint=footprint,
+                    component_height_mm=component_height_mm,
+                    profile_render_3d=profile_render_3d,
+                    project_root=project_root,
                     output_root=temp_dir,
-                    blender_executable=exe,
-                    cycles_samples=samples,
-                    device=device,
+                    jobs_filename="blender_jobs.jsonl",
+                    expected_count_check="exact",
                 )
-                _postprocess_blender_images(records, temp_dir)
-
-                # Sanity check: ensure Blender produced the expected images.
-                try:
-                    img_count = len(list((temp_dir / "images").glob("*.png")))
-                except Exception:
-                    img_count = 0
-                if img_count != len(records):
-                    raise RuntimeError(f"Blender render incomplete: expected {len(records)} images, found {img_count} under {temp_dir / 'images'}")
 
                 write_jsonl(temp_dir / "meta.jsonl", meta_rows)
                 write_jsonl(temp_dir / "labels.jsonl", label_rows)
