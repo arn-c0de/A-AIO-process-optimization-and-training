@@ -55,23 +55,27 @@ def persist_active_profile(popup: Any) -> None:
 def update_internal_vars(popup: Any, data: Dict[str, Any]) -> None:
     payload = FilterPopupPayload.from_mapping(data)
     normalized = payload.to_mapping()
-    for key, var in popup.filter_vars.items():
-        if key not in normalized:
-            continue
-        value = normalized[key]
-        if isinstance(var, tk.BooleanVar):
-            if isinstance(value, str):
-                var.set(value.strip().lower() in {"1", "true", "yes", "on"})
-            else:
-                var.set(bool(value))
-        elif isinstance(var, (tk.DoubleVar, tk.StringVar)):
-            try:
-                if isinstance(var, tk.DoubleVar):
-                    var.set(float(value))
+    popup._suspend_live_sync = True
+    try:
+        for key, var in popup.filter_vars.items():
+            if key not in normalized:
+                continue
+            value = normalized[key]
+            if isinstance(var, tk.BooleanVar):
+                if isinstance(value, str):
+                    var.set(value.strip().lower() in {"1", "true", "yes", "on"})
                 else:
-                    var.set(str(value))
-            except (ValueError, TypeError):
-                pass
+                    var.set(bool(value))
+            elif isinstance(var, (tk.DoubleVar, tk.StringVar)):
+                try:
+                    if isinstance(var, tk.DoubleVar):
+                        var.set(float(value))
+                    else:
+                        var.set(str(value))
+                except (ValueError, TypeError):
+                    pass
+    finally:
+        popup._suspend_live_sync = False
 
 
 def load_profile_from_selection(popup: Any, _evt: Optional[tk.Event] = None) -> None:
