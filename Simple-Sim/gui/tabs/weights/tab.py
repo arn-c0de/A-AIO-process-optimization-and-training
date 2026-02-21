@@ -466,7 +466,7 @@ class WeightsTab(BaseTab):
         rp = Path(str(p))
         if not rp.exists(): return messagebox.showwarning("Not found", f"Report file not found:\\n{rp}")
         
-        try: (self.logic.sim_root.resolve()).relative_to(rp.resolve()) # Check if rp is within sim_root
+        try: rp.resolve().relative_to(self.logic.sim_root.resolve())  # Check if rp is within sim_root
         except ValueError: return messagebox.showerror("Blocked", f"Refusing to delete file outside repo:\\n{rp}")
 
         if not messagebox.askyesno("Delete report", f"Delete this report file?\\n\\n{rp}"): return
