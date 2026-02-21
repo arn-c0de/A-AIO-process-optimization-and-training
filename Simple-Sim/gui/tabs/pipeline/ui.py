@@ -213,11 +213,11 @@ class PipelineUI:
         self.var_run_mode.trace("w", on_run_mode_change)
         on_run_mode_change()
 
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
-
-        ttk.Label(top, text="Dataset:").pack(side="left", padx=(0, 6))
-        ttk.Radiobutton(top, text="Create New", variable=self.var_dataset_mode, value="new").pack(side="left")
-        ttk.Radiobutton(top, text="Extend Existing", variable=self.var_dataset_mode, value="extend").pack(side="left", padx=(5, 0))
+        top_dataset_mode = ttk.Frame(self.frame)
+        top_dataset_mode.pack(fill="x", pady=(0, 5))
+        ttk.Label(top_dataset_mode, text="Dataset Mode:").pack(side="left", padx=(0, 6))
+        ttk.Radiobutton(top_dataset_mode, text="Create New", variable=self.var_dataset_mode, value="new").pack(side="left")
+        ttk.Radiobutton(top_dataset_mode, text="Extend Existing", variable=self.var_dataset_mode, value="extend").pack(side="left", padx=(5, 0))
 
         top2 = ttk.Frame(self.frame)
         top2.pack(fill="x", pady=(0, 5))

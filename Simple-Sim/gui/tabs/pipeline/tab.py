@@ -1258,6 +1258,18 @@ class PipelineControlTab(BaseTab):
             image_filters=image_filters,
         ): return
 
+        # Mixed cross-backend generation runs through temporary per-profile output dirs.
+        # Those dirs are always newly created and must not use --extend.
+        runtime_dataset_mode = dataset_mode
+        if (
+            dataset_mode == "extend"
+            and multi_enabled
+            and multi_mode == "mixed"
+            and effective_task == "generate_only"
+        ):
+            runtime_dataset_mode = "new"
+            self._append_log("[mixed] using internal dataset mode 'new' for temporary generation dirs; extend is applied during final merge.\n")
+
         self.ui.set_run_buttons_state(True)
         self.logic.stop_evt.clear()
 
@@ -1268,7 +1280,7 @@ class PipelineControlTab(BaseTab):
             "snap_every": self._snap_every_n(), "snap_keep": self._snap_keep_n(), "autosnap": self.ui.var_autosnap.get()
         }
         self.logic.start_pipeline(
-            run_specs=run_specs, run_count=run_count, dataset_mode=dataset_mode, task=effective_task,
+            run_specs=run_specs, run_count=run_count, dataset_mode=runtime_dataset_mode, task=effective_task,
             image_filters=image_filters,
             event_callback=self._handle_event, log_callback=self._append_log,
             ui_update_callback=lambda: self.frame.after(0, self._after_pipeline_run_ui_update),
