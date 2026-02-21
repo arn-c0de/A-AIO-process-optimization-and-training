@@ -49,6 +49,7 @@ See latest Arena stats: [`ARENA_REPORT.md`](ARENA_REPORT.md)
 For comprehensive guides and references, see [`Documentation Index`](docs/INDEX.md). Quick links:
 - [Command Cheatsheet](docs/guides/CHEATSHEET.md) - Common operations and workflows
 - [3D Rendering Quickstart](docs/guides/3D_RENDERING_QUICKSTART.md) - Blender 3D rendering guide
+- [Architecture Overview](architektur.md) - Generated project architecture map
 - [Profile System Implementation](PROFILE_SYSTEM_IMPLEMENTATION.md) - Component profile design
 
 
