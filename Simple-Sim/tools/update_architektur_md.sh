@@ -67,6 +67,15 @@ render_structure() {
   echo "- Excluded noise: \`__pycache__/\`, \`.venv/\`, \`.venv-wheelhouse/\`, \`.pytest_cache/\`."
   echo "- Update command: \`./tools/update_architektur_md.sh\` (from \`Simple-Sim/\`)."
   echo
+  echo "## Architecture Conventions"
+  echo
+  echo "- New CLI workflows: add entrypoints in \`scripts/\`; keep reusable logic in \`simple_sim/\`."
+  echo "- New validation/migration helpers: place in \`tools/\`."
+  echo "- New GUI features: use \`gui/tabs/<feature>/\` with \`tab.py\`, \`logic.py\`, and \`ui.py\` when applicable."
+  echo "- Shared GUI primitives: place reusable widgets in \`gui/components/\` and cross-tab helpers in \`gui/utils/\`."
+  echo "- New docs: add user-facing guides to \`docs/guides/\`, engineering notes to \`docs/technical/\`, and experiment logs to \`docs/training_logs/\`."
+  echo "- Runtime outputs: write generated artifacts under \`outputs/\`; keep source folders free of run artifacts."
+  echo
   echo "## Project Structure (Auto)"
   echo
   echo '```text'
