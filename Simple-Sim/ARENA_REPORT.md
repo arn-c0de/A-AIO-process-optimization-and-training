@@ -1,5 +1,5 @@
 # Model Arena Report
-> Last updated: 2026-02-20 16:14:07
+> Last updated: 2026-02-21 13:47:42
 
 ## Quick Navigation
 
@@ -88,14 +88,18 @@ Tracked paths missing on disk:
 
 ![Dataset Storage Breakdown](ARENA_REPORT_assets/dataset_size_pie.svg)
 
+### Accuracy Heatmap
+
+![Accuracy Heatmap](ARENA_REPORT_assets/accuracy_heatmap.svg)
+
 <a id="overall-ranking"></a>
 ## Overall Ranking
 
 | Rank | Model | Type | Avg Accuracy | Avg F1 | Datasets Tested | Best Dataset | Worst Dataset | Last Run |
 |---:|---|---|---:|---:|---:|---|---|---|
-| 1 | QFN-FINE-TUNED-RandomCrawler-1X.pt | Single | 0.7704 | 0.7436 | 8 | CLEAN-Transistor-2D (0.9500) | CLEAN-QFN-3D (0.3187) | 2026-02-20 16:12:54 |
-| 2 | RandomCrawler-5X.pt | Single | 0.7225 | 0.6856 | 8 | Transistor-2D (0.9925) | IC-16-3D (0.2900) | 2026-02-20 13:26:47 |
-| 3 | RandomCrawler-1X_MultiTrained.pt | Single | 0.7176 | 0.6717 | 8 | Resistor-2D (0.9975) | QFN-3D (0.2500) | 2026-02-20 13:26:56 |
+| Top-1 | **QFN-FINE-TUNED-RandomCrawler-1X.pt** | Single | 0.7704 | 0.7436 | 8 | CLEAN-Transistor-2D (0.9500) | CLEAN-QFN-3D (0.3187) | 2026-02-20 16:12:54 |
+| Top-2 | **RandomCrawler-5X.pt** | Single | 0.7225 | 0.6856 | 8 | Transistor-2D (0.9925) | IC-16-3D (0.2900) | 2026-02-20 13:26:47 |
+| Top-3 | **RandomCrawler-1X_MultiTrained.pt** | Single | 0.7176 | 0.6717 | 8 | Resistor-2D (0.9975) | QFN-3D (0.2500) | 2026-02-20 13:26:56 |
 | 4 | FINE-TUNED-RandomCrawler-1X.pt | Single | 0.7164 | 0.6851 | 8 | Filter-Default-Mixed-ALL_20260220_131657 (0.9604) | CLEAN-QFN-3D (0.2075) | 2026-02-20 13:26:14 |
 | 5 | CLEAN-Transistor-2D.pt | Single | 0.6181 | 0.5549 | 8 | CLEAN-Transistor-2D (0.9850) | CLEAN-Resistor-3D (0.2500) | 2026-02-20 13:32:31 |
 | 6 | Transistor-2D.pt | Single | 0.5891 | 0.5090 | 7 | Transistor-2D (0.9850) | Resistor-3D (0.2500) | 2026-02-16 22:35:03 |
@@ -122,9 +126,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | QFN-FINE-TUNED-RandomCrawler-1X.pt | 0.8715 | 0.8698 | all | 11200 | 695.59 MB | 2026-02-20 16:11:59 |
-| 2 | FINE-TUNED-RandomCrawler-1X.pt | 0.8604 | 0.8605 | all | 11200 | 695.59 MB | 2026-02-20 13:25:19 |
-| 3 | CLEAN-Transistor-2D.pt | 0.6579 | 0.6365 | all | 11200 | 695.59 MB | 2026-02-20 13:31:45 |
+| Top-1 | **QFN-FINE-TUNED-RandomCrawler-1X.pt** | 0.8715 | 0.8698 | all | 11200 | 695.59 MB | 2026-02-20 16:11:59 |
+| Top-2 | **FINE-TUNED-RandomCrawler-1X.pt** | 0.8604 | 0.8605 | all | 11200 | 695.59 MB | 2026-02-20 13:25:19 |
+| Top-3 | **CLEAN-Transistor-2D.pt** | 0.6579 | 0.6365 | all | 11200 | 695.59 MB | 2026-02-20 13:31:45 |
 | 4 | CLEAN-Transistor-3D.pt | 0.5272 | 0.5231 | all | 11200 | 695.59 MB | 2026-02-20 13:29:14 |
 | 5 | CLEAN-Resistor-3D.pt | 0.4496 | 0.4131 | all | 11200 | 695.59 MB | 2026-02-20 13:33:02 |
 | 6 | CLEAN-Resistor-2D.pt | 0.4204 | 0.4085 | all | 11200 | 695.59 MB | 2026-02-20 13:34:23 |
@@ -139,9 +143,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | CLEAN-QFN-3D.pt | 0.9875 | 0.9875 | all | 800 | 619.09 MB | 2026-02-20 13:37:14 |
-| 2 | CLEAN-IC-16-3D.pt | 0.7250 | 0.6648 | all | 800 | 619.09 MB | 2026-02-20 13:38:36 |
-| 3 | CLEAN-Transistor-3D.pt | 0.6500 | 0.5784 | all | 800 | 619.09 MB | 2026-02-20 13:29:31 |
+| Top-1 | **CLEAN-QFN-3D.pt** | 0.9875 | 0.9875 | all | 800 | 619.09 MB | 2026-02-20 13:37:14 |
+| Top-2 | **CLEAN-IC-16-3D.pt** | 0.7250 | 0.6648 | all | 800 | 619.09 MB | 2026-02-20 13:38:36 |
+| Top-3 | **CLEAN-Transistor-3D.pt** | 0.6500 | 0.5784 | all | 800 | 619.09 MB | 2026-02-20 13:29:31 |
 | 4 | CLEAN-Transistor-2D.pt | 0.3925 | 0.2671 | all | 800 | 619.09 MB | 2026-02-20 13:32:02 |
 | 5 | QFN-FINE-TUNED-RandomCrawler-1X.pt | 0.3187 | 0.2760 | all | 800 | 619.09 MB | 2026-02-20 16:12:17 |
 | 6 | CLEAN-QFN32-2D.pt | 0.2500 | 0.1000 | all | 800 | 619.09 MB | 2026-02-20 13:35:57 |
@@ -156,9 +160,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | CLEAN-QFN32-2D.pt | 1.0000 | 1.0000 | all | 800 | 1.30 GB | 2026-02-20 13:36:11 |
-| 2 | CLEAN-Transistor-2D.pt | 0.5487 | 0.4744 | all | 800 | 1.30 GB | 2026-02-20 13:32:16 |
-| 3 | QFN-FINE-TUNED-RandomCrawler-1X.pt | 0.5425 | 0.4601 | all | 800 | 1.30 GB | 2026-02-20 16:12:30 |
+| Top-1 | **CLEAN-QFN32-2D.pt** | 1.0000 | 1.0000 | all | 800 | 1.30 GB | 2026-02-20 13:36:11 |
+| Top-2 | **CLEAN-Transistor-2D.pt** | 0.5487 | 0.4744 | all | 800 | 1.30 GB | 2026-02-20 13:32:16 |
+| Top-3 | **QFN-FINE-TUNED-RandomCrawler-1X.pt** | 0.5425 | 0.4601 | all | 800 | 1.30 GB | 2026-02-20 16:12:30 |
 | 4 | CLEAN-Resistor-2D.pt | 0.4150 | 0.3548 | all | 800 | 1.30 GB | 2026-02-20 13:34:54 |
 | 5 | CLEAN-Resistor-3D.pt | 0.3800 | 0.2710 | all | 800 | 1.30 GB | 2026-02-20 13:33:34 |
 | 6 | FINE-TUNED-RandomCrawler-1X.pt | 0.3150 | 0.2108 | all | 800 | 1.30 GB | 2026-02-20 13:25:50 |
@@ -173,9 +177,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | CLEAN-Resistor-2D.pt | 0.9825 | 0.9825 | all | 400 | 116.87 MB | 2026-02-20 13:34:58 |
-| 2 | CLEAN-Transistor-2D.pt | 0.9650 | 0.9650 | all | 400 | 116.87 MB | 2026-02-20 13:32:19 |
-| 3 | QFN-FINE-TUNED-RandomCrawler-1X.pt | 0.9400 | 0.9398 | all | 400 | 116.87 MB | 2026-02-20 16:12:34 |
+| Top-1 | **CLEAN-Resistor-2D.pt** | 0.9825 | 0.9825 | all | 400 | 116.87 MB | 2026-02-20 13:34:58 |
+| Top-2 | **CLEAN-Transistor-2D.pt** | 0.9650 | 0.9650 | all | 400 | 116.87 MB | 2026-02-20 13:32:19 |
+| Top-3 | **QFN-FINE-TUNED-RandomCrawler-1X.pt** | 0.9400 | 0.9398 | all | 400 | 116.87 MB | 2026-02-20 16:12:34 |
 | 4 | FINE-TUNED-RandomCrawler-1X.pt | 0.9225 | 0.9221 | all | 400 | 116.87 MB | 2026-02-20 13:25:53 |
 | 5 | CLEAN-QFN32-2D.pt | 0.4775 | 0.3218 | all | 400 | 116.87 MB | 2026-02-20 13:36:14 |
 | 6 | CLEAN-IC-16-3D.pt | 0.2950 | 0.2102 | all | 400 | 116.87 MB | 2026-02-20 13:38:54 |
@@ -190,9 +194,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | CLEAN-Resistor-3D.pt | 0.9800 | 0.9800 | all | 400 | 58.12 MB | 2026-02-20 13:33:40 |
-| 2 | QFN-FINE-TUNED-RandomCrawler-1X.pt | 0.6925 | 0.6049 | all | 400 | 58.12 MB | 2026-02-20 16:12:37 |
-| 3 | FINE-TUNED-RandomCrawler-1X.pt | 0.6875 | 0.6312 | all | 400 | 58.12 MB | 2026-02-20 13:25:57 |
+| Top-1 | **CLEAN-Resistor-3D.pt** | 0.9800 | 0.9800 | all | 400 | 58.12 MB | 2026-02-20 13:33:40 |
+| Top-2 | **QFN-FINE-TUNED-RandomCrawler-1X.pt** | 0.6925 | 0.6049 | all | 400 | 58.12 MB | 2026-02-20 16:12:37 |
+| Top-3 | **FINE-TUNED-RandomCrawler-1X.pt** | 0.6875 | 0.6312 | all | 400 | 58.12 MB | 2026-02-20 13:25:57 |
 | 4 | CLEAN-IC-16-3D.pt | 0.2850 | 0.1575 | all | 400 | 58.12 MB | 2026-02-20 13:38:57 |
 | 5 | CLEAN-QFN-3D.pt | 0.2600 | 0.1221 | all | 400 | 58.12 MB | 2026-02-20 13:37:35 |
 | 6 | CLEAN-QFN32-2D.pt | 0.2500 | 0.1139 | all | 400 | 58.12 MB | 2026-02-20 13:36:18 |
@@ -207,9 +211,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | CLEAN-Transistor-2D.pt | 0.9850 | 0.9850 | all | 800 | 249.28 MB | 2026-02-20 13:32:27 |
-| 2 | QFN-FINE-TUNED-RandomCrawler-1X.pt | 0.9500 | 0.9497 | all | 800 | 249.28 MB | 2026-02-20 16:12:41 |
-| 3 | FINE-TUNED-RandomCrawler-1X.pt | 0.9413 | 0.9408 | all | 800 | 249.28 MB | 2026-02-20 13:26:01 |
+| Top-1 | **CLEAN-Transistor-2D.pt** | 0.9850 | 0.9850 | all | 800 | 249.28 MB | 2026-02-20 13:32:27 |
+| Top-2 | **QFN-FINE-TUNED-RandomCrawler-1X.pt** | 0.9500 | 0.9497 | all | 800 | 249.28 MB | 2026-02-20 16:12:41 |
+| Top-3 | **FINE-TUNED-RandomCrawler-1X.pt** | 0.9413 | 0.9408 | all | 800 | 249.28 MB | 2026-02-20 13:26:01 |
 | 4 | CLEAN-Resistor-2D.pt | 0.6338 | 0.6416 | all | 800 | 249.28 MB | 2026-02-20 13:35:05 |
 | 5 | CLEAN-QFN32-2D.pt | 0.4550 | 0.3084 | all | 800 | 249.28 MB | 2026-02-20 13:36:22 |
 | 6 | CLEAN-IC-16-3D.pt | 0.2712 | 0.1725 | all | 800 | 249.28 MB | 2026-02-20 13:39:01 |
@@ -224,9 +228,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | CLEAN-Transistor-3D.pt | 0.9838 | 0.9837 | all | 800 | 84.12 MB | 2026-02-20 13:30:01 |
-| 2 | QFN-FINE-TUNED-RandomCrawler-1X.pt | 0.9038 | 0.9046 | all | 800 | 84.12 MB | 2026-02-20 16:12:44 |
-| 3 | FINE-TUNED-RandomCrawler-1X.pt | 0.8363 | 0.8393 | all | 800 | 84.12 MB | 2026-02-20 13:26:05 |
+| Top-1 | **CLEAN-Transistor-3D.pt** | 0.9838 | 0.9837 | all | 800 | 84.12 MB | 2026-02-20 13:30:01 |
+| Top-2 | **QFN-FINE-TUNED-RandomCrawler-1X.pt** | 0.9038 | 0.9046 | all | 800 | 84.12 MB | 2026-02-20 16:12:44 |
+| Top-3 | **FINE-TUNED-RandomCrawler-1X.pt** | 0.8363 | 0.8393 | all | 800 | 84.12 MB | 2026-02-20 13:26:05 |
 | 4 | CLEAN-IC-16-3D.pt | 0.5775 | 0.5134 | all | 800 | 84.12 MB | 2026-02-20 13:39:05 |
 | 5 | CLEAN-Transistor-2D.pt | 0.5363 | 0.4327 | all | 800 | 84.12 MB | 2026-02-20 13:32:31 |
 | 6 | CLEAN-Resistor-3D.pt | 0.5000 | 0.3798 | all | 800 | 84.12 MB | 2026-02-20 13:33:48 |
@@ -241,9 +245,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | FINE-TUNED-RandomCrawler-1X.pt | 0.9604 | 0.9605 | all | 2800 | 144.44 MB | 2026-02-20 13:26:14 |
-| 2 | QFN-FINE-TUNED-RandomCrawler-1X.pt | 0.9443 | 0.9440 | all | 2800 | 144.44 MB | 2026-02-20 16:12:54 |
-| 3 | RandomCrawler-5X.pt | 0.7614 | 0.7641 | all | 2800 | 144.44 MB | 2026-02-20 13:26:47 |
+| Top-1 | **FINE-TUNED-RandomCrawler-1X.pt** | 0.9604 | 0.9605 | all | 2800 | 144.44 MB | 2026-02-20 13:26:14 |
+| Top-2 | **QFN-FINE-TUNED-RandomCrawler-1X.pt** | 0.9443 | 0.9440 | all | 2800 | 144.44 MB | 2026-02-20 16:12:54 |
+| Top-3 | **RandomCrawler-5X.pt** | 0.7614 | 0.7641 | all | 2800 | 144.44 MB | 2026-02-20 13:26:47 |
 | 4 | RandomCrawler-1X_MultiTrained.pt | 0.7336 | 0.7426 | all | 2800 | 144.44 MB | 2026-02-20 13:26:56 |
 | 5 | CLEAN-Transistor-2D.pt | 0.6093 | 0.5786 | all | 2800 | 144.44 MB | 2026-02-20 13:27:16 |
 | 6 | CLEAN-Transistor-3D.pt | 0.4329 | 0.4115 | all | 2800 | 144.44 MB | 2026-02-20 13:27:07 |
@@ -260,9 +264,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | IC-16-3D.pt | 0.9875 | 0.9875 | all | 800 | 0 B | 2026-02-16 22:40:21 |
-| 2 | Transistor-3D.pt | 0.5112 | 0.4004 | all | 800 | 0 B | 2026-02-16 22:33:11 |
-| 3 | RandomCrawler-1X_MultiTrained.pt | 0.4975 | 0.3734 | all | 800 | 0 B | 2026-02-16 22:31:46 |
+| Top-1 | **IC-16-3D.pt** | 0.9875 | 0.9875 | all | 800 | 0 B | 2026-02-16 22:40:21 |
+| Top-2 | **Transistor-3D.pt** | 0.5112 | 0.4004 | all | 800 | 0 B | 2026-02-16 22:33:11 |
+| Top-3 | **RandomCrawler-1X_MultiTrained.pt** | 0.4975 | 0.3734 | all | 800 | 0 B | 2026-02-16 22:31:46 |
 | 4 | QFN-3D.pt | 0.4938 | 0.3725 | all | 800 | 0 B | 2026-02-16 22:39:12 |
 | 5 | Transistor-2D.pt | 0.4462 | 0.3385 | all | 800 | 0 B | 2026-02-16 22:34:19 |
 | 6 | QFN32-2D.pt | 0.3013 | 0.1883 | all | 800 | 0 B | 2026-02-16 22:38:03 |
@@ -277,9 +281,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | QFN-3D.pt | 0.9875 | 0.9875 | all | 800 | 0 B | 2026-02-16 22:39:28 |
-| 2 | IC-16-3D.pt | 0.7250 | 0.6648 | all | 800 | 0 B | 2026-02-16 22:40:34 |
-| 3 | Transistor-3D.pt | 0.6500 | 0.5784 | all | 800 | 0 B | 2026-02-16 22:33:25 |
+| Top-1 | **QFN-3D.pt** | 0.9875 | 0.9875 | all | 800 | 0 B | 2026-02-16 22:39:28 |
+| Top-2 | **IC-16-3D.pt** | 0.7250 | 0.6648 | all | 800 | 0 B | 2026-02-16 22:40:34 |
+| Top-3 | **Transistor-3D.pt** | 0.6500 | 0.5784 | all | 800 | 0 B | 2026-02-16 22:33:25 |
 | 4 | RandomCrawler-5X.pt | 0.4400 | 0.3345 | all | 800 | 0 B | 2026-02-16 22:56:00 |
 | 5 | Transistor-2D.pt | 0.3925 | 0.2671 | all | 800 | 0 B | 2026-02-16 22:34:33 |
 | 6 | RandomCrawler-1X_MultiTrained.pt | 0.2500 | 0.1000 | all | 800 | 0 B | 2026-02-20 11:03:43 |
@@ -294,9 +298,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | QFN32-2D.pt | 1.0000 | 1.0000 | all | 800 | 0 B | 2026-02-16 22:38:32 |
-| 2 | Transistor-2D.pt | 0.5487 | 0.4744 | all | 800 | 0 B | 2026-02-16 22:34:48 |
-| 3 | Resistor-2D.pt | 0.4150 | 0.3548 | all | 800 | 0 B | 2026-02-16 22:36:59 |
+| Top-1 | **QFN32-2D.pt** | 1.0000 | 1.0000 | all | 800 | 0 B | 2026-02-16 22:38:32 |
+| Top-2 | **Transistor-2D.pt** | 0.5487 | 0.4744 | all | 800 | 0 B | 2026-02-16 22:34:48 |
+| Top-3 | **Resistor-2D.pt** | 0.4150 | 0.3548 | all | 800 | 0 B | 2026-02-16 22:36:59 |
 | 4 | Resistor-3D.pt | 0.3800 | 0.2710 | all | 800 | 0 B | 2026-02-16 22:35:53 |
 | 5 | RandomCrawler-5X.pt | 0.3438 | 0.2640 | all | 800 | 0 B | 2026-02-16 22:56:14 |
 | 6 | RandomCrawler-1X_MultiTrained.pt | 0.3075 | 0.2054 | all | 800 | 0 B | 2026-02-20 11:01:27 |
@@ -311,9 +315,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | RandomCrawler-1X_MultiTrained.pt | 0.9975 | 0.9975 | all | 400 | 0 B | 2026-02-20 11:01:30 |
-| 2 | RandomCrawler-5X.pt | 0.9900 | 0.9900 | all | 400 | 0 B | 2026-02-16 22:56:18 |
-| 3 | Resistor-2D.pt | 0.9825 | 0.9825 | all | 400 | 0 B | 2026-02-16 22:37:03 |
+| Top-1 | **RandomCrawler-1X_MultiTrained.pt** | 0.9975 | 0.9975 | all | 400 | 0 B | 2026-02-20 11:01:30 |
+| Top-2 | **RandomCrawler-5X.pt** | 0.9900 | 0.9900 | all | 400 | 0 B | 2026-02-16 22:56:18 |
+| Top-3 | **Resistor-2D.pt** | 0.9825 | 0.9825 | all | 400 | 0 B | 2026-02-16 22:37:03 |
 | 4 | Transistor-2D.pt | 0.9650 | 0.9650 | all | 400 | 0 B | 2026-02-16 22:34:52 |
 | 5 | QFN32-2D.pt | 0.4775 | 0.3218 | all | 400 | 0 B | 2026-02-16 22:38:35 |
 | 6 | IC-16-3D.pt | 0.2950 | 0.2102 | all | 400 | 0 B | 2026-02-16 22:40:52 |
@@ -328,9 +332,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | Resistor-3D.pt | 0.9800 | 0.9800 | all | 400 | 0 B | 2026-02-16 22:36:00 |
-| 2 | RandomCrawler-1X_MultiTrained.pt | 0.9775 | 0.9775 | all | 400 | 0 B | 2026-02-20 11:01:34 |
-| 3 | RandomCrawler-5X.pt | 0.9725 | 0.9724 | all | 400 | 0 B | 2026-02-16 22:56:21 |
+| Top-1 | **Resistor-3D.pt** | 0.9800 | 0.9800 | all | 400 | 0 B | 2026-02-16 22:36:00 |
+| Top-2 | **RandomCrawler-1X_MultiTrained.pt** | 0.9775 | 0.9775 | all | 400 | 0 B | 2026-02-20 11:01:34 |
+| Top-3 | **RandomCrawler-5X.pt** | 0.9725 | 0.9724 | all | 400 | 0 B | 2026-02-16 22:56:21 |
 | 4 | IC-16-3D.pt | 0.2850 | 0.1575 | all | 400 | 0 B | 2026-02-16 22:40:55 |
 | 5 | QFN-3D.pt | 0.2600 | 0.1221 | all | 400 | 0 B | 2026-02-16 22:39:49 |
 | 6 | QFN32-2D.pt | 0.2500 | 0.1139 | all | 400 | 0 B | 2026-02-16 22:38:39 |
@@ -345,9 +349,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | RandomCrawler-5X.pt | 0.9925 | 0.9925 | all | 800 | 0 B | 2026-02-16 22:56:25 |
-| 2 | RandomCrawler-1X_MultiTrained.pt | 0.9900 | 0.9900 | all | 800 | 0 B | 2026-02-20 11:01:38 |
-| 3 | Transistor-2D.pt | 0.9850 | 0.9850 | all | 800 | 0 B | 2026-02-16 22:34:59 |
+| Top-1 | **RandomCrawler-5X.pt** | 0.9925 | 0.9925 | all | 800 | 0 B | 2026-02-16 22:56:25 |
+| Top-2 | **RandomCrawler-1X_MultiTrained.pt** | 0.9900 | 0.9900 | all | 800 | 0 B | 2026-02-20 11:01:38 |
+| Top-3 | **Transistor-2D.pt** | 0.9850 | 0.9850 | all | 800 | 0 B | 2026-02-16 22:34:59 |
 | 4 | Resistor-2D.pt | 0.6338 | 0.6416 | all | 800 | 0 B | 2026-02-16 22:37:10 |
 | 5 | QFN32-2D.pt | 0.4550 | 0.3084 | all | 800 | 0 B | 2026-02-16 22:38:43 |
 | 6 | IC-16-3D.pt | 0.2712 | 0.1725 | all | 800 | 0 B | 2026-02-16 22:40:59 |
@@ -362,9 +366,9 @@ Tracked paths missing on disk:
 
 | Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |
 |---:|---|---:|---:|---|---:|---:|---|
-| 1 | RandomCrawler-5X.pt | 0.9900 | 0.9900 | all | 800 | 0 B | 2026-02-16 22:56:29 |
-| 2 | RandomCrawler-1X_MultiTrained.pt | 0.9875 | 0.9875 | all | 800 | 0 B | 2026-02-20 11:01:43 |
-| 3 | Transistor-3D.pt | 0.9838 | 0.9837 | all | 800 | 0 B | 2026-02-16 22:33:53 |
+| Top-1 | **RandomCrawler-5X.pt** | 0.9900 | 0.9900 | all | 800 | 0 B | 2026-02-16 22:56:29 |
+| Top-2 | **RandomCrawler-1X_MultiTrained.pt** | 0.9875 | 0.9875 | all | 800 | 0 B | 2026-02-20 11:01:43 |
+| Top-3 | **Transistor-3D.pt** | 0.9838 | 0.9837 | all | 800 | 0 B | 2026-02-16 22:33:53 |
 | 4 | IC-16-3D.pt | 0.5775 | 0.5134 | all | 800 | 0 B | 2026-02-16 22:41:03 |
 | 5 | Transistor-2D.pt | 0.5363 | 0.4327 | all | 800 | 0 B | 2026-02-16 22:35:03 |
 | 6 | Resistor-3D.pt | 0.5000 | 0.3798 | all | 800 | 0 B | 2026-02-16 22:36:08 |
@@ -628,4 +632,4 @@ Tracked paths missing on disk:
 <a id="history"></a>
 ## History
 
-- 2026-02-20: Report generated (18 models, 15 datasets)
+- 2026-02-21: Report generated (18 models, 15 datasets)
