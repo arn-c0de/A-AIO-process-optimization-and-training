@@ -9,87 +9,104 @@
 
 # A-AIO-process-optimization-and-training
 
-This is a **testing / prototyping repository** for experimenting with AOI/AI concepts and implementing them as clean, reproducible building blocks.
+Testing/prototyping repository for AOI/AI concepts, focused on reproducible pipelines and practical model iteration.
+
+## Quick Links
+
+- Main project: [`Simple-Sim`](Simple-Sim/README.md)
+- Documentation index: [`Simple-Sim/docs/INDEX.md`](Simple-Sim/docs/INDEX.md)
+- Latest arena report: [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
+- Training logs index: [`Simple-Sim/docs/training_logs/INDEX.md`](Simple-Sim/docs/training_logs/INDEX.md)
+- Sample gallery: [`Simple-Sim/SAMPLE_GALLERY.md`](Simple-Sim/SAMPLE_GALLERY.md)
+
+## Contents
+
+- [Current Status](#current-status)
+- [Projects](#projects)
+- [Arena](#arena)
+- [Research Updates](#research-updates)
+- [Model Strategy](#model-strategy)
+- [License and Usage](#license-and-usage)
+
+## Current Status
+
+Last updated: **2026-02-20**
+
+| Topic | Status | Link |
+|---|---|---|
+| Arena leaderboard | Current top ranking based on latest QFN crawler fine-tune boost | [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md) |
+| Active research | Extended image filter robustness + QFN-focused fine-tuning | [`Simple-Sim/docs/training_logs/INDEX.md`](Simple-Sim/docs/training_logs/INDEX.md) |
+| Production recommendation | Prefer single cross-profile models for robustness/simplicity | [`Final Verdict`](Simple-Sim/docs/training_logs/2026-02-16-Training-Final-Conclusion-Phase1.md) |
 
 ## Projects
 
 ![Simple-Sim Pipeline Dashboard](Simple-Sim/images/pipeline-dashboard-simple-sim-v1.0.png)
 
-## - [`Simple-Sim`](Simple-Sim/README.md): 
-A sandbox environment for pre-training and specializing models on synthetic datasets before passing them to main simulation and production training. Includes an arena system to evaluate and select the best-performing models for further training iterations.
-- Sample images: [`Simple-Sim/SAMPLE_GALLERY.md`](Simple-Sim/SAMPLE_GALLERY.md)
+| Project | Purpose | Start Here |
+|---|---|---|
+| [`Simple-Sim`](Simple-Sim/README.md) | Sandbox for synthetic data generation, training, evaluation, and model selection via arena workflows | [`Simple-Sim/README.md`](Simple-Sim/README.md) |
 
----
+## Arena
 
-## Latest Arena stats : [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
->  Older Arena stats history index: [`Simple-Sim/docs/arena-reports-historie/INDEX.md`](Simple-Sim/docs/arena-reports-historie/INDEX.md)
+- Latest stats: [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
+- Historical arena reports: [`Simple-Sim/docs/arena-reports-historie/INDEX.md`](Simple-Sim/docs/arena-reports-historie/INDEX.md)
 
 ![Top Avg Accuracy](Simple-Sim/ARENA_REPORT_assets/top_avg_accuracy.svg)
 
----
+## Research Updates
 
-## 2026-02-20 Current Research
-Latest update: QFN crawler fine-tune boost with additional clean no-image-filter samples (`QFN32-2D +50`, `QFN-3D +50`), resulting in current top arena ranking: [`Simple-Sim/docs/training_logs/2026-02-20-Training-QFN-Crawler-NoImageFilter-Boost.md`](Simple-Sim/docs/training_logs/2026-02-20-Training-QFN-Crawler-NoImageFilter-Boost.md)
+### Current Focus (2026-02-20)
 
-Fine-tuned comparison run (default-filter fine-tune vs QFN-focused fine-tune) as baseline reference for the previous state: [`Simple-Sim/docs/training_logs/2026-02-20-Training-Comparison-FineTuned-vs-QFN-FineTuned.md`](Simple-Sim/docs/training_logs/2026-02-20-Training-Comparison-FineTuned-vs-QFN-FineTuned.md)
+QFN crawler fine-tune boost with additional clean no-image-filter samples (`QFN32-2D +50`, `QFN-3D +50`) reached the current top arena ranking.  
+Log: [`2026-02-20-Training-QFN-Crawler-NoImageFilter-Boost.md`](Simple-Sim/docs/training_logs/2026-02-20-Training-QFN-Crawler-NoImageFilter-Boost.md)
 
-Renewed training restart with extended image filter options to improve robustness/generalization (living research log): [`Simple-Sim/docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md`](Simple-Sim/docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md)
+### Recent Logs
 
-Filter configuration and implementation reference: [`Simple-Sim/docs/guides/FILTER_SETTINGS.md`](Simple-Sim/docs/guides/FILTER_SETTINGS.md)
+- Fine-tuned comparison (default-filter vs QFN-focused): [`2026-02-20-Training-Comparison-FineTuned-vs-QFN-FineTuned.md`](Simple-Sim/docs/training_logs/2026-02-20-Training-Comparison-FineTuned-vs-QFN-FineTuned.md)
+- Extended filter restart (living log): [`2026-02-17-Training-Restart-Extended-Image-Filters.md`](Simple-Sim/docs/training_logs/2026-02-17-Training-Restart-Extended-Image-Filters.md)
+- 90° random orientation + SOIC16 restart: [`2026-02-16-Training-Restart-90deg-SOIC16.md`](Simple-Sim/docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md)
+- Filter settings reference: [`FILTER_SETTINGS.md`](Simple-Sim/docs/guides/FILTER_SETTINGS.md)
 
-Training logs index: [`Simple-Sim/docs/training_logs/INDEX.md`](Simple-Sim/docs/training_logs/INDEX.md)
+## Model Strategy
 
-### Completed Testing Research
-- Completed training restart log (same datasets, with random 90° orientation per image + SOIC16 profile testing): [`Simple-Sim/docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md`](Simple-Sim/docs/training_logs/2026-02-16-Training-Restart-90deg-SOIC16.md)
+Current conclusions: [`Final Verdict`](Simple-Sim/docs/training_logs/2026-02-16-Training-Final-Conclusion-Phase1.md), [`Training Conclusions`](Simple-Sim/docs/guides/knowledge/ModelTrainingConclusions-2D-3D%20Mixed-vs.-Staged-Approach.md)
 
----
+### Bundled Models (Multi-Profile)
 
-## Production Notes: Bundled vs Single Models
-> **📌 Current Conclusions 2026-02**
->
-> [Final Verdict](Simple-Sim/docs/training_logs/2026-02-16-Training-Final-Conclusion-Phase1.md)
-> [Training Conclusions](Simple-Sim/docs/guides/knowledge/ModelTrainingConclusions-2D-3D%20Mixed-vs.-Staged-Approach.md)
-> 
-> **Bundled Models** (multi-profile, per-component-type):
-> - Require an additional **object classification model** upstream to identify component type first
-> - Higher per-component accuracy
-> - Larger model footprint (multiple sub-models stored)
->
-> **Single Models** (cross-profile, e.g. `random-datacrawler-v1`):
-> - **No external classifier needed** — fully self-contained
-> - Trained on **all datasets** (all profiles, all defect types combined)
-> - **Much smaller model size** than bundles
-> - Slightly lower per-component accuracy, but **significantly better at randomized recognition of mixed/unknown components**
-> - Ideal for edge deployment and real-world PCB inspection where component type is unknown
->
-> **→ Recommendation**: Use single models trained on all datasets for robustness, simplicity, and smaller footprint.
+- Require an upstream component/object classifier for routing.
+- Higher per-component peak accuracy.
+- Larger footprint (multiple sub-models).
 
----
+### Single Models (Cross-Profile)
 
-## License
+- Self-contained (no external classifier).
+- Trained across all profiles and defect types.
+- Smaller footprint.
+- Slightly lower per-component peak accuracy, but stronger on randomized mixed/unknown component recognition.
 
-This repository is **proprietary**. No permission is granted to use, copy, modify, or distribute this software without prior written permission.
-See [`LICENSE`](LICENSE).
+Recommendation: use single cross-profile models for deployment when robustness and simplicity are prioritized.
 
-Third-party dependencies (Python packages, etc.) remain under their own licenses; see [`Simple-Sim/THIRD_PARTY_LICENSES.md`](Simple-Sim/THIRD_PARTY_LICENSES.md).
+## License and Usage
 
-## What You May / May Not Do
+This repository is **proprietary** and **not open-source**.
 
-This repository is public so others can understand the ideas and approach. It is **not** open-source.
+- Full license: [`LICENSE`](LICENSE)
+- Third-party dependency licenses: [`Simple-Sim/THIRD_PARTY_LICENSES.md`](Simple-Sim/THIRD_PARTY_LICENSES.md)
 
-Allowed:
-- Read the code and documentation.
-- Discuss concepts, provide feedback, and share high-level ideas.
+### Allowed
+
+- Read code and documentation.
+- Discuss concepts and provide feedback.
 - Link to this repository.
 
-Not allowed (without prior written permission):
-- Use this code (in whole or in part) in your own projects, products, or services.
-- Extract or reuse individual modules, components, files, snippets, or other parts of this project.
-- Copy, modify, merge, re-publish, distribute, or sublicense the code.
-- Use it for commercial purposes or production deployments.
+### Not Allowed (without prior written permission)
 
-Note: On GitHub, others may be able to technically fork/clone public repositories. This does **not** grant permission to use the software beyond what is required to view it on GitHub; all other use remains strictly prohibited by [`LICENSE`](LICENSE).
+- Use this code (whole or partial) in projects/products/services.
+- Extract or reuse modules, files, snippets, or components.
+- Copy, modify, distribute, sublicense, or republish.
+- Use for commercial or production deployments.
 
-Permission requests: arn-c0de@protonmail.com
+Note: public visibility on GitHub does not grant reuse rights beyond viewing the repository.
 
+Permission requests: `arn-c0de@protonmail.com`  
 See also: [`CONTRIBUTING.md`](CONTRIBUTING.md)
