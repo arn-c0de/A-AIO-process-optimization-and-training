@@ -308,19 +308,132 @@ class PipelineControlTab(BaseTab):
         profile_label = ", ".join(profile_ids[:5]) if profile_ids else "-"
         if len(profile_ids) > 5:
             profile_label += f" (+{len(profile_ids) - 5})"
+        mode_raw = str(image_filters.get("filter_mode", "custom") or "custom").strip().lower()
+        filter_mode = mode_raw if mode_raw in {"custom", "realism"} else "custom"
+        realism_enabled = bool(image_filters.get("realism_enabled", False))
+        realism_constraints = bool(image_filters.get("realism_constraints_enabled", True))
+        realism_profile = str(image_filters.get("realism_profile_id", "profile_industrial_cam"))
 
-        msg = (
+        filter_toggles = [k for k, v in image_filters.items() if isinstance(k, str) and k.startswith("enable_") and k != "enable" and bool(v)]
+        filter_summary = (
+            f"Mode: {filter_mode}\n"
+            f"Enabled: {'yes' if bool(image_filters.get('enable', True)) else 'no'}\n"
+            f"Realism active: {'yes' if (filter_mode == 'realism' and realism_enabled) else 'no'}\n"
+            f"Enabled toggles: {len(filter_toggles)}"
+        )
+        filter_details = (
+            f"filter_mode={filter_mode}\n"
+            f"enable={bool(image_filters.get('enable', True))}\n"
+            f"realism_enabled={realism_enabled}\n"
+            f"realism_constraints_enabled={realism_constraints}\n"
+            f"realism_profile_id={realism_profile}\n"
+            f"cardinal_rotation_90={bool(image_filters.get('cardinal_rotation_90', True))}\n"
+            f"enabled_filter_keys={', '.join(sorted(filter_toggles)) if filter_toggles else '-'}"
+        )
+
+        precise_summary = "off"
+        precise_details = "Precise mode is not active."
+        if run_mode == "precise":
+            s = self._precise_settings
+            per_class = bool(s.get("per_class", False))
+            multi_profiles = list(s.get("multi_profiles") or [])
+            if multi_profiles:
+                precise_summary = f"on | multi={len(multi_profiles)} | per_class={'yes' if per_class else 'no'}"
+            else:
+                precise_summary = f"on | single profile | per_class={'yes' if per_class else 'no'}"
+            precise_details = (
+                f"total={s.get('total', 100)}\n"
+                f"per_class={per_class}\n"
+                f"class_names={', '.join(s.get('class_names') or []) or '-'}\n"
+                f"classes={json.dumps(s.get('classes') or {}, ensure_ascii=True)}\n"
+                f"multi_profiles={json.dumps(multi_profiles, ensure_ascii=True)}\n"
+                f"multi_totals={json.dumps(s.get('multi_totals') or {}, ensure_ascii=True)}\n"
+                f"multi_classes={json.dumps(s.get('multi_classes') or {}, ensure_ascii=True)}"
+            )
+
+        model_target = self.ui.var_model.get().strip() if task != "generate_only" else "(n/a for generate only)"
+
+        top = tk.Toplevel(self.frame.winfo_toplevel())
+        top.title("Start pipeline")
+        top.transient(self.frame.winfo_toplevel())
+        top.resizable(True, True)
+        top.minsize(740, 460)
+        top.geometry("860x620")
+
+        result = {"ok": False}
+
+        outer = ttk.Frame(top, padding=10)
+        outer.pack(fill="both", expand=True)
+
+        header = (
             f"Task: {task_label}\n"
             f"Run mode: {run_mode} ({run_label})\n"
             f"Dataset mode: {dataset_mode}\n"
             f"Output: {out_dir}\n"
             f"Profiles: {profile_label}\n"
-            f"Multi-profile: {'on' if multi_enabled else 'off'} ({multi_mode})\n\n"
-            f"90° rotation: {'on' if bool(image_filters.get('cardinal_rotation_90', True)) else 'off'}\n"
-            f"Filter button: {'on' if bool(image_filters.get('enable', True)) else 'off'}\n\n"
-            "Start now?"
+            f"Multi-profile: {'on' if multi_enabled else 'off'} ({multi_mode})\n"
+            f"Model target: {model_target}\n"
+            f"Filter mode: {filter_mode} (realism_enabled={realism_enabled})\n"
+            f"Precise: {precise_summary}"
         )
-        return self.ui.ask_yes_no("Start pipeline", msg)
+        ttk.Label(outer, text=header, justify="left", anchor="w").pack(fill="x", pady=(0, 10))
+
+        sep = ttk.Separator(outer, orient="horizontal")
+        sep.pack(fill="x", pady=(0, 8))
+
+        details_wrap = ttk.Frame(outer)
+        details_wrap.pack(fill="both", expand=True)
+
+        def _add_collapsible(parent: ttk.Frame, title: str, text: str) -> None:
+            block = ttk.Frame(parent)
+            block.pack(fill="x", pady=(0, 6))
+            state = {"open": False}
+            body = ttk.Frame(block)
+            btn = ttk.Button(block, text=f"▶ {title}")
+            btn.pack(anchor="w")
+
+            height = min(14, max(3, len(text.splitlines())))
+            txt = tk.Text(body, height=height, wrap="word")
+            txt.insert("1.0", text)
+            txt.configure(state="disabled")
+            txt.pack(fill="x", expand=True)
+
+            def _toggle() -> None:
+                if state["open"]:
+                    body.pack_forget()
+                    btn.configure(text=f"▶ {title}")
+                    state["open"] = False
+                else:
+                    body.pack(fill="x", pady=(4, 0))
+                    btn.configure(text=f"▼ {title}")
+                    state["open"] = True
+
+            btn.configure(command=_toggle)
+
+        _add_collapsible(details_wrap, "Filter Details", filter_details)
+        _add_collapsible(details_wrap, "Precise Details", precise_details)
+        if task != "generate_only":
+            _add_collapsible(details_wrap, "Model Details", f"model_path={self.ui.var_model.get().strip()}")
+
+        btns = ttk.Frame(outer)
+        btns.pack(fill="x", pady=(8, 0))
+
+        def _on_cancel() -> None:
+            result["ok"] = False
+            top.destroy()
+
+        def _on_start() -> None:
+            result["ok"] = True
+            top.destroy()
+
+        ttk.Button(btns, text="Cancel", width=12, command=_on_cancel).pack(side="right")
+        ttk.Button(btns, text="Start", width=12, command=_on_start).pack(side="right", padx=(0, 8))
+
+        top.bind("<Escape>", lambda _e: _on_cancel())
+        top.protocol("WM_DELETE_WINDOW", _on_cancel)
+        top.grab_set()
+        top.wait_window()
+        return bool(result["ok"])
 
     def _ask_multi_dataset_train_strategy(self, dss: list[Path]) -> Optional[str]:
         msg = (
@@ -829,6 +942,7 @@ class PipelineControlTab(BaseTab):
         *,
         task: str,
         run_count: int,
+        dataset_mode: str,
         multi_enabled: bool,
         multi_mode: str,
         profile_ids: list[str],
@@ -908,7 +1022,21 @@ class PipelineControlTab(BaseTab):
                 effective_task = "generate_mixed"
             else:
                 final_out = self.logic._resolve_out_dir(out_dir)
-                if final_out.exists():
+                replace_existing_final_out = False
+                selected_ds = self._selected_dataset_dir()
+                selected_matches_out = False
+                try:
+                    selected_matches_out = (
+                        selected_ds is not None
+                        and str(selected_ds.resolve()) == str(final_out.resolve())
+                    )
+                except Exception:
+                    selected_matches_out = False
+
+                if final_out.exists() and (dataset_mode == "extend" or selected_matches_out):
+                    replace_existing_final_out = True
+                    self._append_log(f"[mixed] reusing selected output path: {final_out}\n")
+                elif final_out.exists():
                     ts = time.strftime("%Y%m%d_%H%M%S")
                     base_name = final_out.name
                     parent = final_out.parent
@@ -952,6 +1080,9 @@ class PipelineControlTab(BaseTab):
                     src_dirs: list[Path] = []
                     try:
                         src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
+                        if replace_existing_final_out and final_out.exists():
+                            shutil.rmtree(final_out, ignore_errors=True)
+                            log_callback(f"[mixed] removed previous dataset at target: {final_out}\n")
                         log_callback(f"[mixed] merging {len(src_dirs)} generated datasets into: {final_out}\n")
                         self.logic.merge_datasets_for_training(src_dirs, final_out, log_callback, log_callback)
                         log_callback(f"[mixed] merged dataset ready: {final_out}\n")
@@ -1073,14 +1204,13 @@ class PipelineControlTab(BaseTab):
                 self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\\n\\nClick Pick and select at least 1 profile.")
                 return
             if dataset_mode == "extend":
-                dataset_mode = "new"
-                self.ui.var_dataset_mode.set("new")
-                out_dir = self.ui.var_out.get().strip()
-                if not out_dir:
-                    fallback = self.sim_root / "outputs" / "sim_data" / "runs" / "run_multi_profile"
-                    out_dir = str(fallback)
-                    self.ui.var_out.set(out_dir)
-                self._append_log("[multi-profile] switched dataset mode to Create New (Extend Existing is not supported).\n")
+                self.ui.show_messagebox(
+                    "error",
+                    "Error",
+                    "Extend Existing is not supported while Multi-profile is enabled.\n\n"
+                    "Disable Multi-profile or switch Dataset Mode to Create New.",
+                )
+                return
         else:
             if p := self.ui.var_profile.get().strip(): profile_ids = [p]
 
@@ -1091,6 +1221,7 @@ class PipelineControlTab(BaseTab):
         built_specs = self._build_run_specs(
             task=task,
             run_count=run_count,
+            dataset_mode=dataset_mode,
             multi_enabled=multi_enabled,
             multi_mode=multi_mode,
             profile_ids=profile_ids,
