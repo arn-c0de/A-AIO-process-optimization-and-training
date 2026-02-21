@@ -29,6 +29,17 @@ Interpretation:
 - Performance floor is higher.
 - This indicates stronger generalization robustness across difficult datasets.
 
+## Additional Dataset Observations
+- `CLEAN-QFN32-2D`:
+  - Top-1: `CLEAN-QFN32-2D.pt` (`1.0000` / `1.0000`)
+  - Top-2: `Real-ALL-200clear-100filter-RandomCrawler-v2_20260221_142203.pt` (`0.6375` / `0.5885`)
+  - Note: REAL-ALL reaches Top-2 on this dataset, directly behind the specialized main model trained for this target dataset.
+
+- `CLEAN-QFN-3D`:
+  - REAL-ALL: Rank `#4` (`0.4900` / `0.4646`)
+  - `QFN-FINE-TUNED-RandomCrawler-1X.pt`: Rank `#6` (`0.3187` / `0.2760`)
+  - Note: REAL-ALL outperforms the QFN fine-tuned model on this 3D QFN benchmark.
+
 ---
 
 ## Decision
