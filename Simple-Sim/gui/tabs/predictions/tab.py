@@ -327,6 +327,16 @@ class PredictionsTab(BaseTab):
                 self._load_preds(last_preds_path)
     
     def _refresh_datasets(self) -> None:
+        def same_path(a: Path, b: Path) -> bool:
+            try:
+                return a.resolve() == b.resolve()
+            except Exception:
+                return str(a) == str(b)
+
+        prev_selected: Optional[Path] = self._selected_dataset_dir()
+        if prev_selected is None and self.state.dataset_dir is not None:
+            prev_selected = self.state.dataset_dir
+
         cand = self.logic.get_datasets()
 
         def is_version(p: Path) -> bool:
@@ -366,9 +376,15 @@ class PredictionsTab(BaseTab):
         if cur and cur in self._dataset_by_label:
             self.state.dataset_dir = self._dataset_by_label[cur]
             return
+        if prev_selected is not None:
+            for label, p in self._dataset_by_label.items():
+                if same_path(p, prev_selected):
+                    self.ui.var_dataset.set(label)
+                    self.state.dataset_dir = p
+                    return
         if self.state.dataset_dir:
             for label, p in self._dataset_by_label.items():
-                if p == self.state.dataset_dir:
+                if same_path(p, self.state.dataset_dir):
                     self.ui.var_dataset.set(label)
                     return
         if labels:
