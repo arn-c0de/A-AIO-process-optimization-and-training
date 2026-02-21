@@ -23,6 +23,7 @@ Architecture-oriented overviews of package modules, scripts, and GUI tabs.
 | [simple_sim Package Overview](architekture/simple_sim-Overview.md) | Architecture and responsibilities of all modules in `simple_sim` |
 | [Scripts Overview](architekture/scripts-Overview.md) | Architecture and behavior of all executable scripts in `scripts/` |
 | [Tabs Overview](architekture/Tabs-Overview.md) | Architecture and responsibilities of all GUI tabs in `gui/tabs` |
+| [Tools Overview](architekture/tools-Overview.md) | Architecture and responsibilities of all support tools in `tools/` |
 
 ## Technical Reference
 
@@ -41,7 +42,7 @@ In-depth technical documentation for advanced topics and system design.
 
 - **Get started quickly**: Read [Command Cheatsheet](guides/CHEATSHEET.md)
 - **Set up 3D rendering**: Read [3D Rendering Quickstart](guides/3D_RENDERING_QUICKSTART.md)
-- **Understand architecture**: Read [simple_sim Package Overview](architekture/simple_sim-Overview.md), [Scripts Overview](architekture/scripts-Overview.md), and [Tabs Overview](architekture/Tabs-Overview.md)
+- **Understand architecture**: Read [simple_sim Package Overview](architekture/simple_sim-Overview.md), [Scripts Overview](architekture/scripts-Overview.md), [Tabs Overview](architekture/Tabs-Overview.md), and [Tools Overview](architekture/tools-Overview.md)
 - **Understand component profiles**: Read [Profile System Implementation](../PROFILE_SYSTEM_IMPLEMENTATION.md)
 - **See example outputs**: View [Sample Gallery](../SAMPLE_GALLERY.md)
 - **Check performance benchmarks**: Review [Arena Report](../Simple-Sim/ARENA_REPORT.md)
@@ -72,6 +73,9 @@ Overview of all CLI scripts, including generation, training, evaluation, predict
 
 #### Tabs Overview
 Overview of all GUI tabs and their responsibilities, including data flow, side effects, and key logic in each tab module.
+
+#### Tools Overview
+Overview of all utility tools in `tools/`, including migration/backfill, validation, dataset merge, gallery/docs generation, and the profile editor package.
 
 ### Technical Reference
 
