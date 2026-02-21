@@ -49,6 +49,119 @@ from .logic import PipelineLogic
 
 _LOG = logging.getLogger(__name__)
 
+_SETTING_BINDING_ATTRS: list[tuple[str, str]] = [
+    ("pipeline.run_mode", "var_run_mode"),
+    ("pipeline.run_count", "var_run_count"),
+    ("pipeline.dataset_mode", "var_dataset_mode"),
+    ("pipeline.config", "var_config"),
+    ("pipeline.out", "var_out"),
+    ("pipeline.model", "var_model"),
+    ("pipeline.autosnap", "var_autosnap"),
+    ("pipeline.snap_every", "var_snap_every"),
+    ("pipeline.snap_keep", "var_snap_keep"),
+    ("pipeline.continue_epochs", "var_continue_epochs"),
+    ("pipeline.continue_out_mode", "var_continue_out_mode"),
+    ("pipeline.name", "var_name"),
+    ("pipeline.name_ts", "var_name_ts"),
+    ("pipeline.dataset_selection", "var_dataset"),
+    ("pipeline.dataset_multi_enabled", "var_dataset_multi"),
+    ("pipeline.dataset_multi_paths", "var_dataset_multi_paths"),
+    ("pipeline.profile_model", "var_profile_model"),
+    ("pipeline.profile_model_locked", "var_profile_model_lock"),
+    ("pipeline.profile_build_preset", "var_profile_build_preset"),
+    ("pipeline.render_backend", "var_render_backend"),
+    ("pipeline.filter.cardinal_rotation_90", "var_filter_cardinal_rotation_90"),
+    ("pipeline.filter.enable_rotation", "var_filter_enable_rotation"),
+    ("pipeline.filter.enable_blur", "var_filter_enable_blur"),
+    ("pipeline.filter.enable_grain", "var_filter_enable_grain"),
+    ("pipeline.filter.enable_brightness", "var_filter_enable_brightness"),
+    ("pipeline.filter.enable_contrast", "var_filter_enable_contrast"),
+    ("pipeline.filter.rotation_strength", "var_filter_rotation_strength"),
+    ("pipeline.filter.blur_strength", "var_filter_blur_strength"),
+    ("pipeline.filter.grain_strength", "var_filter_grain_strength"),
+    ("pipeline.filter.brightness_strength", "var_filter_brightness_strength"),
+    ("pipeline.filter.contrast_strength", "var_filter_contrast_strength"),
+    ("pipeline.filter.enable_perspective", "var_filter_enable_perspective"),
+    ("pipeline.filter.perspective_strength", "var_filter_perspective_strength"),
+    ("pipeline.filter.enable_motion_blur", "var_filter_enable_motion_blur"),
+    ("pipeline.filter.motion_blur_strength", "var_filter_motion_blur_strength"),
+    ("pipeline.filter.enable_saturation", "var_filter_enable_saturation"),
+    ("pipeline.filter.saturation_factor", "var_filter_saturation_factor"),
+    ("pipeline.filter.enable_hue_shift", "var_filter_enable_hue_shift"),
+    ("pipeline.filter.hue_shift_deg", "var_filter_hue_shift_deg"),
+    ("pipeline.filter.enable_shadow", "var_filter_enable_shadow"),
+    ("pipeline.filter.shadow_strength", "var_filter_shadow_strength"),
+    ("pipeline.filter.enable_reflection", "var_filter_enable_reflection"),
+    ("pipeline.filter.reflection_strength", "var_filter_reflection_strength"),
+    ("pipeline.filter.enable_vignetting", "var_filter_enable_vignetting"),
+    ("pipeline.filter.vignetting_strength", "var_filter_vignetting_strength"),
+    ("pipeline.filter.enable_chromatic_aberration", "var_filter_enable_chromatic_aberration"),
+    ("pipeline.filter.chromatic_strength", "var_filter_chromatic_strength"),
+    ("pipeline.filter.enable_jpeg_compression", "var_filter_enable_jpeg_compression"),
+    ("pipeline.filter.jpeg_quality", "var_filter_jpeg_quality"),
+    ("pipeline.filter.enable_color_temperature", "var_filter_enable_color_temperature"),
+    ("pipeline.filter.color_temperature_kelvin", "var_filter_color_temperature_kelvin"),
+    ("pipeline.filter.enable_lens_distortion", "var_filter_enable_lens_distortion"),
+    ("pipeline.filter.distortion_k1", "var_filter_distortion_k1"),
+    ("pipeline.filter.enable_dust", "var_filter_enable_dust"),
+    ("pipeline.filter.dust_density", "var_filter_dust_density"),
+    ("pipeline.filter.enable_sharpen", "var_filter_enable_sharpen"),
+    ("pipeline.filter.sharpen_strength", "var_filter_sharpen_strength"),
+]
+
+_FILTER_BOOL_PAYLOAD_ATTRS: list[tuple[str, str]] = [
+    ("cardinal_rotation_90", "var_filter_cardinal_rotation_90"),
+    ("enable_rotation", "var_filter_enable_rotation"),
+    ("enable_blur", "var_filter_enable_blur"),
+    ("enable_grain", "var_filter_enable_grain"),
+    ("enable_brightness", "var_filter_enable_brightness"),
+    ("enable_contrast", "var_filter_enable_contrast"),
+    ("enable_perspective", "var_filter_enable_perspective"),
+    ("enable_motion_blur", "var_filter_enable_motion_blur"),
+    ("enable_saturation", "var_filter_enable_saturation"),
+    ("enable_hue_shift", "var_filter_enable_hue_shift"),
+    ("enable_shadow", "var_filter_enable_shadow"),
+    ("enable_reflection", "var_filter_enable_reflection"),
+    ("enable_vignetting", "var_filter_enable_vignetting"),
+    ("enable_chromatic_aberration", "var_filter_enable_chromatic_aberration"),
+    ("enable_jpeg_compression", "var_filter_enable_jpeg_compression"),
+    ("enable_color_temperature", "var_filter_enable_color_temperature"),
+    ("enable_lens_distortion", "var_filter_enable_lens_distortion"),
+    ("enable_dust", "var_filter_enable_dust"),
+    ("enable_sharpen", "var_filter_enable_sharpen"),
+]
+
+_FILTER_FLOAT_PAYLOAD_ATTRS: list[tuple[str, str, float]] = [
+    ("rotation_strength", "var_filter_rotation_strength", 1.0),
+    ("blur_strength", "var_filter_blur_strength", 1.0),
+    ("grain_strength", "var_filter_grain_strength", 1.0),
+    ("brightness_strength", "var_filter_brightness_strength", 1.0),
+    ("contrast_strength", "var_filter_contrast_strength", 1.0),
+    ("perspective_strength", "var_filter_perspective_strength", 1.0),
+    ("perspective_angle_x", "var_filter_perspective_angle_x", 0.0),
+    ("perspective_angle_y", "var_filter_perspective_angle_y", 0.0),
+    ("motion_blur_strength", "var_filter_motion_blur_strength", 1.0),
+    ("motion_blur_angle", "var_filter_motion_blur_angle", 0.0),
+    ("saturation_factor", "var_filter_saturation_factor", 1.0),
+    ("hue_shift_deg", "var_filter_hue_shift_deg", 0.0),
+    ("shadow_strength", "var_filter_shadow_strength", 0.3),
+    ("shadow_size", "var_filter_shadow_size", 0.2),
+    ("reflection_strength", "var_filter_reflection_strength", 0.5),
+    ("reflection_size", "var_filter_reflection_size", 0.15),
+    ("vignetting_strength", "var_filter_vignetting_strength", 1.0),
+    ("chromatic_strength", "var_filter_chromatic_strength", 1.0),
+    ("distortion_k1", "var_filter_distortion_k1", 0.0),
+    ("distortion_k2", "var_filter_distortion_k2", 0.0),
+    ("dust_density", "var_filter_dust_density", 0.3),
+    ("dust_size", "var_filter_dust_size", 2.0),
+    ("sharpen_strength", "var_filter_sharpen_strength", 1.0),
+]
+
+_FILTER_INT_PAYLOAD_ATTRS: list[tuple[str, str, int]] = [
+    ("jpeg_quality", "var_filter_jpeg_quality", 85),
+    ("color_temperature_kelvin", "var_filter_color_temperature_kelvin", 5500),
+]
+
 
 class PipelineControlTab(BaseTab):
     """Tab 1: Pipeline control with enhanced monitoring."""
@@ -225,55 +338,7 @@ class PipelineControlTab(BaseTab):
         st = self._store()
         if st is None: return
 
-        for key, var in [
-            ("pipeline.run_mode", self.ui.var_run_mode), ("pipeline.run_count", self.ui.var_run_count),
-            ("pipeline.dataset_mode", self.ui.var_dataset_mode), ("pipeline.config", self.ui.var_config),
-            ("pipeline.out", self.ui.var_out), ("pipeline.model", self.ui.var_model),
-            ("pipeline.autosnap", self.ui.var_autosnap), ("pipeline.snap_every", self.ui.var_snap_every),
-            ("pipeline.snap_keep", self.ui.var_snap_keep), ("pipeline.continue_epochs", self.ui.var_continue_epochs),
-            ("pipeline.continue_out_mode", self.ui.var_continue_out_mode), ("pipeline.name", self.ui.var_name),
-            ("pipeline.name_ts", self.ui.var_name_ts), ("pipeline.dataset_selection", self.ui.var_dataset),
-            ("pipeline.dataset_multi_enabled", self.ui.var_dataset_multi), ("pipeline.dataset_multi_paths", self.ui.var_dataset_multi_paths),
-            ("pipeline.profile_model", self.ui.var_profile_model), ("pipeline.profile_model_locked", self.ui.var_profile_model_lock),
-            ("pipeline.profile_build_preset", self.ui.var_profile_build_preset), ("pipeline.render_backend", self.ui.var_render_backend),
-            ("pipeline.filter.cardinal_rotation_90", self.ui.var_filter_cardinal_rotation_90),
-            ("pipeline.filter.enable_rotation", self.ui.var_filter_enable_rotation),
-            ("pipeline.filter.enable_blur", self.ui.var_filter_enable_blur),
-            ("pipeline.filter.enable_grain", self.ui.var_filter_enable_grain),
-            ("pipeline.filter.enable_brightness", self.ui.var_filter_enable_brightness),
-            ("pipeline.filter.enable_contrast", self.ui.var_filter_enable_contrast),
-            ("pipeline.filter.rotation_strength", self.ui.var_filter_rotation_strength),
-            ("pipeline.filter.blur_strength", self.ui.var_filter_blur_strength),
-            ("pipeline.filter.grain_strength", self.ui.var_filter_grain_strength),
-            ("pipeline.filter.brightness_strength", self.ui.var_filter_brightness_strength),
-            ("pipeline.filter.contrast_strength", self.ui.var_filter_contrast_strength),
-            ("pipeline.filter.enable_perspective", self.ui.var_filter_enable_perspective),
-            ("pipeline.filter.perspective_strength", self.ui.var_filter_perspective_strength),
-            ("pipeline.filter.enable_motion_blur", self.ui.var_filter_enable_motion_blur),
-            ("pipeline.filter.motion_blur_strength", self.ui.var_filter_motion_blur_strength),
-            ("pipeline.filter.enable_saturation", self.ui.var_filter_enable_saturation),
-            ("pipeline.filter.saturation_factor", self.ui.var_filter_saturation_factor),
-            ("pipeline.filter.enable_hue_shift", self.ui.var_filter_enable_hue_shift),
-            ("pipeline.filter.hue_shift_deg", self.ui.var_filter_hue_shift_deg),
-            ("pipeline.filter.enable_shadow", self.ui.var_filter_enable_shadow),
-            ("pipeline.filter.shadow_strength", self.ui.var_filter_shadow_strength),
-            ("pipeline.filter.enable_reflection", self.ui.var_filter_enable_reflection),
-            ("pipeline.filter.reflection_strength", self.ui.var_filter_reflection_strength),
-            ("pipeline.filter.enable_vignetting", self.ui.var_filter_enable_vignetting),
-            ("pipeline.filter.vignetting_strength", self.ui.var_filter_vignetting_strength),
-            ("pipeline.filter.enable_chromatic_aberration", self.ui.var_filter_enable_chromatic_aberration),
-            ("pipeline.filter.chromatic_strength", self.ui.var_filter_chromatic_strength),
-            ("pipeline.filter.enable_jpeg_compression", self.ui.var_filter_enable_jpeg_compression),
-            ("pipeline.filter.jpeg_quality", self.ui.var_filter_jpeg_quality),
-            ("pipeline.filter.enable_color_temperature", self.ui.var_filter_enable_color_temperature),
-            ("pipeline.filter.color_temperature_kelvin", self.ui.var_filter_color_temperature_kelvin),
-            ("pipeline.filter.enable_lens_distortion", self.ui.var_filter_enable_lens_distortion),
-            ("pipeline.filter.distortion_k1", self.ui.var_filter_distortion_k1),
-            ("pipeline.filter.enable_dust", self.ui.var_filter_enable_dust),
-            ("pipeline.filter.dust_density", self.ui.var_filter_dust_density),
-            ("pipeline.filter.enable_sharpen", self.ui.var_filter_enable_sharpen),
-            ("pipeline.filter.sharpen_strength", self.ui.var_filter_sharpen_strength),
-        ]:
+        for key, var in self._iter_setting_bindings():
             v = st.get(key, None)
             if v is None:
                 continue
@@ -318,56 +383,11 @@ class PipelineControlTab(BaseTab):
         st = self._store()
         if st is None: return
 
-        for var, key in [
-            (self.ui.var_run_mode, "pipeline.run_mode"), (self.ui.var_run_count, "pipeline.run_count"),
-            (self.ui.var_dataset_mode, "pipeline.dataset_mode"), (self.ui.var_config, "pipeline.config"),
-            (self.ui.var_out, "pipeline.out"), (self.ui.var_model, "pipeline.model"),
-            (self.ui.var_autosnap, "pipeline.autosnap"), (self.ui.var_snap_every, "pipeline.snap_every"),
-            (self.ui.var_snap_keep, "pipeline.snap_keep"), (self.ui.var_continue_epochs, "pipeline.continue_epochs"),
-            (self.ui.var_continue_out_mode, "pipeline.continue_out_mode"), (self.ui.var_name, "pipeline.name"),
-            (self.ui.var_name_ts, "pipeline.name_ts"), (self.ui.var_dataset, "pipeline.dataset_selection"),
-            (self.ui.var_dataset_multi, "pipeline.dataset_multi_enabled"), (self.ui.var_dataset_multi_paths, "pipeline.dataset_multi_paths"),
-            (self.ui.var_profile_model, "pipeline.profile_model"), (self.ui.var_profile_model_lock, "pipeline.profile_model_locked"),
-            (self.ui.var_profile_build_preset, "pipeline.profile_build_preset"), (self.ui.var_render_backend, "pipeline.render_backend"),
-            (self.ui.var_filter_cardinal_rotation_90, "pipeline.filter.cardinal_rotation_90"),
-            (self.ui.var_filter_enable_rotation, "pipeline.filter.enable_rotation"),
-            (self.ui.var_filter_enable_blur, "pipeline.filter.enable_blur"),
-            (self.ui.var_filter_enable_grain, "pipeline.filter.enable_grain"),
-            (self.ui.var_filter_enable_brightness, "pipeline.filter.enable_brightness"),
-            (self.ui.var_filter_enable_contrast, "pipeline.filter.enable_contrast"),
-            (self.ui.var_filter_rotation_strength, "pipeline.filter.rotation_strength"),
-            (self.ui.var_filter_blur_strength, "pipeline.filter.blur_strength"),
-            (self.ui.var_filter_grain_strength, "pipeline.filter.grain_strength"),
-            (self.ui.var_filter_brightness_strength, "pipeline.filter.brightness_strength"),
-            (self.ui.var_filter_contrast_strength, "pipeline.filter.contrast_strength"),
-            (self.ui.var_filter_enable_perspective, "pipeline.filter.enable_perspective"),
-            (self.ui.var_filter_perspective_strength, "pipeline.filter.perspective_strength"),
-            (self.ui.var_filter_enable_motion_blur, "pipeline.filter.enable_motion_blur"),
-            (self.ui.var_filter_motion_blur_strength, "pipeline.filter.motion_blur_strength"),
-            (self.ui.var_filter_enable_saturation, "pipeline.filter.enable_saturation"),
-            (self.ui.var_filter_saturation_factor, "pipeline.filter.saturation_factor"),
-            (self.ui.var_filter_enable_hue_shift, "pipeline.filter.enable_hue_shift"),
-            (self.ui.var_filter_hue_shift_deg, "pipeline.filter.hue_shift_deg"),
-            (self.ui.var_filter_enable_shadow, "pipeline.filter.enable_shadow"),
-            (self.ui.var_filter_shadow_strength, "pipeline.filter.shadow_strength"),
-            (self.ui.var_filter_enable_reflection, "pipeline.filter.enable_reflection"),
-            (self.ui.var_filter_reflection_strength, "pipeline.filter.reflection_strength"),
-            (self.ui.var_filter_enable_vignetting, "pipeline.filter.enable_vignetting"),
-            (self.ui.var_filter_vignetting_strength, "pipeline.filter.vignetting_strength"),
-            (self.ui.var_filter_enable_chromatic_aberration, "pipeline.filter.enable_chromatic_aberration"),
-            (self.ui.var_filter_chromatic_strength, "pipeline.filter.chromatic_strength"),
-            (self.ui.var_filter_enable_jpeg_compression, "pipeline.filter.enable_jpeg_compression"),
-            (self.ui.var_filter_jpeg_quality, "pipeline.filter.jpeg_quality"),
-            (self.ui.var_filter_enable_color_temperature, "pipeline.filter.enable_color_temperature"),
-            (self.ui.var_filter_color_temperature_kelvin, "pipeline.filter.color_temperature_kelvin"),
-            (self.ui.var_filter_enable_lens_distortion, "pipeline.filter.enable_lens_distortion"),
-            (self.ui.var_filter_distortion_k1, "pipeline.filter.distortion_k1"),
-            (self.ui.var_filter_enable_dust, "pipeline.filter.enable_dust"),
-            (self.ui.var_filter_dust_density, "pipeline.filter.dust_density"),
-            (self.ui.var_filter_enable_sharpen, "pipeline.filter.enable_sharpen"),
-            (self.ui.var_filter_sharpen_strength, "pipeline.filter.sharpen_strength"),
-        ]:
+        for key, var in self._iter_setting_bindings():
             var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
+
+    def _iter_setting_bindings(self) -> list[tuple[str, Any]]:
+        return [(key, getattr(self.ui, attr_name)) for key, attr_name in _SETTING_BINDING_ATTRS]
 
     def _float_or_default(self, value: str, *, default: float) -> float:
         try:
@@ -545,77 +565,18 @@ class PipelineControlTab(BaseTab):
         st.schedule_save(self.frame)
 
     def _image_filters_payload(self) -> Dict[str, Any]:
-        has_any_filter = any([
-            bool(self.ui.var_filter_cardinal_rotation_90.get()),
-            bool(self.ui.var_filter_enable_rotation.get()),
-            bool(self.ui.var_filter_enable_blur.get()),
-            bool(self.ui.var_filter_enable_grain.get()),
-            bool(self.ui.var_filter_enable_brightness.get()),
-            bool(self.ui.var_filter_enable_contrast.get()),
-            bool(self.ui.var_filter_enable_perspective.get()),
-            bool(self.ui.var_filter_enable_motion_blur.get()),
-            bool(self.ui.var_filter_enable_saturation.get()),
-            bool(self.ui.var_filter_enable_hue_shift.get()),
-            bool(self.ui.var_filter_enable_shadow.get()),
-            bool(self.ui.var_filter_enable_reflection.get()),
-            bool(self.ui.var_filter_enable_vignetting.get()),
-            bool(self.ui.var_filter_enable_chromatic_aberration.get()),
-            bool(self.ui.var_filter_enable_jpeg_compression.get()),
-            bool(self.ui.var_filter_enable_color_temperature.get()),
-            bool(self.ui.var_filter_enable_lens_distortion.get()),
-            bool(self.ui.var_filter_enable_dust.get()),
-            bool(self.ui.var_filter_enable_sharpen.get()),
-        ])
-        payload = {
-            "enable": has_any_filter,
-            # Existing filters
-            "cardinal_rotation_90": bool(self.ui.var_filter_cardinal_rotation_90.get()),
-            "enable_rotation": bool(self.ui.var_filter_enable_rotation.get()),
-            "enable_blur": bool(self.ui.var_filter_enable_blur.get()),
-            "enable_grain": bool(self.ui.var_filter_enable_grain.get()),
-            "enable_brightness": bool(self.ui.var_filter_enable_brightness.get()),
-            "enable_contrast": bool(self.ui.var_filter_enable_contrast.get()),
-            "rotation_strength": self._float_or_default(self.ui.var_filter_rotation_strength.get(), default=1.0),
-            "blur_strength": self._float_or_default(self.ui.var_filter_blur_strength.get(), default=1.0),
-            "grain_strength": self._float_or_default(self.ui.var_filter_grain_strength.get(), default=1.0),
-            "brightness_strength": self._float_or_default(self.ui.var_filter_brightness_strength.get(), default=1.0),
-            "contrast_strength": self._float_or_default(self.ui.var_filter_contrast_strength.get(), default=1.0),
-            # High priority new filters
-            "enable_perspective": bool(self.ui.var_filter_enable_perspective.get()),
-            "perspective_strength": self._float_or_default(self.ui.var_filter_perspective_strength.get(), default=1.0),
-            "perspective_angle_x": self._float_or_default(self.ui.var_filter_perspective_angle_x.get(), default=0.0),
-            "perspective_angle_y": self._float_or_default(self.ui.var_filter_perspective_angle_y.get(), default=0.0),
-            "enable_motion_blur": bool(self.ui.var_filter_enable_motion_blur.get()),
-            "motion_blur_strength": self._float_or_default(self.ui.var_filter_motion_blur_strength.get(), default=1.0),
-            "motion_blur_angle": self._float_or_default(self.ui.var_filter_motion_blur_angle.get(), default=0.0),
-            "enable_saturation": bool(self.ui.var_filter_enable_saturation.get()),
-            "saturation_factor": self._float_or_default(self.ui.var_filter_saturation_factor.get(), default=1.0),
-            "enable_hue_shift": bool(self.ui.var_filter_enable_hue_shift.get()),
-            "hue_shift_deg": self._float_or_default(self.ui.var_filter_hue_shift_deg.get(), default=0.0),
-            "enable_shadow": bool(self.ui.var_filter_enable_shadow.get()),
-            "shadow_strength": self._float_or_default(self.ui.var_filter_shadow_strength.get(), default=0.3),
-            "shadow_size": self._float_or_default(self.ui.var_filter_shadow_size.get(), default=0.2),
-            "enable_reflection": bool(self.ui.var_filter_enable_reflection.get()),
-            "reflection_strength": self._float_or_default(self.ui.var_filter_reflection_strength.get(), default=0.5),
-            "reflection_size": self._float_or_default(self.ui.var_filter_reflection_size.get(), default=0.15),
-            # Medium/Low priority new filters
-            "enable_vignetting": bool(self.ui.var_filter_enable_vignetting.get()),
-            "vignetting_strength": self._float_or_default(self.ui.var_filter_vignetting_strength.get(), default=1.0),
-            "enable_chromatic_aberration": bool(self.ui.var_filter_enable_chromatic_aberration.get()),
-            "chromatic_strength": self._float_or_default(self.ui.var_filter_chromatic_strength.get(), default=1.0),
-            "enable_jpeg_compression": bool(self.ui.var_filter_enable_jpeg_compression.get()),
-            "jpeg_quality": int(self._float_or_default(self.ui.var_filter_jpeg_quality.get(), default=85)),
-            "enable_color_temperature": bool(self.ui.var_filter_enable_color_temperature.get()),
-            "color_temperature_kelvin": int(self._float_or_default(self.ui.var_filter_color_temperature_kelvin.get(), default=5500)),
-            "enable_lens_distortion": bool(self.ui.var_filter_enable_lens_distortion.get()),
-            "distortion_k1": self._float_or_default(self.ui.var_filter_distortion_k1.get(), default=0.0),
-            "distortion_k2": self._float_or_default(self.ui.var_filter_distortion_k2.get(), default=0.0),
-            "enable_dust": bool(self.ui.var_filter_enable_dust.get()),
-            "dust_density": self._float_or_default(self.ui.var_filter_dust_density.get(), default=0.3),
-            "dust_size": self._float_or_default(self.ui.var_filter_dust_size.get(), default=2.0),
-            "enable_sharpen": bool(self.ui.var_filter_enable_sharpen.get()),
-            "sharpen_strength": self._float_or_default(self.ui.var_filter_sharpen_strength.get(), default=1.0),
-        }
+        bool_payload: dict[str, bool] = {}
+        for key, attr_name in _FILTER_BOOL_PAYLOAD_ATTRS:
+            bool_payload[key] = bool(getattr(self.ui, attr_name).get())
+
+        payload: Dict[str, Any] = {"enable": any(bool_payload.values())}
+        payload.update(bool_payload)
+
+        for key, attr_name, default in _FILTER_FLOAT_PAYLOAD_ATTRS:
+            payload[key] = self._float_or_default(getattr(self.ui, attr_name).get(), default=default)
+        for key, attr_name, default in _FILTER_INT_PAYLOAD_ATTRS:
+            payload[key] = int(self._float_or_default(getattr(self.ui, attr_name).get(), default=float(default)))
+
         for k, v in self._filter_popup_extras.items():
             if not isinstance(k, str) or not self._is_filter_popup_extra_key(k):
                 continue
@@ -856,6 +817,215 @@ class PipelineControlTab(BaseTab):
 
     def start_pipeline(self) -> None: self._start_pipeline(task="full")
     def start_pipeline_generate_only(self) -> None: self._start_pipeline(task="generate_only")
+
+    def _rel_to_sim_root(self, p: Path) -> str:
+        try:
+            return str(p.resolve().relative_to(self.sim_root.resolve()))
+        except Exception:
+            return str(p)
+
+    def _build_run_specs(
+        self,
+        *,
+        task: str,
+        run_count: int,
+        multi_enabled: bool,
+        multi_mode: str,
+        profile_ids: list[str],
+        render_backend: str,
+        out_dir: str,
+    ) -> Optional[tuple[list[dict[str, str]], str, Any, str]]:
+        run_specs: list[dict[str, str]] = []
+        effective_task = task
+        run_complete_callback = None
+
+        if multi_enabled and multi_mode == "mixed":
+            if task != "generate_only":
+                self.ui.show_messagebox("error", "Error", "Multi-profile mode 'mixed' is supported only for Generate Only.")
+                return None
+            if len(profile_ids) < 2:
+                self.ui.show_messagebox("error", "Error", "Mixed dataset mode requires at least 2 selected profiles.")
+                return None
+            if run_count != 1:
+                self.ui.show_messagebox("error", "Error", "Mixed dataset generation currently supports only a single run.")
+                return None
+
+            resolved_configs: list[tuple[str, Path, str, str]] = []
+            backends_used: set[str] = set()
+            for pid in profile_ids:
+                cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
+                if not cfg_info:
+                    cfg_info = self.logic.config_for_profile(pid, want_backend=None)
+                if not cfg_info:
+                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\n{pid}\n\nPick or create a config with run.component_profile={pid}.")
+                    return None
+                cfg_path = Path(cfg_info["path"])
+                run_id = str(cfg_info.get("run_id") or pid)
+                try:
+                    cfg_data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                except Exception:
+                    cfg_data = {}
+                backend = str(((cfg_data.get("render") or {}).get("backend") or "opencv_2d")).strip() or "opencv_2d"
+                resolved_configs.append((pid, cfg_path, run_id, backend))
+                backends_used.add(backend)
+
+            if backends_used == {"opencv_2d"}:
+                cfg_str = self.ui.var_config.get().strip()
+                cfg_path = (self.sim_root / cfg_str) if cfg_str and not Path(cfg_str).is_absolute() else Path(cfg_str) if cfg_str else None
+                if not cfg_path or not cfg_path.exists():
+                    self.ui.show_messagebox("error", "Error", f"Config file not found:\\n{cfg_str}")
+                    return None
+                try:
+                    base_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                except Exception as e:
+                    self.ui.show_messagebox("error", "Error", f"Failed to read config:\\n{cfg_path}\\n\\n{e}")
+                    return None
+
+                run_block = dict(base_cfg.get("run") or {})
+                run_block.pop("component_profile", None)
+                run_block["mode"] = "profile_classifier"
+                run_block["schema_version"] = int(run_block.get("schema_version", 2) or 2)
+                run_block["component_profiles"] = list(profile_ids)
+                if not run_block.get("run_id"):
+                    run_block["run_id"] = "run_profile_cls_selected"
+                base_cfg["run"] = run_block
+                base_cfg.setdefault("render", {})["backend"] = "opencv_2d"
+
+                live_dir = (self.sim_root / "outputs" / "live")
+                live_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml", prefix="run_profile_cls_selected_", dir=str(live_dir), delete=False) as tf:
+                        yaml.safe_dump(base_cfg, tf, sort_keys=False)
+                        tmp_cfg_path = Path(tf.name)
+                except Exception as e:
+                    self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\\n\\n{e}")
+                    return None
+
+                run_specs.append({
+                    "profile_id": "multi", "config": self._rel_to_sim_root(tmp_cfg_path), "out_dir": out_dir,
+                    "model_path": self.ui.var_model.get().strip(),
+                })
+                effective_task = "generate_mixed"
+            else:
+                final_out = self.logic._resolve_out_dir(out_dir)
+                if final_out.exists():
+                    ts = time.strftime("%Y%m%d_%H%M%S")
+                    base_name = final_out.name
+                    parent = final_out.parent
+                    cand = parent / f"{base_name}_{ts}"
+                    i = 1
+                    while cand.exists():
+                        cand = parent / f"{base_name}_{ts}_{i:02d}"
+                        i += 1
+                    final_out = cand
+                    out_dir = str(final_out)
+                    try:
+                        rel_out = str(final_out.resolve().relative_to(self.sim_root.resolve()))
+                        self.ui.var_out.set(rel_out)
+                    except Exception:
+                        self.ui.var_out.set(str(final_out))
+                    self._append_log(f"[mixed] output exists, using new dataset path: {final_out}\n")
+
+                live_dir = (self.sim_root / "outputs" / "live")
+                live_dir.mkdir(parents=True, exist_ok=True)
+                tmp_root = live_dir / f"mixed_profile_gen_{int(time.time())}_{os.getpid()}"
+                try:
+                    tmp_root.mkdir(parents=True, exist_ok=False)
+                except Exception as e:
+                    self.ui.show_messagebox("error", "Error", f"Failed to create temporary mixed-generation directory:\\n{tmp_root}\\n\\n{e}")
+                    return None
+
+                self._append_log(f"[mixed] Cross-backend profiles detected ({', '.join(sorted(backends_used))}). Generating per profile and auto-merging.\n")
+                for idx, (pid, cfg_path, _run_id, backend) in enumerate(resolved_configs):
+                    tmp_out = tmp_root / f"{idx:02d}_{self.logic.slugify_name(pid)}"
+                    run_specs.append({
+                        "profile_id": pid,
+                        "config": self._rel_to_sim_root(cfg_path),
+                        "out_dir": str(tmp_out),
+                        "model_path": self.ui.var_model.get().strip(),
+                    })
+                    self._append_log(f"[mixed] {pid} -> backend={backend} tmp={tmp_out}\n")
+                effective_task = "generate_only"
+
+                def _merge_after_run(_run_i: int, specs: list[dict[str, str]], log_callback) -> bool:
+                    ok = True
+                    src_dirs: list[Path] = []
+                    try:
+                        src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
+                        log_callback(f"[mixed] merging {len(src_dirs)} generated datasets into: {final_out}\n")
+                        self.logic.merge_datasets_for_training(src_dirs, final_out, log_callback, log_callback)
+                        log_callback(f"[mixed] merged dataset ready: {final_out}\n")
+                    except Exception as e:
+                        log_callback(f"[mixed] merge failed: {e}\n")
+                        ok = False
+                    try:
+                        for p in src_dirs:
+                            if p.exists():
+                                shutil.rmtree(p, ignore_errors=True)
+                        if tmp_root.exists():
+                            shutil.rmtree(tmp_root, ignore_errors=True)
+                        log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
+                    except Exception as e:
+                        log_callback(f"[mixed] temp cleanup warning: {e}\n")
+                    return ok
+
+                run_complete_callback = _merge_after_run
+        else:
+            base_out = Path(out_dir)
+            base_model = Path(self.ui.var_model.get().strip())
+            for pid in profile_ids:
+                cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
+                if not cfg_info:
+                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\\n{pid}\\n\\nPick or create a config with run.component_profile={pid}.")
+                    return None
+                cfg_path = Path(cfg_info["path"])
+                cfg_rel = self._rel_to_sim_root(cfg_path)
+                run_id = str(cfg_info.get("run_id") or pid)
+
+                out_i = base_out.with_name(run_id) if len(profile_ids) > 1 else base_out
+                if len(profile_ids) > 1:
+                    if base_out.name in {"runs", "versions"}:
+                        out_i = base_out / run_id
+                    elif base_out.parent.name in {"runs", "versions"}:
+                        out_i = base_out.parent / run_id
+
+                if len(profile_ids) > 1:
+                    model_i = (self.sim_root / "outputs" / "models" / f"{run_id}.pt")
+                    if base_model.suffix == ".pt":
+                        if base_model.parent.name == "models":
+                            model_i = base_model.parent / f"{run_id}.pt"
+                        else:
+                            model_i = base_model.with_name(f"{run_id}.pt")
+                else:
+                    model_i = base_model if str(base_model).strip() else (self.sim_root / "outputs" / "models" / f"{run_id}.pt")
+
+                run_specs.append({
+                    "profile_id": pid, "config": cfg_rel, "out_dir": str(out_i), "model_path": str(model_i),
+                })
+
+        return run_specs, effective_task, run_complete_callback, out_dir
+
+    def _apply_precise_counts_to_run_specs(self, run_specs: list[dict[str, str]]) -> Optional[list[dict[str, str]]]:
+        precise_counts = self._get_precise_counts()
+        if precise_counts is None:
+            return None
+        per_profile_map: Optional[Dict[str, Any]] = precise_counts.get("_per_profile") if isinstance(precise_counts, dict) else None
+        patched_specs: list[dict[str, str]] = []
+        for spec in run_specs:
+            cfg_rel = spec["config"]
+            cfg_path = (self.sim_root / cfg_rel) if not Path(cfg_rel).is_absolute() else Path(cfg_rel)
+            if per_profile_map is not None:
+                pid = spec.get("profile_id", "")
+                spec_counts = per_profile_map.get(pid) or next(iter(per_profile_map.values()), {})
+            else:
+                spec_counts = precise_counts
+            try:
+                patched_path = self._write_precise_config(cfg_path, spec_counts)
+                patched_specs.append({**spec, "config": self._rel_to_sim_root(patched_path)})
+            except Exception as e:
+                self.ui.show_messagebox("error", "Error", f"Failed to write precise config:\n\n{e}")
+                return None
+        return patched_specs
     
     def _start_pipeline(self, *, task: str) -> None:
         if self.logic.is_process_running(): return
@@ -918,196 +1088,24 @@ class PipelineControlTab(BaseTab):
             if profile_ids: self._autoselect_config_for_profile(profile_ids[0], prefer_quiet=False)
         except Exception: pass
 
-        run_specs: list[dict[str, str]] = []
-        effective_task = task
-        run_complete_callback = None
-
-        def _rel_to_sim_root(p: Path) -> str:
-            try: return str(p.resolve().relative_to(self.sim_root.resolve()))
-            except Exception: return str(p)
-
-        if multi_enabled and multi_mode == "mixed":
-            if task != "generate_only":
-                self.ui.show_messagebox("error", "Error", "Multi-profile mode 'mixed' is supported only for Generate Only.")
-                return
-            if len(profile_ids) < 2:
-                self.ui.show_messagebox("error", "Error", "Mixed dataset mode requires at least 2 selected profiles.")
-                return
-            if run_count != 1:
-                self.ui.show_messagebox("error", "Error", "Mixed dataset generation currently supports only a single run.")
-                return
-
-            resolved_configs: list[tuple[str, Path, str, str]] = []
-            backends_used: set[str] = set()
-            for pid in profile_ids:
-                cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
-                if not cfg_info:
-                    cfg_info = self.logic.config_for_profile(pid, want_backend=None)
-                if not cfg_info:
-                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\n{pid}\n\nPick or create a config with run.component_profile={pid}.")
-                    return
-                cfg_path = Path(cfg_info["path"])
-                run_id = str(cfg_info.get("run_id") or pid)
-                try:
-                    cfg_data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-                except Exception:
-                    cfg_data = {}
-                backend = str(((cfg_data.get("render") or {}).get("backend") or "opencv_2d")).strip() or "opencv_2d"
-                resolved_configs.append((pid, cfg_path, run_id, backend))
-                backends_used.add(backend)
-
-            if backends_used == {"opencv_2d"}:
-                cfg_str = self.ui.var_config.get().strip()
-                cfg_path = (self.sim_root / cfg_str) if cfg_str and not Path(cfg_str).is_absolute() else Path(cfg_str) if cfg_str else None
-                if not cfg_path or not cfg_path.exists():
-                    self.ui.show_messagebox("error", "Error", f"Config file not found:\\n{cfg_str}")
-                    return
-                try: base_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-                except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to read config:\\n{cfg_path}\\n\\n{e}")
-                    return
-
-                run_block = dict(base_cfg.get("run") or {})
-                run_block.pop("component_profile", None)
-                run_block["mode"] = "profile_classifier"
-                run_block["schema_version"] = int(run_block.get("schema_version", 2) or 2)
-                run_block["component_profiles"] = list(profile_ids)
-                if not run_block.get("run_id"): run_block["run_id"] = "run_profile_cls_selected"
-                base_cfg["run"] = run_block
-                base_cfg.setdefault("render", {})["backend"] = "opencv_2d"
-
-                live_dir = (self.sim_root / "outputs" / "live")
-                live_dir.mkdir(parents=True, exist_ok=True)
-                try:
-                    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml", prefix="run_profile_cls_selected_", dir=str(live_dir), delete=False) as tf:
-                        yaml.safe_dump(base_cfg, tf, sort_keys=False)
-                        tmp_cfg_path = Path(tf.name)
-                except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\\n\\n{e}")
-                    return
-
-                run_specs.append({
-                    "profile_id": "multi", "config": _rel_to_sim_root(tmp_cfg_path), "out_dir": out_dir,
-                    "model_path": self.ui.var_model.get().strip(),
-                })
-                effective_task = "generate_mixed"
-            else:
-                final_out = self.logic._resolve_out_dir(out_dir)
-                if final_out.exists():
-                    ts = time.strftime("%Y%m%d_%H%M%S")
-                    base_name = final_out.name
-                    parent = final_out.parent
-                    cand = parent / f"{base_name}_{ts}"
-                    i = 1
-                    while cand.exists():
-                        cand = parent / f"{base_name}_{ts}_{i:02d}"
-                        i += 1
-                    final_out = cand
-                    out_dir = str(final_out)
-                    try:
-                        rel_out = str(final_out.resolve().relative_to(self.sim_root.resolve()))
-                        self.ui.var_out.set(rel_out)
-                    except Exception:
-                        self.ui.var_out.set(str(final_out))
-                    self._append_log(f"[mixed] output exists, using new dataset path: {final_out}\n")
-
-                live_dir = (self.sim_root / "outputs" / "live")
-                live_dir.mkdir(parents=True, exist_ok=True)
-                tmp_root = live_dir / f"mixed_profile_gen_{int(time.time())}_{os.getpid()}"
-                try:
-                    tmp_root.mkdir(parents=True, exist_ok=False)
-                except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to create temporary mixed-generation directory:\\n{tmp_root}\\n\\n{e}")
-                    return
-
-                self._append_log(f"[mixed] Cross-backend profiles detected ({', '.join(sorted(backends_used))}). Generating per profile and auto-merging.\n")
-                for idx, (pid, cfg_path, _run_id, backend) in enumerate(resolved_configs):
-                    tmp_out = tmp_root / f"{idx:02d}_{self.logic.slugify_name(pid)}"
-                    run_specs.append({
-                        "profile_id": pid,
-                        "config": _rel_to_sim_root(cfg_path),
-                        "out_dir": str(tmp_out),
-                        "model_path": self.ui.var_model.get().strip(),
-                    })
-                    self._append_log(f"[mixed] {pid} -> backend={backend} tmp={tmp_out}\n")
-                effective_task = "generate_only"
-
-                def _merge_after_run(_run_i: int, specs: list[dict[str, str]], log_callback) -> bool:
-                    ok = True
-                    src_dirs: list[Path] = []
-                    try:
-                        src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
-                        log_callback(f"[mixed] merging {len(src_dirs)} generated datasets into: {final_out}\n")
-                        self.logic.merge_datasets_for_training(src_dirs, final_out, log_callback, log_callback)
-                        log_callback(f"[mixed] merged dataset ready: {final_out}\n")
-                    except Exception as e:
-                        log_callback(f"[mixed] merge failed: {e}\n")
-                        ok = False
-                    try:
-                        for p in src_dirs:
-                            if p.exists():
-                                shutil.rmtree(p, ignore_errors=True)
-                        if tmp_root.exists():
-                            shutil.rmtree(tmp_root, ignore_errors=True)
-                        log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
-                    except Exception as e:
-                        log_callback(f"[mixed] temp cleanup warning: {e}\n")
-                    return ok
-
-                run_complete_callback = _merge_after_run
-        else:
-            base_out = Path(out_dir)
-            base_model = Path(self.ui.var_model.get().strip())
-            for i, pid in enumerate(profile_ids):
-                cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
-                if not cfg_info:
-                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\\n{pid}\\n\\nPick or create a config with run.component_profile={pid}.")
-                    return
-                cfg_path = Path(cfg_info["path"])
-                cfg_rel = _rel_to_sim_root(cfg_path)
-                run_id = str(cfg_info.get("run_id") or pid)
-
-                out_i = base_out.with_name(run_id) if len(profile_ids) > 1 else base_out
-                if len(profile_ids) > 1:
-                    if base_out.name in {"runs", "versions"}: out_i = base_out / run_id
-                    elif base_out.parent.name in {"runs", "versions"}: out_i = base_out.parent / run_id
-
-                # Keep the user-selected model path for a single-profile run.
-                # Only auto-derive per-profile model names when running multiple profiles.
-                if len(profile_ids) > 1:
-                    model_i = (self.sim_root / "outputs" / "models" / f"{run_id}.pt")
-                    if base_model.suffix == ".pt":
-                        if base_model.parent.name == "models": model_i = base_model.parent / f"{run_id}.pt"
-                        else: model_i = base_model.with_name(f"{run_id}.pt")
-                else:
-                    model_i = base_model if str(base_model).strip() else (self.sim_root / "outputs" / "models" / f"{run_id}.pt")
-
-                run_specs.append({
-                    "profile_id": pid, "config": cfg_rel, "out_dir": str(out_i), "model_path": str(model_i),
-                })
+        built_specs = self._build_run_specs(
+            task=task,
+            run_count=run_count,
+            multi_enabled=multi_enabled,
+            multi_mode=multi_mode,
+            profile_ids=profile_ids,
+            render_backend=render_backend,
+            out_dir=out_dir,
+        )
+        if built_specs is None:
+            return
+        run_specs, effective_task, run_complete_callback, out_dir = built_specs
         
         # Precise mode: patch each spec's config with user-specified sample counts
         if run_mode == "precise":
-            precise_counts = self._get_precise_counts()
-            if precise_counts is None:
+            patched_specs = self._apply_precise_counts_to_run_specs(run_specs)
+            if patched_specs is None:
                 return
-            per_profile_map: Optional[Dict[str, Any]] = precise_counts.get("_per_profile") if isinstance(precise_counts, dict) else None
-            patched_specs: list[dict[str, str]] = []
-            for spec in run_specs:
-                cfg_rel = spec["config"]
-                cfg_path = (self.sim_root / cfg_rel) if not Path(cfg_rel).is_absolute() else Path(cfg_rel)
-                # Use profile-specific counts when available
-                if per_profile_map is not None:
-                    pid = spec.get("profile_id", "")
-                    spec_counts = per_profile_map.get(pid) or next(iter(per_profile_map.values()), {})
-                else:
-                    spec_counts = precise_counts
-                try:
-                    patched_path = self._write_precise_config(cfg_path, spec_counts)
-                    patched_specs.append({**spec, "config": _rel_to_sim_root(patched_path)})
-                except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to write precise config:\n\n{e}")
-                    return
             run_specs = patched_specs
 
         image_filters = self._image_filters_payload()

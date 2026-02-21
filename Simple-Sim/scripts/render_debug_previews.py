@@ -733,6 +733,80 @@ def _settings_from_config(cfg: Dict[str, Any]) -> RenderSettings:
     )
 
 
+def _load_preview_config_for_backend(
+    *,
+    forced_cfg: Optional[Dict[str, Any]],
+    sim_root: Path,
+    configs_dir: Path,
+    profile_id: str,
+    backend: str,
+) -> Dict[str, Any]:
+    if forced_cfg is not None:
+        cfg = forced_cfg
+        validate_config(cfg)
+        cfg_backend = str((cfg.get("render") or {}).get("backend", ""))
+        if cfg_backend != backend:
+            raise RuntimeError(f"Forced --config backend={cfg_backend!r} does not match requested backend={backend!r}")
+        return cfg
+
+    matches = _find_matching_run_configs(configs_dir, profile_id=profile_id, backend=backend)
+    if matches:
+        cfg = load_config(matches[0])
+    else:
+        fallback = "configs/run_0001.yaml" if backend == BACKEND_2D else "configs/run_0001_3d.yaml"
+        cfg = load_config(sim_root / fallback)
+    validate_config(cfg)
+    return cfg
+
+
+def _apply_3d_settings_overrides(
+    settings: RenderSettings,
+    *,
+    roi_override: Optional[Tuple[int, int, float]],
+    blender_override: str,
+    samples_override: int,
+    device_override: str,
+) -> RenderSettings:
+    if roi_override is not None:
+        w, h, mpp = roi_override
+        settings = RenderSettings(
+            roi_width_px=int(w),
+            roi_height_px=int(h),
+            mm_per_px=float(mpp),
+            blender_executable=settings.blender_executable,
+            cycles_samples=settings.cycles_samples,
+            device=settings.device,
+        )
+    if blender_override:
+        settings = RenderSettings(
+            roi_width_px=settings.roi_width_px,
+            roi_height_px=settings.roi_height_px,
+            mm_per_px=settings.mm_per_px,
+            blender_executable=str(blender_override),
+            cycles_samples=settings.cycles_samples,
+            device=settings.device,
+        )
+    if samples_override and int(samples_override) > 0:
+        settings = RenderSettings(
+            roi_width_px=settings.roi_width_px,
+            roi_height_px=settings.roi_height_px,
+            mm_per_px=settings.mm_per_px,
+            blender_executable=settings.blender_executable,
+            cycles_samples=int(samples_override),
+            device=settings.device,
+        )
+    if device_override:
+        settings = RenderSettings(
+            roi_width_px=settings.roi_width_px,
+            roi_height_px=settings.roi_height_px,
+            mm_per_px=settings.mm_per_px,
+            blender_executable=settings.blender_executable,
+            cycles_samples=settings.cycles_samples,
+            device=str(device_override),
+        )
+    return settings
+
+
 def _write_index_html(out_root: Path, previews: List[PreviewRec]) -> None:
     """previews: list of (profile_id, backend, defect, rel_image_path)."""
     out_root = Path(out_root)
@@ -1211,66 +1285,23 @@ def _open_tk_viewer(
                     all_new_previews: List[PreviewRec] = []
 
                     for backend in backends_to_render:
-                        # Select config for this profile/backend
-                        if forced_cfg is not None:
-                            cfg = forced_cfg
-                            validate_config(cfg)
-                            cfg_backend = str((cfg.get("render") or {}).get("backend", ""))
-                            if cfg_backend != backend:
-                                raise RuntimeError(f"Forced --config backend={cfg_backend!r} does not match requested backend={backend!r}")
-                        else:
-                            matches = _find_matching_run_configs(configs_dir, profile_id=selected_pid, backend=backend)
-                            if matches:
-                                cfg = load_config(matches[0])
-                            else:
-                                fallback = "configs/run_0001.yaml" if backend == BACKEND_2D else "configs/run_0001_3d.yaml"
-                                cfg = load_config(sim_root / fallback)
-                            validate_config(cfg)
+                        cfg = _load_preview_config_for_backend(
+                            forced_cfg=forced_cfg,
+                            sim_root=sim_root,
+                            configs_dir=configs_dir,
+                            profile_id=selected_pid,
+                            backend=backend,
+                        )
 
                         if backend == BACKEND_3D:
                             settings = _settings_from_config(cfg)
-
-                            # Apply overrides (3D only)
-                            if roi_override is not None:
-                                w, h, mpp = roi_override
-                                settings = RenderSettings(
-                                    roi_width_px=int(w),
-                                    roi_height_px=int(h),
-                                    mm_per_px=float(mpp),
-                                    blender_executable=settings.blender_executable,
-                                    cycles_samples=settings.cycles_samples,
-                                    device=settings.device,
-                                )
-
-                            if blender_override:
-                                settings = RenderSettings(
-                                    roi_width_px=settings.roi_width_px,
-                                    roi_height_px=settings.roi_height_px,
-                                    mm_per_px=settings.mm_per_px,
-                                    blender_executable=str(blender_override),
-                                    cycles_samples=settings.cycles_samples,
-                                    device=settings.device,
-                                )
-
-                            if samples_override and int(samples_override) > 0:
-                                settings = RenderSettings(
-                                    roi_width_px=settings.roi_width_px,
-                                    roi_height_px=settings.roi_height_px,
-                                    mm_per_px=settings.mm_per_px,
-                                    blender_executable=settings.blender_executable,
-                                    cycles_samples=int(samples_override),
-                                    device=settings.device,
-                                )
-
-                            if device_override:
-                                settings = RenderSettings(
-                                    roi_width_px=settings.roi_width_px,
-                                    roi_height_px=settings.roi_height_px,
-                                    mm_per_px=settings.mm_per_px,
-                                    blender_executable=settings.blender_executable,
-                                    cycles_samples=settings.cycles_samples,
-                                    device=str(device_override),
-                                )
+                            settings = _apply_3d_settings_overrides(
+                                settings,
+                                roi_override=roi_override,
+                                blender_override=str(blender_override),
+                                samples_override=int(samples_override or 0),
+                                device_override=str(device_override),
+                            )
 
                             jobs, new_previews = _build_preview_jobs(
                                 profile_id=selected_pid,
@@ -1438,65 +1469,23 @@ def _open_tk_viewer(
                         backends_to_render = [b for b in [BACKEND_2D, BACKEND_3D] if b in backends] if mode == "both" else [mode]
 
                         for backend in backends_to_render:
-                            # Get config for this profile/backend
-                            if forced_cfg is not None:
-                                cfg = forced_cfg
-                                validate_config(cfg)
-                                cfg_backend = str((cfg.get("render") or {}).get("backend", ""))
-                                if cfg_backend != backend:
-                                    raise RuntimeError(f"Forced --config backend={cfg_backend!r} does not match requested backend={backend!r}")
-                            else:
-                                matches = _find_matching_run_configs(configs_dir, profile_id=pid, backend=backend)
-                                if matches:
-                                    cfg = load_config(matches[0])
-                                else:
-                                    fallback = "configs/run_0001.yaml" if backend == BACKEND_2D else "configs/run_0001_3d.yaml"
-                                    cfg = load_config(sim_root / fallback)
-                                validate_config(cfg)
+                            cfg = _load_preview_config_for_backend(
+                                forced_cfg=forced_cfg,
+                                sim_root=sim_root,
+                                configs_dir=configs_dir,
+                                profile_id=pid,
+                                backend=backend,
+                            )
 
                             if backend == BACKEND_3D:
                                 settings = _settings_from_config(cfg)
-
-                                if roi_override is not None:
-                                    w, h, mpp = roi_override
-                                    settings = RenderSettings(
-                                        roi_width_px=int(w),
-                                        roi_height_px=int(h),
-                                        mm_per_px=float(mpp),
-                                        blender_executable=settings.blender_executable,
-                                        cycles_samples=settings.cycles_samples,
-                                        device=settings.device,
-                                    )
-
-                                if blender_override:
-                                    settings = RenderSettings(
-                                        roi_width_px=settings.roi_width_px,
-                                        roi_height_px=settings.roi_height_px,
-                                        mm_per_px=settings.mm_per_px,
-                                        blender_executable=str(blender_override),
-                                        cycles_samples=settings.cycles_samples,
-                                        device=settings.device,
-                                    )
-
-                                if samples_override and int(samples_override) > 0:
-                                    settings = RenderSettings(
-                                        roi_width_px=settings.roi_width_px,
-                                        roi_height_px=settings.roi_height_px,
-                                        mm_per_px=settings.mm_per_px,
-                                        blender_executable=settings.blender_executable,
-                                        cycles_samples=int(samples_override),
-                                        device=settings.device,
-                                    )
-
-                                if device_override:
-                                    settings = RenderSettings(
-                                        roi_width_px=settings.roi_width_px,
-                                        roi_height_px=settings.roi_height_px,
-                                        mm_per_px=settings.mm_per_px,
-                                        blender_executable=settings.blender_executable,
-                                        cycles_samples=settings.cycles_samples,
-                                        device=str(device_override),
-                                    )
+                                settings = _apply_3d_settings_overrides(
+                                    settings,
+                                    roi_override=roi_override,
+                                    blender_override=str(blender_override),
+                                    samples_override=int(samples_override or 0),
+                                    device_override=str(device_override),
+                                )
 
                                 jobs, new_previews = _build_preview_jobs(
                                     profile_id=pid,
