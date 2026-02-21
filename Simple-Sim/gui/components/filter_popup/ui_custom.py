@@ -44,6 +44,9 @@ def build_filter_controls(popup: Any, parent: ttk.Frame) -> None:
     tab_realism = ttk.Frame(notebook)
     notebook.add(tab_custom, text="Custom")
     notebook.add(tab_realism, text="Realism")
+    popup._mode_notebook = notebook
+    popup._mode_tab_custom = tab_custom
+    popup._mode_tab_realism = tab_realism
 
     row0 = ttk.Frame(tab_custom)
     row0.pack(fill="x", pady=(0, 8))
@@ -77,6 +80,39 @@ def build_filter_controls(popup: Any, parent: ttk.Frame) -> None:
     popup._update_rotation_row_state()
 
     build_realism_controls(popup, tab_realism, current)
+
+    def _select_mode_tab(*_args: Any) -> None:
+        nb = getattr(popup, "_mode_notebook", None)
+        if nb is None:
+            return
+        mode = str(popup.var_filter_mode.get()).strip().lower()
+        target = popup._mode_tab_realism if mode == "realism" else popup._mode_tab_custom
+        try:
+            if str(nb.select()) != str(target):
+                nb.select(target)
+        except Exception:
+            pass
+
+    def _sync_mode_from_tab(_evt: tk.Event) -> None:
+        mode = "realism" if str(notebook.select()) == str(tab_realism) else "custom"
+        if popup.var_filter_mode.get() != mode:
+            popup.var_filter_mode.set(mode)
+
+    def _live_sync(*_args: Any) -> None:
+        if bool(getattr(popup, "_suspend_live_sync", False)):
+            return
+        try:
+            popup._sync_to_external_vars()
+        except Exception:
+            pass
+
+    notebook.bind("<<NotebookTabChanged>>", _sync_mode_from_tab)
+    popup.var_filter_mode.trace_add("write", _select_mode_tab)
+    _select_mode_tab()
+
+    for var in popup.filter_vars.values():
+        if isinstance(var, (tk.BooleanVar, tk.DoubleVar, tk.StringVar)):
+            var.trace_add("write", _live_sync)
 
     preview_inline = ttk.Frame(body, width=360)
     preview_inline.grid(row=0, column=1, sticky="nsew")
