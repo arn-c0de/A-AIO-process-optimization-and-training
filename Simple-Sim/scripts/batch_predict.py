@@ -360,6 +360,7 @@ def main() -> None:
         gt_profile_map = {}
 
     # --- Profile classifier (optional two-stage) ---
+    profile_model_path: Optional[Path] = None
     profile_model = None
     profile_class_names: List[str] = []
     if args.profile_model:
@@ -379,116 +380,138 @@ def main() -> None:
         )
 
     ds = build_dataset(data_dir, args.split, class_names, return_id=True)
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    y_true: List[int] = []
-    y_pred: List[int] = []
+    def _is_cuda_oom(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return ("out of memory" in msg) and ("cuda" in msg or "cudnn" in msg)
 
-    # Profile tracking (only when --profile-model is set)
-    profile_gt_labels: List[str] = []
-    profile_pred_labels: List[str] = []
+    def _run_predict_once(curr_device: torch.device, curr_model: torch.nn.Module, curr_profile_model: Optional[torch.nn.Module], curr_batch_size: int):
+        loader = DataLoader(ds, batch_size=curr_batch_size, shuffle=False, num_workers=num_workers)
+        y_true_local: List[int] = []
+        y_pred_local: List[int] = []
+        profile_gt_local: List[str] = []
+        profile_pred_local: List[str] = []
+        preds_rows_local: List[Dict[str, Any]] = []
 
-    preds_rows: List[Dict[str, Any]] = []
+        t0_local = time.perf_counter()
+        ema_ips_local = None
+        seen_local = 0
 
-    t0 = time.perf_counter()
-    ema_ips = None
+        progress = tqdm(loader, desc=f"Predict({args.split})")
+        for batch in progress:
+            images, labels, sample_ids, image_paths = batch
 
-    progress = tqdm(loader, desc=f"Predict({args.split})")
-    seen = 0
-    for batch in progress:
-        # ROIDataset(return_id=True) returns: (img, label, id, image_rel_path)
-        images, labels, sample_ids, image_paths = batch
+            bt0 = time.perf_counter()
+            images = images.to(curr_device)
+            labels = labels.to(curr_device)
 
-        bt0 = time.perf_counter()
-        images = images.to(device)
-        labels = labels.to(device)
-
-        with torch.no_grad():
-            logits = model(images)
-            pred_idx = torch.argmax(logits, dim=1)
-            probs = torch.softmax(logits, dim=1)
-
-        # Profile classification (optional)
-        profile_pred_idx_np = None
-        profile_probs_np = None
-        if profile_model is not None:
             with torch.no_grad():
-                profile_logits = profile_model(images)
-                profile_probs_t = torch.softmax(profile_logits, dim=1)
-                profile_pred_idx_t = torch.argmax(profile_logits, dim=1)
-            profile_pred_idx_np = profile_pred_idx_t.detach().cpu().numpy()
-            profile_probs_np = profile_probs_t.detach().cpu().numpy()
+                logits = curr_model(images)
+                pred_idx = torch.argmax(logits, dim=1)
+                probs = torch.softmax(logits, dim=1)
 
-        dt = max(1e-9, time.perf_counter() - bt0)
-        bs = int(images.shape[0])
-        ips = bs / dt
-        ema_ips = ips if ema_ips is None else (0.9 * ema_ips + 0.1 * ips)
-        progress.set_postfix({"img/s": f"{ema_ips:.1f}", "last_img": str(image_paths[-1]).split("/")[-1]})
+            profile_pred_idx_np = None
+            profile_probs_np = None
+            if curr_profile_model is not None:
+                with torch.no_grad():
+                    profile_logits = curr_profile_model(images)
+                    profile_probs_t = torch.softmax(profile_logits, dim=1)
+                    profile_pred_idx_t = torch.argmax(profile_logits, dim=1)
+                profile_pred_idx_np = profile_pred_idx_t.detach().cpu().numpy()
+                profile_probs_np = profile_probs_t.detach().cpu().numpy()
 
-        y_true.extend(labels.detach().cpu().numpy().tolist())
-        y_pred.extend(pred_idx.detach().cpu().numpy().tolist())
-        seen += bs
+            dt = max(1e-9, time.perf_counter() - bt0)
+            bs = int(images.shape[0])
+            ips = bs / dt
+            ema_ips_local = ips if ema_ips_local is None else (0.9 * ema_ips_local + 0.1 * ips)
+            progress.set_postfix({"img/s": f"{ema_ips_local:.1f}", "last_img": str(image_paths[-1]).split("/")[-1]})
 
-        if args.save_preds:
-            topk = min(args.topk, len(class_names))
-            top_vals, top_inds = torch.topk(probs, k=topk, dim=1)
-            top_vals = top_vals.detach().cpu().numpy()
-            top_inds = top_inds.detach().cpu().numpy()
-            pred_idx_np = pred_idx.detach().cpu().numpy()
-            labels_np = labels.detach().cpu().numpy()
-            for i in range(bs):
-                tid = str(sample_ids[i])
-                gt_name = class_names[int(labels_np[i])]
-                pred_name = class_names[int(pred_idx_np[i])]
-                row = {
-                    "id": tid,
-                    "image_path": str(image_paths[i]),
-                    "gt": gt_name,
-                    "pred": pred_name,
-                    "correct": bool(pred_name == gt_name),
-                }
-                row["topk"] = [
-                    {"class": class_names[int(top_inds[i, j])], "prob": float(top_vals[i, j])}
-                    for j in range(topk)
-                ]
+            y_true_local.extend(labels.detach().cpu().numpy().tolist())
+            y_pred_local.extend(pred_idx.detach().cpu().numpy().tolist())
+            seen_local += bs
 
-                # Include GT profile_id when available (even without two-stage profile prediction).
-                if gt_profile_map:
-                    gt_prof = gt_profile_map.get(tid, "")
-                    if gt_prof:
+            if args.save_preds:
+                topk = min(args.topk, len(class_names))
+                top_vals, top_inds = torch.topk(probs, k=topk, dim=1)
+                top_vals = top_vals.detach().cpu().numpy()
+                top_inds = top_inds.detach().cpu().numpy()
+                pred_idx_np = pred_idx.detach().cpu().numpy()
+                labels_np = labels.detach().cpu().numpy()
+                for i in range(bs):
+                    tid = str(sample_ids[i])
+                    gt_name = class_names[int(labels_np[i])]
+                    pred_name = class_names[int(pred_idx_np[i])]
+                    row = {
+                        "id": tid,
+                        "image_path": str(image_paths[i]),
+                        "gt": gt_name,
+                        "pred": pred_name,
+                        "correct": bool(pred_name == gt_name),
+                    }
+                    row["topk"] = [
+                        {"class": class_names[int(top_inds[i, j])], "prob": float(top_vals[i, j])}
+                        for j in range(topk)
+                    ]
+
+                    if gt_profile_map:
+                        gt_prof = gt_profile_map.get(tid, "")
+                        if gt_prof:
+                            row["gt_profile"] = gt_prof
+
+                    if curr_profile_model is not None and profile_pred_idx_np is not None:
+                        pred_prof = profile_class_names[int(profile_pred_idx_np[i])]
+                        gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
+                        prof_conf = float(profile_probs_np[i, int(profile_pred_idx_np[i])])
+                        row["pred_profile"] = pred_prof
                         row["gt_profile"] = gt_prof
+                        row["profile_correct"] = bool(pred_prof == gt_prof) if gt_prof else None
+                        row["profile_confidence"] = prof_conf
 
-                # Enrich with profile data when available
-                if profile_model is not None and profile_pred_idx_np is not None:
-                    pred_prof = profile_class_names[int(profile_pred_idx_np[i])]
-                    gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
-                    prof_conf = float(profile_probs_np[i, int(profile_pred_idx_np[i])])
-                    row["pred_profile"] = pred_prof
-                    row["gt_profile"] = gt_prof
-                    row["profile_correct"] = bool(pred_prof == gt_prof) if gt_prof else None
-                    row["profile_confidence"] = prof_conf
+                        if gt_prof:
+                            profile_gt_local.append(gt_prof)
+                            profile_pred_local.append(pred_prof)
+                    elif ckpt_profile_id:
+                        gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
+                        row["pred_profile"] = ckpt_profile_id
+                        row["gt_profile"] = gt_prof
+                        row["profile_correct"] = bool(ckpt_profile_id == gt_prof) if gt_prof else None
+                        row["profile_confidence"] = 1.0
+                        if gt_prof:
+                            profile_gt_local.append(gt_prof)
+                            profile_pred_local.append(ckpt_profile_id)
 
-                    if gt_prof:
-                        profile_gt_labels.append(gt_prof)
-                        profile_pred_labels.append(pred_prof)
-                elif ckpt_profile_id:
-                    # Fallback: for single-profile checkpoints, propagate the checkpoint's profile_id as prediction.
-                    # This makes profile columns usable without requiring a separate profile classifier model.
-                    gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
-                    row["pred_profile"] = ckpt_profile_id
-                    row["gt_profile"] = gt_prof
-                    row["profile_correct"] = bool(ckpt_profile_id == gt_prof) if gt_prof else None
-                    row["profile_confidence"] = 1.0
-                    if gt_prof:
-                        profile_gt_labels.append(gt_prof)
-                        profile_pred_labels.append(ckpt_profile_id)
+                    preds_rows_local.append(row)
 
-                preds_rows.append(row)
+            if args.max_samples is not None and seen_local >= args.max_samples:
+                break
 
-        if args.max_samples is not None and seen >= args.max_samples:
+        elapsed_local = max(1e-9, time.perf_counter() - t0_local)
+        return y_true_local, y_pred_local, profile_gt_local, profile_pred_local, preds_rows_local, seen_local, elapsed_local
+
+    run_batch_size = max(1, int(batch_size))
+    while True:
+        try:
+            y_true, y_pred, profile_gt_labels, profile_pred_labels, preds_rows, seen, elapsed = _run_predict_once(
+                device, model, profile_model, run_batch_size
+            )
             break
+        except Exception as e:
+            if device.type == "cuda" and _is_cuda_oom(e) and run_batch_size > 1:
+                new_bs = max(1, run_batch_size // 2)
+                print(f"[warn] CUDA OOM at batch_size={run_batch_size}. Retrying on GPU with batch_size={new_bs}.")
+                run_batch_size = new_bs
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                continue
+            if device.type == "cuda" and _is_cuda_oom(e):
+                raise RuntimeError(
+                    "CUDA OOM even at batch_size=1. Keep GPU selected but reduce memory pressure "
+                    "(close other GPU jobs, use a smaller model, or lower input size)."
+                ) from e
+            raise
 
-    elapsed = max(1e-9, time.perf_counter() - t0)
     metrics = compute_metrics(np.array(y_true), np.array(y_pred), class_names, critical_classes=critical_classes)
 
     print("\n" + "=" * 60)
