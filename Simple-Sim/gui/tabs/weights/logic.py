@@ -7,7 +7,6 @@ import queue
 import shutil
 import subprocess
 import threading
-import time
 import re
 import zipfile
 from datetime import datetime
@@ -301,7 +300,7 @@ class WeightsLogic:
 
             if profile_path.exists():
                 info_text += "\n" + "="*60 + "\n" + "PROFILE DETAILS\n" + "="*60 + "\n\n"
-                with open(profile_path, 'r') as f:
+                with open(profile_path) as f:
                     profile_yaml = yaml.safe_load(f)
                 info_text += yaml.dump(profile_yaml, default_flow_style=False, sort_keys=False)
             else:
@@ -430,7 +429,7 @@ class WeightsLogic:
                 self.log_q.put("\n[stopped]\n")
                 return None
             if rc != 0:
-                if class_mismatch: self.log_q.put(f"[skip] incompatible model/dataset (class mismatch)\n")
+                if class_mismatch: self.log_q.put("[skip] incompatible model/dataset (class mismatch)\n")
                 else: self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
                 return None
         except Exception as e:

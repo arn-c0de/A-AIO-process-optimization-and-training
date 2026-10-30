@@ -152,7 +152,7 @@ class Preview3D(ttk.Frame):
         self.meshes = self._build_scene(profile_data or {})
         self._rebuild_components_menu()
 
-        profile_id = str(((profile_data.get("profile") or {}).get("profile_id") or "")).strip()
+        profile_id = str((profile_data.get("profile") or {}).get("profile_id") or "").strip()
         profile_changed = bool(profile_id and profile_id != self._last_profile_id)
 
         if (not self._camera_initialized) or (profile_changed and self.auto_fit_on_profile_change.get()):
@@ -392,7 +392,7 @@ class Preview3D(ttk.Frame):
         comp_h = max(8.0, min(42.0, h_ratio * max(comp_l, comp_w) * 0.65))
         pad_t = max(2.0, min(10.0, min(pad_w, pad_h) * 0.22))
 
-        footprint = str(((profile.get("component") or {}).get("footprint") or "chip_2pad")).strip()
+        footprint = str((profile.get("component") or {}).get("footprint") or "chip_2pad").strip()
         self._scene_footprint = footprint
 
         body_len_x = comp_l

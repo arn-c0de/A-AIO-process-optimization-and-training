@@ -119,7 +119,7 @@ def main() -> None:
             img_path = data_dir / meta.image_path
             img_bgr = cv2.imread(str(img_path))
             if img_bgr is None:
-                raise IOError(f"Failed to load image: {img_path}")
+                raise OSError(f"Failed to load image: {img_path}")
             xs.append(preprocess(img_bgr))
             ids.append(sid)
             gts.append(gt)

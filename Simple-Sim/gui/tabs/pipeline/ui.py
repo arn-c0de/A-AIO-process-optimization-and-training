@@ -5,7 +5,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable, Tuple
-import os
 
 from PIL import Image, ImageTk
 import cv2

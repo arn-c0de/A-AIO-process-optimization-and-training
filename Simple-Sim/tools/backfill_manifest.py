@@ -49,7 +49,7 @@ def backfill_dataset(
     # Check if manifest exists
     manifest_path = data_dir / "dataset_manifest.json"
     if manifest_path.exists():
-        print(f"  ✓ Manifest already exists, skipping")
+        print("  ✓ Manifest already exists, skipping")
         return False
 
     # Validate dataset structure
@@ -58,12 +58,12 @@ def backfill_dataset(
     labels_path = data_dir / "labels.jsonl"
 
     if not all([config_path.exists(), meta_path.exists(), labels_path.exists()]):
-        print(f"  ✗ Invalid dataset structure (missing config.yaml, meta.jsonl, or labels.jsonl)")
+        print("  ✗ Invalid dataset structure (missing config.yaml, meta.jsonl, or labels.jsonl)")
         return False
 
     # Load config
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path) as f:
             config = yaml.safe_load(f)
     except Exception as e:
         print(f"  ✗ Failed to load config: {e}")
@@ -153,7 +153,7 @@ def backfill_dataset(
         print(f"  ✗ Failed to write manifest: {e}")
         return False
 
-    print(f"  ✓ Manifest created")
+    print("  ✓ Manifest created")
     print(f"     Profile: {profile_id}")
     print(f"     Hash: {profile_hash_str[:48]}...")
     print(f"     Samples: {len(meta_rows)}")

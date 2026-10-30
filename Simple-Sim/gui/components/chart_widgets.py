@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk
 import matplotlib
 matplotlib.use('TkAgg')
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 
 def create_confusion_matrix_widget(parent: tk.Widget, confusion_matrix: np.ndarray,

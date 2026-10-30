@@ -136,7 +136,7 @@ def read_split(split_file: Path) -> List[str]:
     if not split_file.exists():
         raise FileNotFoundError(f"Split file not found: {split_file}")
 
-    with open(split_file, 'r') as f:
+    with open(split_file) as f:
         return [line.strip() for line in f if line.strip()]
 
 

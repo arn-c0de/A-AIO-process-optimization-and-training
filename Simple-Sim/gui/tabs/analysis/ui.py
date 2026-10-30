@@ -311,7 +311,7 @@ class AnalysisUI:
             if note:
                 info += f"Feedback note: {note}\n"
         
-        info += f"\nDefect Parameters:\n"
+        info += "\nDefect Parameters:\n"
         for key, value in meta_row.defect.items():
             if isinstance(value, float):
                 info += f"  {key}: {value:.2f}\n"

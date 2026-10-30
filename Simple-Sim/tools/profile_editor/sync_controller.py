@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 from .profile_registry import ProfileRegistry, RegistrySnapshot
 from .state_store import EditorStateStore

@@ -77,7 +77,7 @@ class _BaseROIDataset(Dataset):
         image_path = self.data_dir / meta.image_path
         img_bgr = cv2.imread(str(image_path))
         if img_bgr is None:
-            raise IOError(f"Failed to load image: {image_path}")
+            raise OSError(f"Failed to load image: {image_path}")
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         return self.transform(img_rgb)
 

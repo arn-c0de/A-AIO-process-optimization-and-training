@@ -41,7 +41,7 @@ def _ram_percent() -> Optional[float]:
     try:
         mem_total = 0.0
         mem_avail = 0.0
-        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+        with open("/proc/meminfo", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
                     mem_total = float(line.split()[1])

@@ -4,7 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Tuple, TYPE_CHECKING
 from datetime import datetime
 from gui.utils.formatting import fmt_bytes
 

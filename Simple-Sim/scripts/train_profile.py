@@ -45,7 +45,7 @@ def main():
 
     # Load config from dataset
     config_path = data_dir / 'config.yaml'
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:
         config = yaml.safe_load(f)
 
     # Load manifest and get profile list
@@ -67,7 +67,7 @@ def main():
         raise ValueError(f"Profile classifier requires 2+ profiles, found: {profile_names}")
 
     num_classes = len(profile_names)
-    print(f"Profile classifier training")
+    print("Profile classifier training")
     print(f"  Dataset: {data_dir}")
     print(f"  Profiles ({num_classes}): {profile_names}")
     print(f"  Device: {device}")

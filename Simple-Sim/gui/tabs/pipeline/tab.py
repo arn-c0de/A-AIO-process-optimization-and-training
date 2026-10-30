@@ -9,23 +9,18 @@ import threading
 import time
 import subprocess
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any, Dict, Optional, List
 import shutil
-from datetime import datetime
-import re
 import shlex
 import tempfile
 
 import torch
-from PIL import Image, ImageTk
-import cv2
 import yaml
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.tooltip import ToolTip
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.components.filter_popup import open_filter_popup
 from gui.components.precise_popup import open_precise_popup
@@ -41,8 +36,6 @@ from gui.utils.filter_profile_store import (
 
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
-from simple_sim.schema import write_jsonl
-from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
 
 from .ui import PipelineUI
 from .logic import PipelineLogic
@@ -1003,7 +996,7 @@ class PipelineControlTab(BaseTab):
                     cfg_data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
                 except Exception:
                     cfg_data = {}
-                backend = str(((cfg_data.get("render") or {}).get("backend") or "opencv_2d")).strip() or "opencv_2d"
+                backend = str((cfg_data.get("render") or {}).get("backend") or "opencv_2d").strip() or "opencv_2d"
                 resolved_configs.append((pid, cfg_path, run_id, backend))
                 backends_used.add(backend)
 
@@ -1508,7 +1501,7 @@ class PipelineControlTab(BaseTab):
         manifest_path = ds / "dataset_manifest.json"
         if manifest_path.exists():
             try:
-                with open(manifest_path, "r", encoding="utf-8") as f: manifest = json.load(f)
+                with open(manifest_path, encoding="utf-8") as f: manifest = json.load(f)
                 stats = manifest.get("dataset_stats", {})
                 splits = stats.get("splits", {})
                 self._set_dataset_samples_from_manifest(ds, stats.get("total_samples"), splits.get("train"), splits.get("val"), splits.get("test"))
@@ -1971,7 +1964,7 @@ class PipelineControlTab(BaseTab):
         if not profile_path.exists(): self.ui.show_messagebox("error", "Error", f"Profile file not found:\n{profile_path}"); return
 
         try:
-            with open(profile_path, 'r') as f: profile_data = yaml.safe_load(f)
+            with open(profile_path) as f: profile_data = yaml.safe_load(f)
             dialog = tk.Toplevel(self.frame); dialog.title(f"Profile Info: {profile_id}"); dialog.geometry("600x500")
             text_frame = ttk.Frame(dialog); text_frame.pack(fill="both", expand=True, padx=10, pady=10)
             scrollbar = ttk.Scrollbar(text_frame); scrollbar.pack(side="right", fill="y")
@@ -1990,7 +1983,7 @@ class PipelineControlTab(BaseTab):
             manifest_path = ds / "dataset_manifest.json"
             if not manifest_path.exists(): self.ui.var_profile_compat.set(""); return
 
-            with open(manifest_path, 'r') as f: manifest = json.load(f)
+            with open(manifest_path) as f: manifest = json.load(f)
             mver = int(manifest.get('manifest_version', 1) or 1)
             ds_profile_id = (manifest.get('component_profile', {}).get('profile_id') if mver == 1 else "multi")
             ds_profile_hash = (manifest.get('component_profile', {}).get('profile_hash') if mver == 1 else "multi")
@@ -2017,7 +2010,7 @@ class PipelineControlTab(BaseTab):
             elif model_profile_id != ds_profile_id:
                 self.ui.var_profile_compat.set(f"✗ INCOMPATIBLE: Model={model_profile_id}, Dataset={ds_profile_id}"); self.ui.lbl_profile_compat.configure(foreground="red")
             elif model_profile_hash != ds_profile_hash:
-                self.ui.var_profile_compat.set(f"⚠ Profile hash mismatch (same ID, different version)"); self.ui.lbl_profile_compat.configure(foreground="orange")
+                self.ui.var_profile_compat.set("⚠ Profile hash mismatch (same ID, different version)"); self.ui.lbl_profile_compat.configure(foreground="orange")
             else:
                 self.ui.var_profile_compat.set(f"✓ Compatible: {ds_profile_id}"); self.ui.lbl_profile_compat.configure(foreground="green")
 
@@ -2029,7 +2022,7 @@ class PipelineControlTab(BaseTab):
         if not manifest_path.exists(): self.ui.show_messagebox("error", "No Manifest", f"Dataset has no manifest (legacy dataset).\n\nUse the backfill tool to add a manifest:\n  .venv/bin/python tools/backfill_manifest.py --data {ds}"); return
 
         try:
-            with open(manifest_path, 'r') as f: manifest = json.load(f)
+            with open(manifest_path) as f: manifest = json.load(f)
             profile_id, profile_hash, profile_path_str = manifest.get('component_profile', {}).get('profile_id', 'unknown'), manifest.get('component_profile', {}).get('profile_hash', ''), manifest.get('component_profile', {}).get('profile_path', '')
             profiles_dir = self.sim_root / "configs" / "profiles"
             profile_path = profiles_dir / f"{profile_id}.yaml"
@@ -2093,7 +2086,7 @@ class PipelineControlTab(BaseTab):
 
         try:
             if (manifest_path := ds / "dataset_manifest.json").exists():
-                with open(manifest_path, 'r') as f: manifest = json.load(f)
+                with open(manifest_path) as f: manifest = json.load(f)
                 profile_id = manifest.get('component_profile', {}).get('profile_id', 'unknown')
                 profile_hash = manifest.get('component_profile', {}).get('profile_hash', '')
                 stats = manifest.get("dataset_stats", {}); total_samples = stats.get("total_samples")
@@ -2105,7 +2098,7 @@ class PipelineControlTab(BaseTab):
                 self.ui.var_dataset_profile.set("Profile: ⚠ No manifest (legacy dataset)")
                 self._set_dataset_samples_info("Samples: legacy dataset", "black")
         except Exception as e:
-            self.ui.var_dataset_profile.set(f"Profile: ⚠ Error loading manifest"); self._set_dataset_samples_info("Samples: error", "")
+            self.ui.var_dataset_profile.set("Profile: ⚠ Error loading manifest"); self._set_dataset_samples_info("Samples: error", "")
             _LOG.warning("Failed to load dataset manifest: %s", e)
 
         self._check_profile_compatibility(); self._apply_dataset_settings(ds)

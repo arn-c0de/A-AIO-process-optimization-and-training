@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from gui.components.chart_widgets import create_confusion_matrix_widget
 from gui.components.overlay_renderer import draw_prediction_overlay, draw_two_stage_overlay

@@ -1,10 +1,9 @@
 """Validation Tab"""
 
 from __future__ import annotations
-import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional
 import threading
 import os
 

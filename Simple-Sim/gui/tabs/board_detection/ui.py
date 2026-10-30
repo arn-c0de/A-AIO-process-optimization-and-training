@@ -3,7 +3,7 @@
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from simple_sim.two_stage import TwoStageResult
 

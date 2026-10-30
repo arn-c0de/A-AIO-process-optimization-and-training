@@ -4,7 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, List
 import threading
 from collections import Counter
 from datetime import datetime

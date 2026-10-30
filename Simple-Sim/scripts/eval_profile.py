@@ -33,7 +33,7 @@ def main():
     model_path = Path(args.model)
     device = torch.device(args.device)
 
-    print(f"Profile classifier evaluation")
+    print("Profile classifier evaluation")
     print(f"  Dataset: {data_dir}")
     print(f"  Model: {model_path}")
     print(f"  Device: {device}")

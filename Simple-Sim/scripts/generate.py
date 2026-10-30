@@ -145,7 +145,7 @@ def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
         path = output_root / str(r["image_path"])
         img = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if img is None:
-            raise IOError(f"Failed to read Blender output image for filter postprocess: {path}")
+            raise OSError(f"Failed to read Blender output image for filter postprocess: {path}")
         rng = np.random.default_rng(int(r["seed"]))
         img = apply_blur(img, blur_sigma)
         img = apply_noise(img, noise_stddev, rng)
@@ -165,7 +165,7 @@ def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
         img = apply_jpeg_compression(img, jpeg_quality)
         img = apply_perspective_transform(img, perspective_strength, perspective_angle_x, perspective_angle_y)
         if not cv2.imwrite(str(path), img):
-            raise IOError(f"Failed to write filtered Blender image: {path}")
+            raise OSError(f"Failed to write filtered Blender image: {path}")
 
 
 def _render_opencv_image(
@@ -686,7 +686,7 @@ def generate_dataset(
                 full_path.parent.mkdir(parents=True, exist_ok=True)
                 ok = cv2.imwrite(str(full_path), img)
                 if not ok:
-                    raise IOError(f"Failed to write image: {r['image_path']}")
+                    raise OSError(f"Failed to write image: {r['image_path']}")
         elif backend == "blender_3d":
             _render_blender_records(
                 records=records,

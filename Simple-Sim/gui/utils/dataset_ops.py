@@ -206,7 +206,7 @@ def recompute_manifest_stats(dataset_dir: Path) -> None:
     for row in label_rows:
         class_counts[row.class_name] = class_counts.get(row.class_name, 0) + 1
 
-    with open(manifest_path, "r", encoding="utf-8") as f:
+    with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
 
     manifest["dataset_stats"] = {
@@ -297,7 +297,7 @@ def _read_profile_id(dataset_dir: Path) -> Optional[str]:
     if not manifest_path.exists():
         return None
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
+        with open(manifest_path, encoding="utf-8") as f:
             data = json.load(f)
         profile = data.get("component_profile")
         if isinstance(profile, dict):
