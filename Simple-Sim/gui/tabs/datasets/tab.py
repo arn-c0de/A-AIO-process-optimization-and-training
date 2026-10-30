@@ -316,7 +316,7 @@ class DatasetsTab(BaseTab):
             labels_path = ds / "labels.jsonl"
             if labels_path.exists():
                 try:
-                    total_samples = sum(1 for _ in labels_path.open("r", encoding="utf-8") if _.strip())
+                    with labels_path.open("r", encoding="utf-8") as fh: total_samples = sum(1 for line in fh if line.strip())
                 except Exception:
                     total_samples = None
 

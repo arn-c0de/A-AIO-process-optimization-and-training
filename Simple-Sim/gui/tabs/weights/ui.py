@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 import os
 
 from gui.utils.tooltip import ToolTip
+from gui.utils.formatting import fmt_bytes
 
 if TYPE_CHECKING:
     from .tab import WeightsTab
@@ -309,16 +310,7 @@ class WeightsUI:
         self.txt.pack(fill="both", expand=True, pady=(6, 0))
         self.txt.configure(state="disabled")
 
-    def fmt_bytes(self, n: int) -> str:
-        units = ["B", "KB", "MB", "GB", "TB"]
-        v = float(max(0, n))
-        u = 0
-        while v >= 1024.0 and u < len(units) - 1:
-            v /= 1024.0
-            u += 1
-        if u == 0:
-            return f"{int(v)} {units[u]}"
-        return f"{v:.1f} {units[u]}"
+    fmt_bytes = staticmethod(fmt_bytes)
 
     def append_log(self, s: str) -> None:
         self.txt.configure(state="normal")

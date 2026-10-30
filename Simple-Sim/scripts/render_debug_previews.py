@@ -902,7 +902,7 @@ def _open_tk_viewer(
     # Import lazily so the script can still run on systems without Tk installed.
     try:
         import tkinter as tk
-        from tkinter import ttk, simpledialog
+        from tkinter import ttk, simpledialog, messagebox
     except Exception as exc:
         raise RuntimeError(f"Tkinter not available: {exc}") from exc
 
@@ -1403,7 +1403,8 @@ def _open_tk_viewer(
                     root.after(0, lambda: status_label.config(text="Render complete", foreground="#060"))
 
                 except Exception as exc:
-                    root.after(0, lambda: status_label.config(text=f"Error: {exc}", foreground="#b00"))
+                    err_msg = f"Error: {exc}"
+                    root.after(0, lambda: status_label.config(text=err_msg, foreground="#b00"))
                 finally:
                     state.is_rendering = False
                     root.after(0, lambda: render_btn.config(state="normal"))
@@ -1585,7 +1586,8 @@ def _open_tk_viewer(
                     root.after(0, lambda: status_label.config(text=f"Rendered all {len(all_profiles)} profiles", foreground="#060"))
 
                 except Exception as exc:
-                    root.after(0, lambda: status_label.config(text=f"Error: {exc}", foreground="#b00"))
+                    err_msg = f"Error: {exc}"
+                    root.after(0, lambda: status_label.config(text=err_msg, foreground="#b00"))
                 finally:
                     state.is_rendering = False
                     root.after(0, lambda: render_btn.config(state="normal"))

@@ -110,37 +110,37 @@ class ValidationUI:
                 self.flag_tree.insert("", "end", text=sample_id, values=(flag_dict['flag'], flag_dict['reason']))
 
     def display_results(self, results: dict) -> None:
-        output = "=" * 60 + "\\nVALIDATION RESULTS\\n" + "=" * 60 + "\\n\\n"
+        output = "=" * 60 + "\nVALIDATION RESULTS\n" + "=" * 60 + "\n\n"
         if results.get('schema_validation'):
             schema = results['schema_validation']
             status = "✓ PASSED" if schema['passed'] else "✗ FAILED"
-            output += f"Schema Validation: {status}\\n  {schema['message']}\\n\\n"
+            output += f"Schema Validation: {status}\n  {schema['message']}\n\n"
 
         outliers = results.get('outliers', [])
-        output += f"Image Outliers: {len(outliers)} found\\n"
+        output += f"Image Outliers: {len(outliers)} found\n"
         if outliers:
             for outlier in outliers[:10]:
-                output += f"  - {outlier['sample_id']}: {outlier['reason']}\\n"
+                output += f"  - {outlier['sample_id']}: {outlier['reason']}\n"
             if len(outliers) > 10:
-                output += f"  ... and {len(outliers) - 10} more\\n"
-        output += "\\n"
+                output += f"  ... and {len(outliers) - 10} more\n"
+        output += "\n"
 
         duplicates = results.get('duplicates', [])
-        output += f"Duplicate Images: {len(duplicates)} pairs found\\n"
+        output += f"Duplicate Images: {len(duplicates)} pairs found\n"
         if duplicates:
             for id1, id2, dist in duplicates[:5]:
-                output += f"  - {id1} ↔ {id2} (distance={dist})\\n"
+                output += f"  - {id1} ↔ {id2} (distance={dist})\n"
             if len(duplicates) > 5:
-                output += f"  ... and {len(duplicates) - 5} more\\n"
-        output += "\\n"
+                output += f"  ... and {len(duplicates) - 5} more\n"
+        output += "\n"
 
         edge_cases = results.get('edge_cases', [])
-        output += f"Edge Cases: {len(edge_cases)} found\\n"
+        output += f"Edge Cases: {len(edge_cases)} found\n"
         if edge_cases:
             for case in edge_cases[:10]:
-                output += f"  - {case['sample_id']}: {case['reason']}\\n"
+                output += f"  - {case['sample_id']}: {case['reason']}\n"
             if len(edge_cases) > 10:
-                output += f"  ... and {len(edge_cases) - 10} more\\n"
+                output += f"  ... and {len(edge_cases) - 10} more\n"
 
-        output += "\\n" + "=" * 60
+        output += "\n" + "=" * 60
         self.set_results_text(output)

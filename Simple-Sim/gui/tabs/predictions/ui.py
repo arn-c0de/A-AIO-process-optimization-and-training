@@ -262,7 +262,7 @@ class PredictionsUI:
                 self._cm_canvas.get_tk_widget().pack(fill="both", expand=True)
                 self._schedule_enforce_log_pane_min_height()
         except Exception as e:
-            self.append_log(f"[warn] failed to render confusion matrix: {e}\\n")
+            self.append_log(f"[warn] failed to render confusion matrix: {e}\n")
 
     def _schedule_enforce_log_pane_min_height(self) -> None:
         if self._pane_adjust_scheduled:

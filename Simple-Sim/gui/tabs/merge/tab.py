@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import threading
 import time
@@ -426,14 +427,14 @@ class MergeTab(BaseTab):
         if not bd.exists():
             return
 
-        if not messagebox.askyesno("Delete Bundle", f"Delete this bundle?\\n\\n{bd}"):
+        if not messagebox.askyesno("Delete Bundle", f"Delete this bundle?\n\n{bd}"):
             return
 
         try:
             self.logic.delete_bundle(bd)
             self._append_log(f"[delete] Bundle deleted: {bd}\n")
         except Exception as e:
-            messagebox.showerror("Error", f"Delete failed:\\n{e}")
+            messagebox.showerror("Error", f"Delete failed:\n{e}")
             return
 
         self._refresh_bundles()
