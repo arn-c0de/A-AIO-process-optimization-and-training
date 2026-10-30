@@ -275,7 +275,7 @@ class AnalysisUI:
             
             self.update_metadata_panel(meta_row, label, prediction, original_label=original_label, feedback=feedback)
         except Exception as e:
-            raise RuntimeError(f"Failed to display image: {e}")
+            raise RuntimeError(f"Failed to display image: {e}") from e
 
     def update_metadata_panel(
         self,

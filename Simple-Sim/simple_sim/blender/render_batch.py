@@ -195,7 +195,7 @@ def _pad_positions_mm(footprint: str, nominal: dict[str, float], *, mm_per_px: f
         ]
     if footprint == "soic_16":
         # SOIC-16: 8 pads on the left and 8 pads on the right side.
-        comp_w = float(nominal.get("component_width", 0.0)) * mm_per_px
+        float(nominal.get("component_width", 0.0)) * mm_per_px
         pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
         # Keep lead rows compact using pad width as reference.
         y_span = pad_w * 7.0

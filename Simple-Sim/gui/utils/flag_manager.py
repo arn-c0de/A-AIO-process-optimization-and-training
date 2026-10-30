@@ -55,7 +55,7 @@ class FlagManager:
             self.flags_path.parent.mkdir(parents=True, exist_ok=True)
 
             with open(self.flags_path, 'w') as f:
-                for sample_id, flag_list in self._flags.items():
+                for _sample_id, flag_list in self._flags.items():
                     for flag_dict in flag_list:
                         f.write(json.dumps(flag_dict) + '\n')
         except Exception as e:

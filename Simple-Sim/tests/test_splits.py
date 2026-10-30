@@ -12,7 +12,7 @@ def create_test_data(n_per_class=10):
 
     idx = 0
     for class_name in ['OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE']:
-        for i in range(n_per_class):
+        for _i in range(n_per_class):
             sample_id = f"test/domain_A/train/{idx:06d}"
 
             meta = MetaRow(

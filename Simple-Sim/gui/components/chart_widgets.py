@@ -89,7 +89,7 @@ def create_class_distribution_widget(parent: tk.Widget,
     ax.grid(axis='y', alpha=0.3)
 
     # Add count labels on bars
-    for i, (c, count) in enumerate(zip(classes, counts)):
+    for i, (_c, count) in enumerate(zip(classes, counts)):
         ax.text(i, count, str(count), ha='center', va='bottom', fontsize=10)
 
     fig.tight_layout()

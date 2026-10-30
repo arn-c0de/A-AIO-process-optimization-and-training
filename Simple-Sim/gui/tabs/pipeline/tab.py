@@ -2392,7 +2392,7 @@ class PipelineControlTab(BaseTab):
 
         def worker() -> None:
             try:
-                for dirpath, dirnames, filenames in os.walk(ds):
+                for dirpath, _dirnames, filenames in os.walk(ds):
                     rel = Path(dirpath).relative_to(ds)
                     for fn in filenames: link_or_copy_file(Path(dirpath) / fn, dst / rel / fn)
                 self.log_q.put(f"[snapshot dataset] done: {dst}\n")
