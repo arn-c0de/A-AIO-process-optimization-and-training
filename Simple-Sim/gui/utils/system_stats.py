@@ -11,7 +11,7 @@ def read_ram_info() -> Optional[Tuple[float, int, int]]:
     """Return (used_percent, used_bytes, total_bytes) from /proc/meminfo, or None."""
     try:
         total_kb, avail_kb = None, None
-        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+        with open("/proc/meminfo", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
                     total_kb = int(line.split()[1])
@@ -63,7 +63,7 @@ class SystemStatsSampler:
 
     def cpu_percent(self) -> Optional[float]:
         try:
-            with open("/proc/stat", "r", encoding="utf-8") as f:
+            with open("/proc/stat", encoding="utf-8") as f:
                 line = f.readline().strip()
             parts = line.split()
             if not parts or parts[0] != "cpu" or len(parts) < 5:

@@ -30,7 +30,7 @@ from simple_sim.models import load_checkpoint_model
 def load_image_bgr(image_path: Path) -> np.ndarray:
     img_bgr = cv2.imread(str(image_path))
     if img_bgr is None:
-        raise IOError(f"Failed to load image: {image_path}")
+        raise OSError(f"Failed to load image: {image_path}")
     return img_bgr
 
 
@@ -142,7 +142,7 @@ def main():
 
                 # WARNING: Profile hash mismatch
                 if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
-                    print(f"WARNING: Profile hash mismatch")
+                    print("WARNING: Profile hash mismatch")
 
     img_bgr = load_image_bgr(image_path)
     x = preprocess(img_bgr).unsqueeze(0).to(device)

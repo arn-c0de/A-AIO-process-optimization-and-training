@@ -221,7 +221,7 @@ def main():
 
     # Load config from dataset
     config_path = data_dir / 'config.yaml'
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:
         config = yaml.safe_load(f)
 
     # GUARD: Load and validate dataset manifest
@@ -291,7 +291,7 @@ def main():
     class_names = sorted(config['classes'].keys())
     num_classes = len(class_names)
 
-    print(f"Training configuration:")
+    print("Training configuration:")
     print(f"  Dataset: {data_dir}")
     print(f"  Classes: {class_names}")
     print(f"  Epochs: {epochs}")
@@ -382,11 +382,11 @@ def main():
 
             # WARNING: Profile hash mismatch
             if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
-                print(f"WARNING: Profile hash mismatch (different tolerance/geometry)")
+                print("WARNING: Profile hash mismatch (different tolerance/geometry)")
                 print(f"  Checkpoint hash: {ckpt_profile_hash[:72]}...")
                 print(f"  Dataset hash:    {dataset_profile_hash[:72]}...")
         else:
-            print(f"WARNING: Checkpoint lacks profile metadata (legacy checkpoint)")
+            print("WARNING: Checkpoint lacks profile metadata (legacy checkpoint)")
 
         model.load_state_dict(checkpoint['model_state_dict'])
         try:

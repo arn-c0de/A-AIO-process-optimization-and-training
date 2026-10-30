@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, List, Tuple, Callable
+from typing import Any, Dict, Optional, List, Callable
 import shutil
 from datetime import datetime
 import re
@@ -21,7 +21,6 @@ import yaml
 
 from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
-from simple_sim.model_bundle import bundle_checkpoint_path
 from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
 
 
@@ -328,7 +327,7 @@ class PipelineLogic:
         while not self.stop_evt.is_set():
             try:
                 if not path.exists(): time.sleep(0.1); continue
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     f.seek(pos)
                     for line in f:
                         line = line.strip()
@@ -407,7 +406,7 @@ class PipelineLogic:
         manifest_path = ds / "dataset_manifest.json"
         if not manifest_path.exists(): return None
         try:
-            with open(manifest_path, "r", encoding="utf-8") as f: manifest = json.load(f)
+            with open(manifest_path, encoding="utf-8") as f: manifest = json.load(f)
             mver = int(manifest.get("manifest_version", 1) or 1)
             if mver == 1: return manifest.get("component_profile", {}).get("profile_id")
             if mver == 2: return "multi"
@@ -419,7 +418,7 @@ class PipelineLogic:
         manifest_path = ds / "dataset_manifest.json"
         if not manifest_path.exists(): return None
         try:
-            with open(manifest_path, "r", encoding="utf-8") as f: manifest = json.load(f)
+            with open(manifest_path, encoding="utf-8") as f: manifest = json.load(f)
             mver = int(manifest.get("manifest_version", 1) or 1)
             if mver == 1: return manifest.get("component_profile", {}).get("profile_hash")
             return None
@@ -601,7 +600,7 @@ class PipelineLogic:
         except Exception:
             cfg0 = {}
         classes0 = cfg0.get("classes") or {}
-        class_keys0 = tuple(sorted((classes0.keys() if isinstance(classes0, dict) else [])))
+        class_keys0 = tuple(sorted(classes0.keys() if isinstance(classes0, dict) else []))
         roi0 = cfg0.get("roi") or {}
         roi0_w, roi0_h = int(roi0.get("width_px") or 0), int(roi0.get("height_px") or 0)
 
@@ -653,7 +652,7 @@ class PipelineLogic:
             except Exception:
                 cfg = {}
             classes = cfg.get("classes") or {}
-            class_keys = tuple(sorted((classes.keys() if isinstance(classes, dict) else [])))
+            class_keys = tuple(sorted(classes.keys() if isinstance(classes, dict) else []))
             if class_keys != class_keys0:
                 raise ValueError(f"Cannot merge datasets with different class sets.\n  first: {class_keys0}\n  {ds.name}: {class_keys}")
             roi = cfg.get("roi") or {}
@@ -719,7 +718,7 @@ class PipelineLogic:
                         )
                         dst_image.parent.mkdir(parents=True, exist_ok=True)
                         if not cv2.imwrite(str(dst_image), img):
-                            raise IOError("imwrite failed")
+                            raise OSError("imwrite failed")
                     else:
                         link_or_copy(src_image, dst_image)
                 except Exception:

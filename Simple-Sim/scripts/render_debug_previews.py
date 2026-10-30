@@ -27,7 +27,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -902,7 +902,7 @@ def _open_tk_viewer(
     # Import lazily so the script can still run on systems without Tk installed.
     try:
         import tkinter as tk
-        from tkinter import ttk, simpledialog, messagebox
+        from tkinter import ttk, messagebox
     except Exception as exc:
         raise RuntimeError(f"Tkinter not available: {exc}") from exc
 
@@ -937,7 +937,7 @@ def _open_tk_viewer(
         return items
 
     root = tk.Tk()
-    root.title(f"Simple-Sim Debug Previews")
+    root.title("Simple-Sim Debug Previews")
     root.geometry("1200x900")
 
     top = ttk.Frame(root, padding=10)
@@ -1693,7 +1693,7 @@ def _open_tk_viewer(
         if not items:
             msg = "No images found yet. Click 'Render' to generate previews."
             ttk.Label(inner, text=msg, foreground="#b00").grid(row=0, column=0, pady=16)
-            root.title(f"Simple-Sim Debug Previews (0 images)")
+            root.title("Simple-Sim Debug Previews (0 images)")
             return
 
         root.title(f"Simple-Sim Debug Previews ({len(items)} images)")

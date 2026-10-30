@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -78,8 +77,8 @@ class BlenderLivePreviewWorker:
         if not isinstance(profile_data.get("render_3d"), dict):
             raise ValueError("profile.render_3d missing")
 
-        profile_id = str(((profile_data.get("profile") or {}).get("profile_id") or "profile")).strip() or "profile"
-        footprint = str(((profile_data.get("component") or {}).get("footprint") or "chip_2pad")).strip() or "chip_2pad"
+        profile_id = str((profile_data.get("profile") or {}).get("profile_id") or "profile").strip() or "profile"
+        footprint = str((profile_data.get("component") or {}).get("footprint") or "chip_2pad").strip() or "chip_2pad"
         nominal_dims = ((profile_data.get("component") or {}).get("nominal_dims_mm") or {})
         geometry_ranges = profile_data.get("geometry_ranges") or {}
 

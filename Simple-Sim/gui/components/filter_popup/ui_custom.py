@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Dict, Optional, Callable
+from typing import Any, Dict, Optional
 
 from .ui_realism import build_realism_controls
 

@@ -101,7 +101,7 @@ def test_delete_samples_updates_jsonl_and_manifest(tmp_path: Path) -> None:
     assert [r.id for r in label_rows] == ["run_a/sim/test/0002"]
     assert not (ds / "images/0001.png").exists()
 
-    with open(ds / "dataset_manifest.json", "r", encoding="utf-8") as f:
+    with open(ds / "dataset_manifest.json", encoding="utf-8") as f:
         manifest = json.load(f)
     assert manifest["dataset_stats"]["total_samples"] == 1
     assert manifest["dataset_stats"]["splits"]["test"] == 1
@@ -125,9 +125,9 @@ def test_move_samples_transfers_rows_files_and_manifest(tmp_path: Path) -> None:
     assert src_ids == {"run_a/sim/train/0001"}
     assert "run_a/sim/val/0002" in dst_ids
 
-    with open(src / "dataset_manifest.json", "r", encoding="utf-8") as f:
+    with open(src / "dataset_manifest.json", encoding="utf-8") as f:
         src_manifest = json.load(f)
-    with open(dst / "dataset_manifest.json", "r", encoding="utf-8") as f:
+    with open(dst / "dataset_manifest.json", encoding="utf-8") as f:
         dst_manifest = json.load(f)
     assert src_manifest["dataset_stats"]["total_samples"] == 1
     assert dst_manifest["dataset_stats"]["total_samples"] == 2

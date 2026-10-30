@@ -76,7 +76,7 @@ def write_dataset(
             full_path.parent.mkdir(parents=True, exist_ok=True)
             success = cv2.imwrite(str(full_path), image_array)
             if not success:
-                raise IOError(f"Failed to write image: {image_path}")
+                raise OSError(f"Failed to write image: {image_path}")
 
         # Write JSONL files
         write_jsonl(temp_dir / 'meta.jsonl', meta_rows)

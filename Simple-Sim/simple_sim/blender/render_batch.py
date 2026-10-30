@@ -76,7 +76,7 @@ def _new_material(name: str, *, base_color=(0.5, 0.5, 0.5), roughness=0.5, metal
 
 def _apply_material(obj: bpy.types.Object, mat: bpy.types.Material) -> None:
     if obj is None or obj.data is None:
-        print(f"[ERROR] Object or data is None!")
+        print("[ERROR] Object or data is None!")
         return
 
     # FIX: Use obj.data directly, materials is a collection
@@ -648,7 +648,7 @@ def main() -> None:
 
     # Load jobs
     jobs: List[Dict[str, Any]] = []
-    with open(jobs_path, "r", encoding="utf-8") as f:
+    with open(jobs_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:

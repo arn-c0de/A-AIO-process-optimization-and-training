@@ -14,13 +14,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -48,7 +47,7 @@ def discover_profiles(profiles_dir: Path) -> list[Path]:
 def read_profile(profile_path: Path) -> dict:
     """Load profile YAML and return its contents."""
     try:
-        with open(profile_path, "r", encoding="utf-8") as f:
+        with open(profile_path, encoding="utf-8") as f:
             return yaml.safe_load(f)
     except Exception as e:
         print(f"  Error reading {profile_path}: {e}")

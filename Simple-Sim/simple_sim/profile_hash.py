@@ -9,7 +9,7 @@ This module provides functions for:
 import hashlib
 import yaml
 from pathlib import Path
-from typing import Dict, Any, Union
+from typing import Dict, Any
 
 
 def canonicalize_profile(profile_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -69,7 +69,7 @@ def hash_profile(profile_path: Path) -> str:
     if not profile_path.exists():
         raise FileNotFoundError(f"Profile not found: {profile_path}")
 
-    with open(profile_path, 'r') as f:
+    with open(profile_path) as f:
         profile_dict = yaml.safe_load(f)
 
     # Canonicalize: remove metadata, sort keys, normalize floats
@@ -106,7 +106,7 @@ def load_profile(profile_id: str, profiles_dir: Path) -> Dict[str, Any]:
             f"Available profiles: {list(profiles_dir.glob('*.yaml'))}"
         )
 
-    with open(profile_path, 'r') as f:
+    with open(profile_path) as f:
         profile_dict = yaml.safe_load(f)
 
     # Validate profile structure

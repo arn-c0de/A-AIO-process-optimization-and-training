@@ -113,7 +113,7 @@ def main():
     model_path = Path(args.model)
     device = torch.device(args.device)
 
-    print(f"Evaluation configuration:")
+    print("Evaluation configuration:")
     print(f"  Dataset: {data_dir}")
     print(f"  Model: {model_path}")
     print(f"  Device: {device}")
@@ -176,13 +176,13 @@ def main():
 
         # WARNING: Profile hash mismatch
         if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
-            print(f"WARNING: Profile hash mismatch (different tolerance/geometry)")
+            print("WARNING: Profile hash mismatch (different tolerance/geometry)")
             print(f"  Model hash:   {ckpt_profile_hash[:72]}...")
             print(f"  Dataset hash: {dataset_profile_hash[:72]}...")
 
         print(f"  Profile: {ckpt_profile_id}")
     else:
-        print(f"  WARNING: Model lacks profile metadata (legacy checkpoint)")
+        print("  WARNING: Model lacks profile metadata (legacy checkpoint)")
 
     emit("eval_start", dataset_dir=str(data_dir), model_path=str(model_path), device=str(device))
 

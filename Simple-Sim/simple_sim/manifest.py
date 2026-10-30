@@ -114,7 +114,7 @@ def write_dataset_manifest(
 
     if extend and manifest_path.exists():
         # Update existing manifest
-        with open(manifest_path, 'r') as f:
+        with open(manifest_path) as f:
             manifest = json.load(f)
 
         # Validate profile match (should have been caught earlier, but double-check)
@@ -227,7 +227,7 @@ def read_dataset_manifest(manifest_path: Path) -> Dict[str, Any]:
     if not manifest_path.exists():
         raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
 
-    with open(manifest_path, 'r') as f:
+    with open(manifest_path) as f:
         manifest = json.load(f)
 
     # Validate manifest structure

@@ -9,9 +9,8 @@ import shutil
 import threading
 import time
 import tkinter as tk
-from datetime import datetime
 from pathlib import Path
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 from typing import Any, Dict, List, Optional, Tuple
 
 from gui.tabs.core.base import BaseTab

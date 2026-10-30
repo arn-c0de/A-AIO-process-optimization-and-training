@@ -33,7 +33,7 @@ class FlagManager:
             return
 
         try:
-            with open(self.flags_path, 'r') as f:
+            with open(self.flags_path) as f:
                 for line in f:
                     line = line.strip()
                     if not line:

@@ -9,7 +9,6 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-import os
 
 from simple_sim.model_bundle import bundle_checkpoint_path
 
@@ -244,7 +243,7 @@ class PredictionsLogic:
     def load_preds(self, preds_path: Path) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
         rows: List[Dict[str, Any]] = []
         try:
-            with open(preds_path, "r", encoding="utf-8") as f:
+            with open(preds_path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -280,7 +279,7 @@ class PredictionsLogic:
             return {}
 
         gt_profile_map: Dict[str, str] = {}
-        with open(labels_path, "r", encoding="utf-8") as f:
+        with open(labels_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:

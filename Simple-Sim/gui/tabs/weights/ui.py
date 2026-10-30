@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk, messagebox
-from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
-import os
+from tkinter import ttk
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from gui.utils.tooltip import ToolTip
 from gui.utils.formatting import fmt_bytes
 
 if TYPE_CHECKING:

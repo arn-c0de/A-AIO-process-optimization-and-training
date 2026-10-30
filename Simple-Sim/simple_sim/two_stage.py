@@ -145,5 +145,5 @@ class TwoStageClassifier:
         """
         img_bgr = cv2.imread(str(image_path))
         if img_bgr is None:
-            raise IOError(f"Failed to load image: {image_path}")
+            raise OSError(f"Failed to load image: {image_path}")
         return self.predict_array(img_bgr)

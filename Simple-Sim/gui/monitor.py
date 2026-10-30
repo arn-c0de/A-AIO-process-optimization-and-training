@@ -12,9 +12,8 @@ Professional GUI with:
 from __future__ import annotations
 
 import sys
-import subprocess
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -30,7 +29,7 @@ except Exception as e:
     )
 
 try:
-    from PIL import Image, ImageTk
+    pass
 except Exception as e:
     raise SystemExit(
         "Pillow is required for thumbnails. Install dependencies:\n"
