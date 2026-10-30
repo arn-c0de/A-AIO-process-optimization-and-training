@@ -10,8 +10,18 @@ from simple_sim.generators.filter_settings import normalize_image_filters
 from .realism import apply_realism_groups
 
 
-def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optional[Dict[str, Any]]) -> Dict[str, float]:
-    """Apply toggle + strength overrides to sampled augment params."""
+def apply_image_filter_overrides(
+    augment: Dict[str, float],
+    image_filters: Optional[Dict[str, Any]],
+    rng: Optional[np.random.Generator] = None,
+) -> Dict[str, float]:
+    """Apply toggle + strength overrides to sampled augment params.
+
+    Pass the per-sample ``rng`` to keep randomized filters reproducible; without it a
+    fresh unseeded generator is used (e.g. for interactive previews).
+    """
+    if rng is None:
+        rng = np.random.default_rng()
     aug = dict(augment or {})
     src_keys = set(image_filters.keys()) if isinstance(image_filters, dict) else set()
     filt_base = normalize_image_filters(image_filters)
@@ -46,7 +56,7 @@ def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optio
     filt = dict(filt_base)
     filt["__source_keys"] = src_keys
     if str(filt.get("filter_mode", "custom")).strip().lower() == "realism" and bool(filt.get("realism_enabled", False)):
-        return apply_realism_groups(aug, filt)
+        return apply_realism_groups(aug, filt, rng)
 
     def _rand_float(base_key: str, default_value: float) -> float:
         base = float(filt.get(base_key, default_value))
@@ -54,7 +64,7 @@ def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optio
             return base
         lo = float(filt.get(f"{base_key}_min", base))
         hi = float(filt.get(f"{base_key}_max", base))
-        return float(np.random.uniform(min(lo, hi), max(lo, hi)))
+        return float(rng.uniform(min(lo, hi), max(lo, hi)))
 
     def _rand_int(base_key: str, default_value: int) -> int:
         base = int(filt.get(base_key, default_value))
@@ -62,7 +72,7 @@ def apply_image_filter_overrides(augment: Dict[str, float], image_filters: Optio
             return base
         lo = int(filt.get(f"{base_key}_min", base))
         hi = int(filt.get(f"{base_key}_max", base))
-        return int(np.random.randint(min(lo, hi), max(lo, hi) + 1))
+        return int(rng.integers(min(lo, hi), max(lo, hi) + 1))
 
     rotation_strength = _rand_float("rotation_strength", 1.0)
     blur_strength = _rand_float("blur_strength", 1.0)

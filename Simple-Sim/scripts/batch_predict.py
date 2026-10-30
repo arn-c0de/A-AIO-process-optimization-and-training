@@ -22,13 +22,11 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import ConcatDataset, DataLoader
-from torchvision import models
 from tqdm import tqdm
 
 import sys
@@ -38,8 +36,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
-from simple_sim.manifest import read_dataset_manifest
+from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
+from simple_sim.models import load_checkpoint_model
 
 
 @dataclass
@@ -52,72 +51,6 @@ class RunInfo:
     class_list: List[str]
 
 
-def load_checkpoint_model(model_path: Path, device: torch.device) -> Tuple[torch.nn.Module, List[str], Dict[str, Any]]:
-    # Always load to CPU first to avoid accidentally loading a large ensemble onto GPU.
-    checkpoint = torch.load(model_path, map_location="cpu")
-
-    # Ensemble checkpoint: average logits from multiple sub-models.
-    if isinstance(checkpoint, dict) and checkpoint.get("format") == "simple_sim_ensemble_v1":
-        class_names = list(checkpoint.get("class_names") or [])
-        num_classes = len(class_names)
-        items = checkpoint.get("models") or []
-        if not class_names or not isinstance(items, list) or not items:
-            raise ValueError(f"Invalid ensemble checkpoint (missing class_names/models): {model_path}")
-
-        sub_models: List[torch.nn.Module] = []
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            ckpt = it.get("checkpoint") or {}
-            if not isinstance(ckpt, dict):
-                continue
-            cn = ckpt.get("class_names")
-            if list(cn or []) != class_names:
-                raise ValueError(
-                    "Ensemble class_names mismatch between sub-models. "
-                    "All merged models must share the same defect class list."
-                )
-            m = models.resnet18(weights=None)
-            num_features = m.fc.in_features
-            m.fc = nn.Linear(num_features, num_classes)
-            m.load_state_dict(ckpt["model_state_dict"])
-            m = m.to(device)
-            m.eval()
-            sub_models.append(m)
-
-        if not sub_models:
-            raise ValueError(f"Invalid ensemble checkpoint (no valid sub-models): {model_path}")
-
-        class EnsembleModel(nn.Module):
-            def __init__(self, parts: List[nn.Module]) -> None:
-                super().__init__()
-                self.parts = nn.ModuleList(parts)
-
-            def forward(self, x: torch.Tensor) -> torch.Tensor:
-                # Average logits; softmax is applied by the caller.
-                out = None
-                for m in self.parts:
-                    y = m(x)
-                    out = y if out is None else (out + y)
-                assert out is not None
-                return out / float(len(self.parts))
-
-        model = EnsembleModel(sub_models).to(device)
-        model.eval()
-        return model, class_names, checkpoint
-
-    # Standard single-checkpoint model.
-    class_names = checkpoint["class_names"]
-    num_classes = len(class_names)
-    model = models.resnet18(weights=None)
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
-    model.eval()
-    return model, class_names, checkpoint
-
-
 def dataset_info(data_dir: Path) -> RunInfo:
     data_dir = Path(data_dir)
     meta_rows = read_jsonl(data_dir / "meta.jsonl", MetaRow)
@@ -127,7 +60,8 @@ def dataset_info(data_dir: Path) -> RunInfo:
     for s in ["train", "val", "test"]:
         p = data_dir / "splits" / f"{s}.txt"
         if p.exists():
-            split_sizes[s] = sum(1 for _ in p.open("r", encoding="utf-8") if _.strip())
+            with p.open("r", encoding="utf-8") as fh:
+                split_sizes[s] = sum(1 for line in fh if line.strip())
         else:
             split_sizes[s] = 0
 
@@ -316,7 +250,7 @@ def main() -> None:
         if not manifest_path.exists():
             raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
         manifest = read_dataset_manifest(manifest_path)
-        dataset_profile_id = manifest["component_profile"]["profile_id"]
+        dataset_profile_id, _ = resolve_dataset_profile(manifest)
         resolved = bundle_checkpoint_path(requested_model_path, dataset_profile_id, kind="best")
         if not resolved.exists():
             # Help users diagnose what's actually inside the bundle dir.
@@ -400,6 +334,12 @@ def main() -> None:
         progress = tqdm(loader, desc=f"Predict({args.split})")
         for batch in progress:
             images, labels, sample_ids, image_paths = batch
+            if args.max_samples is not None:
+                # Truncate the last batch so exactly --max-samples samples are evaluated.
+                remaining = int(args.max_samples) - seen_local
+                if remaining < int(images.shape[0]):
+                    images, labels = images[:remaining], labels[:remaining]
+                    sample_ids, image_paths = sample_ids[:remaining], image_paths[:remaining]
 
             bt0 = time.perf_counter()
             images = images.to(curr_device)
@@ -429,6 +369,18 @@ def main() -> None:
             y_true_local.extend(labels.detach().cpu().numpy().tolist())
             y_pred_local.extend(pred_idx.detach().cpu().numpy().tolist())
             seen_local += bs
+
+            # Profile metrics are collected independently of --save-preds.
+            if curr_profile_model is not None or ckpt_profile_id:
+                for i in range(bs):
+                    gt_prof = str(gt_profile_map.get(str(sample_ids[i]), "") or "")
+                    if not gt_prof:
+                        continue
+                    if curr_profile_model is not None and profile_pred_idx_np is not None:
+                        profile_pred_local.append(profile_class_names[int(profile_pred_idx_np[i])])
+                    else:
+                        profile_pred_local.append(ckpt_profile_id)
+                    profile_gt_local.append(gt_prof)
 
             if args.save_preds:
                 topk = min(args.topk, len(class_names))
@@ -466,19 +418,12 @@ def main() -> None:
                         row["gt_profile"] = gt_prof
                         row["profile_correct"] = bool(pred_prof == gt_prof) if gt_prof else None
                         row["profile_confidence"] = prof_conf
-
-                        if gt_prof:
-                            profile_gt_local.append(gt_prof)
-                            profile_pred_local.append(pred_prof)
                     elif ckpt_profile_id:
                         gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
                         row["pred_profile"] = ckpt_profile_id
                         row["gt_profile"] = gt_prof
                         row["profile_correct"] = bool(ckpt_profile_id == gt_prof) if gt_prof else None
                         row["profile_confidence"] = 1.0
-                        if gt_prof:
-                            profile_gt_local.append(gt_prof)
-                            profile_pred_local.append(ckpt_profile_id)
 
                     preds_rows_local.append(row)
 

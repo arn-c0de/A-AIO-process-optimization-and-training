@@ -8,9 +8,7 @@ from pathlib import Path
 from datetime import datetime
 import time
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
-from torchvision import models
 from tqdm import tqdm
 import numpy as np
 
@@ -19,8 +17,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import compute_metrics, format_metrics
+from simple_sim.models import build_resnet18
 from simple_sim.telemetry import emit
-from simple_sim.manifest import read_dataset_manifest
+from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
 
 
@@ -130,15 +129,7 @@ def main():
         )
 
     manifest = read_dataset_manifest(manifest_path)
-    mver = int(manifest.get('manifest_version', 1) or 1)
-    if mver == 1:
-        dataset_profile_id = manifest['component_profile']['profile_id']
-        dataset_profile_hash = manifest['component_profile']['profile_hash']
-    elif mver == 2:
-        dataset_profile_id = "multi"
-        dataset_profile_hash = "multi"
-    else:
-        raise ValueError(f"Unsupported dataset manifest_version: {mver}")
+    dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
 
     # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
     if model_path.exists() and model_path.is_dir():
@@ -197,9 +188,7 @@ def main():
 
     # Create model
     print("\nInitializing model...")
-    model = models.resnet18()
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
+    model = build_resnet18(num_classes)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
 
@@ -241,6 +230,7 @@ def main():
         'timestamp': datetime.now().isoformat(),
         'dataset_path': str(data_dir),
         'model_path': str(model_path),
+        'split': 'test',
         'metrics': metrics,
         'test_size': len(test_dataset),
         'seen_samples': int(seen),

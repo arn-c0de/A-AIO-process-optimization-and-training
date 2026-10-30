@@ -16,72 +16,15 @@ from typing import Optional
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
-from torchvision import models, transforms
+from torchvision import transforms
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
-from simple_sim.manifest import read_dataset_manifest
+from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
-
-
-def load_checkpoint_model(model_path: Path, device: torch.device):
-    checkpoint = torch.load(model_path, map_location="cpu")
-
-    if isinstance(checkpoint, dict) and checkpoint.get("format") == "simple_sim_ensemble_v1":
-        class_names = list(checkpoint.get("class_names") or [])
-        num_classes = len(class_names)
-        items = checkpoint.get("models") or []
-        if not class_names or not isinstance(items, list) or not items:
-            raise ValueError(f"Invalid ensemble checkpoint (missing class_names/models): {model_path}")
-
-        parts = []
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            ckpt = it.get("checkpoint") or {}
-            if not isinstance(ckpt, dict):
-                continue
-            if list(ckpt.get("class_names") or []) != class_names:
-                raise ValueError("Ensemble class_names mismatch between sub-models.")
-            m = models.resnet18(weights=None)
-            num_features = m.fc.in_features
-            m.fc = nn.Linear(num_features, num_classes)
-            m.load_state_dict(ckpt["model_state_dict"])
-            m = m.to(device)
-            m.eval()
-            parts.append(m)
-
-        if not parts:
-            raise ValueError(f"Invalid ensemble checkpoint (no valid sub-models): {model_path}")
-
-        class EnsembleModel(nn.Module):
-            def __init__(self, sub):
-                super().__init__()
-                self.parts = nn.ModuleList(sub)
-
-            def forward(self, x):
-                out = None
-                for m in self.parts:
-                    y = m(x)
-                    out = y if out is None else (out + y)
-                return out / float(len(self.parts))
-
-        model = EnsembleModel(parts).to(device)
-        model.eval()
-        return model, class_names, checkpoint
-
-    class_names = checkpoint["class_names"]
-    num_classes = len(class_names)
-    model = models.resnet18(weights=None)
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
-    model.eval()
-    return model, class_names, checkpoint
+from simple_sim.models import load_checkpoint_model
 
 
 def load_image_bgr(image_path: Path) -> np.ndarray:
@@ -164,7 +107,7 @@ def main():
         if not manifest_path.exists():
             raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
         manifest = read_dataset_manifest(manifest_path)
-        dataset_profile_id = manifest['component_profile']['profile_id']
+        dataset_profile_id, _ = resolve_dataset_profile(manifest)
         resolved = bundle_checkpoint_path(model_path, dataset_profile_id, kind="best")
         if not resolved.exists():
             raise FileNotFoundError(
@@ -181,8 +124,7 @@ def main():
         manifest_path = data_dir / 'dataset_manifest.json'
         if manifest_path.exists():
             manifest = read_dataset_manifest(manifest_path)
-            dataset_profile_id = manifest['component_profile']['profile_id']
-            dataset_profile_hash = manifest['component_profile']['profile_hash']
+            dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
 
             ckpt_profile = checkpoint.get('component_profile')
             if ckpt_profile:

@@ -15,13 +15,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import models
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import ProfileDataset
-from simple_sim.metrics import compute_metrics, format_metrics
+from simple_sim.models import build_resnet18
 from simple_sim.telemetry import emit
 from simple_sim.manifest import read_dataset_manifest, hash_file
 from simple_sim.schema import read_jsonl, LabelRow
@@ -121,19 +119,9 @@ def main():
 
     # Create model
     print("\nInitializing ResNet18...")
-    if pretrained:
-        try:
-            model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
-        except Exception as e:
-            print(f"WARNING: Failed to load pretrained weights ({e}). Falling back to random init.")
-            model = models.resnet18(weights=None)
-    else:
-        model = models.resnet18(weights=None)
+    model = build_resnet18(num_classes, pretrained=pretrained)
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
-
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()
