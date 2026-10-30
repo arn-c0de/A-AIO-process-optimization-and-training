@@ -338,11 +338,8 @@ def _write_svg_barh(
     h = top_pad + bot_pad + n * row_h
 
     vmax = max(values) if values else 0.0
-    vmin = min(values) if values else 0.0
     if vmax <= 0:
         vmax = 1.0
-    # If values are extremely close, avoid dividing by ~0. Keep scaling stable.
-    span = max(1e-12, vmax - min(0.0, vmin))
 
     plot_w = w - left_pad - right_pad
 
@@ -647,8 +644,12 @@ def _write_svg_pie_with_legend(
         color = palette[i % len(palette)]
         # For SVG coords (y down), invert angle direction by swapping sign on sin via using -angles,
         # but easier is to rotate in clockwise by using +sin; starting angle already aligned.
-        path = _svg_arc_path(cx, cy, r, a0, a1)
-        lines.append(f'<path d="{path}" fill="{color}" stroke="{bg}" stroke-width="2"/>')
+        if frac >= 0.9999:
+            # A full-circle arc has identical start/end points and SVG would drop it.
+            lines.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" stroke="{bg}" stroke-width="2"/>')
+        else:
+            path = _svg_arc_path(cx, cy, r, a0, a1)
+            lines.append(f'<path d="{path}" fill="{color}" stroke="{bg}" stroke-width="2"/>')
         a = a1
 
     # Outline circle for crispness
@@ -824,6 +825,9 @@ def _render(
 
     best_rows: dict[tuple[str, str], BestByDataset] = {}
     for (model_abs, ds_name), rs in per_model_dataset.items():
+        # Rank on the test split when available; train/val reports would inflate "best" scores.
+        # Reports without a split key (older eval.py) are test reports.
+        rs = [rr for rr in rs if str(rr.get("split") or "test") == "test"] or rs
 
         def key(rr: dict[str, Any]) -> tuple[float, float, float]:
             acc = _metric(rr, "accuracy")

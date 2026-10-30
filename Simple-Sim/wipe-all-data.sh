@@ -12,6 +12,7 @@ if [[ ! -d "$OUTPUT_DIR" ]]; then
 fi
 
 echo "This will delete all datasets in $DATASETS_DIR and all model artifacts in $MODELS_DIR."
+echo "Dataset snapshots in $OUTPUT_DIR/sim_data/versions are NOT deleted."
 echo "Please create your own backup if needed."
 
 read -rp "Type DELETE (uppercase) to confirm you want to wipe the datasets/models: " CONFIRM_FIRST

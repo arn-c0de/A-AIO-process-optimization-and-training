@@ -32,7 +32,8 @@ if [[ -n "${WHEELHOUSE:-}" ]]; then
 fi
 
 echo "Installing dependencies (if needed)"
-"${PYTHON}" -m pip install "${PIP_FLAGS[@]}" -r requirements.txt
+# ${arr[@]+...} keeps an empty array safe under `set -u` on bash < 4.4 (macOS ships 3.2).
+"${PYTHON}" -m pip install ${PIP_FLAGS[@]+"${PIP_FLAGS[@]}"} -r requirements.txt
 
 exec "${PYTHON}" gui/monitor.py
 
