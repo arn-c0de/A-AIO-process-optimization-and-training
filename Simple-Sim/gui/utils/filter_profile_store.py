@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any
 
 
 def is_filter_popup_extra_key(key: str) -> bool:
@@ -26,16 +26,16 @@ def parse_bool_like(value: Any, default: bool = False) -> bool:
     return default
 
 
-def extract_filter_popup_extras(values: Dict[str, Any]) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def extract_filter_popup_extras(values: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for k, v in values.items():
         if isinstance(k, str) and is_filter_popup_extra_key(k):
             out[k] = v
     return out
 
 
-def load_filter_popup_extras_from_profiles_json(raw_profiles: str, raw_active: str = "Default") -> Dict[str, Any]:
-    extras: Dict[str, Any] = {}
+def load_filter_popup_extras_from_profiles_json(raw_profiles: str, raw_active: str = "Default") -> dict[str, Any]:
+    extras: dict[str, Any] = {}
     raw_profiles = str(raw_profiles or "").strip()
     raw_active = str(raw_active or "").strip() or "Default"
     if not raw_profiles:

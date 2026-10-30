@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import json
+import os
+from typing import Any
 
 
-_FLOAT_RANGES: Dict[str, tuple[float, float, float]] = {
+_FLOAT_RANGES: dict[str, tuple[float, float, float]] = {
     "rotation_strength": (1.0, 0.0, 4.0),
     "blur_strength": (1.0, 0.0, 4.0),
     "grain_strength": (1.0, 0.0, 4.0),
@@ -31,12 +33,12 @@ _FLOAT_RANGES: Dict[str, tuple[float, float, float]] = {
     "sharpen_strength": (1.0, 0.0, 2.0),
 }
 
-_INT_RANGES: Dict[str, tuple[int, int, int]] = {
+_INT_RANGES: dict[str, tuple[int, int, int]] = {
     "jpeg_quality": (85, 50, 95),
     "color_temperature_kelvin": (5500, 2500, 7500),
 }
 
-_BOOL_DEFAULTS: Dict[str, bool] = {
+_BOOL_DEFAULTS: dict[str, bool] = {
     "enable": True,
     "cardinal_rotation_90": True,
     "enable_rotation": True,
@@ -61,12 +63,12 @@ _BOOL_DEFAULTS: Dict[str, bool] = {
     "realism_constraints_enabled": True,
 }
 
-_STR_DEFAULTS: Dict[str, str] = {
+_STR_DEFAULTS: dict[str, str] = {
     "filter_mode": "custom",
     "realism_profile_id": "profile_industrial_cam",
 }
 
-_REALISM_FLOAT_RANGES: Dict[str, tuple[float, float, float]] = {
+_REALISM_FLOAT_RANGES: dict[str, tuple[float, float, float]] = {
     "realism_k_prob_0": (0.60, 0.0, 1.0),
     "realism_k_prob_1": (0.35, 0.0, 1.0),
     "realism_k_prob_2": (0.05, 0.0, 1.0),
@@ -80,7 +82,7 @@ _REALISM_FLOAT_RANGES: Dict[str, tuple[float, float, float]] = {
     "realism_group_G8_prob": (0.08, 0.0, 1.0),
 }
 
-_RANDOMIZABLE_FLOAT_RANGES: Dict[str, tuple[float, float]] = {
+_RANDOMIZABLE_FLOAT_RANGES: dict[str, tuple[float, float]] = {
     "rotation_strength": (0.0, 4.0),
     "blur_strength": (0.0, 4.0),
     "grain_strength": (0.0, 4.0),
@@ -99,14 +101,14 @@ _RANDOMIZABLE_FLOAT_RANGES: Dict[str, tuple[float, float]] = {
     "sharpen_strength": (0.0, 2.0),
 }
 
-_RANDOMIZABLE_INT_RANGES: Dict[str, tuple[int, int]] = {
+_RANDOMIZABLE_INT_RANGES: dict[str, tuple[int, int]] = {
     "jpeg_quality": (50, 95),
     "color_temperature_kelvin": (2500, 7500),
 }
 
 
 
-def _to_bool(src: Dict[str, Any], name: str, default: bool) -> bool:
+def _to_bool(src: dict[str, Any], name: str, default: bool) -> bool:
     v = src.get(name, default)
     if isinstance(v, bool):
         return v
@@ -118,7 +120,7 @@ def _to_bool(src: Dict[str, Any], name: str, default: bool) -> bool:
 
 
 
-def _to_float(src: Dict[str, Any], name: str, default: float, lo: float, hi: float) -> float:
+def _to_float(src: dict[str, Any], name: str, default: float, lo: float, hi: float) -> float:
     try:
         v = float(src.get(name, default))
     except Exception:
@@ -127,7 +129,7 @@ def _to_float(src: Dict[str, Any], name: str, default: float, lo: float, hi: flo
 
 
 
-def _to_int(src: Dict[str, Any], name: str, default: int, lo: int, hi: int) -> int:
+def _to_int(src: dict[str, Any], name: str, default: int, lo: int, hi: int) -> int:
     try:
         v = int(src.get(name, default))
     except Exception:
@@ -136,10 +138,10 @@ def _to_int(src: Dict[str, Any], name: str, default: int, lo: int, hi: int) -> i
 
 
 
-def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def normalize_image_filters(image_filters: dict[str, Any] | None) -> dict[str, Any]:
     """Normalize optional IMAGE_FILTERS payload with safe defaults."""
     src = image_filters or {}
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
 
     for key, default in _BOOL_DEFAULTS.items():
         out[key] = _to_bool(src, key, default)
@@ -191,10 +193,10 @@ def normalize_image_filters(image_filters: Optional[Dict[str, Any]]) -> Dict[str
 
 
 
-def default_filter_values_for_popup() -> Dict[str, Any]:
+def default_filter_values_for_popup() -> dict[str, Any]:
     """Default values encoded as popup-friendly strings/bools."""
     normalized = normalize_image_filters(None)
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for key, value in normalized.items():
         if isinstance(value, bool):
             out[key] = value
@@ -208,7 +210,7 @@ def default_filter_values_for_popup() -> Dict[str, Any]:
 
 
 
-def clean_filter_values_for_popup() -> Dict[str, Any]:
+def clean_filter_values_for_popup() -> dict[str, Any]:
     """Neutral/no-op preset for clean image generation."""
     clean = default_filter_values_for_popup()
     for key in list(clean.keys()):
@@ -243,3 +245,27 @@ def clean_filter_values_for_popup() -> Dict[str, Any]:
         clean[f"{key}_max"] = value
 
     return clean
+
+
+def load_image_filters_env(var_name: str = "IMAGE_FILTERS") -> dict[str, Any]:
+    """Read image-filter settings as JSON from an environment variable (GUI -> generator handoff)."""
+    raw = os.environ.get(var_name, "").strip()
+    if not raw:
+        return normalize_image_filters(None)
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        print(f"[warn] Invalid {var_name} JSON, using defaults.")
+        return normalize_image_filters(None)
+    return normalize_image_filters(parsed if isinstance(parsed, dict) else None)
+
+
+def augment_for_meta(augment: dict[str, Any]) -> dict[str, float]:
+    """Return the schema-compatible augment subset stored in MetaRow."""
+    return {
+        "blur_sigma": float(augment.get("blur_sigma", 0.0) or 0.0),
+        "noise_stddev": float(augment.get("noise_stddev", 0.0) or 0.0),
+        "brightness_factor": float(augment.get("brightness_factor", 1.0) or 1.0),
+        "contrast_factor": float(augment.get("contrast_factor", 1.0) or 1.0),
+        "rotation_deg": float(augment.get("rotation_deg", 0.0) or 0.0),
+    }

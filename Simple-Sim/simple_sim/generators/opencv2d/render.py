@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
@@ -30,12 +30,12 @@ from .filters import (
 
 
 def render_roi(
-    nominal: Dict[str, float],
-    defect_params: Dict[str, Any],
-    augment: Dict[str, float],
-    roi_size: Tuple[int, int],
-    config: Dict[str, Any],
-    tolerances: Optional[Dict[str, Any]],
+    nominal: dict[str, float],
+    defect_params: dict[str, Any],
+    augment: dict[str, float],
+    roi_size: tuple[int, int],
+    config: dict[str, Any],
+    tolerances: dict[str, Any] | None,
     rng: np.random.Generator,
     footprint: str = "chip_2pad",
 ) -> np.ndarray:
@@ -46,7 +46,9 @@ def render_roi(
     draw_substrate(img, config)
     draw_pads(img, nominal, tuple(config["copper_color"]), footprint=footprint)
     draw_solder(img, nominal, footprint=footprint)
-    draw_component(img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances)
+    draw_component(
+        img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances, footprint=footprint
+    )
 
     img = apply_blur(img, augment.get("blur_sigma", 0.0))
     img = apply_noise(img, augment.get("noise_stddev", 0.0), rng)

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
 
 from .profile_registry import ProfileRegistry, RegistrySnapshot
 from .state_store import EditorStateStore
@@ -10,8 +9,8 @@ from .state_store import EditorStateStore
 
 @dataclass
 class ChoiceLists:
-    profile_ids: List[str]
-    run_ids: List[str]
+    profile_ids: list[str]
+    run_ids: list[str]
 
 
 class SyncController:
@@ -21,7 +20,7 @@ class SyncController:
         self.sim_root = Path(sim_root)
         self.store = store
         self.registry = ProfileRegistry(self.sim_root)
-        self.snapshot: Optional[RegistrySnapshot] = None
+        self.snapshot: RegistrySnapshot | None = None
 
     def refresh_registry(self) -> ChoiceLists:
         self.snapshot = self.registry.snapshot()
@@ -29,7 +28,7 @@ class SyncController:
         run_ids = sorted(self.snapshot.run_files.keys())
         return ChoiceLists(profile_ids=profile_ids, run_ids=run_ids)
 
-    def maybe_refresh_registry(self) -> Optional[ChoiceLists]:
+    def maybe_refresh_registry(self) -> ChoiceLists | None:
         if not self.registry.changed():
             return None
         return self.refresh_registry()
@@ -54,7 +53,7 @@ class SyncController:
             raise ValueError(f"Unknown run: {run_id}")
         self.store.load_run(p)
 
-    def matching_runs_for_current_profile(self) -> List[str]:
+    def matching_runs_for_current_profile(self) -> list[str]:
         if not self.snapshot:
             self.refresh_registry()
         if not self.snapshot:

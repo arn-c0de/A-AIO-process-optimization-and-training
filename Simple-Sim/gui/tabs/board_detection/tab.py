@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from gui.state import UiState
@@ -23,7 +22,7 @@ class BoardDetectionTab(BaseTab):
         super().__init__(parent, sim_root, state)
         self.ui = BoardDetectionUI(self, self.frame)
         self.logic = BoardDetectionLogic()
-        self._result: Optional[TwoStageResult] = None
+        self._result: TwoStageResult | None = None
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -89,8 +88,9 @@ class BoardDetectionTab(BaseTab):
             image_path=Path(image_path),
             device=self.ui._device_var.get(),
             min_profile_confidence=min_conf,
-            on_complete=self._on_predict_complete,
-            on_error=self.ui.show_error,
+            # Callbacks run on the worker thread: marshal UI updates onto the Tk main loop.
+            on_complete=lambda result: self.frame.after(0, self._on_predict_complete, result),
+            on_error=lambda msg: self.frame.after(0, self.ui.show_error, msg),
         )
 
     def _on_predict_complete(self, result: TwoStageResult) -> None:

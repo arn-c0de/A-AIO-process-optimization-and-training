@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Dict
+from typing import Any
 
 from .constants import DEFAULT_REALISM_PROFILE_ID, REALISM_GROUP_DEFAULTS, REALISM_K_DEFAULTS
 
 
-def build_realism_controls(popup: Any, parent: ttk.Frame, current: Dict[str, Any]) -> None:
+def build_realism_controls(popup: Any, parent: ttk.Frame, current: dict[str, Any]) -> None:
     """Build realism-mode controls."""
     top = ttk.Frame(parent)
     top.pack(fill="x", pady=(2, 6))
@@ -60,7 +60,7 @@ def build_realism_controls(popup: Any, parent: ttk.Frame, current: Dict[str, Any
 
 def set_realism_defaults(popup: Any) -> None:
     """Apply the default realism group probabilities."""
-    defaults: Dict[str, Any] = {
+    defaults: dict[str, Any] = {
         "filter_mode": "realism",
         "realism_enabled": True,
         "realism_constraints_enabled": True,

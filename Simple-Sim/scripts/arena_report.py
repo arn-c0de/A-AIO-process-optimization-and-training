@@ -22,10 +22,10 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
-def _detect_sim_root(start: Path) -> Optional[Path]:
+def _detect_sim_root(start: Path) -> Path | None:
     """Walk up from start until we find a directory that looks like a Simple-Sim root."""
     start = Path(start).resolve()
     for p in [start, *start.parents]:
@@ -34,12 +34,12 @@ def _detect_sim_root(start: Path) -> Optional[Path]:
     return None
 
 
-def _report_search_dirs(sim_root: Path) -> List[Path]:
-    def add_dataset_prediction_dirs(dirs: List[Path], ds: Path) -> None:
+def _report_search_dirs(sim_root: Path) -> list[Path]:
+    def add_dataset_prediction_dirs(dirs: list[Path], ds: Path) -> None:
         dirs.append(ds / "predictions")
         dirs.append(ds / "predictions" / "weights_tab")
 
-    dirs: List[Path] = []
+    dirs: list[Path] = []
     dirs.append(sim_root / "outputs" / "models")
     dirs.append(sim_root / "outputs" / "models" / "history")
 
@@ -61,7 +61,7 @@ def _report_search_dirs(sim_root: Path) -> List[Path]:
     except Exception:
         pass
 
-    out: List[Path] = []
+    out: list[Path] = []
     seen = set()
     for d in dirs:
         try:
@@ -75,13 +75,13 @@ def _report_search_dirs(sim_root: Path) -> List[Path]:
     return out
 
 
-def _load_reports(dirs: List[Path]) -> List[Dict[str, Any]]:
-    reports: List[Dict[str, Any]] = []
+def _load_reports(dirs: list[Path]) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
     seen_paths = set()
     for d in dirs:
         if not d.exists():
             continue
-        cand: List[Path] = []
+        cand: list[Path] = []
         cand.extend(d.glob("report_*.json"))
         cand.extend(d.glob("batch_report_*.json"))
         for p in sorted(cand, key=lambda x: x.stat().st_mtime if x.exists() else 0.0, reverse=True):
@@ -100,7 +100,7 @@ def _load_reports(dirs: List[Path]) -> List[Dict[str, Any]]:
     return reports
 
 
-def _metric(report: Dict[str, Any], key: str) -> Optional[float]:
+def _metric(report: dict[str, Any], key: str) -> float | None:
     try:
         v = (report.get("metrics") or {}).get(key)
         if v is None:
@@ -110,7 +110,7 @@ def _metric(report: Dict[str, Any], key: str) -> Optional[float]:
         return None
 
 
-def _ts(report: Dict[str, Any]) -> float:
+def _ts(report: dict[str, Any]) -> float:
     s = str(report.get("timestamp") or "")
     try:
         return datetime.fromisoformat(s).timestamp()
@@ -138,7 +138,7 @@ def _basename(p: Any) -> str:
         return str(p)
 
 
-def _resolve_model_path(sim_root: Path, model_path: str) -> Optional[Path]:
+def _resolve_model_path(sim_root: Path, model_path: str) -> Path | None:
     if not model_path:
         return None
     p = Path(model_path)
@@ -150,7 +150,7 @@ def _resolve_model_path(sim_root: Path, model_path: str) -> Optional[Path]:
         return p
 
 
-def _resolve_dataset_path(sim_root: Path, dataset_path: str) -> Optional[Path]:
+def _resolve_dataset_path(sim_root: Path, dataset_path: str) -> Path | None:
     if not dataset_path:
         return None
     p = Path(dataset_path)
@@ -169,7 +169,7 @@ def _rel(sim_root: Path, p: Path) -> str:
         return str(p)
 
 
-def _load_arena(sim_root: Path) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+def _load_arena(sim_root: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
     p = sim_root / "outputs" / "models" / "arena.json"
     if not p.exists():
         return {}, []
@@ -180,8 +180,8 @@ def _load_arena(sim_root: Path) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
     if not isinstance(obj, dict):
         return {}, []
 
-    out: Dict[str, Dict[str, Any]] = {}
-    missing: List[str] = []
+    out: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
     items = obj.get("arena_models")
     if not isinstance(items, list):
         return {}, []
@@ -205,16 +205,16 @@ class BestByDataset:
     dataset_name: str
     dataset_path: str
     split: str
-    accuracy: Optional[float]
-    f1: Optional[float]
-    seen: Optional[int]
-    dataset_size_bytes: Optional[int]
+    accuracy: float | None
+    f1: float | None
+    seen: int | None
+    dataset_size_bytes: int | None
     last_ts: float
     report_path: str
-    extra: Dict[str, Any]
+    extra: dict[str, Any]
 
 
-def _intish(v: Any) -> Optional[int]:
+def _intish(v: Any) -> int | None:
     try:
         if v is None:
             return None
@@ -223,7 +223,7 @@ def _intish(v: Any) -> Optional[int]:
         return None
 
 
-def _critical_fn_summary(report: Dict[str, Any]) -> str:
+def _critical_fn_summary(report: dict[str, Any]) -> str:
     try:
         d = (report.get("metrics") or {}).get("critical_fn_rates") or {}
         if not isinstance(d, dict) or not d:
@@ -247,7 +247,7 @@ def _arena_type(sim_root: Path, model_abs: Path) -> str:
         return "Single"
 
 
-def _bundle_details(sim_root: Path, bundle_dir: Path) -> Dict[str, Any]:
+def _bundle_details(sim_root: Path, bundle_dir: Path) -> dict[str, Any]:
     try:
         sys.path.insert(0, str(sim_root))
         from simple_sim.model_bundle import read_bundle_meta
@@ -261,7 +261,7 @@ def _bundle_details(sim_root: Path, bundle_dir: Path) -> Dict[str, Any]:
         except Exception:
             meta = None
 
-    profiles: List[str] = []
+    profiles: list[str] = []
     checkpoints = 0
     created = "-"
     try:
@@ -287,7 +287,7 @@ def _md_escape(s: str) -> str:
 def _anchor_slug(s: str) -> str:
     """Create a URL-safe anchor slug for markdown links."""
     text = (s or "").strip().lower()
-    out: List[str] = []
+    out: list[str] = []
     prev_dash = False
     for ch in text:
         if ch.isalnum():
@@ -317,8 +317,8 @@ def _write_svg_barh(
     out_path: Path,
     *,
     title: str,
-    labels: List[str],
-    values: List[float],
+    labels: list[str],
+    values: list[float],
     value_fmt: str = "{:.4f}",
 ) -> None:
     """Write a simple horizontal bar chart as SVG (no external deps)."""
@@ -338,11 +338,8 @@ def _write_svg_barh(
     h = top_pad + bot_pad + n * row_h
 
     vmax = max(values) if values else 0.0
-    vmin = min(values) if values else 0.0
     if vmax <= 0:
         vmax = 1.0
-    # If values are extremely close, avoid dividing by ~0. Keep scaling stable.
-    span = max(1e-12, vmax - min(0.0, vmin))
 
     plot_w = w - left_pad - right_pad
 
@@ -361,7 +358,7 @@ def _write_svg_barh(
     top2 = "#b1bac4"
     top3 = "#c69063"
 
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">')
     lines.append(f'<rect x="0" y="0" width="{w}" height="{h}" fill="{bg}"/>')
@@ -426,9 +423,9 @@ def _write_svg_heatmap(
     out_path: Path,
     *,
     title: str,
-    row_labels: List[str],
-    col_labels: List[str],
-    values: List[List[Optional[float]]],
+    row_labels: list[str],
+    col_labels: list[str],
+    values: list[list[float | None]],
 ) -> None:
     """Write a dark-theme heatmap SVG for model x dataset accuracy."""
     if not row_labels or not col_labels or not values:
@@ -481,7 +478,7 @@ def _write_svg_heatmap(
             b = int(c1[2] + (c2[2] - c1[2]) * t)
         return f"#{r:02x}{g:02x}{b:02x}"
 
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">')
     lines.append(f'<rect x="0" y="0" width="{w}" height="{h}" fill="{bg}"/>')
@@ -591,7 +588,7 @@ def _write_svg_pie_with_legend(
     out_path: Path,
     *,
     title: str,
-    items: List[Tuple[str, int]],
+    items: list[tuple[str, int]],
 ) -> None:
     """Write a pie chart SVG with legend for byte sizes."""
     items = [(str(n), int(v)) for (n, v) in items if v is not None and int(v) > 0]
@@ -628,7 +625,7 @@ def _write_svg_pie_with_legend(
         "#8b949e",
     ]
 
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">')
     lines.append(f'<rect x="0" y="0" width="{w}" height="{h}" fill="{bg}"/>')
@@ -647,8 +644,12 @@ def _write_svg_pie_with_legend(
         color = palette[i % len(palette)]
         # For SVG coords (y down), invert angle direction by swapping sign on sin via using -angles,
         # but easier is to rotate in clockwise by using +sin; starting angle already aligned.
-        path = _svg_arc_path(cx, cy, r, a0, a1)
-        lines.append(f'<path d="{path}" fill="{color}" stroke="{bg}" stroke-width="2"/>')
+        if frac >= 0.9999:
+            # A full-circle arc has identical start/end points and SVG would drop it.
+            lines.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" stroke="{bg}" stroke-width="2"/>')
+        else:
+            path = _svg_arc_path(cx, cy, r, a0, a1)
+            lines.append(f'<path d="{path}" fill="{color}" stroke="{bg}" stroke-width="2"/>')
         a = a1
 
     # Outline circle for crispness
@@ -682,18 +683,18 @@ def _write_svg_pie_with_legend(
 
 def _write_charts(
     sim_root: Path,
-    overall: List[Dict[str, Any]],
+    overall: list[dict[str, Any]],
     *,
-    dataset_sizes: Optional[List[Tuple[str, int]]] = None,
-    heatmap_models: Optional[List[str]] = None,
-    heatmap_datasets: Optional[List[str]] = None,
-    heatmap_values: Optional[List[List[Optional[float]]]] = None,
-) -> List[Tuple[str, str]]:
+    dataset_sizes: list[tuple[str, int]] | None = None,
+    heatmap_models: list[str] | None = None,
+    heatmap_datasets: list[str] | None = None,
+    heatmap_values: list[list[float | None]] | None = None,
+) -> list[tuple[str, str]]:
     """Write SVG charts and return markdown-relative paths to embed."""
     assets_dir = sim_root / "ARENA_REPORT_assets"
     assets_dir.mkdir(parents=True, exist_ok=True)
 
-    charts: List[Tuple[str, str]] = []
+    charts: list[tuple[str, str]] = []
 
     def _append_top_metric_chart(
         *,
@@ -731,7 +732,7 @@ def _write_charts(
     )
 
     # Model storage breakdown (pie chart).
-    size_items: List[Tuple[str, int]] = []
+    size_items: list[tuple[str, int]] = []
     for it in overall:
         try:
             p = Path(str(it["model_abs"]))
@@ -784,13 +785,13 @@ def _write_charts(
 
 def _render(
     sim_root: Path,
-    tracked: Dict[str, Dict[str, Any]],
-    reports: List[Dict[str, Any]],
+    tracked: dict[str, dict[str, Any]],
+    reports: list[dict[str, Any]],
     *,
-    missing: List[str],
+    missing: list[str],
 ) -> str:
-    per_model_dataset: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
-    ds_size_cache: Dict[str, int] = {}
+    per_model_dataset: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    ds_size_cache: dict[str, int] = {}
 
     for r in reports:
         mp = str(r.get("model_path") or "").strip()
@@ -822,10 +823,13 @@ def _render(
         ds_name = _basename(ds_path) if ds_path else "-"
         per_model_dataset.setdefault((matched_key, ds_name), []).append(r)
 
-    best_rows: Dict[Tuple[str, str], BestByDataset] = {}
+    best_rows: dict[tuple[str, str], BestByDataset] = {}
     for (model_abs, ds_name), rs in per_model_dataset.items():
+        # Rank on the test split when available; train/val reports would inflate "best" scores.
+        # Reports without a split key (older eval.py) are test reports.
+        rs = [rr for rr in rs if str(rr.get("split") or "test") == "test"] or rs
 
-        def key(rr: Dict[str, Any]) -> Tuple[float, float, float]:
+        def key(rr: dict[str, Any]) -> tuple[float, float, float]:
             acc = _metric(rr, "accuracy")
             f1 = _metric(rr, "macro_f1")
             return (
@@ -837,7 +841,7 @@ def _render(
         rr_best = max(rs, key=key)
         last_ts = max(_ts(rr) for rr in rs) if rs else 0.0
         ds_path_s = str(rr_best.get("dataset_path") or "")
-        ds_size_b: Optional[int] = None
+        ds_size_b: int | None = None
         ds_abs = _resolve_dataset_path(sim_root, ds_path_s)
         if ds_abs is not None:
             ds_key = str(ds_abs)
@@ -862,11 +866,11 @@ def _render(
             },
         )
 
-    model_to_rows: Dict[str, List[BestByDataset]] = {}
+    model_to_rows: dict[str, list[BestByDataset]] = {}
     for (model_abs, _ds), row in best_rows.items():
         model_to_rows.setdefault(model_abs, []).append(row)
 
-    overall: List[Dict[str, Any]] = []
+    overall: list[dict[str, Any]] = []
     for model_abs, rows in model_to_rows.items():
         accs = [r.accuracy for r in rows if r.accuracy is not None]
         f1s = [r.f1 for r in rows if r.f1 is not None]
@@ -903,13 +907,13 @@ def _render(
         )
     )
 
-    dataset_to_models: Dict[str, List[Tuple[str, BestByDataset]]] = {}
+    dataset_to_models: dict[str, list[tuple[str, BestByDataset]]] = {}
     for model_abs, rows in model_to_rows.items():
         for r in rows:
             dataset_to_models.setdefault(r.dataset_name, []).append((model_abs, r))
 
-    dataset_sizes_map: Dict[str, int] = {}
-    dataset_samples_map: Dict[str, int] = {}
+    dataset_sizes_map: dict[str, int] = {}
+    dataset_samples_map: dict[str, int] = {}
     for ds_name, rows in dataset_to_models.items():
         best_size = max((int(r.dataset_size_bytes) for _m, r in rows if r.dataset_size_bytes is not None), default=0)
         best_samples = max((int(r.seen) for _m, r in rows if r.seen is not None), default=0)
@@ -918,7 +922,7 @@ def _render(
         if best_samples > 0:
             dataset_samples_map[ds_name] = best_samples
 
-    dataset_chart_items: List[Tuple[str, int]] = []
+    dataset_chart_items: list[tuple[str, int]] = []
     for ds_name, size_b in sorted(dataset_sizes_map.items(), key=lambda t: -int(t[1])):
         samples = dataset_samples_map.get(ds_name, 0)
         label = f"{ds_name} ({samples} samples)" if samples > 0 else ds_name
@@ -934,14 +938,14 @@ def _render(
         top_datasets = sorted(dataset_to_models.keys())
     top_datasets = top_datasets[:12]
 
-    model_dataset_acc: Dict[Tuple[str, str], Optional[float]] = {}
+    model_dataset_acc: dict[tuple[str, str], float | None] = {}
     for model_abs, rows in model_to_rows.items():
         for r in rows:
             model_dataset_acc[(model_abs, r.dataset_name)] = r.accuracy
 
-    heatmap_values: List[List[Optional[float]]] = []
+    heatmap_values: list[list[float | None]] = []
     for model_abs in top_model_abs:
-        row_vals: List[Optional[float]] = []
+        row_vals: list[float | None] = []
         for ds in top_datasets:
             row_vals.append(model_dataset_acc.get((model_abs, ds)))
         heatmap_values.append(row_vals)
@@ -978,15 +982,15 @@ def _render(
     aid_per_model = _unique_anchor_id("per-model-detail-cards")
     aid_history = _unique_anchor_id("history")
 
-    dataset_anchor: Dict[str, str] = {}
+    dataset_anchor: dict[str, str] = {}
     for ds_name in dataset_order:
         dataset_anchor[ds_name] = _unique_anchor_id(f"dataset-{ds_name}")
 
-    model_anchor: Dict[str, str] = {}
+    model_anchor: dict[str, str] = {}
     for model_abs in model_order:
         model_anchor[model_abs] = _unique_anchor_id(f"model-{Path(model_abs).name}")
 
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append("# Model Arena Report")
     lines.append(f"> Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")

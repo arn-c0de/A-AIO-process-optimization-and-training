@@ -9,10 +9,10 @@ This module provides functions for:
 import hashlib
 import yaml
 from pathlib import Path
-from typing import Dict, Any, Union
+from typing import Any
 
 
-def canonicalize_profile(profile_dict: Dict[str, Any]) -> Dict[str, Any]:
+def canonicalize_profile(profile_dict: dict[str, Any]) -> dict[str, Any]:
     """Canonicalize profile for stable hashing.
 
     Rules:
@@ -69,7 +69,7 @@ def hash_profile(profile_path: Path) -> str:
     if not profile_path.exists():
         raise FileNotFoundError(f"Profile not found: {profile_path}")
 
-    with open(profile_path, 'r') as f:
+    with open(profile_path) as f:
         profile_dict = yaml.safe_load(f)
 
     # Canonicalize: remove metadata, sort keys, normalize floats
@@ -83,7 +83,7 @@ def hash_profile(profile_path: Path) -> str:
     return f"sha256:{hash_obj.hexdigest()}"
 
 
-def load_profile(profile_id: str, profiles_dir: Path) -> Dict[str, Any]:
+def load_profile(profile_id: str, profiles_dir: Path) -> dict[str, Any]:
     """Load component profile from YAML file.
 
     Args:
@@ -106,7 +106,7 @@ def load_profile(profile_id: str, profiles_dir: Path) -> Dict[str, Any]:
             f"Available profiles: {list(profiles_dir.glob('*.yaml'))}"
         )
 
-    with open(profile_path, 'r') as f:
+    with open(profile_path) as f:
         profile_dict = yaml.safe_load(f)
 
     # Validate profile structure
@@ -129,7 +129,7 @@ def load_profile(profile_id: str, profiles_dir: Path) -> Dict[str, Any]:
     return profile_dict
 
 
-def get_profile_metadata(profile_dict: Dict[str, Any]) -> Dict[str, str]:
+def get_profile_metadata(profile_dict: dict[str, Any]) -> dict[str, str]:
     """Extract profile metadata for display/logging.
 
     Args:

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import threading
 import time
 import tkinter as tk
-from datetime import datetime
 from pathlib import Path
-from tkinter import ttk, messagebox, simpledialog
-from typing import Any, Dict, List, Optional, Tuple
+from tkinter import ttk, messagebox
+from typing import Any
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
@@ -31,17 +31,17 @@ class MergeTab(BaseTab):
         self.logic = MergeLogic(sim_root)
 
         # profile_id -> list of (display_name, Path)
-        self._profile_models: Dict[str, List[Tuple[str, Path]]] = {}
+        self._profile_models: dict[str, list[tuple[str, Path]]] = {}
         # profile_id -> selected Path (one per profile)
-        self._selected_weights: Dict[str, Path] = {}
+        self._selected_weights: dict[str, Path] = {}
         # Treeview item tracking
-        self._iid_to_model: Dict[str, Tuple[str, Path]] = {}  # iid -> (profile_id, path)
+        self._iid_to_model: dict[str, tuple[str, Path]] = {}  # iid -> (profile_id, path)
         # Cache: resolved_path -> (profile_id, profile_hash, val_accuracy, val_f1)
-        self._model_meta_cache: Dict[str, Tuple[Optional[str], Optional[str], Optional[float], Optional[float]]] = {}
+        self._model_meta_cache: dict[str, tuple[str | None, str | None, float | None, float | None]] = {}
         # Group data (shared with weights tab via settings store + favorites.json)
-        self._favorites: Dict[str, Dict[str, Any]] = {}
-        self._group_assignments: Dict[str, str] = {}
-        self._custom_groups: List[str] = []
+        self._favorites: dict[str, dict[str, Any]] = {}
+        self._group_assignments: dict[str, str] = {}
+        self._custom_groups: list[str] = []
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -85,8 +85,8 @@ class MergeTab(BaseTab):
         except Exception:
             pass
 
-    def _available_groups(self) -> List[str]:
-        names: List[str] = ["Favorites", "Snapshots", "Imports", "Bundles"]
+    def _available_groups(self) -> list[str]:
+        names: list[str] = ["Favorites", "Snapshots", "Imports", "Bundles"]
         for custom in self._custom_groups:
             if custom and custom not in names:
                 names.append(custom)
@@ -426,14 +426,14 @@ class MergeTab(BaseTab):
         if not bd.exists():
             return
 
-        if not messagebox.askyesno("Delete Bundle", f"Delete this bundle?\\n\\n{bd}"):
+        if not messagebox.askyesno("Delete Bundle", f"Delete this bundle?\n\n{bd}"):
             return
 
         try:
             self.logic.delete_bundle(bd)
             self._append_log(f"[delete] Bundle deleted: {bd}\n")
         except Exception as e:
-            messagebox.showerror("Error", f"Delete failed:\\n{e}")
+            messagebox.showerror("Error", f"Delete failed:\n{e}")
             return
 
         self._refresh_bundles()

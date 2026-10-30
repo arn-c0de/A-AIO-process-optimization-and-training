@@ -9,10 +9,10 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 
-def _event_path() -> Optional[str]:
+def _event_path() -> str | None:
     return os.environ.get("SIMPLE_SIM_EVENT_LOG") or None
 
 
@@ -22,7 +22,7 @@ def emit(event: str, **fields: Any) -> None:
     if not path:
         return
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "ts": time.time(),
         "event": event,
         **fields,

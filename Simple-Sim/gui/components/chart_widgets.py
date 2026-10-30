@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk
 import matplotlib
 matplotlib.use('TkAgg')
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
-from typing import Dict, List, Optional
 
 
 def create_confusion_matrix_widget(parent: tk.Widget, confusion_matrix: np.ndarray,
-                                   class_names: List[str]) -> FigureCanvasTkAgg:
+                                   class_names: list[str]) -> FigureCanvasTkAgg:
     """Create confusion matrix heatmap widget.
 
     Args:
@@ -58,7 +56,7 @@ def create_confusion_matrix_widget(parent: tk.Widget, confusion_matrix: np.ndarr
 
 
 def create_class_distribution_widget(parent: tk.Widget,
-                                     class_counts: Dict[str, int],
+                                     class_counts: dict[str, int],
                                      title: str = "Class Distribution") -> FigureCanvasTkAgg:
     """Create class distribution bar chart widget.
 
@@ -91,7 +89,7 @@ def create_class_distribution_widget(parent: tk.Widget,
     ax.grid(axis='y', alpha=0.3)
 
     # Add count labels on bars
-    for i, (c, count) in enumerate(zip(classes, counts)):
+    for i, (_c, count) in enumerate(zip(classes, counts)):
         ax.text(i, count, str(count), ha='center', va='bottom', fontsize=10)
 
     fig.tight_layout()
@@ -147,7 +145,7 @@ def create_histogram_widget(parent: tk.Widget, data: np.ndarray,
 def create_scatter_plot_widget(parent: tk.Widget,
                                x_data: np.ndarray, y_data: np.ndarray,
                                labels: np.ndarray,
-                               class_names: List[str],
+                               class_names: list[str],
                                xlabel: str, ylabel: str,
                                title: str) -> FigureCanvasTkAgg:
     """Create scatter plot widget with class-colored points.

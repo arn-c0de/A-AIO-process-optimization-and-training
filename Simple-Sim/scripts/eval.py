@@ -8,9 +8,7 @@ from pathlib import Path
 from datetime import datetime
 import time
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
-from torchvision import models
 from tqdm import tqdm
 import numpy as np
 
@@ -18,9 +16,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import ROIDataset
-from simple_sim.metrics import compute_metrics, format_metrics
+from simple_sim.metrics import check_success_criteria, compute_metrics, format_metrics
+from simple_sim.models import build_resnet18
 from simple_sim.telemetry import emit
-from simple_sim.manifest import read_dataset_manifest
+from simple_sim.manifest import check_checkpoint_profile, read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
 
 
@@ -114,7 +113,7 @@ def main():
     model_path = Path(args.model)
     device = torch.device(args.device)
 
-    print(f"Evaluation configuration:")
+    print("Evaluation configuration:")
     print(f"  Dataset: {data_dir}")
     print(f"  Model: {model_path}")
     print(f"  Device: {device}")
@@ -130,15 +129,7 @@ def main():
         )
 
     manifest = read_dataset_manifest(manifest_path)
-    mver = int(manifest.get('manifest_version', 1) or 1)
-    if mver == 1:
-        dataset_profile_id = manifest['component_profile']['profile_id']
-        dataset_profile_hash = manifest['component_profile']['profile_hash']
-    elif mver == 2:
-        dataset_profile_id = "multi"
-        dataset_profile_hash = "multi"
-    else:
-        raise ValueError(f"Unsupported dataset manifest_version: {mver}")
+    dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
 
     # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
     if model_path.exists() and model_path.is_dir():
@@ -154,7 +145,7 @@ def main():
 
     # Load checkpoint
     print("\nLoading model checkpoint...")
-    checkpoint = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     class_names = checkpoint['class_names']
     num_classes = len(class_names)
 
@@ -164,42 +155,20 @@ def main():
     print(f"  Val F1: {checkpoint['val_f1']:.4f}")
 
     # GUARD: Validate component profile match
-    ckpt_profile = checkpoint.get('component_profile')
-    if ckpt_profile:
-        ckpt_profile_id = ckpt_profile.get('profile_id')
-        ckpt_profile_hash = ckpt_profile.get('profile_hash')
-
-        # HARD FAIL by default: Profile ID mismatch
-        if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
-            if not args.allow_profile_mismatch:
-                raise ValueError(
-                    f"Component profile mismatch:\n"
-                    f"  Model trained on: {ckpt_profile_id}\n"
-                    f"  Dataset profile:  {dataset_profile_id}\n"
-                    f"Cannot evaluate model on different component type.\n\n"
-                    f"To override (NOT recommended): pass --allow-profile-mismatch"
-                )
-            print("WARNING: Evaluating with component profile mismatch (--allow-profile-mismatch).")
-            print(f"  Model trained on: {ckpt_profile_id}")
-            print(f"  Dataset profile:  {dataset_profile_id}")
-
-        # WARNING: Profile hash mismatch
-        if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
-            print(f"WARNING: Profile hash mismatch (different tolerance/geometry)")
-            print(f"  Model hash:   {ckpt_profile_hash[:72]}...")
-            print(f"  Dataset hash: {dataset_profile_hash[:72]}...")
-
+    ckpt_profile_id = check_checkpoint_profile(
+        checkpoint, dataset_profile_id, dataset_profile_hash,
+        action="evaluate model on",
+        allow_mismatch=bool(args.allow_profile_mismatch),
+        override_verb="Evaluating",
+    )
+    if ckpt_profile_id is not None:
         print(f"  Profile: {ckpt_profile_id}")
-    else:
-        print(f"  WARNING: Model lacks profile metadata (legacy checkpoint)")
 
     emit("eval_start", dataset_dir=str(data_dir), model_path=str(model_path), device=str(device))
 
     # Create model
     print("\nInitializing model...")
-    model = models.resnet18()
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
+    model = build_resnet18(num_classes)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
 
@@ -241,6 +210,7 @@ def main():
         'timestamp': datetime.now().isoformat(),
         'dataset_path': str(data_dir),
         'model_path': str(model_path),
+        'split': 'test',
         'metrics': metrics,
         'test_size': len(test_dataset),
         'seen_samples': int(seen),
@@ -254,27 +224,7 @@ def main():
     print(f"\nReport saved to: {report_path}")
 
     # Check success criteria
-    print("\n" + "="*60)
-    print("SUCCESS CRITERIA CHECK")
-    print("="*60)
-
-    checks = []
-    checks.append(("Val accuracy > 70%", checkpoint['val_accuracy'] > 0.70))
-    checks.append(("Test accuracy > 70%", metrics['accuracy'] > 0.70))
-    checks.append(("No class with 0% recall", all(m['recall'] > 0 for m in metrics['per_class'].values())))
-
-    all_passed = True
-    for check_name, passed in checks:
-        status = "✓ PASS" if passed else "✗ FAIL"
-        print(f"{status}: {check_name}")
-        all_passed = all_passed and passed
-
-    if all_passed:
-        print("\n✓ ALL CHECKS PASSED")
-    else:
-        print("\n✗ SOME CHECKS FAILED")
-
-    print("="*60)
+    check_success_criteria(checkpoint['val_accuracy'], metrics, entity="class")
 
 
 if __name__ == '__main__':

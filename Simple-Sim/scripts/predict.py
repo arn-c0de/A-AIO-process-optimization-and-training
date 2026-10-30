@@ -11,96 +11,33 @@ Usage examples:
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
-from torchvision import models, transforms
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
-from simple_sim.manifest import read_dataset_manifest
+from simple_sim.data_loader import preprocess_bgr
+from simple_sim.manifest import check_checkpoint_profile, read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
-
-
-def load_checkpoint_model(model_path: Path, device: torch.device):
-    checkpoint = torch.load(model_path, map_location="cpu")
-
-    if isinstance(checkpoint, dict) and checkpoint.get("format") == "simple_sim_ensemble_v1":
-        class_names = list(checkpoint.get("class_names") or [])
-        num_classes = len(class_names)
-        items = checkpoint.get("models") or []
-        if not class_names or not isinstance(items, list) or not items:
-            raise ValueError(f"Invalid ensemble checkpoint (missing class_names/models): {model_path}")
-
-        parts = []
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            ckpt = it.get("checkpoint") or {}
-            if not isinstance(ckpt, dict):
-                continue
-            if list(ckpt.get("class_names") or []) != class_names:
-                raise ValueError("Ensemble class_names mismatch between sub-models.")
-            m = models.resnet18(weights=None)
-            num_features = m.fc.in_features
-            m.fc = nn.Linear(num_features, num_classes)
-            m.load_state_dict(ckpt["model_state_dict"])
-            m = m.to(device)
-            m.eval()
-            parts.append(m)
-
-        if not parts:
-            raise ValueError(f"Invalid ensemble checkpoint (no valid sub-models): {model_path}")
-
-        class EnsembleModel(nn.Module):
-            def __init__(self, sub):
-                super().__init__()
-                self.parts = nn.ModuleList(sub)
-
-            def forward(self, x):
-                out = None
-                for m in self.parts:
-                    y = m(x)
-                    out = y if out is None else (out + y)
-                return out / float(len(self.parts))
-
-        model = EnsembleModel(parts).to(device)
-        model.eval()
-        return model, class_names, checkpoint
-
-    class_names = checkpoint["class_names"]
-    num_classes = len(class_names)
-    model = models.resnet18(weights=None)
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
-    model.eval()
-    return model, class_names, checkpoint
+from simple_sim.models import load_checkpoint_model
 
 
 def load_image_bgr(image_path: Path) -> np.ndarray:
     img_bgr = cv2.imread(str(image_path))
     if img_bgr is None:
-        raise IOError(f"Failed to load image: {image_path}")
+        raise OSError(f"Failed to load image: {image_path}")
     return img_bgr
 
 
 def preprocess(img_bgr: np.ndarray) -> torch.Tensor:
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    tfm = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    return tfm(img_rgb)
+    return preprocess_bgr(img_bgr)
 
 
-def maybe_get_ground_truth(data_dir: Optional[Path], sample_id: Optional[str]):
+def maybe_get_ground_truth(data_dir: Path | None, sample_id: str | None):
     if not data_dir or not sample_id:
         return None
     label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
@@ -164,7 +101,7 @@ def main():
         if not manifest_path.exists():
             raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
         manifest = read_dataset_manifest(manifest_path)
-        dataset_profile_id = manifest['component_profile']['profile_id']
+        dataset_profile_id, _ = resolve_dataset_profile(manifest)
         resolved = bundle_checkpoint_path(model_path, dataset_profile_id, kind="best")
         if not resolved.exists():
             raise FileNotFoundError(
@@ -181,26 +118,13 @@ def main():
         manifest_path = data_dir / 'dataset_manifest.json'
         if manifest_path.exists():
             manifest = read_dataset_manifest(manifest_path)
-            dataset_profile_id = manifest['component_profile']['profile_id']
-            dataset_profile_hash = manifest['component_profile']['profile_hash']
+            dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
 
-            ckpt_profile = checkpoint.get('component_profile')
-            if ckpt_profile:
-                ckpt_profile_id = ckpt_profile.get('profile_id')
-                ckpt_profile_hash = ckpt_profile.get('profile_hash')
-
-                # HARD FAIL: Profile ID mismatch
-                if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
-                    raise ValueError(
-                        f"Component profile mismatch:\n"
-                        f"  Model trained on: {ckpt_profile_id}\n"
-                        f"  Dataset profile:  {dataset_profile_id}\n"
-                        f"Cannot predict on different component type."
-                    )
-
-                # WARNING: Profile hash mismatch
-                if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
-                    print(f"WARNING: Profile hash mismatch")
+            # HARD FAIL on profile ID mismatch (no override flag here).
+            check_checkpoint_profile(
+                checkpoint, dataset_profile_id, dataset_profile_hash,
+                action="predict on",
+            )
 
     img_bgr = load_image_bgr(image_path)
     x = preprocess(img_bgr).unsqueeze(0).to(device)

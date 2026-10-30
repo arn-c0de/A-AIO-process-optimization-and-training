@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -29,14 +29,14 @@ class TrainConfig:
     lr: float
     optimizer: str
     weight_decay: float
-    pretrained: Optional[bool]
-    num_workers: Optional[int]
+    pretrained: bool | None
+    num_workers: int | None
 
 
 @dataclass(frozen=True)
 class EvalConfig:
     batch_size: int
-    num_workers: Optional[int]
+    num_workers: int | None
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,7 @@ class SimulationConfig:
 
 
 
-def parse_config_typed(cfg: Dict[str, Any]) -> SimulationConfig:
+def parse_config_typed(cfg: dict[str, Any]) -> SimulationConfig:
     """Parse minimal typed config view used for strict baseline checks."""
     try:
         run_raw = cfg["run"]

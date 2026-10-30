@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import shutil
-from typing import Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, write_jsonl
 
@@ -33,13 +33,13 @@ class DatasetEditSummary:
     affected: int
 
 
-def list_dataset_samples(dataset_dir: Path) -> List[DatasetSampleInfo]:
+def list_dataset_samples(dataset_dir: Path) -> list[DatasetSampleInfo]:
     """Return dataset samples for UI selection lists."""
     dataset_dir = Path(dataset_dir)
     meta_rows, label_rows = _read_rows(dataset_dir)
     label_by_id = {row.id: row.class_name for row in label_rows}
 
-    out: List[DatasetSampleInfo] = []
+    out: list[DatasetSampleInfo] = []
     for row in meta_rows:
         out.append(
             DatasetSampleInfo(
@@ -71,6 +71,9 @@ def delete_samples(dataset_dir: Path, sample_ids: Iterable[str]) -> DatasetEditS
 
     write_jsonl(dataset_dir / "meta.jsonl", keep_meta)
     write_jsonl(dataset_dir / "labels.jsonl", keep_labels)
+    split_files = _read_split_files(dataset_dir)
+    if split_files:
+        _write_split_files(dataset_dir, _remove_from_splits(split_files, set(selected)))
     recompute_manifest_stats(dataset_dir)
 
     for sample_id in selected:
@@ -114,7 +117,7 @@ def move_samples(
     dst_ids = {row.id for row in dst_meta}
     dst_image_paths = {row.image_path for row in dst_meta}
 
-    moved_pairs: List[Tuple[Path, Path]] = []
+    moved_pairs: list[tuple[Path, Path]] = []
     selected_set = set(selected)
 
     new_src_meta = [row for row in src_meta if row.id not in selected_set]
@@ -123,6 +126,13 @@ def move_samples(
     new_dst_meta = list(dst_meta)
     new_dst_labels = list(dst_labels)
 
+    src_splits = _read_split_files(src_dataset_dir)
+    dst_splits = _read_split_files(dst_dataset_dir)
+    src_split_of: dict[str, str] = {}
+    for split_name, ids in src_splits.items():
+        for sid in ids:
+            src_split_of.setdefault(sid, split_name)
+
     try:
         for src_id in selected:
             src_meta_row = src_meta_by_id[src_id]
@@ -130,6 +140,9 @@ def move_samples(
 
             new_id = _dedupe_sample_id(src_meta_row.id, dst_ids)
             dst_ids.add(new_id)
+            # Keep the split assignment the sample had in the source dataset;
+            # samples not listed in any split file default to train.
+            dst_splits.setdefault(src_split_of.get(src_id, "train"), []).append(new_id)
 
             dst_image_rel = _dedupe_image_path(src_meta_row.image_path, dst_image_paths)
             dst_image_paths.add(dst_image_rel)
@@ -174,6 +187,10 @@ def move_samples(
         write_jsonl(dst_dataset_dir / "meta.jsonl", new_dst_meta)
         write_jsonl(dst_dataset_dir / "labels.jsonl", new_dst_labels)
 
+        if src_splits:
+            _write_split_files(src_dataset_dir, _remove_from_splits(src_splits, selected_set))
+        _write_split_files(dst_dataset_dir, dst_splits)
+
         recompute_manifest_stats(src_dataset_dir)
         recompute_manifest_stats(dst_dataset_dir)
     except Exception:
@@ -198,15 +215,15 @@ def recompute_manifest_stats(dataset_dir: Path) -> None:
 
     meta_rows, label_rows = _read_rows(dataset_dir)
 
-    split_counts: Dict[str, int] = {"train": 0, "val": 0, "test": 0}
+    split_counts: dict[str, int] = {"train": 0, "val": 0, "test": 0}
     for row in meta_rows:
         split_counts[row.split] = split_counts.get(row.split, 0) + 1
 
-    class_counts: Dict[str, int] = {}
+    class_counts: dict[str, int] = {}
     for row in label_rows:
         class_counts[row.class_name] = class_counts.get(row.class_name, 0) + 1
 
-    with open(manifest_path, "r", encoding="utf-8") as f:
+    with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
 
     manifest["dataset_stats"] = {
@@ -221,15 +238,44 @@ def recompute_manifest_stats(dataset_dir: Path) -> None:
     tmp_path.replace(manifest_path)
 
 
-def _read_rows(dataset_dir: Path) -> Tuple[List[MetaRow], List[LabelRow]]:
+def _read_split_files(dataset_dir: Path) -> dict[str, list[str]]:
+    """Return ``{split_name: [ids]}`` for every ``splits/*.txt`` file present."""
+    splits_dir = Path(dataset_dir) / "splits"
+    if not splits_dir.is_dir():
+        return {}
+    out: dict[str, list[str]] = {}
+    for split_file in sorted(splits_dir.glob("*.txt")):
+        with open(split_file, encoding="utf-8") as f:
+            out[split_file.stem] = [line.strip() for line in f if line.strip()]
+    return out
+
+
+def _remove_from_splits(splits: dict[str, list[str]], removed: set[str]) -> dict[str, list[str]]:
+    return {name: [sid for sid in ids if sid not in removed] for name, ids in splits.items()}
+
+
+def _write_split_files(dataset_dir: Path, splits: dict[str, list[str]]) -> None:
+    """Atomically (tmp + replace) write each split file."""
+    splits_dir = Path(dataset_dir) / "splits"
+    splits_dir.mkdir(parents=True, exist_ok=True)
+    for split_name, ids in splits.items():
+        split_file = splits_dir / f"{split_name}.txt"
+        tmp_path = split_file.with_suffix(".txt.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for sid in ids:
+                f.write(sid + "\n")
+        tmp_path.replace(split_file)
+
+
+def _read_rows(dataset_dir: Path) -> tuple[list[MetaRow], list[LabelRow]]:
     dataset_dir = Path(dataset_dir)
     meta_rows = read_jsonl(dataset_dir / "meta.jsonl", MetaRow)
     label_rows = read_jsonl(dataset_dir / "labels.jsonl", LabelRow)
     return meta_rows, label_rows
 
 
-def _normalize_selection(sample_ids: Iterable[str]) -> List[str]:
-    out: List[str] = []
+def _normalize_selection(sample_ids: Iterable[str]) -> list[str]:
+    out: list[str] = []
     seen = set()
     for sample_id in sample_ids:
         key = str(sample_id).strip()
@@ -240,7 +286,7 @@ def _normalize_selection(sample_ids: Iterable[str]) -> List[str]:
     return out
 
 
-def _ensure_ids_exist(sample_ids: List[str], meta_by_id: Dict[str, MetaRow], action: str) -> None:
+def _ensure_ids_exist(sample_ids: list[str], meta_by_id: dict[str, MetaRow], action: str) -> None:
     missing = [sample_id for sample_id in sample_ids if sample_id not in meta_by_id]
     if missing:
         preview = ", ".join(missing[:3])
@@ -292,12 +338,12 @@ def _ensure_profile_compatibility(src_dataset_dir: Path, dst_dataset_dir: Path) 
         )
 
 
-def _read_profile_id(dataset_dir: Path) -> Optional[str]:
+def _read_profile_id(dataset_dir: Path) -> str | None:
     manifest_path = Path(dataset_dir) / "dataset_manifest.json"
     if not manifest_path.exists():
         return None
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
+        with open(manifest_path, encoding="utf-8") as f:
             data = json.load(f)
         profile = data.get("component_profile")
         if isinstance(profile, dict):

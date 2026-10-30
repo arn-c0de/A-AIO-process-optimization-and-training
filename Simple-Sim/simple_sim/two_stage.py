@@ -4,23 +4,16 @@ Stage 1: Profile classifier identifies which component type (profile) is present
 Stage 2: Per-profile defect model classifies the defect state (OK/MISSING/MISALIGNED/TOMBSTONE).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
 
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
-from torchvision import models, transforms
 
-from simple_sim.data_loader import IMAGENET_MEAN, IMAGENET_STD
+from simple_sim.data_loader import preprocess_bgr
 from simple_sim.model_bundle import bundle_checkpoint_path
-
-_PREPROCESS_TRANSFORM = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-])
+from simple_sim.models import model_from_checkpoint
 
 
 @dataclass
@@ -28,33 +21,22 @@ class TwoStageResult:
     """Result from two-stage classification."""
     profile_id: str
     profile_confidence: float
-    profile_probabilities: Dict[str, float]
+    profile_probabilities: dict[str, float]
     defect_class: str
     defect_confidence: float
-    defect_probabilities: Dict[str, float]
+    defect_probabilities: dict[str, float]
     review_flag: bool  # True if profile_confidence < threshold
 
 
 def _load_model(checkpoint_path: Path, device: torch.device):
     """Load a ResNet18 checkpoint and return (model, class_names, checkpoint)."""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    class_names = checkpoint['class_names']
-    num_classes = len(class_names)
-
-    model = models.resnet18(weights=None)
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(device)
-    model.eval()
-
-    return model, class_names, checkpoint
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    return model_from_checkpoint(checkpoint, device), checkpoint['class_names'], checkpoint
 
 
 def _preprocess(img_bgr: np.ndarray) -> torch.Tensor:
     """Preprocess a BGR image to a normalized tensor."""
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    return _PREPROCESS_TRANSFORM(img_rgb)
+    return preprocess_bgr(img_bgr)
 
 
 class TwoStageClassifier:
@@ -84,7 +66,7 @@ class TwoStageClassifier:
         )
 
         # Lazy-loaded per-profile defect models
-        self._defect_models: Dict[str, tuple] = {}  # profile_id -> (model, class_names)
+        self._defect_models: dict[str, tuple] = {}  # profile_id -> (model, class_names)
 
     def _get_defect_model(self, profile_id: str):
         """Lazy-load defect model for the given profile."""
@@ -155,5 +137,5 @@ class TwoStageClassifier:
         """
         img_bgr = cv2.imread(str(image_path))
         if img_bgr is None:
-            raise IOError(f"Failed to load image: {image_path}")
+            raise OSError(f"Failed to load image: {image_path}")
         return self.predict_array(img_bgr)

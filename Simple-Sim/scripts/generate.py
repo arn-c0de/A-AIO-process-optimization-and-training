@@ -3,13 +3,11 @@
 
 import argparse
 import sys
-import os
 from pathlib import Path
 from tqdm import tqdm
 import numpy as np
 import time
 import json
-import random
 from dataclasses import asdict
 
 # Add parent directory to path
@@ -23,7 +21,6 @@ from simple_sim.generators.opencv_2d import (
     sample_nominal_geometry,
     sample_augment_params,
     apply_image_filter_overrides,
-    normalize_image_filters,
     apply_blur,
     apply_noise,
     apply_brightness,
@@ -49,6 +46,7 @@ from simple_sim.telemetry import emit
 from simple_sim.profile_hash import load_profile, hash_profile
 from simple_sim.manifest import write_dataset_manifest, write_multi_profile_manifest, read_dataset_manifest
 from simple_sim.generators.blender_3d import write_jobs_jsonl, render_blender_batch
+from simple_sim.generators.filter_settings import augment_for_meta, load_image_filters_env
 
 
 def _append_jsonl(path: Path, rows) -> None:
@@ -89,29 +87,6 @@ def _assign_splits_for_new_samples(tmp_meta_rows: list[MetaRow], tmp_label_rows:
     return generate_splits(tmp_meta_rows, tmp_label_rows, config, seed)
 
 
-def _load_image_filters_env() -> dict:
-    raw = os.environ.get("IMAGE_FILTERS", "").strip()
-    if not raw:
-        return normalize_image_filters(None)
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        print("[warn] Invalid IMAGE_FILTERS JSON, using defaults.")
-        return normalize_image_filters(None)
-    return normalize_image_filters(parsed if isinstance(parsed, dict) else None)
-
-
-def _augment_for_meta(augment: dict) -> dict:
-    """Return schema-compatible augment payload for MetaRow."""
-    return {
-        "blur_sigma": float(augment.get("blur_sigma", 0.0) or 0.0),
-        "noise_stddev": float(augment.get("noise_stddev", 0.0) or 0.0),
-        "brightness_factor": float(augment.get("brightness_factor", 1.0) or 1.0),
-        "contrast_factor": float(augment.get("contrast_factor", 1.0) or 1.0),
-        "rotation_deg": float(augment.get("rotation_deg", 0.0) or 0.0),
-    }
-
-
 def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
     import cv2
 
@@ -141,7 +116,8 @@ def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
         perspective_strength = float(aug.get("perspective_strength", 0.0) or 0.0)
         perspective_angle_x = float(aug.get("perspective_angle_x", 0.0) or 0.0)
         perspective_angle_y = float(aug.get("perspective_angle_y", 0.0) or 0.0)
-        rotation_deg = float(aug.get("rotation_deg", 0.0) or 0.0)
+        # rotation_deg is intentionally not applied here: render_batch.py already rotates
+        # the Blender scene by augment.rotation_deg (global_rotation_root).
 
         needs_filter = (
             blur_sigma > 1e-6
@@ -162,7 +138,6 @@ def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
             or dust_density > 1e-6
             or jpeg_quality < 100
             or perspective_strength > 1e-6
-            or abs(rotation_deg) > 1e-6
         )
         if not needs_filter:
             continue
@@ -170,7 +145,7 @@ def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
         path = output_root / str(r["image_path"])
         img = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if img is None:
-            raise IOError(f"Failed to read Blender output image for filter postprocess: {path}")
+            raise OSError(f"Failed to read Blender output image for filter postprocess: {path}")
         rng = np.random.default_rng(int(r["seed"]))
         img = apply_blur(img, blur_sigma)
         img = apply_noise(img, noise_stddev, rng)
@@ -189,13 +164,8 @@ def _postprocess_blender_images(records: list[dict], output_root: Path) -> None:
         img = apply_dust_particles(img, dust_density, dust_size, rng)
         img = apply_jpeg_compression(img, jpeg_quality)
         img = apply_perspective_transform(img, perspective_strength, perspective_angle_x, perspective_angle_y)
-        if abs(rotation_deg) > 0.1:
-            h, w = img.shape[:2]
-            center = (w // 2, h // 2)
-            m = cv2.getRotationMatrix2D(center, rotation_deg, 1.0)
-            img = cv2.warpAffine(img, m, (w, h), borderMode=cv2.BORDER_REPLICATE)
         if not cv2.imwrite(str(path), img):
-            raise IOError(f"Failed to write filtered Blender image: {path}")
+            raise OSError(f"Failed to write filtered Blender image: {path}")
 
 
 def _render_opencv_image(
@@ -267,6 +237,7 @@ def _render_blender_records(
     exe = str(blender_cfg.get("executable", "blender"))
     samples = int(blender_cfg.get("samples", 64))
     device = str(blender_cfg.get("device", "CPU"))
+    engine = str(blender_cfg.get("engine", "BLENDER_EEVEE"))
 
     jobs = _build_blender_jobs(
         records,
@@ -286,6 +257,7 @@ def _render_blender_records(
         blender_executable=exe,
         cycles_samples=samples,
         device=device,
+        engine=engine,
     )
     _postprocess_blender_images(records, output_root)
 
@@ -323,7 +295,7 @@ def generate_dataset(
     config = load_config(config_path)
     validate_config(config)
 
-    image_filters = _load_image_filters_env()
+    image_filters = load_image_filters_env()
 
     run_id = config['run']['run_id']
     run_seed = config['run']['seed']
@@ -572,7 +544,7 @@ def generate_dataset(
                 rng,
                 enable_cardinal_rotation_90=(enable_cardinal_rotation_90 and bool(image_filters.get("cardinal_rotation_90", True))),
             )
-            augment = apply_image_filter_overrides(augment, image_filters)
+            augment = apply_image_filter_overrides(augment, image_filters, rng)
 
             image_path = f"images/{sample_index:06d}.png"
 
@@ -619,7 +591,7 @@ def generate_dataset(
             footprint=footprint,
             nominal=r['nominal'],
             defect=r['defect'],
-            augment=_augment_for_meta(r['augment']),
+            augment=augment_for_meta(r['augment']),
             render_meta={
                 "augment_full": dict(r["augment"]),
                 "image_filters": dict(image_filters),
@@ -678,7 +650,7 @@ def generate_dataset(
             footprint=footprint,
             nominal=r['nominal'],
             defect=r['defect'],
-            augment=_augment_for_meta(r['augment']),
+            augment=augment_for_meta(r['augment']),
             render_meta=render_meta,
         ))
         label_rows.append(
@@ -716,7 +688,7 @@ def generate_dataset(
                 full_path.parent.mkdir(parents=True, exist_ok=True)
                 ok = cv2.imwrite(str(full_path), img)
                 if not ok:
-                    raise IOError(f"Failed to write image: {r['image_path']}")
+                    raise OSError(f"Failed to write image: {r['image_path']}")
         elif backend == "blender_3d":
             _render_blender_records(
                 records=records,

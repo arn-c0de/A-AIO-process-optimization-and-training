@@ -3,7 +3,7 @@
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING
 from PIL import Image, ImageTk
 import cv2
 
@@ -38,11 +38,11 @@ class AnalysisUI:
         self.combo_class: ttk.Combobox
         self.combo_profile: ttk.Combobox
         self.combo_sort: ttk.Combobox
-        self.photo: Optional[ImageTk.PhotoImage] = None
+        self.photo: ImageTk.PhotoImage | None = None
         self._preview_max_px: int = 420
         self.sample_menu: tk.Menu
         self.var_feedback_status: tk.StringVar
-        self._feedback_class_values: List[str]
+        self._feedback_class_values: list[str]
         self.feedback_history_tree: ttk.Treeview
 
     def build_ui(self):
@@ -250,9 +250,9 @@ class AnalysisUI:
         image_path: str,
         meta_row: MetaRow,
         label: str,
-        prediction: Optional[Tuple[str, float, dict]],
-        original_label: Optional[str] = None,
-        feedback: Optional[Dict] = None,
+        prediction: tuple[str, float, dict] | None,
+        original_label: str | None = None,
+        feedback: dict | None = None,
     ):
         try:
             img = cv2.imread(image_path)
@@ -275,28 +275,28 @@ class AnalysisUI:
             
             self.update_metadata_panel(meta_row, label, prediction, original_label=original_label, feedback=feedback)
         except Exception as e:
-            raise RuntimeError(f"Failed to display image: {e}")
+            raise RuntimeError(f"Failed to display image: {e}") from e
 
     def update_metadata_panel(
         self,
         meta_row: MetaRow,
         ground_truth: str,
-        prediction: Optional[Tuple[str, float, dict]],
-        original_label: Optional[str] = None,
-        feedback: Optional[Dict] = None,
+        prediction: tuple[str, float, dict] | None,
+        original_label: str | None = None,
+        feedback: dict | None = None,
     ):
         self.info_text.configure(state="normal")
         self.info_text.delete("1.0", "end")
         
-        info = f"Sample ID: {meta_row.id}\\nGround Truth (effective): {ground_truth}\\n"
+        info = f"Sample ID: {meta_row.id}\nGround Truth (effective): {ground_truth}\n"
         if original_label and original_label != ground_truth:
-            info += f"Ground Truth (original): {original_label}\\n"
+            info += f"Ground Truth (original): {original_label}\n"
         if prediction:
             predicted, confidence, _ = prediction
             status = "✓ CORRECT" if predicted == ground_truth else "✗ WRONG"
-            info += f"Predicted: {predicted} ({confidence:.1%}) {status}\\n"
+            info += f"Predicted: {predicted} ({confidence:.1%}) {status}\n"
         else:
-            info += "Predicted: (no model loaded)\\n"
+            info += "Predicted: (no model loaded)\n"
         if feedback:
             verdict = str(feedback.get("verdict") or "")
             corrected = str(feedback.get("corrected_class") or "").strip()
@@ -307,11 +307,11 @@ class AnalysisUI:
                 info += f" -> {corrected}"
             if ts:
                 info += f" @ {ts}"
-            info += "\\n"
+            info += "\n"
             if note:
-                info += f"Feedback note: {note}\\n"
+                info += f"Feedback note: {note}\n"
         
-        info += f"\\nDefect Parameters:\\n"
+        info += "\nDefect Parameters:\n"
         for key, value in meta_row.defect.items():
             if isinstance(value, float):
                 info += f"  {key}: {value:.2f}\n"
@@ -323,12 +323,12 @@ class AnalysisUI:
 
     def populate_tree(
         self,
-        hierarchy: Dict,
-        label_dict: Dict,
-        visible_sample_ids: List[str],
-        visible_sample_item_by_id: Dict[str, str],
+        hierarchy: dict,
+        label_dict: dict,
+        visible_sample_ids: list[str],
+        visible_sample_item_by_id: dict[str, str],
         query: str,
-        sample_date_dict: Optional[Dict[str, str]] = None,
+        sample_date_dict: dict[str, str] | None = None,
     ):
         self.tree.delete(*self.tree.get_children())
         open_nodes = bool(query)
@@ -339,7 +339,7 @@ class AnalysisUI:
                 domain_node = self.tree.insert(run_node, "end", text=f"🌐 {domain}", values=("", ""), open=open_nodes)
                 for split in sorted(hierarchy[run_id][domain].keys(), key=lambda x: {"train": 0, "val": 1, "test": 2}.get(x, 3)):
                     samples = hierarchy[run_id][domain][split]
-                    class_counts: Dict[str, int] = {}
+                    class_counts: dict[str, int] = {}
                     for sid in samples:
                         cls = label_dict.get(sid, "?")
                         if not cls:
@@ -381,13 +381,13 @@ class AnalysisUI:
         self.tree.selection_set(item)
         self.sample_menu.tk_popup(event.x_root, event.y_root)
 
-    def set_feedback_class_values(self, values: List[str]) -> None:
+    def set_feedback_class_values(self, values: list[str]) -> None:
         self._feedback_class_values = list(values)
 
     def set_feedback_status(self, text: str) -> None:
         self.var_feedback_status.set(text)
 
-    def refresh_feedback_history(self, entries: List[Dict]) -> None:
+    def refresh_feedback_history(self, entries: list[dict]) -> None:
         self.feedback_history_tree.delete(*self.feedback_history_tree.get_children())
         for idx, entry in enumerate(entries):
             ts = str(entry.get("timestamp") or "")
@@ -399,7 +399,7 @@ class AnalysisUI:
             iid = f"fb::{idx}"
             self.feedback_history_tree.insert("", "end", iid=iid, values=(ts_short, sample_id, action, corrected))
 
-    def selected_feedback_sample_id(self) -> Optional[str]:
+    def selected_feedback_sample_id(self) -> str | None:
         sel = self.feedback_history_tree.selection()
         if not sel:
             return None
@@ -409,7 +409,7 @@ class AnalysisUI:
         sid = str(vals[1]).strip()
         return sid or None
 
-    def prompt_thumbs_down_feedback(self) -> Optional[Tuple[str, str]]:
+    def prompt_thumbs_down_feedback(self) -> tuple[str, str] | None:
         """Ask user for corrected class and optional note on thumbs-down."""
         if not self._feedback_class_values:
             return None

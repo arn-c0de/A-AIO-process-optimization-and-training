@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from collections.abc import Iterable
 
 from gui.utils.settings_store import SettingsStore
 
@@ -44,15 +44,71 @@ def dataset_display_name(dataset_dir: Path, *, runs_root: Path, versions_root: P
     return dataset_dir.name
 
 
+def sim_data_roots(sim_root: Path, *, create: bool = True) -> tuple[Path, Path]:
+    """Return ``(runs_root, versions_root)`` under ``outputs/sim_data`` (created by default)."""
+    sim_data = Path(sim_root) / "outputs" / "sim_data"
+    runs = sim_data / "runs"
+    versions = sim_data / "versions"
+    if create:
+        runs.mkdir(parents=True, exist_ok=True)
+        versions.mkdir(parents=True, exist_ok=True)
+    return runs, versions
+
+
+def list_dataset_dirs(sim_root: Path) -> list[Path]:
+    """Unsorted dataset directories: ``runs/*`` followed by snapshot ``versions/*/*``."""
+    runs, versions = sim_data_roots(sim_root)
+    cand: list[Path] = [p for p in runs.iterdir() if p.is_dir()]
+    cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
+    return cand
+
+
+def is_snapshot_dataset(sim_root: Path, dataset_dir: Path) -> bool:
+    """True when ``dataset_dir`` lives under ``outputs/sim_data/versions``."""
+    _runs, versions = sim_data_roots(sim_root, create=False)
+    try:
+        return str(dataset_dir.resolve()).startswith(str(versions.resolve()) + os.sep)
+    except Exception:
+        return False
+
+
+def dataset_sort_key(sim_root: Path, dataset_dir: Path) -> tuple:
+    """Runs first (by name), then snapshots newest-first."""
+    if is_snapshot_dataset(sim_root, dataset_dir):
+        try:
+            mtime = dataset_dir.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+        return (1, -mtime, dataset_dir.name)
+    return (0, dataset_dir.name)
+
+
+def sorted_dataset_dirs(sim_root: Path) -> list[Path]:
+    """``list_dataset_dirs`` sorted with ``dataset_sort_key``."""
+    return sorted(list_dataset_dirs(sim_root), key=lambda p: dataset_sort_key(sim_root, p))
+
+
+def unique_dataset_labels(dataset_dirs: Iterable[Path], *, runs_root: Path, versions_root: Path) -> dict[str, Path]:
+    """Map display labels to dataset dirs, suffixing duplicates as ``name (2)``, ``name (3)``..."""
+    out: dict[str, Path] = {}
+    seen: dict[str, int] = {}
+    for p in dataset_dirs:
+        base = dataset_display_name(p, runs_root=runs_root, versions_root=versions_root)
+        n = seen.get(base, 0) + 1
+        seen[base] = n
+        out[base if n == 1 else f"{base} ({n})"] = p
+    return out
+
+
 class DatasetCatalog:
     """In-memory view over dataset category + archive metadata in SettingsStore."""
 
-    def __init__(self, sim_root: Path, store: Optional[SettingsStore]) -> None:
+    def __init__(self, sim_root: Path, store: SettingsStore | None) -> None:
         self.sim_root = sim_root
         self.store = store
-        self.custom_categories: List[str] = []
-        self.category_assignments: Dict[str, str] = {}
-        self.archived_paths: Set[str] = set()
+        self.custom_categories: list[str] = []
+        self.category_assignments: dict[str, str] = {}
+        self.archived_paths: set[str] = set()
         self.reload()
 
     def reload(self) -> None:
@@ -82,7 +138,7 @@ class DatasetCatalog:
         if widget is not None:
             self.store.schedule_save(widget)
 
-    def all_categories(self) -> List[str]:
+    def all_categories(self) -> list[str]:
         cats = [DEFAULT_CATEGORY]
         cats.extend(sorted({c for c in self.custom_categories if c and c != DEFAULT_CATEGORY}))
         return cats
@@ -93,14 +149,14 @@ class DatasetCatalog:
     def is_archived(self, dataset_dir: Path) -> bool:
         return dataset_relative_key(self.sim_root, dataset_dir) in self.archived_paths
 
-    def set_category(self, dataset_dirs: List[Path], category: str) -> None:
+    def set_category(self, dataset_dirs: list[Path], category: str) -> None:
         category = str(category).strip() or DEFAULT_CATEGORY
         if category != DEFAULT_CATEGORY and category not in self.custom_categories:
             self.custom_categories.append(category)
         for ds in dataset_dirs:
             self.category_assignments[dataset_relative_key(self.sim_root, ds)] = category
 
-    def set_archived(self, dataset_dirs: List[Path], archived: bool) -> None:
+    def set_archived(self, dataset_dirs: list[Path], archived: bool) -> None:
         for ds in dataset_dirs:
             key = dataset_relative_key(self.sim_root, ds)
             if archived:
@@ -132,7 +188,7 @@ class DatasetCatalog:
                 self.category_assignments[key] = DEFAULT_CATEGORY
         return True
 
-    def prune_unknown(self, existing_dataset_dirs: List[Path]) -> None:
+    def prune_unknown(self, existing_dataset_dirs: list[Path]) -> None:
         valid = {dataset_relative_key(self.sim_root, p) for p in existing_dataset_dirs}
         self.archived_paths = {k for k in self.archived_paths if k in valid}
         self.category_assignments = {k: v for k, v in self.category_assignments.items() if k in valid}

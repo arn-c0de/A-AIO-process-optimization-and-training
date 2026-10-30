@@ -12,7 +12,7 @@ def create_test_data(n_per_class=10):
 
     idx = 0
     for class_name in ['OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE']:
-        for i in range(n_per_class):
+        for _i in range(n_per_class):
             sample_id = f"test/domain_A/train/{idx:06d}"
 
             meta = MetaRow(
@@ -115,3 +115,51 @@ def test_assert_no_overlap_detects_overlap():
 
     with pytest.raises(ValueError):
         assert_no_overlap(splits)
+
+
+def _splits_config():
+    return {'splits': {'train_frac': 0.7, 'val_frac': 0.15, 'test_frac': 0.15}}
+
+
+def test_generate_splits_small_groups_get_val_and_test():
+    """Largest-remainder rounding: 5 per class -> 3/1/1 (not 3/0/2)."""
+    meta_rows, label_rows = create_test_data(5)
+    splits = generate_splits(meta_rows, label_rows, _splits_config(), run_seed=42)
+    assert (len(splits['train']), len(splits['val']), len(splits['test'])) == (12, 4, 4)
+
+
+def test_generate_splits_deterministic():
+    meta_rows, label_rows = create_test_data(7)
+    a = generate_splits(meta_rows, label_rows, _splits_config(), run_seed=1)
+    b = generate_splits(meta_rows, label_rows, _splits_config(), run_seed=1)
+    assert a == b
+
+
+def test_split_counts_largest_remainder():
+    from simple_sim.splits import _split_counts
+    assert _split_counts(5, (0.7, 0.15, 0.15)) == [3, 1, 1]
+    assert _split_counts(100, (0.7, 0.15, 0.15)) == [70, 15, 15]
+    assert _split_counts(3, (0.7, 0.15, 0.15)) == [1, 1, 1]
+    assert _split_counts(2, (0.7, 0.15, 0.15)) == [2, 0, 0]
+    assert _split_counts(7, (0.8, 0.2, 0.0)) == [6, 1, 0]
+    for n in range(0, 40):
+        assert sum(_split_counts(n, (0.7, 0.15, 0.15))) == n
+
+
+def test_generate_splits_stratifies_by_profile():
+    """Each (profile, class) group is split on its own, so every profile reaches val/test."""
+    meta_a, labels_a = create_test_data(5)
+    meta_rows, label_rows = [], []
+    for pid in ('prof_a@1', 'prof_b@1'):
+        for m, l in zip(meta_a, labels_a):
+            sid = f"{pid}/{m.id}"
+            meta_rows.append(MetaRow(**{**m.__dict__, 'id': sid}))
+            label_rows.append(LabelRow(schema_version=2, id=sid, class_name=l.class_name, profile_id=pid))
+
+    splits = generate_splits(meta_rows, label_rows, _splits_config(), run_seed=42)
+    id_to_profile = {r.id: r.profile_id for r in label_rows}
+    for split_name in ('val', 'test'):
+        per_profile = {}
+        for sid in splits[split_name]:
+            per_profile[id_to_profile[sid]] = per_profile.get(id_to_profile[sid], 0) + 1
+        assert per_profile == {'prof_a@1': 4, 'prof_b@1': 4}

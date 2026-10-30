@@ -11,10 +11,8 @@ Usage:
 import argparse
 import sys
 import time
-import os
 import json
 from pathlib import Path
-from dataclasses import asdict
 
 import numpy as np
 from tqdm import tqdm
@@ -25,29 +23,17 @@ from simple_sim.config import load_config, validate_config
 from simple_sim.schema import MetaRow, LabelRow
 from simple_sim.rng import derive_sample_seed, make_sample_id
 from simple_sim.defects import sample_defect_params, classify_defect
+from simple_sim.generators.filter_settings import augment_for_meta, load_image_filters_env
 from simple_sim.generators.opencv_2d import (
     sample_nominal_geometry,
     sample_augment_params,
     apply_image_filter_overrides,
-    normalize_image_filters,
     render_roi,
 )
 from simple_sim.dataset_store import write_dataset
 from simple_sim.splits import generate_splits, assert_no_overlap, write_splits, check_class_coverage
-from simple_sim.telemetry import emit
 from simple_sim.profile_hash import load_profile, hash_profile
 from simple_sim.manifest import write_multi_profile_manifest
-
-
-def _augment_for_meta(augment: dict) -> dict:
-    """Return schema-compatible augment payload for MetaRow."""
-    return {
-        "blur_sigma": float(augment.get("blur_sigma", 0.0) or 0.0),
-        "noise_stddev": float(augment.get("noise_stddev", 0.0) or 0.0),
-        "brightness_factor": float(augment.get("brightness_factor", 1.0) or 1.0),
-        "contrast_factor": float(augment.get("contrast_factor", 1.0) or 1.0),
-        "rotation_deg": float(augment.get("rotation_deg", 0.0) or 0.0),
-    }
 
 
 def generate_profile_dataset(
@@ -61,15 +47,7 @@ def generate_profile_dataset(
     config = load_config(config_path)
     validate_config(config)
 
-    image_filters_raw = os.environ.get("IMAGE_FILTERS", "").strip()
-    image_filters = normalize_image_filters(None)
-    if image_filters_raw:
-        try:
-            parsed = json.loads(image_filters_raw)
-            if isinstance(parsed, dict):
-                image_filters = normalize_image_filters(parsed)
-        except Exception:
-            print("[warn] Invalid IMAGE_FILTERS JSON, using defaults.")
+    image_filters = load_image_filters_env()
 
     run_id = config['run']['run_id']
     run_seed = config['run']['seed']
@@ -129,7 +107,7 @@ def generate_profile_dataset(
 
         for class_name, count in classes.items():
             progress = tqdm(range(count), desc=f"{pid}/{class_name}")
-            for i in progress:
+            for _i in progress:
                 seed = derive_sample_seed(run_seed, domain_name, global_index)
                 rng = np.random.default_rng(seed)
 
@@ -144,7 +122,7 @@ def generate_profile_dataset(
                     rng,
                     enable_cardinal_rotation_90=(enable_cardinal_rotation_90 and bool(image_filters.get("cardinal_rotation_90", True))),
                 )
-                augment = apply_image_filter_overrides(augment, image_filters)
+                augment = apply_image_filter_overrides(augment, image_filters, rng)
 
                 img = render_roi(
                     nominal=nominal,
@@ -191,7 +169,7 @@ def generate_profile_dataset(
             footprint=r['footprint'],
             nominal=r['nominal'],
             defect=r['defect'],
-            augment=_augment_for_meta(r['augment']),
+            augment=augment_for_meta(r['augment']),
             render_meta={
                 "augment_full": dict(r["augment"]),
                 "image_filters": dict(image_filters),
@@ -228,7 +206,7 @@ def generate_profile_dataset(
             footprint=r['footprint'],
             nominal=r['nominal'],
             defect=r['defect'],
-            augment=_augment_for_meta(r['augment']),
+            augment=augment_for_meta(r['augment']),
             render_meta={
                 "augment_full": dict(r["augment"]),
                 "image_filters": dict(image_filters),

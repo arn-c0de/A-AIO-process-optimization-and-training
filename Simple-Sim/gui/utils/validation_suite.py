@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Any
 
 import numpy as np
 import cv2
@@ -21,12 +21,12 @@ _TOMBSTONE_TILT_DEG = 75.0
 
 
 def _detect_metric_outliers(
-    sample_ids: List[str],
-    scores: List[float],
+    sample_ids: list[str],
+    scores: list[float],
     metric: str,
     threshold_sigma: float,
     reason_template: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Detect outliers in a list of per-sample metric scores using z-scores.
 
     Args:
@@ -50,7 +50,7 @@ def _detect_metric_outliers(
     if std == 0:
         return []
 
-    outliers: List[Dict[str, Any]] = []
+    outliers: list[dict[str, Any]] = []
     for sample_id, value in zip(sample_ids, scores):
         z_score = abs(value - mean) / std
         if z_score > threshold_sigma:
@@ -67,7 +67,7 @@ def _detect_metric_outliers(
 
 
 def detect_image_outliers(dataset_dir: Path,
-                          threshold_sigma: float = 3.0) -> List[Dict[str, Any]]:
+                          threshold_sigma: float = 3.0) -> list[dict[str, Any]]:
     """Detect statistical outliers in image quality metrics.
 
     Args:
@@ -119,7 +119,7 @@ def detect_image_outliers(dataset_dir: Path,
 
 
 def detect_duplicate_images(dataset_dir: Path,
-                            hamming_threshold: int = 5) -> List[Tuple[str, str, int]]:
+                            hamming_threshold: int = 5) -> list[tuple[str, str, int]]:
     """Detect perceptually similar images using perceptual hashing.
 
     Args:
@@ -140,7 +140,7 @@ def detect_duplicate_images(dataset_dir: Path,
     meta_rows = read_jsonl(dataset_dir / 'meta.jsonl', MetaRow)
 
     # Compute hashes
-    hashes: Dict[str, Any] = {}
+    hashes: dict[str, Any] = {}
 
     for meta_row in meta_rows:
         image_path = dataset_dir / meta_row.image_path
@@ -172,7 +172,7 @@ def detect_duplicate_images(dataset_dir: Path,
     return duplicates
 
 
-def detect_edge_cases(dataset_dir: Path) -> List[Dict[str, Any]]:
+def detect_edge_cases(dataset_dir: Path) -> list[dict[str, Any]]:
     """Detect samples with defect parameters near tolerance boundaries.
 
     Args:
@@ -241,7 +241,7 @@ def run_validation_suite(dataset_dir: Path,
                          run_schema: bool = True,
                          run_outliers: bool = True,
                          run_duplicates: bool = True,
-                         run_edge_cases: bool = True) -> Dict[str, Any]:
+                         run_edge_cases: bool = True) -> dict[str, Any]:
     """Run complete validation suite.
 
     Args:

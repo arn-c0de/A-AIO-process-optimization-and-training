@@ -3,8 +3,11 @@
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from pathlib import Path
+from typing import Any, TYPE_CHECKING
+from collections.abc import Callable
 from datetime import datetime
+from gui.utils.formatting import fmt_bytes
 
 if TYPE_CHECKING:
     from .tab import MergeTab
@@ -152,9 +155,9 @@ class MergeUI:
         self.txt.see("end")
         self.txt.configure(state="disabled")
 
-    def rebuild_tree(self, profile_models: Dict[str, List[Tuple[str, Path]]], iid_to_model: Dict[str, Tuple[str, Path]],
-                     model_meta_cache: Dict, selected_weights: Dict[str, Path], favorites: Dict[str, Any],
-                     group_for_path: Callable[[Path], str], available_groups: List[str]) -> None:
+    def rebuild_tree(self, profile_models: dict[str, list[tuple[str, Path]]], iid_to_model: dict[str, tuple[str, Path]],
+                     model_meta_cache: dict, selected_weights: dict[str, Path], favorites: dict[str, Any],
+                     group_for_path: Callable[[Path], str], available_groups: list[str]) -> None:
         
         self.tree.delete(*self.tree.get_children())
         iid_to_model.clear()
@@ -172,7 +175,7 @@ class MergeUI:
                 values=("", "", "", "", ""), tags=("profile_header",), open=True,
             )
 
-            grouped: Dict[str, List[Tuple[str, Path]]] = {g: [] for g in available_groups}
+            grouped: dict[str, list[tuple[str, Path]]] = {g: [] for g in available_groups}
             for disp, p in models:
                 g = group_for_path(p)
                 if g not in grouped: grouped[g] = []
@@ -218,13 +221,13 @@ class MergeUI:
                     )
                     iid_to_model[iid_model] = (profile_id, p)
     
-    def refresh_selection_summary(self, selected_weights: Dict[str, Path]) -> None:
+    def refresh_selection_summary(self, selected_weights: dict[str, Path]) -> None:
         self.selection_tree.delete(*self.selection_tree.get_children())
         for profile_id in sorted(selected_weights.keys()):
             p = selected_weights[profile_id]
             self.selection_tree.insert("", "end", values=(f"{profile_id}  ->  {p.name}",))
 
-    def refresh_bundles(self, bundle_dirs: List[Path], read_bundle_meta_func: Callable[[Path], Any], fmt_bytes_func: Callable[[int], str]) -> None:
+    def refresh_bundles(self, bundle_dirs: list[Path], read_bundle_meta_func: Callable[[Path], Any], fmt_bytes_func: Callable[[int], str]) -> None:
         self.bundle_tree.delete(*self.bundle_tree.get_children())
 
         for bd in bundle_dirs:
@@ -240,13 +243,4 @@ class MergeUI:
 
             self.bundle_tree.insert("", "end", iid=str(bd), values=(profiles, created))
 
-    def fmt_bytes(self, n: int) -> str:
-        units = ["B", "KB", "MB", "GB", "TB"]
-        v = float(max(0, n))
-        u = 0
-        while v >= 1024.0 and u < len(units) - 1:
-            v /= 1024.0
-            u += 1
-        if u == 0:
-            return f"{int(v)} {units[u]}"
-        return f"{v:.1f} {units[u]}"
+    fmt_bytes = staticmethod(fmt_bytes)

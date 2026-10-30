@@ -7,12 +7,12 @@ import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-import os
+from typing import Any
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.settings_store import SettingsStore
+from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_dataset_labels
+from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 
 from .ui import PredictionsUI
 from .logic import PredictionsLogic
@@ -25,18 +25,18 @@ class PredictionsTab(BaseTab):
         self.ui = PredictionsUI(self, self.frame)
         self.logic = PredictionsLogic(sim_root, self.log_q)
 
-        self._pred_rows: List[Dict[str, Any]] = []
-        self._pred_row_by_id: Dict[str, Dict[str, Any]] = {}
-        self._active_dataset_dir: Optional[Path] = None
+        self._pred_rows: list[dict[str, Any]] = []
+        self._pred_row_by_id: dict[str, dict[str, Any]] = {}
+        self._active_dataset_dir: Path | None = None
 
-        self._multi_dataset_paths: List[str] = []
-        self._multi_results: List[Dict[str, Any]] = []
-        self._multi_result_by_key: Dict[str, Dict[str, Any]] = {}
+        self._multi_dataset_paths: list[str] = []
+        self._multi_results: list[dict[str, Any]] = []
+        self._multi_result_by_key: dict[str, dict[str, Any]] = {}
         
-        self._dataset_dirs: List[Path] = []
-        self._dataset_by_label: Dict[str, Path] = {}
+        self._dataset_dirs: list[Path] = []
+        self._dataset_by_label: dict[str, Path] = {}
 
-        self._ui_tick_id: Optional[str] = None
+        self._ui_tick_id: str | None = None
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -76,32 +76,15 @@ class PredictionsTab(BaseTab):
         except Exception:
             pass
 
-    def _store(self) -> Optional[SettingsStore]:
+    def _store(self) -> SettingsStore | None:
         return self.state.settings_store
 
     def _load_persisted_settings(self) -> None:
         st = self._store()
         if st is None:
             return
-        for key, var in [
-            ("pred.dataset_selection", self.ui.var_dataset),
-            ("pred.model_selection", self.ui.var_model),
-            ("pred.split", self.ui.var_split),
-            ("pred.device", self.ui.var_device),
-            ("pred.max_samples", self.ui.var_max_samples),
-            ("pred.profile_model", self.ui.var_profile_model),
-        ]:
-            v = st.get(key)
-            if v is None:
-                continue
-            try:
-                var.set(v)
-            except Exception:
-                pass
+        restore_persisted_vars(st, self._persisted_var_bindings())
         try:
-            self.ui.chk_save_preds.set(bool(st.get("pred.save_preds", True)))
-            self.ui.chk_auto_train_bundle.set(bool(st.get("pred.auto_train_bundle", False)))
-            self.ui.var_multi_datasets.set(bool(st.get("pred.multi_datasets", False)))
             raw = st.get("pred.multi_dataset_paths_json")
             if isinstance(raw, str) and raw.strip():
                 obj = json.loads(raw)
@@ -110,29 +93,25 @@ class PredictionsTab(BaseTab):
         except Exception:
             self._multi_dataset_paths = []
 
-    def _wire_settings_autosave(self) -> None:
-        st = self._store()
-        if st is None:
-            return
-        
-        def bind(var, key: str) -> None:
-            def cb(*_a) -> None:
-                try:
-                    st.set(key, var.get())
-                    st.schedule_save(self.frame)
-                except Exception:
-                    pass
-            var.trace_add("write", cb)
+    def _persisted_var_bindings(self) -> list[tuple[Any, ...]]:
+        # (key, var[, default]); defaults are applied when the key was never persisted.
+        return [
+            ("pred.dataset_selection", self.ui.var_dataset),
+            ("pred.model_selection", self.ui.var_model),
+            ("pred.split", self.ui.var_split),
+            ("pred.device", self.ui.var_device),
+            ("pred.max_samples", self.ui.var_max_samples),
+            ("pred.profile_model", self.ui.var_profile_model),
+            ("pred.save_preds", self.ui.chk_save_preds, True),
+            ("pred.auto_train_bundle", self.ui.chk_auto_train_bundle, False),
+            ("pred.multi_datasets", self.ui.var_multi_datasets, False),
+        ]
 
-        bind(self.ui.var_dataset, "pred.dataset_selection")
-        bind(self.ui.var_model, "pred.model_selection")
-        bind(self.ui.var_split, "pred.split")
-        bind(self.ui.var_device, "pred.device")
-        bind(self.ui.var_max_samples, "pred.max_samples")
-        bind(self.ui.var_profile_model, "pred.profile_model")
-        bind(self.ui.var_multi_datasets, "pred.multi_datasets")
-        bind(self.ui.chk_save_preds, "pred.save_preds")
-        bind(self.ui.chk_auto_train_bundle, "pred.auto_train_bundle")
+    def _wire_settings_autosave(self) -> None:
+        wire_vars_autosave(self._store(), self._persisted_var_bindings(), self.frame)
+
+    def on_close(self) -> None:
+        self.logic.stop_predictions()
 
     def _persist_multi_dataset_paths(self) -> None:
         st = self._store()
@@ -206,7 +185,7 @@ class PredictionsTab(BaseTab):
 
         def on_ok() -> None:
             sel = list(lb.curselection())
-            picked: List[str] = []
+            picked: list[str] = []
             for i in sel:
                 try:
                     lab = labels[int(i)]
@@ -226,7 +205,7 @@ class PredictionsTab(BaseTab):
         ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side="right", padx=(0, 8))
         dlg.geometry("560x420")
 
-    def _active_data_dir(self) -> Optional[Path]:
+    def _active_data_dir(self) -> Path | None:
         return self._active_dataset_dir or self.state.dataset_dir
 
     def _tick_ui(self) -> None:
@@ -248,9 +227,9 @@ class PredictionsTab(BaseTab):
         self.logic.stop_predictions()
         self.ui.var_status.set("status: stopping...")
 
-    def _selected_dataset_paths(self) -> List[Path]:
+    def _selected_dataset_paths(self) -> list[Path]:
         if hasattr(self.ui, "var_multi_datasets") and bool(self.ui.var_multi_datasets.get()):
-            out: List[Path] = [self.logic.resolve_dataset_path(s) for s in self._multi_dataset_paths if s.strip()]
+            out: list[Path] = [self.logic.resolve_dataset_path(s) for s in self._multi_dataset_paths if s.strip()]
             seen = set()
             return [p for p in out if not (str(p) in seen or seen.add(str(p)))]
         ds = self.state.dataset_dir
@@ -264,7 +243,7 @@ class PredictionsTab(BaseTab):
         model_s = self.ui.var_model.get().strip()
         model_path = self.logic.resolve_model_path(model_s)
         if not model_path.exists():
-            messagebox.showerror("Error", f"Model not found:\\n{model_path}")
+            messagebox.showerror("Error", f"Model not found:\n{model_path}")
             return
 
         dataset_dirs = self._selected_dataset_paths()
@@ -273,17 +252,17 @@ class PredictionsTab(BaseTab):
             return
         
         profile_model_s = self.ui.var_profile_model.get().strip()
-        pm_path: Optional[Path] = None
+        pm_path: Path | None = None
         if profile_model_s:
             pm_path = self.logic.resolve_model_path(profile_model_s)
             if not pm_path.exists():
-                messagebox.showerror("Error", f"Profile model not found:\\n{pm_path}")
+                messagebox.showerror("Error", f"Profile model not found:\n{pm_path}")
                 return
         
         self.ui.var_status.set("status: running...")
         self.ui.var_report_path.set("report: -")
         self.ui.var_preds_path.set("preds: -")
-        self.ui.set_metrics_text("Running batch prediction...\\n")
+        self.ui.set_metrics_text("Running batch prediction...\n")
         self.ui.clear_confusion_matrix()
         self._pred_rows = []
         self._pred_row_by_id = {}
@@ -304,7 +283,8 @@ class PredictionsTab(BaseTab):
             bool(self.ui.chk_save_preds.get()),
             bool(self.ui.chk_auto_train_bundle.get()),
             pm_path,
-            self._on_prediction_complete,
+            # Called from the worker thread: hop onto the Tk main loop before touching widgets.
+            lambda *res: self.frame.after(0, self._on_prediction_complete, *res),
         )
 
     def _on_prediction_complete(self, last_report_path, last_preds_path, last_dataset_dir, multi_results, multi_result_by_key, was_stopped):
@@ -333,43 +313,17 @@ class PredictionsTab(BaseTab):
             except Exception:
                 return str(a) == str(b)
 
-        prev_selected: Optional[Path] = self._selected_dataset_dir()
+        prev_selected: Path | None = self._selected_dataset_dir()
         if prev_selected is None and self.state.dataset_dir is not None:
             prev_selected = self.state.dataset_dir
 
         cand = self.logic.get_datasets()
-
-        def is_version(p: Path) -> bool:
-            try:
-                return str(p.resolve()).startswith(str(self.sim_root / "outputs" / "sim_data" / "versions").resolve() + os.sep)
-            except Exception: return False
-
-        def sort_key(p: Path) -> tuple:
-            return (1, -p.stat().st_mtime, p.name) if is_version(p) else (0, p.name)
-
-        cand.sort(key=sort_key)
+        cand.sort(key=lambda p: dataset_sort_key(self.sim_root, p))
         self._dataset_dirs = cand
 
-        def display(p: Path) -> str:
-            try:
-                rp = p.resolve()
-                runs_base = (self.sim_root / "outputs" / "sim_data" / "runs").resolve()
-                versions_base = (self.sim_root / "outputs" / "sim_data" / "versions").resolve()
-                if str(rp).startswith(str(runs_base) + os.sep): return rp.name
-                if str(rp).startswith(str(versions_base) + os.sep): return f"{rp.parent.name}:{rp.name}"
-            except Exception: pass
-            return p.name
-
-        self._dataset_by_label = {}
-        labels: List[str] = []
-        seen: Dict[str, int] = {}
-        for p in cand:
-            base = display(p)
-            n = seen.get(base, 0) + 1
-            seen[base] = n
-            label = base if n == 1 else f"{base} ({n})"
-            labels.append(label)
-            self._dataset_by_label[label] = p
+        runs, versions = sim_data_roots(self.sim_root)
+        self._dataset_by_label = unique_dataset_labels(cand, runs_root=runs, versions_root=versions)
+        labels: list[str] = list(self._dataset_by_label)
 
         self.ui.combo_dataset["values"] = labels
         cur = self.ui.var_dataset.get().strip()
@@ -391,12 +345,12 @@ class PredictionsTab(BaseTab):
             self.ui.var_dataset.set(labels[0])
             self._on_dataset_selected()
 
-    def _selected_dataset_dir(self) -> Optional[Path]:
+    def _selected_dataset_dir(self) -> Path | None:
         disp = self.ui.var_dataset.get().strip()
         if not disp: return None
         return self._dataset_by_label.get(disp)
 
-    def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
+    def _on_dataset_selected(self, _evt: object | None = None) -> None:
         ds = self._selected_dataset_dir()
         if not ds: return
         self.state.dataset_dir = ds
@@ -446,13 +400,13 @@ class PredictionsTab(BaseTab):
 
         lines = [f"Report: {report_path.name}", f"Model:  {Path(obj.get('model_path', '-')).name}", f"Split:  {obj.get('split', '-')}", f"Seen:   {obj.get('seen_samples', '-')}"]
         if "img_per_s" in obj: lines.append(f"Speed:  {obj.get('img_per_s', 0.0):.1f} img/s")
-        if "accuracy" in metrics: lines.append(f"\\nAccuracy: {metrics.get('accuracy', 0.0):.4f}")
+        if "accuracy" in metrics: lines.append(f"\nAccuracy: {metrics.get('accuracy', 0.0):.4f}")
         if "macro_f1" in metrics: lines.append(f"Macro F1:  {metrics.get('macro_f1', 0.0):.4f}")
         if cfn := metrics.get("critical_fn_rates"):
-            lines.append("\\nCritical FN rates:")
+            lines.append("\nCritical FN rates:")
             lines.extend([f"  {k}: {v:.4f}" for k, v in sorted(cfn.items())])
         
-        self.ui.set_metrics_text("\\n".join(lines) + "\\n")
+        self.ui.set_metrics_text("\n".join(lines) + "\n")
         self.ui.render_confusion_matrix(cm, class_names) if cm and class_names else self.ui.clear_confusion_matrix()
 
     def _load_preds(self, preds_path: Path) -> None:
@@ -465,13 +419,13 @@ class PredictionsTab(BaseTab):
         try:
             self.logic.enrich_rows_with_gt_profile(rows, self._active_data_dir())
         except Exception as e:
-            self.ui.append_log(f"[warn] failed to enrich rows with GT profile: {e}\\n")
+            self.ui.append_log(f"[warn] failed to enrich rows with GT profile: {e}\n")
         
         self._pred_rows = rows
         self._pred_row_by_id = {str(r.get("id")): r for r in rows if r.get("id")}
         self._refresh_tree()
 
-    def _on_tree_select(self, _evt: Optional[object] = None) -> None:
+    def _on_tree_select(self, _evt: object | None = None) -> None:
         sel = self.ui.tree.selection()
         if not sel: return
         sid = sel[0]
@@ -483,15 +437,15 @@ class PredictionsTab(BaseTab):
         if not image_rel: return
         image_path = data_dir / str(image_rel)
         if not image_path.exists():
-            messagebox.showerror("Error", f"Image not found:\\n{image_path}")
+            messagebox.showerror("Error", f"Image not found:\n{image_path}")
             return
         
         try:
             self.ui.display_image(str(image_path), row)
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to display image:\\n{e}")
+            messagebox.showerror("Error", f"Failed to display image:\n{e}")
 
-    def _on_tree_ds_select(self, _evt: Optional[object] = None) -> None:
+    def _on_tree_ds_select(self, _evt: object | None = None) -> None:
         sel = self.ui.tree_ds.selection()
         if not sel: return
         key = sel[0]
@@ -517,7 +471,7 @@ class PredictionsTab(BaseTab):
         self._apply_multi_mode_ui()
         self.ui.tree_ds.delete(*self.ui.tree_ds.get_children())
         
-        rows: List[Tuple[str, str, str, str, str, str]] = []
+        rows: list[tuple[str, str, str, str, str, str]] = []
         for res in self._multi_results:
             key, label, report_path = str(res.get("key") or ""), str(res.get("label") or ""), res.get("report_path")
             acc_s, f1_s, seen_s, prof_acc_s = "", "", "", ""

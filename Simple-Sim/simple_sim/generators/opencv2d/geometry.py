@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
 
 def sample_nominal_geometry(
-    roi_config: Dict[str, Any],
+    roi_config: dict[str, Any],
     rng: np.random.Generator,
-    geometry_ranges: Optional[Dict[str, Any]] = None,
-) -> Dict[str, float]:
+    geometry_ranges: dict[str, Any] | None = None,
+) -> dict[str, float]:
     """Sample nominal component geometry."""
     _ = roi_config  # reserved for future use
     defaults = {

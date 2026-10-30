@@ -1,7 +1,7 @@
 """Defect classification and parameter sampling."""
 
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Sampling constants
@@ -31,7 +31,7 @@ _EPS = 1e-6
 # Public API
 # ---------------------------------------------------------------------------
 
-def classify_defect(nominal: Dict[str, float], defect_params: Dict[str, Any], tolerances: Dict[str, Any]) -> str:
+def classify_defect(nominal: dict[str, float], defect_params: dict[str, Any], tolerances: dict[str, Any] | None) -> str:
     """Classify defect based on tolerances.
 
     Deterministic labeling based on threshold rules.
@@ -49,15 +49,21 @@ def classify_defect(nominal: Dict[str, float], defect_params: Dict[str, Any], to
     if defect_type in ('SOLDER_BRIDGE', 'CORNER_LIFT', 'MISSING'):
         return defect_type
 
+    # Same fallbacks as sample_defect_params() so profiles without tolerances still classify.
+    tolerances = tolerances or {}
+    ok_shift_px = float(tolerances.get('ok_shift_px', _DEFAULT_OK_SHIFT_PX))
+    ok_rotation_deg = float(tolerances.get('ok_rotation_deg', _DEFAULT_OK_ROT_DEG))
+    tombstone_tilt_deg = float(tolerances.get('tombstone_tilt_deg', _DEFAULT_TOMBSTONE_TILT))
+
     tilt_deg = abs(defect_params['tilt_deg'])
-    if tilt_deg >= tolerances['tombstone_tilt_deg']:
+    if tilt_deg >= tombstone_tilt_deg:
         return 'TOMBSTONE'
 
     shift_x = defect_params['shift_x']
     shift_y = defect_params['shift_y']
     rotation_deg = abs(defect_params['rotation_deg'])
     shift_magnitude = np.sqrt(shift_x**2 + shift_y**2)
-    if shift_magnitude > tolerances['ok_shift_px'] or rotation_deg > tolerances['ok_rotation_deg']:
+    if shift_magnitude > ok_shift_px or rotation_deg > ok_rotation_deg:
         return 'MISALIGNED'
 
     return 'OK'
@@ -66,8 +72,8 @@ def classify_defect(nominal: Dict[str, float], defect_params: Dict[str, Any], to
 def sample_defect_params(
     defect_type: str,
     rng: np.random.Generator,
-    tolerances: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    tolerances: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Sample defect parameters based on type.
 
     Args:
@@ -137,7 +143,7 @@ def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone):
     max_rot = max(min_rot, _MISALIGNED_ROT_SCALE * min_rot)
 
     if rng.random() < 0.5:
-        # Misalignment via shift
+        # Misalignment via shift; rotation stays inside tolerance (pure shift)
         sx = rng.uniform(-max_shift, max_shift)
         sy = rng.uniform(-max_shift, max_shift)
         magnitude = np.sqrt(sx**2 + sy**2)
@@ -145,6 +151,11 @@ def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone):
             scale = min_shift / (magnitude + _EPS)
             sx *= scale
             sy *= scale
+        if ok_rotation_deg is not None:
+            rot_bound = max(0.0, _OK_SAFETY_MARGIN * ok_rotation_deg)
+        else:
+            rot_bound = _DEFAULT_OK_ROT_DEG
+        rot = rng.uniform(-rot_bound, rot_bound)
     else:
         # Misalignment via rotation; shift stays inside tolerance
         if ok_shift_px is not None:
@@ -153,10 +164,9 @@ def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone):
             shift_bound = _DEFAULT_OK_SHIFT_PX
         sx = rng.uniform(-shift_bound, shift_bound)
         sy = rng.uniform(-shift_bound, shift_bound)
-
-    rot = rng.uniform(-max_rot, max_rot)
-    if abs(rot) < min_rot:
-        rot = min_rot if rot >= 0 else -min_rot
+        rot = rng.uniform(-max_rot, max_rot)
+        if abs(rot) < min_rot:
+            rot = min_rot if rot >= 0 else -min_rot
 
     return sx, sy, rot, 0.0
 

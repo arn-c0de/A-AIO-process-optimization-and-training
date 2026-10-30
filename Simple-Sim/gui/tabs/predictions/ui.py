@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from gui.components.chart_widgets import create_confusion_matrix_widget
 from gui.components.overlay_renderer import draw_prediction_overlay, draw_two_stage_overlay
@@ -24,8 +24,8 @@ class PredictionsUI:
         self.frame = ttk.Frame(parent, padding=10)
 
         self._cm_canvas = None
-        self._photo: Optional[ImageTk.PhotoImage] = None
-        self._right_paned: Optional[ttk.Panedwindow] = None
+        self._photo: ImageTk.PhotoImage | None = None
+        self._right_paned: ttk.Panedwindow | None = None
         self._min_logs_pane_px: int = 180
         self._pane_adjust_scheduled: bool = False
 
@@ -241,7 +241,7 @@ class PredictionsUI:
         self.txt_logs.see("end")
         self.txt_logs.configure(state="disabled")
 
-    def update_stats_bar(self, cpu_pct: Optional[float], ram_info: Optional[tuple[float, int, int]], gpu_pct: Optional[float]) -> None:
+    def update_stats_bar(self, cpu_pct: float | None, ram_info: tuple[float, int, int] | None, gpu_pct: float | None) -> None:
         return
 
     def clear_confusion_matrix(self) -> None:
@@ -253,7 +253,7 @@ class PredictionsUI:
         self._cm_canvas = None
         self._schedule_enforce_log_pane_min_height()
 
-    def render_confusion_matrix(self, cm: List[List[int]], class_names: List[str]) -> None:
+    def render_confusion_matrix(self, cm: list[list[int]], class_names: list[str]) -> None:
         self.clear_confusion_matrix()
         try:
             if isinstance(cm, list) and cm and class_names:
@@ -262,7 +262,7 @@ class PredictionsUI:
                 self._cm_canvas.get_tk_widget().pack(fill="both", expand=True)
                 self._schedule_enforce_log_pane_min_height()
         except Exception as e:
-            self.append_log(f"[warn] failed to render confusion matrix: {e}\\n")
+            self.append_log(f"[warn] failed to render confusion matrix: {e}\n")
 
     def _schedule_enforce_log_pane_min_height(self) -> None:
         if self._pane_adjust_scheduled:
@@ -292,7 +292,7 @@ class PredictionsUI:
         except Exception:
             pass
 
-    def refresh_tree(self, pred_rows: List[Dict[str, Any]], filter_mode: str) -> None:
+    def refresh_tree(self, pred_rows: list[dict[str, Any]], filter_mode: str) -> None:
         if not hasattr(self, "tree"):
             return
         self.tree.delete(*self.tree.get_children())
@@ -322,7 +322,7 @@ class PredictionsUI:
             
             self.tree.insert("", "end", iid=sid, text=sid, values=(gt, pred, f"{conf:.1%}", ok, str(r.get("gt_profile") or ""), str(r.get("pred_profile") or ""), prof_mark))
 
-    def _top1_confidence(self, row: Dict[str, Any]) -> float:
+    def _top1_confidence(self, row: dict[str, Any]) -> float:
         try:
             topk = row.get("topk") or []
             if not topk:
@@ -335,7 +335,7 @@ class PredictionsUI:
         except Exception:
             return 0.0
 
-    def display_image(self, image_path: str, row: Dict[str, Any]) -> None:
+    def display_image(self, image_path: str, row: dict[str, Any]) -> None:
         gt = str(row.get("gt") or "?")
         pred = str(row.get("pred") or "?")
         conf = self._top1_confidence(row)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Callable, Optional
+from collections.abc import Callable
 
 
 class ToolTip:
@@ -18,9 +18,9 @@ class ToolTip:
         self.text_func = text_func
         self.delay_ms = int(delay_ms)
 
-        self._after_id: Optional[str] = None
-        self._tip: Optional[tk.Toplevel] = None
-        self._label: Optional[tk.Label] = None
+        self._after_id: str | None = None
+        self._tip: tk.Toplevel | None = None
+        self._label: tk.Label | None = None
 
         widget.bind("<Enter>", self._on_enter, add="+")
         widget.bind("<Leave>", self._on_leave, add="+")

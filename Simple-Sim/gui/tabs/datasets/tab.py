@@ -9,7 +9,6 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
-from typing import Dict, List, Optional
 
 from gui.state import UiState
 from gui.tabs.core.base import BaseTab
@@ -26,7 +25,7 @@ class DatasetsTab(BaseTab):
     def __init__(self, parent: ttk.Frame, sim_root: Path, state: UiState) -> None:
         super().__init__(parent, sim_root, state)
         self.catalog = DatasetCatalog(sim_root, state.settings_store)
-        self._dataset_by_iid: Dict[str, Path] = {}
+        self._dataset_by_iid: dict[str, Path] = {}
         self.var_show_archived = tk.BooleanVar(value=True)
         self.var_category_filter = tk.StringVar(value="All")
         self.tree: ttk.Treeview
@@ -127,11 +126,11 @@ class DatasetsTab(BaseTab):
             if self._path_key_for(ds) in selected_keys:
                 self.tree.selection_add(iid)
 
-    def _scan_datasets(self) -> List[Path]:
+    def _scan_datasets(self) -> list[Path]:
         runs, versions = self._sim_data_roots()
         runs.mkdir(parents=True, exist_ok=True)
         versions.mkdir(parents=True, exist_ok=True)
-        cand: List[Path] = [p for p in runs.iterdir() if p.is_dir()]
+        cand: list[Path] = [p for p in runs.iterdir() if p.is_dir()]
         cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
         cand.sort(
             key=lambda p: (1, -p.stat().st_mtime, p.name)
@@ -168,7 +167,7 @@ class DatasetsTab(BaseTab):
         except Exception:
             return str(ds)
 
-    def _selected_dataset_paths(self) -> List[Path]:
+    def _selected_dataset_paths(self) -> list[Path]:
         return [self._dataset_by_iid[iid] for iid in self.tree.selection() if iid in self._dataset_by_iid]
 
     def _set_category_for_selected(self) -> None:
@@ -291,7 +290,7 @@ class DatasetsTab(BaseTab):
         ttk.Button(frm, text="Close", command=dialog.destroy).pack(anchor="e", pady=(8, 0))
 
     def _dataset_details_text(self, ds: Path) -> str:
-        lines: List[str] = []
+        lines: list[str] = []
         lines.append(f"Dataset: {ds.name}")
         lines.append(f"Path: {ds}")
         lines.append("")
@@ -316,7 +315,7 @@ class DatasetsTab(BaseTab):
             labels_path = ds / "labels.jsonl"
             if labels_path.exists():
                 try:
-                    total_samples = sum(1 for _ in labels_path.open("r", encoding="utf-8") if _.strip())
+                    with labels_path.open("r", encoding="utf-8") as fh: total_samples = sum(1 for line in fh if line.strip())
                 except Exception:
                     total_samples = None
 
@@ -372,7 +371,7 @@ class DatasetsTab(BaseTab):
 
         return "\n".join(lines)
 
-    def _ask_category_with_list(self, *, title: str, initial: str = "") -> Optional[str]:
+    def _ask_category_with_list(self, *, title: str, initial: str = "") -> str | None:
         categories = self.catalog.all_categories()
         dialog = tk.Toplevel(self.frame.winfo_toplevel())
         dialog.title(title)
@@ -380,7 +379,7 @@ class DatasetsTab(BaseTab):
         dialog.grab_set()
         dialog.minsize(440, 320)
 
-        chosen: List[str] = []
+        chosen: list[str] = []
         frm = ttk.Frame(dialog, padding=10)
         frm.pack(fill="both", expand=True)
 

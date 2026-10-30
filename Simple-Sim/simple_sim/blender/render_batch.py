@@ -27,7 +27,7 @@ import math
 import random
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import bpy
 from mathutils import Vector
@@ -39,6 +39,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out_root", required=True)
     parser.add_argument("--samples", type=int, required=True)
     parser.add_argument("--device", default="CPU")
+    parser.add_argument("--engine", default="BLENDER_EEVEE", help="Render engine (BLENDER_EEVEE or CYCLES)")
     # Blender passes custom args after a `--` separator.
     argv = sys.argv
     if "--" in argv:
@@ -76,7 +77,7 @@ def _new_material(name: str, *, base_color=(0.5, 0.5, 0.5), roughness=0.5, metal
 
 def _apply_material(obj: bpy.types.Object, mat: bpy.types.Material) -> None:
     if obj is None or obj.data is None:
-        print(f"[ERROR] Object or data is None!")
+        print("[ERROR] Object or data is None!")
         return
 
     # FIX: Use obj.data directly, materials is a collection
@@ -86,7 +87,7 @@ def _apply_material(obj: bpy.types.Object, mat: bpy.types.Material) -> None:
         obj.data.materials.append(mat)
 
 
-def _mk_box(name: str, *, size_xyz: Tuple[float, float, float], loc_xyz: Tuple[float, float, float]) -> bpy.types.Object:
+def _mk_box(name: str, *, size_xyz: tuple[float, float, float], loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc_xyz)
     obj = bpy.context.active_object
     obj.name = name
@@ -95,7 +96,7 @@ def _mk_box(name: str, *, size_xyz: Tuple[float, float, float], loc_xyz: Tuple[f
     return obj
 
 
-def _mk_plane(name: str, *, size_xy: Tuple[float, float], loc_xyz: Tuple[float, float, float]) -> bpy.types.Object:
+def _mk_plane(name: str, *, size_xy: tuple[float, float], loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
     bpy.ops.mesh.primitive_plane_add(size=1.0, location=loc_xyz)
     obj = bpy.context.active_object
     obj.name = name
@@ -104,7 +105,7 @@ def _mk_plane(name: str, *, size_xy: Tuple[float, float], loc_xyz: Tuple[float, 
     return obj
 
 
-def _mk_chip_resistor(name: str, *, length: float, width: float, height: float, loc_xyz: Tuple[float, float, float]) -> bpy.types.Object:
+def _mk_chip_resistor(name: str, *, length: float, width: float, height: float, loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
     """Create realistic chip resistor with rounded ends and end caps."""
     # Main body (slightly smaller than total length for end caps)
     body_length = length * 0.7
@@ -121,7 +122,7 @@ def _mk_chip_resistor(name: str, *, length: float, width: float, height: float, 
     return obj
 
 
-def _mk_sot23_transistor(name: str, *, length: float, width: float, height: float, loc_xyz: Tuple[float, float, float]) -> bpy.types.Object:
+def _mk_sot23_transistor(name: str, *, length: float, width: float, height: float, loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
     """Create realistic SOT-23 transistor package with tapered shape."""
     # Keep sharp edges (no bevel). AOI-style renders look wrong with rounded corners.
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc_xyz)
@@ -132,7 +133,7 @@ def _mk_sot23_transistor(name: str, *, length: float, width: float, height: floa
     return obj
 
 
-def _mk_qfn_package(name: str, *, length: float, width: float, height: float, loc_xyz: Tuple[float, float, float]) -> bpy.types.Object:
+def _mk_qfn_package(name: str, *, length: float, width: float, height: float, loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
     """Create realistic QFN IC package."""
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc_xyz)
     obj = bpy.context.active_object
@@ -142,7 +143,7 @@ def _mk_qfn_package(name: str, *, length: float, width: float, height: float, lo
     return obj
 
 
-def _add_solder_joint(name: str, *, pos_xyz: Tuple[float, float, float], size: float, material: bpy.types.Material) -> bpy.types.Object:
+def _add_solder_joint(name: str, *, pos_xyz: tuple[float, float, float], size: float, material: bpy.types.Material) -> bpy.types.Object:
     """Create realistic solder fillet/joint."""
     # Use UV sphere for smooth solder fillet appearance
     bpy.ops.mesh.primitive_uv_sphere_add(radius=size, location=pos_xyz, segments=8, ring_count=6)
@@ -165,7 +166,7 @@ def _look_at(obj: bpy.types.Object, target: Vector, *, track_axis: str = "-Z", u
     obj.rotation_euler = rot_quat.to_euler()
 
 
-def _pad_positions_mm(footprint: str, nominal: Dict[str, float], *, mm_per_px: float) -> List[Tuple[float, float, float, float]]:
+def _pad_positions_mm(footprint: str, nominal: dict[str, float], *, mm_per_px: float) -> list[tuple[float, float, float, float]]:
     # Returns list of (cx_mm, cy_mm, w_mm, h_mm) in a local XY plane.
     pad_w = float(nominal["pad_width"]) * mm_per_px
     pad_h = float(nominal["pad_height"]) * mm_per_px
@@ -194,13 +195,13 @@ def _pad_positions_mm(footprint: str, nominal: Dict[str, float], *, mm_per_px: f
         ]
     if footprint == "soic_16":
         # SOIC-16: 8 pads on the left and 8 pads on the right side.
-        comp_w = float(nominal.get("component_width", 0.0)) * mm_per_px
+        float(nominal.get("component_width", 0.0)) * mm_per_px
         pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
         # Keep lead rows compact using pad width as reference.
         y_span = pad_w * 7.0
         pitch = y_span / 7.0
         y0 = -y_span / 2.0
-        pads: List[Tuple[float, float, float, float]] = []
+        pads: list[tuple[float, float, float, float]] = []
         for i in range(8):
             cy = y0 + (i * pitch)
             # Left/right pads: radial along X, tangential along Y.
@@ -214,17 +215,40 @@ def _pad_positions_mm(footprint: str, nominal: Dict[str, float], *, mm_per_px: f
     ]
 
 
-def _configure_cycles(*, width_px: int, height_px: int, samples: int, seed: int, device: str) -> bpy.types.Scene:
+def _normalize_engine(engine: str) -> str:
+    e = str(engine or "").strip().upper()
+    if e in ("", "EEVEE", "BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
+        return "BLENDER_EEVEE"
+    return e
+
+
+def _configure_cycles(
+    *, width_px: int, height_px: int, samples: int, seed: int, device: str, engine: str = "BLENDER_EEVEE"
+) -> bpy.types.Scene:
     scene = bpy.context.scene
 
-    # Try EEVEE instead of Cycles for better color handling
-    scene.render.engine = "BLENDER_EEVEE"
+    # Honour the configured engine; EEVEE is the default (better color handling).
+    engine = _normalize_engine(engine)
+    if engine == "BLENDER_EEVEE":
+        try:
+            scene.render.engine = "BLENDER_EEVEE"
+        except TypeError:
+            # Blender 4.2+ renamed the enum to BLENDER_EEVEE_NEXT.
+            scene.render.engine = "BLENDER_EEVEE_NEXT"
 
-    # EEVEE settings for quality
-    scene.eevee.taa_render_samples = max(64, int(samples))
-    scene.eevee.use_gtao = True  # Ambient occlusion
-    scene.eevee.use_bloom = False  # No bloom (more realistic)
-    scene.eevee.use_ssr = True  # Screen space reflections
+        # EEVEE settings for quality (some flags were removed in newer Blender versions)
+        scene.eevee.taa_render_samples = max(64, int(samples))
+        for attr, value in (("use_gtao", True), ("use_bloom", False), ("use_ssr", True)):
+            try:
+                setattr(scene.eevee, attr, value)  # AO on, bloom off (more realistic), SSR on
+            except AttributeError:
+                pass
+    else:
+        scene.render.engine = engine
+        if engine == "CYCLES":
+            scene.cycles.samples = int(samples)
+            # Per-job noise seed keeps Cycles renders deterministic.
+            scene.cycles.seed = int(seed) % (2**31)  # Blender IntProperty is 32-bit
 
     # Disable compositor and sequencer
     scene.render.use_compositing = False
@@ -275,13 +299,13 @@ def _configure_cycles(*, width_px: int, height_px: int, samples: int, seed: int,
     return scene
 
 
-def _as_rgb(v) -> Tuple[float, float, float]:
+def _as_rgb(v) -> tuple[float, float, float]:
     if not isinstance(v, (list, tuple)) or len(v) != 3:
         return (0.5, 0.5, 0.5)
     return (float(v[0]), float(v[1]), float(v[2]))
 
 
-def _build_material_set(render_3d: Dict[str, Any]) -> tuple[bpy.types.Material, bpy.types.Material, bpy.types.Material, bpy.types.Material]:
+def _build_material_set(render_3d: dict[str, Any]) -> tuple[bpy.types.Material, bpy.types.Material, bpy.types.Material, bpy.types.Material]:
     mats_cfg = (render_3d.get("materials") or {})
 
     solder_col_raw = _as_rgb(mats_cfg.get("solder", {}).get("base_color", [0.7, 0.7, 0.72]))
@@ -338,7 +362,7 @@ def _build_material_set(render_3d: Dict[str, Any]) -> tuple[bpy.types.Material, 
     return m_solder, m_sub, m_cu, m_body
 
 
-def _normalize_qfn_pad_spacing(footprint: str, nominal: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_qfn_pad_spacing(footprint: str, nominal: dict[str, Any]) -> dict[str, Any]:
     nominal_pads = dict(nominal)
     if not footprint.startswith("qfn"):
         return nominal_pads
@@ -356,7 +380,7 @@ def _normalize_qfn_pad_spacing(footprint: str, nominal: Dict[str, Any]) -> Dict[
     return nominal_pads
 
 
-def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> None:
+def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engine: str = "BLENDER_EEVEE") -> None:
     seed = int(job.get("seed", 0))
     random.seed(seed)
 
@@ -369,7 +393,9 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
     augment = job.get("augment") or {}
     render_3d = job.get("render_3d") or {}
 
-    _configure_cycles(width_px=width_px, height_px=height_px, samples=samples, seed=seed, device=device)
+    _configure_cycles(
+        width_px=width_px, height_px=height_px, samples=samples, seed=seed, device=device, engine=engine
+    )
 
     m_solder, m_sub, m_cu, m_body = _build_material_set(render_3d)
 
@@ -445,7 +471,7 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
 
     sub = _mk_plane("substrate", size_xy=(board_w_mm, board_h_mm), loc_xyz=(0.0, 0.0, 0.0))
     _apply_material(sub, m_sub)
-    rotate_group: List[bpy.types.Object] = [sub]
+    rotate_group: list[bpy.types.Object] = [sub]
 
     # Pads (thin boxes)
     for i, (cx, cy, pw, ph) in enumerate(pad_positions, 1):
@@ -647,8 +673,8 @@ def main() -> None:
     out_root.mkdir(parents=True, exist_ok=True)
 
     # Load jobs
-    jobs: List[Dict[str, Any]] = []
-    with open(jobs_path, "r", encoding="utf-8") as f:
+    jobs: list[dict[str, Any]] = []
+    with open(jobs_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -660,7 +686,7 @@ def main() -> None:
     for i, job in enumerate(jobs, 1):
         try:
             _clean_scene()
-            _build_scene_for_job(job, samples=int(args.samples), device=str(args.device))
+            _build_scene_for_job(job, samples=int(args.samples), device=str(args.device), engine=str(args.engine))
             out_path = out_root / str(job["image_path"])
             out_path.parent.mkdir(parents=True, exist_ok=True)
             bpy.context.scene.render.filepath = str(out_path)

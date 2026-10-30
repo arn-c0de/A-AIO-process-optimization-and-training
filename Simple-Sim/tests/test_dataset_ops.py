@@ -101,7 +101,7 @@ def test_delete_samples_updates_jsonl_and_manifest(tmp_path: Path) -> None:
     assert [r.id for r in label_rows] == ["run_a/sim/test/0002"]
     assert not (ds / "images/0001.png").exists()
 
-    with open(ds / "dataset_manifest.json", "r", encoding="utf-8") as f:
+    with open(ds / "dataset_manifest.json", encoding="utf-8") as f:
         manifest = json.load(f)
     assert manifest["dataset_stats"]["total_samples"] == 1
     assert manifest["dataset_stats"]["splits"]["test"] == 1
@@ -125,9 +125,9 @@ def test_move_samples_transfers_rows_files_and_manifest(tmp_path: Path) -> None:
     assert src_ids == {"run_a/sim/train/0001"}
     assert "run_a/sim/val/0002" in dst_ids
 
-    with open(src / "dataset_manifest.json", "r", encoding="utf-8") as f:
+    with open(src / "dataset_manifest.json", encoding="utf-8") as f:
         src_manifest = json.load(f)
-    with open(dst / "dataset_manifest.json", "r", encoding="utf-8") as f:
+    with open(dst / "dataset_manifest.json", encoding="utf-8") as f:
         dst_manifest = json.load(f)
     assert src_manifest["dataset_stats"]["total_samples"] == 1
     assert dst_manifest["dataset_stats"]["total_samples"] == 2
@@ -171,3 +171,70 @@ def test_list_dataset_samples_returns_rows(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0].sample_id == "run_a/sim/train/0001"
     assert rows[0].class_name == "OK"
+
+
+def _write_splits(ds: Path, splits: dict[str, list[str]]) -> None:
+    (ds / "splits").mkdir(parents=True, exist_ok=True)
+    for name, ids in splits.items():
+        (ds / "splits" / f"{name}.txt").write_text("".join(f"{i}\n" for i in ids), encoding="utf-8")
+
+
+def _read_splits(ds: Path) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for f in sorted((ds / "splits").glob("*.txt")):
+        out[f.stem] = [line.strip() for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return out
+
+
+def test_delete_samples_updates_split_files(tmp_path: Path) -> None:
+    ds = tmp_path / "runs" / "ds_a"
+    a, b, c = "run_a/sim/train/0001", "run_a/sim/val/0002", "run_a/sim/test/0003"
+    _write_dataset(ds, [(a, "OK", "train"), (b, "OK", "val"), (c, "OK", "test")])
+    _write_splits(ds, {"train": [a], "val": [b], "test": [c]})
+
+    delete_samples(ds, [a, c])
+
+    assert _read_splits(ds) == {"train": [], "val": [b], "test": []}
+    assert not list((ds / "splits").glob("*.tmp"))
+
+
+def test_delete_samples_without_splits_dir_does_not_create_it(tmp_path: Path) -> None:
+    ds = tmp_path / "runs" / "ds_a"
+    _write_dataset(ds, [("run_a/sim/train/0001", "OK", "train")])
+
+    delete_samples(ds, ["run_a/sim/train/0001"])
+
+    assert not (ds / "splits").exists()
+
+
+def test_move_samples_updates_split_files(tmp_path: Path) -> None:
+    src = tmp_path / "runs" / "src"
+    dst = tmp_path / "runs" / "dst"
+    a, b, c = "run_a/sim/train/0001", "run_a/sim/val/0002", "run_a/sim/x/0003"
+    _write_dataset(src, [(a, "OK", "train"), (b, "OK", "val"), (c, "OK", "test")])
+    _write_splits(src, {"train": [a], "val": [b], "test": []})  # c is in no split
+    d = "run_b/sim/train/1001"
+    _write_dataset(dst, [(d, "OK", "train")])
+    _write_splits(dst, {"train": [d], "val": [], "test": []})
+
+    move_samples(src, dst, [b, c])
+
+    assert _read_splits(src) == {"train": [a], "val": [], "test": []}
+    assert _read_splits(dst) == {"train": [d, c], "val": [b], "test": []}
+
+
+def test_move_samples_uses_deduped_id_in_destination_split(tmp_path: Path) -> None:
+    src = tmp_path / "runs" / "src"
+    dst = tmp_path / "runs" / "dst"
+    conflict_id = "run_a/sim/train/0001"
+    _write_dataset(src, [(conflict_id, "OK", "test")])
+    _write_splits(src, {"train": [], "val": [], "test": [conflict_id]})
+    _write_dataset(dst, [(conflict_id, "MISSING", "train")])
+    _write_splits(dst, {"train": [conflict_id], "val": [], "test": []})
+
+    move_samples(src, dst, [conflict_id])
+
+    dst_splits = _read_splits(dst)
+    assert dst_splits["train"] == [conflict_id]
+    assert dst_splits["test"] == [f"{conflict_id}__moved2"]
+    assert _read_splits(src)["test"] == []

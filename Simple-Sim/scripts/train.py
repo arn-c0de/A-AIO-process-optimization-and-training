@@ -3,30 +3,29 @@
 
 import argparse
 import sys
-import os
 from pathlib import Path
-from typing import Optional
 import yaml
 import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import models
 from tqdm import tqdm
 import numpy as np
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.data_loader import ROIDataset
-from simple_sim.metrics import compute_metrics, format_metrics
+from simple_sim.data_loader import ROIDataset, make_loader_kwargs
+from simple_sim.metrics import compute_metrics
+from simple_sim.models import build_resnet18
+from simple_sim.rng import resolve_train_seed, seed_everything
 from simple_sim.telemetry import emit
-from simple_sim.manifest import read_dataset_manifest, hash_file
+from simple_sim.manifest import check_checkpoint_profile, read_dataset_manifest, resolve_dataset_profile, hash_file
 from simple_sim.model_bundle import bundle_checkpoint_path, upsert_bundle_meta
 
 
-def train_epoch(model, loader, criterion, optimizer, device, *, use_amp: bool = False, scaler: Optional[torch.cuda.amp.GradScaler] = None):
+def train_epoch(model, loader, criterion, optimizer, device, *, use_amp: bool = False, scaler: torch.cuda.amp.GradScaler | None = None):
     """Train for one epoch.
 
     Args:
@@ -174,7 +173,7 @@ def validate(model, loader, criterion, device, class_names, critical_classes=Non
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
-    avg_loss = total_loss / num_batches
+    avg_loss = total_loss / max(1, num_batches)
 
     # Compute metrics
     metrics = compute_metrics(
@@ -221,8 +220,12 @@ def main():
 
     # Load config from dataset
     config_path = data_dir / 'config.yaml'
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:
         config = yaml.safe_load(f)
+
+    # Reproducibility: seed Python/NumPy/PyTorch from the dataset config.
+    train_seed = resolve_train_seed(config)
+    seed_everything(train_seed)
 
     # GUARD: Load and validate dataset manifest
     manifest_path = data_dir / 'dataset_manifest.json'
@@ -235,23 +238,17 @@ def main():
         )
 
     manifest = read_dataset_manifest(manifest_path)
-    mver = int(manifest.get('manifest_version', 1) or 1)
-    if mver == 1:
-        dataset_profile_id = manifest['component_profile']['profile_id']
-        dataset_profile_hash = manifest['component_profile']['profile_hash']
+    # Multi-profile (v2) datasets map to the logical profile "multi" for checkpoint metadata.
+    dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
+    if dataset_profile_id != "multi":
         print(f"Dataset Profile: {dataset_profile_id}")
-    elif mver == 2:
-        # Multi-profile dataset: treat as a special logical profile for checkpoint metadata.
-        dataset_profile_id = "multi"
-        dataset_profile_hash = "multi"
+    else:
         profiles = manifest.get('component_profiles') or []
         try:
             pids = [p.get('profile_id') for p in profiles if isinstance(p, dict)]
         except Exception:
             pids = []
         print(f"Dataset Profile: multi ({', '.join([x for x in pids if x])})")
-    else:
-        raise ValueError(f"Unsupported dataset manifest_version: {mver}")
 
     # "Multi-model" bundle support:
     # If --out is a directory (or ends with `.bundle`), write per-profile checkpoints into that dir.
@@ -283,27 +280,20 @@ def main():
     lr = train_config['lr']
     weight_decay = train_config['weight_decay']
     pretrained = train_config.get('pretrained', True)
-    num_workers = int(train_config.get('num_workers', 0) or 0)
-    effective_num_workers = num_workers
-    if device.type == "cuda" and effective_num_workers <= 0:
-        cpu_count = max(1, int(os.cpu_count() or 1))
-        # Auto-tune worker count for GPU runs when config leaves it at 0.
-        effective_num_workers = max(2, min(8, cpu_count - 1 if cpu_count > 1 else 1))
-        print(f"  Num workers: {num_workers} (auto-tuned to {effective_num_workers} for CUDA)")
-    else:
-        print(f"  Num workers: {effective_num_workers}")
+    loader_kwargs = make_loader_kwargs(train_config.get('num_workers', 0), device)
 
     # Class names (sorted for consistency)
     class_names = sorted(config['classes'].keys())
     num_classes = len(class_names)
 
-    print(f"Training configuration:")
+    print("Training configuration:")
     print(f"  Dataset: {data_dir}")
     print(f"  Classes: {class_names}")
     print(f"  Epochs: {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  Learning rate: {lr}")
     print(f"  Pretrained: {pretrained}")
+    print(f"  Seed: {train_seed}")
     print(f"  Device: {device}")
     print(f"  AMP: {use_amp}")
     if resume_path:
@@ -326,35 +316,14 @@ def main():
         print(f"  {class_name}: {count}")
 
     # Create data loaders
-    # num_workers>0 can fail in restricted environments (semaphores / shared memory perms).
-    loader_kwargs = {
-        "num_workers": effective_num_workers,
-        "pin_memory": (device.type == "cuda"),
-    }
-    if effective_num_workers > 0:
-        loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = 2
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
     # Create model
     print("\nInitializing ResNet18...")
-    if pretrained:
-        try:
-            model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
-        except Exception as e:
-            # Pretrained weights may require network access on first run.
-            print(f"WARNING: Failed to load pretrained weights ({e}). Falling back to random init.")
-            model = models.resnet18(weights=None)
-    else:
-        model = models.resnet18(weights=None)
+    model = build_resnet18(num_classes, pretrained=pretrained)
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
-
-    # Modify final layer for our number of classes
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-
     model = model.to(device)
 
     # Loss and optimizer
@@ -371,7 +340,7 @@ def main():
         if not resume_path.exists():
             raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
         print("\nLoading resume checkpoint...")
-        checkpoint = torch.load(resume_path, map_location=device)
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
 
         # Existing guard: class names
         ckpt_classes = checkpoint.get('class_names')
@@ -379,43 +348,25 @@ def main():
             raise ValueError(f"Resume checkpoint classes do not match dataset config.\n"
                              f"  checkpoint: {ckpt_classes}\n  dataset:    {class_names}")
 
-        # NEW GUARD: component profile validation
-        ckpt_profile = checkpoint.get('component_profile')
-        if ckpt_profile:
-            ckpt_profile_id = ckpt_profile.get('profile_id')
-            ckpt_profile_hash = ckpt_profile.get('profile_hash')
-
-            # HARD FAIL by default: Profile ID mismatch
-            if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
-                if not args.allow_profile_mismatch:
-                    raise ValueError(
-                        f"Component profile mismatch for --resume:\n"
-                        f"  Checkpoint profile: {ckpt_profile_id}\n"
-                        f"  Dataset profile:    {dataset_profile_id}\n"
-                        f"Cannot resume training with different component type.\n\n"
-                        f"To override (NOT recommended): pass --allow-profile-mismatch"
-                    )
-                print("WARNING: Resuming with component profile mismatch (--allow-profile-mismatch).")
-                print(f"  Checkpoint profile: {ckpt_profile_id}")
-                print(f"  Dataset profile:    {dataset_profile_id}")
-
-            # WARNING: Profile hash mismatch
-            if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
-                print(f"WARNING: Profile hash mismatch (different tolerance/geometry)")
-                print(f"  Checkpoint hash: {ckpt_profile_hash[:72]}...")
-                print(f"  Dataset hash:    {dataset_profile_hash[:72]}...")
-        else:
-            print(f"WARNING: Checkpoint lacks profile metadata (legacy checkpoint)")
+        # GUARD: component profile validation
+        check_checkpoint_profile(
+            checkpoint, dataset_profile_id, dataset_profile_hash,
+            action="resume training with",
+            allow_mismatch=bool(args.allow_profile_mismatch),
+            override_verb="Resuming",
+            ckpt_label="Checkpoint profile",
+        )
 
         model.load_state_dict(checkpoint['model_state_dict'])
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        except Exception:
+        except Exception as e:
             # Optimizer state may be missing or incompatible; continue with fresh optimizer state.
-            pass
+            print(f"WARNING: Could not restore optimizer state ({e}); using fresh optimizer state.")
         start_epoch = int(checkpoint.get('epoch', 0))
-        best_val_f1 = float(checkpoint.get('val_f1', checkpoint.get('val_f1', 0.0)) or 0.0)
-        best_epoch = int(checkpoint.get('epoch', 0))
+        # Prefer the tracked best score; older checkpoints only carry the F1 of their own epoch.
+        best_val_f1 = float(checkpoint.get('best_val_f1', checkpoint.get('val_f1', 0.0)) or 0.0)
+        best_epoch = int(checkpoint.get('best_epoch', checkpoint.get('epoch', 0)))
         print(f"  Resumed from epoch: {start_epoch}")
         print(f"  Resumed best val F1: {best_val_f1:.4f}")
 
@@ -480,6 +431,16 @@ def main():
             epoch_s=float(epoch_s),
         )
 
+        # Decide "best" before building the checkpoint so it carries the best-so-far score.
+        if args.out_mode == "last":
+            is_best = True
+        else:
+            # Always write --out at least once, even if no epoch beats the resumed/initial score.
+            is_best = val_f1 > best_val_f1 or not output_path.exists()
+        if is_best:
+            best_val_f1 = float(val_f1)
+            best_epoch = int(epoch + 1)
+
         # Save checkpoint(s)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         ckpt = {
@@ -488,6 +449,8 @@ def main():
             'optimizer_state_dict': optimizer.state_dict(),
             'val_f1': val_f1,
             'val_accuracy': val_acc,
+            'best_val_f1': best_val_f1,
+            'best_epoch': best_epoch,
             'class_names': class_names,
             'config': config,
 
@@ -503,25 +466,18 @@ def main():
         # Always save "last" so resume runs are observable.
         torch.save(ckpt, last_path)
 
-        if args.out_mode == "last":
-            torch.save(ckpt, output_path)
-            best_val_f1 = float(val_f1)
-            best_epoch = int(epoch + 1)
-        else:
-            # Save best model
-            if val_f1 > best_val_f1:
-                best_val_f1 = float(val_f1)
-                best_epoch = int(epoch + 1)
+        if is_best:
+            if args.out_mode != "last":
                 print(f"  ✓ New best model (F1: {best_val_f1:.4f})")
-                torch.save(ckpt, output_path)
+            torch.save(ckpt, output_path)
 
         # Bundle bookkeeping: keep a lightweight index of which profiles exist.
         if bundle_dir is not None:
             try:
                 if output_path.exists():
                     upsert_bundle_meta(bundle_dir, dataset_profile_id, output_path)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"WARNING: Failed to update bundle index in {bundle_dir}: {e}")
 
     print("\n" + "="*60)
     print("TRAINING COMPLETE")

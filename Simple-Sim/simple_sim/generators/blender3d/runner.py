@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Dict, Optional
 
 
 def render_blender_batch(
@@ -15,7 +14,8 @@ def render_blender_batch(
     blender_executable: str,
     cycles_samples: int,
     device: str = "CPU",
-    extra_env: Optional[Dict[str, str]] = None,
+    engine: str = "BLENDER_EEVEE",
+    extra_env: dict[str, str] | None = None,
 ) -> None:
     sim_root = Path(sim_root)
     jobs_path = Path(jobs_path)
@@ -44,6 +44,8 @@ def render_blender_batch(
         str(int(cycles_samples)),
         "--device",
         str(device),
+        "--engine",
+        str(engine),
     ]
 
     env = None

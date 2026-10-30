@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import queue
 import re
 from pathlib import Path
 
@@ -19,6 +20,7 @@ if __package__ in {None, ""}:
     from tools.profile_editor.preview_3d import Preview3D
     from tools.profile_editor.state_store import EditorStateStore
     from tools.profile_editor.system_monitor import format_system_stats, read_system_stats
+    from gui.utils.system_stats import SystemStatsSampler
     from tools.profile_editor.sync_controller import SyncController
     from tools.profile_editor.yaml_editor import YamlEditorPanel
     from tools.profile_editor.yaml_io import save_yaml
@@ -29,6 +31,7 @@ else:
     from .preview_3d import Preview3D
     from .state_store import EditorStateStore
     from .system_monitor import format_system_stats, read_system_stats
+    from gui.utils.system_stats import SystemStatsSampler
     from .sync_controller import SyncController
     from .yaml_editor import YamlEditorPanel
     from .yaml_io import save_yaml
@@ -44,8 +47,14 @@ class ProfileEditorApp:
         self.store.add_listener(self._on_state_event)
 
         self._hq_after_id: str | None = None
+        # Worker thread posts (status, image_path) here; drained on the Tk thread.
+        self._hq_status_queue: queue.Queue[tuple[str, Path | None]] = queue.Queue()
         self._worker = BlenderLivePreviewWorker(self.sim_root, self._on_hq_status_from_worker)
         self._closed = False
+        self._stats_sampler = SystemStatsSampler()
+        # Last profile/run ids actually loaded into the store (to revert a cancelled switch).
+        self._active_profile_id = ""
+        self._active_run_id = ""
         self._settings_after_id: str | None = None
         self._session_settings = self._load_session_settings()
         self.dark_mode_var = tk.BooleanVar(value=bool(self._session_settings.get("dark_mode", False)))
@@ -55,6 +64,7 @@ class ProfileEditorApp:
         self._load_initial_choices()
         self._schedule_registry_poll()
         self._schedule_system_stats()
+        self._poll_hq_status_queue()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -80,6 +90,7 @@ class ProfileEditorApp:
         ttk.Button(top, text="Save Profile", command=self._save_profile).pack(side="left", padx=(0, 6))
         ttk.Button(top, text="Copy Profile", command=self._copy_profile).pack(side="left", padx=(0, 6))
         ttk.Button(top, text="Save Run", command=self._save_run).pack(side="left", padx=(0, 6))
+        ttk.Button(top, text="Link Run to Profile", command=self._link_run_to_profile).pack(side="left", padx=(0, 6))
         ttk.Button(top, text="Render HQ Now", command=self._trigger_hq_render_now).pack(side="left", padx=(0, 6))
         ttk.Button(top, text="Refresh Files", command=self._refresh_choices).pack(side="left")
         ttk.Checkbutton(top, text="Night Mode", variable=self.dark_mode_var, command=self._on_theme_toggled).pack(
@@ -171,50 +182,107 @@ class ProfileEditorApp:
 
     def _update_run_choices_for_profile(self) -> None:
         matching = self.controller.matching_runs_for_current_profile()
+        self.run_combo["values"] = matching
         if matching:
-            self.run_combo["values"] = matching
             if self.run_var.get() not in matching:
                 self.run_var.set(matching[0])
         else:
-            snapshot = self.controller.snapshot
-            all_runs = sorted(snapshot.run_files.keys()) if snapshot else []
-            self.run_combo["values"] = all_runs
-            if self.run_var.get() not in all_runs:
-                self.run_var.set(all_runs[0] if all_runs else "")
+            # Never fall back to unrelated runs: Save Run would write a foreign config.
+            self.run_var.set("")
+            pid = self.store.current_profile_id()
+            if pid:
+                self.status_var.set(f"No run config (configs/run_*.yaml) references profile '{pid}'")
+
+    def _confirm_unsaved(self, targets: tuple[str, ...], action: str) -> bool:
+        """Ask before discarding unsaved edits. Returns True if it is OK to proceed."""
+        dirty = [t for t in targets if self.store.is_dirty(t)]
+        if not dirty:
+            return True
+        names = " and ".join(dirty)
+        answer = messagebox.askyesnocancel(
+            "Unsaved changes",
+            f"The {names} has unsaved changes.\n\nSave before {action}?\n"
+            "Yes = save, No = discard, Cancel = stay.",
+            parent=self.root,
+        )
+        if answer is None:
+            return False
+        if answer:
+            for target in dirty:
+                try:
+                    if target == "profile":
+                        self.controller.save_profile()
+                    else:
+                        self.controller.save_run()
+                except Exception as exc:
+                    self.status_var.set(f"Save {target} failed: {exc}")
+                    return False
+        return True
 
     def _on_profile_selected(self) -> None:
         profile_id = self.profile_var.get().strip()
         if not profile_id:
+            return
+        if not self._confirm_unsaved(("profile", "run"), "switching profile"):
+            self.profile_var.set(self._active_profile_id)
             return
         try:
             self.controller.load_profile(profile_id)
         except Exception as exc:
             self.status_var.set(f"Failed to load profile '{profile_id}': {exc}")
             return
+        self._active_profile_id = profile_id
 
         self._update_run_choices_for_profile()
         current_run = self.run_var.get().strip()
         if current_run:
-            self._on_run_selected()
+            self._load_run(current_run)
+        else:
+            self.store.clear_run()
+            self._active_run_id = ""
         self._schedule_settings_save()
 
     def _on_run_selected(self) -> None:
         run_id = self.run_var.get().strip()
         if not run_id:
             return
-        try:
-            self.controller.load_run(run_id)
-        except Exception as exc:
-            self.status_var.set(f"Failed to load run '{run_id}': {exc}")
+        if not self._confirm_unsaved(("run",), "switching run"):
+            self.run_var.set(self._active_run_id)
+            return
+        self._load_run(run_id)
         self._schedule_settings_save()
 
-    def _on_form_commit(self, target: str, path: tuple[str, ...], raw: str) -> None:
+    def _load_run(self, run_id: str) -> None:
         try:
-            value = self.store.parse_form_input(raw)
-            self.store.update_leaf(target, path, value, source="form")
-            self.status_var.set(f"Updated {target}.{'.'.join(path)}")
+            self.controller.load_run(run_id)
+            self._active_run_id = run_id
+        except Exception as exc:
+            self.status_var.set(f"Failed to load run '{run_id}': {exc}")
+            return
+        if self.store.run_profile_mismatch():
+            self.status_var.set(
+                f"Run '{run_id}' uses component_profile '{self.store.run_profile_id()}', not "
+                f"'{self.store.current_profile_id()}' (use 'Link Run to Profile' to change it)"
+            )
+
+    def _link_run_to_profile(self) -> None:
+        pid = self.store.current_profile_id()
+        if self.store.run.path is None or not pid:
+            self.status_var.set("Link run failed: load a profile and a run first")
+            return
+        if self.store.link_run_to_profile():
+            self.status_var.set(f"Run component_profile set to '{pid}' (unsaved)")
+        else:
+            self.status_var.set(f"Run already uses profile '{pid}'")
+
+    def _on_form_commit(self, target: str, path: tuple[str, ...], raw: str) -> bool:
+        try:
+            if self.store.commit_form_text(target, path, raw, source="form"):
+                self.status_var.set(f"Updated {target}.{'.'.join(path)}")
+            return True
         except Exception as exc:
             self.status_var.set(f"Invalid input for {target}.{'.'.join(path)}: {exc}")
+            return False
 
     def _on_yaml_apply(self, target: str, text: str) -> None:
         self.store.set_text(target, text, source="yaml")
@@ -436,7 +504,20 @@ class ProfileEditorApp:
         self._worker.submit(RenderRequest(profile_data=profile_data, run_data=run_data))
 
     def _on_hq_status_from_worker(self, status: str, image_path: Path | None) -> None:
-        self.root.after(0, lambda: self._apply_hq_status(status, image_path))
+        # Called on the Blender worker thread: never touch Tk here.
+        if not self._closed:
+            self._hq_status_queue.put((status, image_path))
+
+    def _poll_hq_status_queue(self) -> None:
+        if self._closed:
+            return
+        while True:
+            try:
+                status, image_path = self._hq_status_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._apply_hq_status(status, image_path)
+        self.root.after(100, self._poll_hq_status_queue)
 
     def _apply_hq_status(self, status: str, image_path: Path | None) -> None:
         if status == "rendering":
@@ -477,6 +558,9 @@ class ProfileEditorApp:
                 if values:
                     self.run_var.set(values[0])
                     self._on_run_selected()
+                elif not self.store.is_dirty("run"):
+                    self.store.clear_run()
+                    self._active_run_id = ""
             self.status_var.set("Detected config file changes and refreshed profile/run lists")
 
         self.root.after(1400, self._schedule_registry_poll)
@@ -485,7 +569,7 @@ class ProfileEditorApp:
         if self._closed:
             return
         try:
-            stats = read_system_stats()
+            stats = read_system_stats(self._stats_sampler)
             self.system_stats_var.set(format_system_stats(stats))
         except Exception:
             self.system_stats_var.set("CPU n/a | GPU n/a | RAM n/a")
@@ -547,8 +631,11 @@ class ProfileEditorApp:
             pass
 
     def _on_close(self) -> None:
-        self._closed = True
+        if not self._confirm_unsaved(("profile", "run"), "closing"):
+            return
         self._flush_session_settings()
+        self._closed = True
+        self._stats_sampler.stop()
         try:
             self._worker.stop()
         finally:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import tkinter as tk
 from tkinter import ttk
@@ -15,7 +15,7 @@ class YamlEditorPanel(ttk.Frame):
         super().__init__(master)
         self._on_apply = on_apply
         self._suppress = False
-        self._pending_after: Optional[str] = None
+        self._pending_after: str | None = None
 
         self.tabs = ttk.Notebook(self)
         self.tabs.pack(fill="both", expand=True)
