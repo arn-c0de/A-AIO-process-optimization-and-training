@@ -11,7 +11,6 @@ Usage examples:
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -38,7 +37,7 @@ def preprocess(img_bgr: np.ndarray) -> torch.Tensor:
     return preprocess_bgr(img_bgr)
 
 
-def maybe_get_ground_truth(data_dir: Optional[Path], sample_id: Optional[str]):
+def maybe_get_ground_truth(data_dir: Path | None, sample_id: str | None):
     if not data_dir or not sample_id:
         return None
     label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)

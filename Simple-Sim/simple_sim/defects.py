@@ -1,7 +1,7 @@
 """Defect classification and parameter sampling."""
 
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Sampling constants
@@ -31,7 +31,7 @@ _EPS = 1e-6
 # Public API
 # ---------------------------------------------------------------------------
 
-def classify_defect(nominal: Dict[str, float], defect_params: Dict[str, Any], tolerances: Optional[Dict[str, Any]]) -> str:
+def classify_defect(nominal: dict[str, float], defect_params: dict[str, Any], tolerances: dict[str, Any] | None) -> str:
     """Classify defect based on tolerances.
 
     Deterministic labeling based on threshold rules.
@@ -72,8 +72,8 @@ def classify_defect(nominal: Dict[str, float], defect_params: Dict[str, Any], to
 def sample_defect_params(
     defect_type: str,
     rng: np.random.Generator,
-    tolerances: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    tolerances: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Sample defect parameters based on type.
 
     Args:

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Tuple
+from typing import Any
+from collections.abc import Callable
 
 import tkinter as tk
 from tkinter import ttk
 
 from .state_store import flatten_leaf_paths
 
-FieldCallback = Callable[[str, Tuple[str, ...], str], None]
+FieldCallback = Callable[[str, tuple[str, ...], str], None]
 
 
 class FormRenderer(ttk.Frame):
@@ -17,7 +18,7 @@ class FormRenderer(ttk.Frame):
         super().__init__(master)
         self.target = target
         self._on_field_commit = on_field_commit
-        self._entries: Dict[Tuple[str, ...], ttk.Entry] = {}
+        self._entries: dict[tuple[str, ...], ttk.Entry] = {}
         self._dark_mode = False
 
         self.canvas = tk.Canvas(self, highlightthickness=0)
@@ -38,7 +39,7 @@ class FormRenderer(ttk.Frame):
     def _on_canvas_resize(self, event: tk.Event) -> None:
         self.canvas.itemconfig(self.window_id, width=event.width)
 
-    def set_data(self, data: Dict[str, Any]) -> None:
+    def set_data(self, data: dict[str, Any]) -> None:
         for child in self.inner.winfo_children():
             child.destroy()
         self._entries.clear()
@@ -77,7 +78,7 @@ class FormRenderer(ttk.Frame):
 
         self.inner.columnconfigure(1, weight=1)
 
-    def _commit_entry(self, path: Tuple[str, ...], widget: ttk.Entry) -> None:
+    def _commit_entry(self, path: tuple[str, ...], widget: ttk.Entry) -> None:
         self._on_field_commit(self.target, path, widget.get())
 
     def apply_theme(self, *, dark: bool) -> None:

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, List, Any
+from typing import Any
 
 from gui.utils.settings_store import SettingsStore
 
@@ -16,14 +16,14 @@ class UiState:
     img_per_s: str = "-"
     last_id: str = "-"
     last_img: str = "-"
-    dataset_dir: Optional[Path] = None
+    dataset_dir: Path | None = None
 
     # New fields for enhanced functionality
-    selected_image_id: Optional[str] = None
-    current_model_path: Optional[Path] = None
-    analysis_results: Optional[Dict[str, Any]] = None
-    flags: Dict[str, List[str]] = field(default_factory=dict)  # id -> list of flags
+    selected_image_id: str | None = None
+    current_model_path: Path | None = None
+    analysis_results: dict[str, Any] | None = None
+    flags: dict[str, list[str]] = field(default_factory=dict)  # id -> list of flags
 
     # Settings persistence
-    settings: Dict[str, Any] = field(default_factory=dict)
-    settings_store: Optional[SettingsStore] = None
+    settings: dict[str, Any] = field(default_factory=dict)
+    settings_store: SettingsStore | None = None

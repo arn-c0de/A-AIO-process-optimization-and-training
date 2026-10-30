@@ -7,7 +7,7 @@ import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
@@ -25,18 +25,18 @@ class PredictionsTab(BaseTab):
         self.ui = PredictionsUI(self, self.frame)
         self.logic = PredictionsLogic(sim_root, self.log_q)
 
-        self._pred_rows: List[Dict[str, Any]] = []
-        self._pred_row_by_id: Dict[str, Dict[str, Any]] = {}
-        self._active_dataset_dir: Optional[Path] = None
+        self._pred_rows: list[dict[str, Any]] = []
+        self._pred_row_by_id: dict[str, dict[str, Any]] = {}
+        self._active_dataset_dir: Path | None = None
 
-        self._multi_dataset_paths: List[str] = []
-        self._multi_results: List[Dict[str, Any]] = []
-        self._multi_result_by_key: Dict[str, Dict[str, Any]] = {}
+        self._multi_dataset_paths: list[str] = []
+        self._multi_results: list[dict[str, Any]] = []
+        self._multi_result_by_key: dict[str, dict[str, Any]] = {}
         
-        self._dataset_dirs: List[Path] = []
-        self._dataset_by_label: Dict[str, Path] = {}
+        self._dataset_dirs: list[Path] = []
+        self._dataset_by_label: dict[str, Path] = {}
 
-        self._ui_tick_id: Optional[str] = None
+        self._ui_tick_id: str | None = None
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -76,7 +76,7 @@ class PredictionsTab(BaseTab):
         except Exception:
             pass
 
-    def _store(self) -> Optional[SettingsStore]:
+    def _store(self) -> SettingsStore | None:
         return self.state.settings_store
 
     def _load_persisted_settings(self) -> None:
@@ -93,7 +93,7 @@ class PredictionsTab(BaseTab):
         except Exception:
             self._multi_dataset_paths = []
 
-    def _persisted_var_bindings(self) -> List[Tuple[Any, ...]]:
+    def _persisted_var_bindings(self) -> list[tuple[Any, ...]]:
         # (key, var[, default]); defaults are applied when the key was never persisted.
         return [
             ("pred.dataset_selection", self.ui.var_dataset),
@@ -185,7 +185,7 @@ class PredictionsTab(BaseTab):
 
         def on_ok() -> None:
             sel = list(lb.curselection())
-            picked: List[str] = []
+            picked: list[str] = []
             for i in sel:
                 try:
                     lab = labels[int(i)]
@@ -205,7 +205,7 @@ class PredictionsTab(BaseTab):
         ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side="right", padx=(0, 8))
         dlg.geometry("560x420")
 
-    def _active_data_dir(self) -> Optional[Path]:
+    def _active_data_dir(self) -> Path | None:
         return self._active_dataset_dir or self.state.dataset_dir
 
     def _tick_ui(self) -> None:
@@ -227,9 +227,9 @@ class PredictionsTab(BaseTab):
         self.logic.stop_predictions()
         self.ui.var_status.set("status: stopping...")
 
-    def _selected_dataset_paths(self) -> List[Path]:
+    def _selected_dataset_paths(self) -> list[Path]:
         if hasattr(self.ui, "var_multi_datasets") and bool(self.ui.var_multi_datasets.get()):
-            out: List[Path] = [self.logic.resolve_dataset_path(s) for s in self._multi_dataset_paths if s.strip()]
+            out: list[Path] = [self.logic.resolve_dataset_path(s) for s in self._multi_dataset_paths if s.strip()]
             seen = set()
             return [p for p in out if not (str(p) in seen or seen.add(str(p)))]
         ds = self.state.dataset_dir
@@ -252,7 +252,7 @@ class PredictionsTab(BaseTab):
             return
         
         profile_model_s = self.ui.var_profile_model.get().strip()
-        pm_path: Optional[Path] = None
+        pm_path: Path | None = None
         if profile_model_s:
             pm_path = self.logic.resolve_model_path(profile_model_s)
             if not pm_path.exists():
@@ -313,7 +313,7 @@ class PredictionsTab(BaseTab):
             except Exception:
                 return str(a) == str(b)
 
-        prev_selected: Optional[Path] = self._selected_dataset_dir()
+        prev_selected: Path | None = self._selected_dataset_dir()
         if prev_selected is None and self.state.dataset_dir is not None:
             prev_selected = self.state.dataset_dir
 
@@ -323,7 +323,7 @@ class PredictionsTab(BaseTab):
 
         runs, versions = sim_data_roots(self.sim_root)
         self._dataset_by_label = unique_dataset_labels(cand, runs_root=runs, versions_root=versions)
-        labels: List[str] = list(self._dataset_by_label)
+        labels: list[str] = list(self._dataset_by_label)
 
         self.ui.combo_dataset["values"] = labels
         cur = self.ui.var_dataset.get().strip()
@@ -345,12 +345,12 @@ class PredictionsTab(BaseTab):
             self.ui.var_dataset.set(labels[0])
             self._on_dataset_selected()
 
-    def _selected_dataset_dir(self) -> Optional[Path]:
+    def _selected_dataset_dir(self) -> Path | None:
         disp = self.ui.var_dataset.get().strip()
         if not disp: return None
         return self._dataset_by_label.get(disp)
 
-    def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
+    def _on_dataset_selected(self, _evt: object | None = None) -> None:
         ds = self._selected_dataset_dir()
         if not ds: return
         self.state.dataset_dir = ds
@@ -425,7 +425,7 @@ class PredictionsTab(BaseTab):
         self._pred_row_by_id = {str(r.get("id")): r for r in rows if r.get("id")}
         self._refresh_tree()
 
-    def _on_tree_select(self, _evt: Optional[object] = None) -> None:
+    def _on_tree_select(self, _evt: object | None = None) -> None:
         sel = self.ui.tree.selection()
         if not sel: return
         sid = sel[0]
@@ -445,7 +445,7 @@ class PredictionsTab(BaseTab):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to display image:\n{e}")
 
-    def _on_tree_ds_select(self, _evt: Optional[object] = None) -> None:
+    def _on_tree_ds_select(self, _evt: object | None = None) -> None:
         sel = self.ui.tree_ds.selection()
         if not sel: return
         key = sel[0]
@@ -471,7 +471,7 @@ class PredictionsTab(BaseTab):
         self._apply_multi_mode_ui()
         self.ui.tree_ds.delete(*self.ui.tree_ds.get_children())
         
-        rows: List[Tuple[str, str, str, str, str, str]] = []
+        rows: list[tuple[str, str, str, str, str, str]] = []
         for res in self._multi_results:
             key, label, report_path = str(res.get("key") or ""), str(res.get("label") or ""), res.get("report_path")
             acc_s, f1_s, seen_s, prof_acc_s = "", "", "", ""

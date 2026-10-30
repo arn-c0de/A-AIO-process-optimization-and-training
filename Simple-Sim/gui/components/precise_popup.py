@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
+from collections.abc import Callable
 
 
 def open_precise_popup(
     parent: tk.Widget,
-    settings: Dict[str, Any],
-    on_apply: Callable[[Dict[str, Any]], None],
-    get_class_names_func: Callable[[], List[str]],
-) -> "PrecisePopup":
+    settings: dict[str, Any],
+    on_apply: Callable[[dict[str, Any]], None],
+    get_class_names_func: Callable[[], list[str]],
+) -> PrecisePopup:
     """Open the precise mode settings popup and return the instance.
 
     The returned instance can be used to push live updates into the popup
@@ -24,7 +25,7 @@ class PrecisePopup:
     """Toplevel popup for configuring per-class / per-profile sample counts."""
 
     # Expected keys in the *settings* dict with their defaults:
-    _DEFAULTS: Dict[str, Any] = {
+    _DEFAULTS: dict[str, Any] = {
         "total": 100,
         "per_class": False,
         "class_names": ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
@@ -37,15 +38,15 @@ class PrecisePopup:
     def __init__(
         self,
         parent: tk.Widget,
-        settings: Dict[str, Any],
-        on_apply: Callable[[Dict[str, Any]], None],
-        get_class_names_func: Callable[[], List[str]],
+        settings: dict[str, Any],
+        on_apply: Callable[[dict[str, Any]], None],
+        get_class_names_func: Callable[[], list[str]],
     ) -> None:
         self._on_apply = on_apply
         self._get_class_names = get_class_names_func
 
         # Deep-copy the incoming settings so we never mutate the caller's dict
-        self._s: Dict[str, Any] = {}
+        self._s: dict[str, Any] = {}
         for k, default in self._DEFAULTS.items():
             val = settings.get(k, default)
             if isinstance(default, dict):
@@ -65,11 +66,11 @@ class PrecisePopup:
         self._var_per_class = tk.BooleanVar(value=bool(self._s["per_class"]))
 
         # Per-content widget var caches (rebuilt on each _rebuild_content call)
-        self._class_vars: Dict[str, tk.StringVar] = {}
-        self._multi_total_vars: Dict[str, tk.StringVar] = {}
-        self._multi_class_vars: Dict[str, Dict[str, tk.StringVar]] = {}
+        self._class_vars: dict[str, tk.StringVar] = {}
+        self._multi_total_vars: dict[str, tk.StringVar] = {}
+        self._multi_class_vars: dict[str, dict[str, tk.StringVar]] = {}
 
-        self._content_frame: Optional[ttk.Frame] = None
+        self._content_frame: ttk.Frame | None = None
         self._win = tk.Toplevel(parent)
         self._win.title("Precise Mode Settings")
         self._win.resizable(True, True)
@@ -87,7 +88,7 @@ class PrecisePopup:
         except Exception:
             return False
 
-    def refresh(self, settings: Dict[str, Any]) -> None:
+    def refresh(self, settings: dict[str, Any]) -> None:
         """Push updated settings into the open popup and rebuild its content.
 
         Called externally when e.g. multi-profile is toggled while the popup
@@ -177,7 +178,7 @@ class PrecisePopup:
 
         multi = bool(self._s["multi_profiles"])
         per_class = self._var_per_class.get()
-        class_names: List[str] = self._s["class_names"] or ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+        class_names: list[str] = self._s["class_names"] or ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
         default = str(self._s["total"])
 
         if multi:
@@ -185,7 +186,7 @@ class PrecisePopup:
         elif per_class:
             self._build_single_per_class(class_names, default)
 
-    def _build_single_per_class(self, class_names: List[str], default: str) -> None:
+    def _build_single_per_class(self, class_names: list[str], default: str) -> None:
         assert self._content_frame is not None
         classes = self._s["classes"]
         for cls in class_names:
@@ -198,12 +199,12 @@ class PrecisePopup:
             ttk.Entry(row, textvariable=var, width=8).pack(side="left")
 
     def _build_multi_table(
-        self, class_names: List[str], per_class: bool, default: str
+        self, class_names: list[str], per_class: bool, default: str
     ) -> None:
         assert self._content_frame is not None
-        profile_ids: List[str] = self._s["multi_profiles"]
-        multi_totals: Dict[str, Any] = self._s["multi_totals"]
-        multi_classes: Dict[str, Any] = self._s["multi_classes"]
+        profile_ids: list[str] = self._s["multi_profiles"]
+        multi_totals: dict[str, Any] = self._s["multi_totals"]
+        multi_classes: dict[str, Any] = self._s["multi_classes"]
 
         # Header row
         hdr = ttk.Frame(self._content_frame)
@@ -224,7 +225,7 @@ class PrecisePopup:
             ttk.Label(row, text=label, width=22).pack(side="left")
 
             if per_class:
-                cls_dict: Dict[str, tk.StringVar] = {}
+                cls_dict: dict[str, tk.StringVar] = {}
                 for cls in class_names:
                     val = str((multi_classes.get(pid) or {}).get(cls, default))
                     var = tk.StringVar(value=val)

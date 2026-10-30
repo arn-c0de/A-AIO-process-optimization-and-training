@@ -8,7 +8,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from gui.utils.dataset_catalog import list_dataset_dirs
 from gui.utils.process import run_streaming, terminate_process
@@ -19,15 +19,15 @@ class PredictionsLogic:
     def __init__(self, sim_root: Path, log_q: queue.Queue[str]) -> None:
         self.sim_root = sim_root
         self.log_q = log_q
-        self.proc: Optional[subprocess.Popen[str]] = None
+        self.proc: subprocess.Popen[str] | None = None
         self.stop_evt = threading.Event()
 
-    def get_datasets(self) -> List[Path]:
+    def get_datasets(self) -> list[Path]:
         return list_dataset_dirs(self.sim_root)
 
-    def get_models(self) -> List[Path]:
+    def get_models(self) -> list[Path]:
         root = self.sim_root / "outputs" / "models"
-        cand: List[Path] = []
+        cand: list[Path] = []
         for search_path in [root, root / "versions", root / "imports"]:
             if not search_path.exists(): continue
             cand.extend(sorted(search_path.glob("**/*.pt" if search_path.name == "versions" else "*.pt")))
@@ -35,13 +35,13 @@ class PredictionsLogic:
             if (bundles_subdir := search_path / "bundles").exists():
                 cand.extend([p for p in sorted(bundles_subdir.iterdir()) if p.is_dir()])
         
-        uniq: Dict[str, Path] = {str(p.resolve()): p for p in cand if p.exists()}
+        uniq: dict[str, Path] = {str(p.resolve()): p for p in cand if p.exists()}
         return sorted(list(uniq.values()), key=lambda p: p.stat().st_mtime, reverse=True)
 
-    def get_profile_models(self) -> List[Path]:
+    def get_profile_models(self) -> list[Path]:
         root = self.sim_root / "outputs" / "models"
         cand = sorted(root.glob("**/profile_classifier_*.pt")) if root.exists() else []
-        seen: Dict[str, Path] = {str(p.resolve()): p for p in cand}
+        seen: dict[str, Path] = {str(p.resolve()): p for p in cand}
         return sorted(list(seen.values()), key=lambda p: p.stat().st_mtime, reverse=True)
 
     def stop_predictions(self) -> None:
@@ -60,23 +60,23 @@ class PredictionsLogic:
     def run_predictions(
         self,
         model_path: Path,
-        dataset_dirs: List[Path],
+        dataset_dirs: list[Path],
         split: str,
         device: str,
         max_samples: str,
         save_preds: bool,
         auto_train_bundle: bool,
-        profile_model_path: Optional[Path],
+        profile_model_path: Path | None,
         on_complete: callable,
     ) -> None:
         self.stop_evt.clear()
 
         def worker() -> None:
-            last_report_path: Optional[Path] = None
-            last_preds_path: Optional[Path] = None
-            last_dataset_dir: Optional[Path] = None
-            multi_results: List[Dict[str, Any]] = []
-            multi_result_by_key: Dict[str, Dict[str, Any]] = {}
+            last_report_path: Path | None = None
+            last_preds_path: Path | None = None
+            last_dataset_dir: Path | None = None
+            multi_results: list[dict[str, Any]] = []
+            multi_result_by_key: dict[str, dict[str, Any]] = {}
             started_s = time.time()
 
             try:
@@ -107,7 +107,7 @@ class PredictionsLogic:
                         if not expected.exists():
                             if auto_train_bundle:
                                 py = self.sim_root / ".venv" / "bin" / "python"
-                                cmd_train: List[str] = [str(py), "scripts/train.py", "--data", str(data_dir), "--out", str(model_path)]
+                                cmd_train: list[str] = [str(py), "scripts/train.py", "--data", str(data_dir), "--out", str(model_path)]
                                 if device != "auto":
                                     cmd_train.extend(["--device", device])
                                 self.log_q.put(f"[bundle] missing '{profile_id}.pt' -> training into bundle...\n")
@@ -141,7 +141,7 @@ class PredictionsLogic:
                     out_dir = data_dir / "predictions"
                     out_dir.mkdir(parents=True, exist_ok=True)
 
-                    cmd: List[str] = ["bash", str(self.sim_root / "predict.sh"), "--model", str(model_arg_path), "--data", str(data_dir), "--split", split, "--out-dir", str(out_dir)]
+                    cmd: list[str] = ["bash", str(self.sim_root / "predict.sh"), "--model", str(model_arg_path), "--data", str(data_dir), "--split", split, "--out-dir", str(out_dir)]
                     if device != "auto":
                         cmd.extend(["--device", device])
                     if max_samples:
@@ -154,8 +154,8 @@ class PredictionsLogic:
                     self.log_q.put(f"\n[dataset {idx}/{len(dataset_dirs)}] {data_dir}\n")
                     self.log_q.put("[cmd] " + " ".join(cmd) + "\n")
 
-                    report_path: Optional[Path] = None
-                    preds_path: Optional[Path] = None
+                    report_path: Path | None = None
+                    preds_path: Path | None = None
 
                     def on_line(line: str) -> None:
                         nonlocal report_path, preds_path
@@ -214,15 +214,15 @@ class PredictionsLogic:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def load_report(self, report_path: Path) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    def load_report(self, report_path: Path) -> tuple[dict[str, Any] | None, str | None]:
         try:
             obj = json.loads(report_path.read_text(encoding="utf-8"))
             return obj, None
         except Exception as e:
             return None, f"Failed to load report:\n{e}"
 
-    def load_preds(self, preds_path: Path) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
-        rows: List[Dict[str, Any]] = []
+    def load_preds(self, preds_path: Path) -> tuple[list[dict[str, Any]] | None, str | None]:
+        rows: list[dict[str, Any]] = []
         try:
             with open(preds_path, encoding="utf-8") as f:
                 for line in f:
@@ -234,7 +234,7 @@ class PredictionsLogic:
         except Exception as e:
             return None, f"Failed to load predictions:\n{e}"
 
-    def enrich_rows_with_gt_profile(self, rows: List[Dict[str, Any]], active_dataset_dir: Optional[Path]) -> None:
+    def enrich_rows_with_gt_profile(self, rows: list[dict[str, Any]], active_dataset_dir: Path | None) -> None:
         gt_profile_map = self._load_gt_profile_map_from_labels(active_dataset_dir)
         if not gt_profile_map:
             return
@@ -252,14 +252,14 @@ class PredictionsLogic:
             if r.get("pred_profile") and r.get("gt_profile") and r.get("profile_correct") is None:
                 r["profile_correct"] = bool(str(r.get("pred_profile")) == str(r.get("gt_profile")))
 
-    def _load_gt_profile_map_from_labels(self, data_dir: Optional[Path]) -> Dict[str, str]:
+    def _load_gt_profile_map_from_labels(self, data_dir: Path | None) -> dict[str, str]:
         if not data_dir:
             return {}
         labels_path = data_dir / "labels.jsonl"
         if not labels_path.exists():
             return {}
 
-        gt_profile_map: Dict[str, str] = {}
+        gt_profile_map: dict[str, str] = {}
         with open(labels_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()

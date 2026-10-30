@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping
+from typing import Any
+from collections.abc import Mapping
 
 from .constants import DEFAULT_REALISM_PROFILE_ID, REALISM_GROUP_DEFAULTS, REALISM_K_DEFAULTS
 
@@ -98,7 +99,7 @@ class RealismSettings:
 class FilterPopupPayload:
     custom: CustomFilterSettings = field(default_factory=CustomFilterSettings)
     realism: RealismSettings = field(default_factory=RealismSettings)
-    extras: Dict[str, Any] = field(default_factory=dict)
+    extras: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def known_keys(cls) -> set[str]:
@@ -106,7 +107,7 @@ class FilterPopupPayload:
         return set(sample.to_mapping().keys())
 
     @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> "FilterPopupPayload":
+    def from_mapping(cls, data: Mapping[str, Any]) -> FilterPopupPayload:
         custom = CustomFilterSettings(
             cardinal_rotation_90=_to_bool(data.get("cardinal_rotation_90", True), True),
             enable_rotation=_to_bool(data.get("enable_rotation", True), True),
@@ -167,10 +168,10 @@ class FilterPopupPayload:
         extras = {k: v for k, v in data.items() if isinstance(k, str) and k not in known}
         return cls(custom=custom, realism=realism, extras=extras)
 
-    def to_mapping(self) -> Dict[str, Any]:
+    def to_mapping(self) -> dict[str, Any]:
         c = self.custom
         r = self.realism
-        out: Dict[str, Any] = {
+        out: dict[str, Any] = {
             "cardinal_rotation_90": bool(c.cardinal_rotation_90),
             "enable_rotation": bool(c.enable_rotation),
             "enable_blur": bool(c.enable_blur),

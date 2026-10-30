@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
 
 
-def draw_substrate(img: np.ndarray, config: Dict[str, Any]) -> None:
+def draw_substrate(img: np.ndarray, config: dict[str, Any]) -> None:
     """Draw green PCB substrate background."""
     img[:] = config["substrate_color"]
 
 
-def _compute_pad_positions(footprint: str, nominal: Dict[str, float], img_shape: Tuple[int, int]) -> List[Dict[str, int]]:
+def _compute_pad_positions(footprint: str, nominal: dict[str, float], img_shape: tuple[int, int]) -> list[dict[str, int]]:
     h, w = img_shape
     center_x, center_y = w // 2, h // 2
 
@@ -67,7 +67,7 @@ def _compute_pad_positions(footprint: str, nominal: Dict[str, float], img_shape:
         left_x = center_x - pad_spacing // 2 - pad_height // 2
         right_x = center_x + pad_spacing // 2 - pad_height // 2
 
-        pads: List[Dict[str, int]] = []
+        pads: list[dict[str, int]] = []
         for i in range(8):
             cy = int(round(y0 + (i * pitch)))
             y = cy - pad_width // 2
@@ -85,13 +85,13 @@ def _compute_pad_positions(footprint: str, nominal: Dict[str, float], img_shape:
     ]
 
 
-def draw_pads(img: np.ndarray, nominal: Dict[str, float], color: Tuple[int, int, int], footprint: str = "chip_2pad") -> None:
+def draw_pads(img: np.ndarray, nominal: dict[str, float], color: tuple[int, int, int], footprint: str = "chip_2pad") -> None:
     pads = _compute_pad_positions(footprint, nominal, img.shape[:2])
     for pad in pads:
         cv2.rectangle(img, (pad["x"], pad["y"]), (pad["x"] + pad["w"], pad["y"] + pad["h"]), color, -1)
 
 
-def draw_solder(img: np.ndarray, nominal: Dict[str, float], footprint: str = "chip_2pad") -> None:
+def draw_solder(img: np.ndarray, nominal: dict[str, float], footprint: str = "chip_2pad") -> None:
     solder_color = (200, 200, 200)
     pads = _compute_pad_positions(footprint, nominal, img.shape[:2])
     h, w = img.shape[:2]
@@ -112,7 +112,7 @@ def draw_solder(img: np.ndarray, nominal: Dict[str, float], footprint: str = "ch
         img[y0:y1, x0:x1] = blended
 
 
-def _param_selector(defect_params: Dict[str, Any]) -> int:
+def _param_selector(defect_params: dict[str, Any]) -> int:
     """Deterministic integer derived from defect params (no RNG consumption)."""
     key = "|".join(f"{float(defect_params.get(k, 0.0)):.6f}" for k in ("shift_x", "shift_y", "rotation_deg", "tilt_deg"))
     return int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:4], "big")
@@ -129,10 +129,10 @@ def _darken_poly(img: np.ndarray, pts: np.ndarray, factor: float) -> None:
 
 def _draw_solder_bridge(
     img: np.ndarray,
-    nominal: Dict[str, float],
+    nominal: dict[str, float],
     footprint: str,
-    body_center: Tuple[int, int],
-    body_size: Tuple[int, int],
+    body_center: tuple[int, int],
+    body_size: tuple[int, int],
     selector: int,
     tilt_deg: float,
 ) -> None:
@@ -187,9 +187,9 @@ def _draw_solder_bridge(
 def _draw_corner_lift(
     img: np.ndarray,
     box: np.ndarray,
-    center: Tuple[int, int],
+    center: tuple[int, int],
     comp_width: int,
-    color: Tuple[int, int, int],
+    color: tuple[int, int, int],
     tilt_deg: float,
     selector: int,
 ) -> None:
@@ -232,10 +232,10 @@ def _draw_corner_lift(
 
 def draw_component(
     img: np.ndarray,
-    nominal: Dict[str, float],
-    defect_params: Dict[str, Any],
-    color: Tuple[int, int, int],
-    tolerances: Optional[Dict[str, Any]] = None,
+    nominal: dict[str, float],
+    defect_params: dict[str, Any],
+    color: tuple[int, int, int],
+    tolerances: dict[str, Any] | None = None,
     footprint: str = "chip_2pad",
 ) -> None:
     defect_type = defect_params["type"]

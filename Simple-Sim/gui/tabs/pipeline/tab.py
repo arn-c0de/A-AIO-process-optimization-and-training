@@ -10,7 +10,7 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Any, Dict, Optional, List
+from typing import Any
 import shutil
 import shlex
 import tempfile
@@ -161,7 +161,7 @@ class PipelineControlTab(BaseTab):
         super().__init__(parent, sim_root, state)
 
         self.log_q: queue.Queue[str] = queue.Queue()
-        self.event_q: queue.Queue[Dict[str, Any]] = queue.Queue()
+        self.event_q: queue.Queue[dict[str, Any]] = queue.Queue()
         self.event_log_path = self.sim_root / "outputs" / "live" / "events.jsonl"
 
         self.ui = PipelineUI(self, self.frame)
@@ -181,7 +181,7 @@ class PipelineControlTab(BaseTab):
         self._last_profile_id: str = "chip_0603_resistor@1"
         self._suspend_profile_event: bool = False
 
-        self._precise_settings: Dict[str, Any] = {
+        self._precise_settings: dict[str, Any] = {
             "total": 100,
             "per_class": False,
             "class_names": ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
@@ -205,14 +205,14 @@ class PipelineControlTab(BaseTab):
 
         self._model_paths: list[Path] = []
         self._all_model_combo_values: list[str] = []
-        self._model_profile_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
+        self._model_profile_cache: dict[str, tuple[str | None, str | None]] = {}
         self._model_meta_gen: int = 0  # bumps per _refresh_models so stale background loads are dropped
-        self._compat_after_id: Optional[str] = None
+        self._compat_after_id: str | None = None
         self._compat_loading: set[str] = set()
 
         self._profile_paths: list[Path] = []
         self._dataset_milestones: dict[str, int] = {}
-        self._filter_popup_extras: Dict[str, Any] = {}
+        self._filter_popup_extras: dict[str, Any] = {}
         self._dataset_catalog = DatasetCatalog(sim_root, state.settings_store)
         self._ui_built: bool = False
         
@@ -250,7 +250,7 @@ class PipelineControlTab(BaseTab):
         if not cfg_info:
             cfg_info = self.logic.config_for_profile(profile_id, want_backend=None)
 
-        cfg_path: Optional[Path] = Path(cfg_info["path"]) if cfg_info and cfg_info.get("path") else None
+        cfg_path: Path | None = Path(cfg_info["path"]) if cfg_info and cfg_info.get("path") else None
         if cfg_path is None or not cfg_path.exists():
             fallback = self.sim_root / "configs" / "run_0001.yaml"
             if fallback.exists():
@@ -268,7 +268,7 @@ class PipelineControlTab(BaseTab):
         except Exception as exc:
             _LOG.warning("Failed to create initial placeholder dataset: %s", exc)
 
-    def _store(self) -> Optional[SettingsStore]:
+    def _store(self) -> SettingsStore | None:
         return self.state.settings_store
 
     def _append_log(self, text: str) -> None:
@@ -292,7 +292,7 @@ class PipelineControlTab(BaseTab):
         profile_ids: list[str],
         multi_enabled: bool,
         multi_mode: str,
-        image_filters: Dict[str, Any],
+        image_filters: dict[str, Any],
     ) -> bool:
         task_label = {
             "full": "Full Pipeline",
@@ -443,7 +443,7 @@ class PipelineControlTab(BaseTab):
             "Proceed?",
         )
 
-    def _ask_multi_dataset_train_strategy(self, dss: list[Path]) -> Optional[str]:
+    def _ask_multi_dataset_train_strategy(self, dss: list[Path]) -> str | None:
         msg = (
             f"{len(dss)} datasets selected.\n\n"
             "Yes: Merge and keep merged dataset\n"
@@ -516,7 +516,7 @@ class PipelineControlTab(BaseTab):
         except Exception:
             return float(default)
 
-    def _current_filter_settings_dict(self) -> Dict[str, Any]:
+    def _current_filter_settings_dict(self) -> dict[str, Any]:
         data = {
             # Existing filters
             "cardinal_rotation_90": bool(self.ui.var_filter_cardinal_rotation_90.get()),
@@ -562,7 +562,7 @@ class PipelineControlTab(BaseTab):
         data.update(self._filter_popup_extras)
         return data
 
-    def _apply_filter_settings_dict(self, data: Dict[str, Any]) -> None:
+    def _apply_filter_settings_dict(self, data: dict[str, Any]) -> None:
         if not isinstance(data, dict):
             return
         self._filter_popup_extras = extract_filter_popup_extras(data)
@@ -607,11 +607,11 @@ class PipelineControlTab(BaseTab):
         self.ui.var_filter_enable_sharpen.set(bool(data.get("enable_sharpen", False)))
         self.ui.var_filter_sharpen_strength.set(str(data.get("sharpen_strength", "1.00")))
 
-    def _load_filter_profiles(self) -> tuple[Dict[str, Dict[str, Any]], str]:
+    def _load_filter_profiles(self) -> tuple[dict[str, dict[str, Any]], str]:
         st = self._store()
-        profiles: Dict[str, Dict[str, Any]] = {}
+        profiles: dict[str, dict[str, Any]] = {}
         active = "Default"
-        current_live: Dict[str, Any] = {}
+        current_live: dict[str, Any] = {}
         if st is not None:
             raw_profiles = str(st.get("pipeline.filter_profiles_json", "") or "").strip()
             raw_active = str(st.get("pipeline.filter_profile_active", "") or "").strip()
@@ -676,7 +676,7 @@ class PipelineControlTab(BaseTab):
             active = sorted(profiles.keys())[0]
         return profiles, active
 
-    def _save_filter_profiles(self, profiles: Dict[str, Dict[str, Any]], active: str) -> None:
+    def _save_filter_profiles(self, profiles: dict[str, dict[str, Any]], active: str) -> None:
         st = self._store()
         if st is None:
             return
@@ -684,12 +684,12 @@ class PipelineControlTab(BaseTab):
         st.set("pipeline.filter_profile_active", str(active))
         st.schedule_save(self.frame)
 
-    def _image_filters_payload(self) -> Dict[str, Any]:
+    def _image_filters_payload(self) -> dict[str, Any]:
         bool_payload: dict[str, bool] = {}
         for key, attr_name in _FILTER_BOOL_PAYLOAD_ATTRS:
             bool_payload[key] = bool(getattr(self.ui, attr_name).get())
 
-        payload: Dict[str, Any] = {"enable": any(bool_payload.values())}
+        payload: dict[str, Any] = {"enable": any(bool_payload.values())}
         payload.update(bool_payload)
 
         for key, attr_name, default in _FILTER_FLOAT_PAYLOAD_ATTRS:
@@ -742,7 +742,7 @@ class PipelineControlTab(BaseTab):
         )
         self._refresh_precise_classes()
 
-        def on_apply(updated: Dict[str, Any]) -> None:
+        def on_apply(updated: dict[str, Any]) -> None:
             self._precise_settings.update(updated)
             self._save_precise_settings()
 
@@ -753,7 +753,7 @@ class PipelineControlTab(BaseTab):
             get_class_names_func=self._get_precise_class_names_from_config,
         )
 
-    def _get_precise_class_names_from_config(self) -> List[str]:
+    def _get_precise_class_names_from_config(self) -> list[str]:
         cfg_str = self.ui.var_config.get().strip()
         if cfg_str:
             cfg_path = (self.sim_root / cfg_str) if not Path(cfg_str).is_absolute() else Path(cfg_str)
@@ -793,21 +793,21 @@ class PipelineControlTab(BaseTab):
             st.set("pipeline.precise_settings_json", json.dumps(self._precise_settings, ensure_ascii=True))
             st.schedule_save(self.frame)
 
-    def _get_precise_counts(self) -> Optional[Dict[str, Any]]:
+    def _get_precise_counts(self) -> dict[str, Any] | None:
         """Return sample-count overrides for precise mode, or None on validation error."""
         s = self._precise_settings
-        multi_profiles: List[str] = s.get("multi_profiles") or []
+        multi_profiles: list[str] = s.get("multi_profiles") or []
         per_class = bool(s.get("per_class", False))
 
         if multi_profiles:
-            per_profile: Dict[str, Any] = {}
+            per_profile: dict[str, Any] = {}
             if per_class:
                 for pid in multi_profiles:
-                    cls_dict: Dict[str, Any] = (s.get("multi_classes") or {}).get(pid) or {}
+                    cls_dict: dict[str, Any] = (s.get("multi_classes") or {}).get(pid) or {}
                     if not cls_dict:
                         self.ui.show_messagebox("error", "Error", f"Precise mode: no class entries for '{pid}'.\nOpen Precise Settings and click ↻.")
                         return None
-                    counts: Dict[str, int] = {}
+                    counts: dict[str, int] = {}
                     for cls, val in cls_dict.items():
                         try:
                             n = int(val)
@@ -830,11 +830,11 @@ class PipelineControlTab(BaseTab):
 
         # Single profile
         if per_class:
-            classes: Dict[str, Any] = s.get("classes") or {}
+            classes: dict[str, Any] = s.get("classes") or {}
             if not classes:
                 self.ui.show_messagebox("error", "Error", "Precise mode: no class entries.\nOpen Precise Settings and click ↻.")
                 return None
-            counts2: Dict[str, int] = {}
+            counts2: dict[str, int] = {}
             for cls, val in classes.items():
                 try:
                     n = int(val)
@@ -853,10 +853,10 @@ class PipelineControlTab(BaseTab):
                 return None
             return {"_total": total}
 
-    def _write_precise_config(self, cfg_path: Path, counts: Dict[str, Any]) -> Path:
+    def _write_precise_config(self, cfg_path: Path, counts: dict[str, Any]) -> Path:
         """Write a temp config YAML with the classes section overridden by counts."""
         data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-        existing_classes: Dict[str, int] = {str(k): int(v) for k, v in (data.get("classes") or {}).items()}
+        existing_classes: dict[str, int] = {str(k): int(v) for k, v in (data.get("classes") or {}).items()}
         if "_total" in counts:
             total = int(counts["_total"])
             new_classes = {cls: total for cls in existing_classes} if existing_classes else {}
@@ -876,7 +876,7 @@ class PipelineControlTab(BaseTab):
         """Open shared image filter popup."""
         profiles, active_profile = self._load_filter_profiles()
 
-        def on_close(updated_profiles: Dict[str, Dict[str, Any]], updated_active: str) -> None:
+        def on_close(updated_profiles: dict[str, dict[str, Any]], updated_active: str) -> None:
             self._save_filter_profiles(updated_profiles, updated_active)
 
         open_filter_popup(
@@ -934,7 +934,7 @@ class PipelineControlTab(BaseTab):
         self.ui.var_profile_model_lock.set(True)
         self._apply_profile_model_lock()
         
-        def run_simple_cmd_callback(cmd_args: List[str], extra_env: Optional[Dict[str, str]] = None) -> None:
+        def run_simple_cmd_callback(cmd_args: list[str], extra_env: dict[str, str] | None = None) -> None:
             self._run_simple_cmd(cmd_args, extra_env)
 
         self.logic.build_profile_model(preset, str(cfg), str(out_ds), str(out_model), self._append_log, run_simple_cmd_callback)
@@ -960,7 +960,7 @@ class PipelineControlTab(BaseTab):
         profile_ids: list[str],
         render_backend: str,
         out_dir: str,
-    ) -> Optional[tuple[list[dict[str, str]], str, Any, str]]:
+    ) -> tuple[list[dict[str, str]], str, Any, str] | None:
         run_specs: list[dict[str, str]] = []
         effective_task = task
         run_complete_callback = None
@@ -1084,7 +1084,7 @@ class PipelineControlTab(BaseTab):
                         src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
                         merge_sources = list(src_dirs)
                         merge_target = final_out
-                        tmp_target: Optional[Path] = None
+                        tmp_target: Path | None = None
 
                         if replace_existing_final_out and final_out.exists():
                             if dataset_mode == "extend":
@@ -1161,11 +1161,11 @@ class PipelineControlTab(BaseTab):
 
         return run_specs, effective_task, run_complete_callback, out_dir
 
-    def _apply_precise_counts_to_run_specs(self, run_specs: list[dict[str, str]]) -> Optional[list[dict[str, str]]]:
+    def _apply_precise_counts_to_run_specs(self, run_specs: list[dict[str, str]]) -> list[dict[str, str]] | None:
         precise_counts = self._get_precise_counts()
         if precise_counts is None:
             return None
-        per_profile_map: Optional[Dict[str, Any]] = precise_counts.get("_per_profile") if isinstance(precise_counts, dict) else None
+        per_profile_map: dict[str, Any] | None = precise_counts.get("_per_profile") if isinstance(precise_counts, dict) else None
         patched_specs: list[dict[str, str]] = []
         for spec in run_specs:
             cfg_rel = spec["config"]
@@ -1321,7 +1321,7 @@ class PipelineControlTab(BaseTab):
     def stop_pipeline(self) -> None:
         self.logic.stop_pipeline()
 
-    def _run_simple_cmd(self, args: list[str], extra_env: Optional[Dict[str, str]] = None, *, cleanup_dir: Optional[Path] = None) -> bool:
+    def _run_simple_cmd(self, args: list[str], extra_env: dict[str, str] | None = None, *, cleanup_dir: Path | None = None) -> bool:
         # cleanup_dir (or a pending logic._temp_merge_cleanup_dir) is removed when this process exits with rc=0.
         cleanup_dir = cleanup_dir or self.logic._temp_merge_cleanup_dir
         self.logic._temp_merge_cleanup_dir = None
@@ -1344,7 +1344,7 @@ class PipelineControlTab(BaseTab):
         shell_cmd = args[0] if len(args) == 1 else shlex.join(args)
         cmd = ["bash", "-lc", shell_cmd]
 
-        def on_exit(rc: Optional[int]) -> None:  # reader thread; logging goes through log_q
+        def on_exit(rc: int | None) -> None:  # reader thread; logging goes through log_q
             if cleanup_dir is not None: self.logic.cleanup_temp_merge_dir(cleanup_dir, rc, self._append_log)
 
         try: self.logic.launch_process(cmd, env, self._append_log, self._handle_event, on_exit=on_exit)
@@ -1355,7 +1355,7 @@ class PipelineControlTab(BaseTab):
         self.ui.var_phase.set("running cmd")
         return True
 
-    def _handle_event(self, evt: Dict[str, Any]) -> None:
+    def _handle_event(self, evt: dict[str, Any]) -> None:
         # Event tailing runs in a worker thread; marshal to the Tk thread.
         if threading.current_thread() is not threading.main_thread():
             self.event_q.put(evt)
@@ -1515,7 +1515,7 @@ class PipelineControlTab(BaseTab):
 
         self._start_dataset_size_calc(ds)
 
-    def _set_dataset_samples_from_manifest(self, ds: Path, total: Optional[int], train: Optional[int], val: Optional[int], test: Optional[int]) -> None:
+    def _set_dataset_samples_from_manifest(self, ds: Path, total: int | None, train: int | None, val: int | None, test: int | None) -> None:
         if total is None: return self._set_dataset_samples_info("Samples: manifest missing", "")
         parts = [f"Samples: {total}"]
         if train is not None and val is not None and test is not None: parts.append(f"(t{train}/v{val}/s{test})")
@@ -1685,7 +1685,7 @@ class PipelineControlTab(BaseTab):
     def _encode_dataset_paths_json(self, paths: list[Path]) -> str:
         return json.dumps([str(p.resolve().relative_to(self.sim_root.resolve())) if not p.is_absolute() else str(p) for p in paths])
 
-    def _dataset_label_for_path(self, p: Path) -> Optional[str]:
+    def _dataset_label_for_path(self, p: Path) -> str | None:
         rp = p.resolve()
         for label, pp in self._dataset_by_label.items():
             if pp.resolve() == rp: return label
@@ -1719,7 +1719,7 @@ class PipelineControlTab(BaseTab):
         return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
     @staticmethod
-    def _profile_from_meta(meta: Optional[Dict[str, Any]]) -> tuple[Optional[str], Optional[str]]:
+    def _profile_from_meta(meta: dict[str, Any] | None) -> tuple[str | None, str | None]:
         comp = (meta or {}).get("component_profile")
         return (comp.get("profile_id"), comp.get("profile_hash")) if isinstance(comp, dict) else (None, None)
 
@@ -1822,7 +1822,7 @@ class PipelineControlTab(BaseTab):
             return sorted(all_profiles)
         return list(self.ui.profile_combo["values"] or [])
 
-    def _profiles_multi_list(self, *, available: Optional[list[str]] = None) -> list[str]:
+    def _profiles_multi_list(self, *, available: list[str] | None = None) -> list[str]:
         available_set = set(available or list(self.ui.profile_combo["values"] or []))
         raw = (self.ui.var_profiles_multi_json.get().strip() or "[]")
         items: list[str] = []
@@ -1883,13 +1883,13 @@ class PipelineControlTab(BaseTab):
         try: self._refresh_precise_classes()
         except Exception: pass
 
-    def _on_render_backend_changed(self, _event: Optional[object] = None) -> None:
+    def _on_render_backend_changed(self, _event: object | None = None) -> None:
         try:
             self._refresh_profiles()
             if pid := self.ui.var_profile.get().strip(): self._autoselect_config_for_profile(pid, prefer_quiet=True)
         except Exception: pass
 
-    def _on_profile_selected(self, _event: Optional[object] = None) -> None:
+    def _on_profile_selected(self, _event: object | None = None) -> None:
         if self._suspend_profile_event: self._suspend_profile_event = False; return
         if not (profile_id := self.ui.var_profile.get().strip()): return
 
@@ -1900,7 +1900,7 @@ class PipelineControlTab(BaseTab):
         # Keep profile selection passive and only update state.
         self._last_profile_id = profile_id
 
-    def _find_dataset_for_profile(self, profile_id: str) -> Optional[Path]:
+    def _find_dataset_for_profile(self, profile_id: str) -> Path | None:
         runs_root = self.sim_root / "outputs" / "sim_data" / "runs"
         if not runs_root.exists(): return None
         for ds in sorted(runs_root.iterdir()):
@@ -1922,8 +1922,8 @@ class PipelineControlTab(BaseTab):
         self._suspend_profile_event = True
         self.ui.var_profile.set(self._last_profile_id or "chip_0603_resistor@1")
 
-    def _prepare_dataset_for_profile(self, profile_id: str, cfg_info: Optional[Dict[str, Any]]) -> None:
-        cfg_path: Optional[Path] = None
+    def _prepare_dataset_for_profile(self, profile_id: str, cfg_info: dict[str, Any] | None) -> None:
+        cfg_path: Path | None = None
         if cfg_info:
             cfg_path = cfg_info["path"]
             self.ui.var_config.set(str(cfg_path))
@@ -2098,10 +2098,10 @@ class PipelineControlTab(BaseTab):
         self._refresh_models()
         self._append_log(f"[naming] out={out_rel} model={model_rel}\n")
 
-    def _selected_dataset_dir(self) -> Optional[Path]:
+    def _selected_dataset_dir(self) -> Path | None:
         dss = self._selected_dataset_dirs(); return dss[0] if dss else None
 
-    def _selected_dataset_dir_single(self) -> Optional[Path]:
+    def _selected_dataset_dir_single(self) -> Path | None:
         label = self.ui.var_dataset.get().strip(); return self._dataset_by_label.get(label)
 
     def _selected_dataset_dirs(self) -> list[Path]:
@@ -2115,7 +2115,7 @@ class PipelineControlTab(BaseTab):
             return
         self._refresh_datasets()
 
-    def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
+    def _on_dataset_selected(self, _evt: object | None = None) -> None:
         ds = self._selected_dataset_dir()
         if not ds: self.ui.var_dataset_profile.set("Profile: -"); self.ui.var_ds_samples.set("Samples: -"); return
         
@@ -2248,7 +2248,7 @@ class PipelineControlTab(BaseTab):
         except Exception as exc:
             self.ui.show_messagebox("error", "Move images failed", str(exc))
 
-    def _open_sample_selector(self, dataset_dir: Path, *, title: str, action_text: str) -> List[str]:
+    def _open_sample_selector(self, dataset_dir: Path, *, title: str, action_text: str) -> list[str]:
         try:
             samples = list_dataset_samples(dataset_dir)
         except Exception as exc:
@@ -2266,7 +2266,7 @@ class PipelineControlTab(BaseTab):
         dialog.grab_set()
         dialog.minsize(860, 420)
 
-        selected_ids: List[str] = []
+        selected_ids: list[str] = []
 
         frm = ttk.Frame(dialog, padding=10)
         frm.pack(fill="both", expand=True)
@@ -2304,7 +2304,7 @@ class PipelineControlTab(BaseTab):
         dialog.wait_window()
         return selected_ids
 
-    def _open_target_dataset_selector(self, source_dataset: Path) -> Optional[Path]:
+    def _open_target_dataset_selector(self, source_dataset: Path) -> Path | None:
         targets = [p for p in self._dataset_dirs if p.resolve() != source_dataset.resolve()]
         if not targets:
             self.ui.show_messagebox("info", "Move images", "No target dataset available.")

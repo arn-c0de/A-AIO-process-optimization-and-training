@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import yaml
 
 
 @dataclass(frozen=True)
 class RegistrySnapshot:
-    profile_files: Dict[str, Path]
-    run_files: Dict[str, Path]
+    profile_files: dict[str, Path]
+    run_files: dict[str, Path]
 
 
 class ProfileRegistry:
@@ -20,9 +19,9 @@ class ProfileRegistry:
         self.sim_root = Path(sim_root)
         self.profiles_dir = self.sim_root / "configs" / "profiles"
         self.configs_dir = self.sim_root / "configs"
-        self._last_signature: Optional[tuple] = None
+        self._last_signature: tuple | None = None
 
-    def _profile_id_from_file(self, path: Path) -> Optional[str]:
+    def _profile_id_from_file(self, path: Path) -> str | None:
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:
@@ -37,7 +36,7 @@ class ProfileRegistry:
             profile_id = path.stem
         return profile_id
 
-    def _run_id_from_file(self, path: Path) -> Optional[str]:
+    def _run_id_from_file(self, path: Path) -> str | None:
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:
@@ -53,8 +52,8 @@ class ProfileRegistry:
         return run_id
 
     def snapshot(self) -> RegistrySnapshot:
-        profiles: Dict[str, Path] = {}
-        runs: Dict[str, Path] = {}
+        profiles: dict[str, Path] = {}
+        runs: dict[str, Path] = {}
 
         if self.profiles_dir.exists():
             for p in sorted(self.profiles_dir.glob("*.yaml")):
@@ -71,7 +70,7 @@ class ProfileRegistry:
         return RegistrySnapshot(profile_files=profiles, run_files=runs)
 
     def _signature(self, snap: RegistrySnapshot) -> tuple:
-        entries: List[tuple] = []
+        entries: list[tuple] = []
         for pid, p in snap.profile_files.items():
             st = p.stat()
             entries.append(("p", pid, str(p), int(st.st_mtime_ns), st.st_size))
@@ -92,9 +91,9 @@ class ProfileRegistry:
             return True
         return False
 
-    def matching_run_ids(self, profile_id: str, snap: Optional[RegistrySnapshot] = None) -> List[str]:
+    def matching_run_ids(self, profile_id: str, snap: RegistrySnapshot | None = None) -> list[str]:
         snap = snap or self.snapshot()
-        out: List[str] = []
+        out: list[str] = []
         for run_id, run_path in snap.run_files.items():
             try:
                 data = yaml.safe_load(run_path.read_text(encoding="utf-8")) or {}

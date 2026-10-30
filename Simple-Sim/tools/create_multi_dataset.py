@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import shutil
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 from simple_sim.config import load_config
 from simple_sim.manifest import write_dataset_manifest
@@ -21,15 +20,15 @@ from simple_sim.schema import MetaRow, LabelRow, read_jsonl, write_jsonl
 def gather_rows(
     ds: Path,
     run_id: str,
-    split_counters: Dict[str, int],
+    split_counters: dict[str, int],
     images_dir: Path,
-) -> Tuple[List[MetaRow], Dict[str, str]]:
+) -> tuple[list[MetaRow], dict[str, str]]:
     meta_rows = read_jsonl(ds / "meta.jsonl", MetaRow)
     label_rows = read_jsonl(ds / "labels.jsonl", LabelRow)
     label_map = {row.id: row.class_name for row in label_rows}
 
-    new_meta: List[MetaRow] = []
-    new_label_map: Dict[str, str] = {}
+    new_meta: list[MetaRow] = []
+    new_label_map: dict[str, str] = {}
     for row in meta_rows:
         class_name = label_map.get(row.id)
         if class_name is None:
@@ -99,11 +98,11 @@ def main() -> None:
     profile_hash = hash_profile(profile_path)
     classes = cfg["classes"]
 
-    meta_rows: List[MetaRow] = []
-    label_rows: List[LabelRow] = []
-    split_counters: Dict[str, int] = {}
-    class_counts: Dict[str, int] = {cls: 0 for cls in classes}
-    splits: Dict[str, List[str]] = {"train": [], "val": [], "test": []}
+    meta_rows: list[MetaRow] = []
+    label_rows: list[LabelRow] = []
+    split_counters: dict[str, int] = {}
+    class_counts: dict[str, int] = {cls: 0 for cls in classes}
+    splits: dict[str, list[str]] = {"train": [], "val": [], "test": []}
 
     for ds_path in args.datasets:
         ds = Path(ds_path)

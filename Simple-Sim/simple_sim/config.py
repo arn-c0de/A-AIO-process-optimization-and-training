@@ -2,7 +2,7 @@
 
 import yaml
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from simple_sim.config_schema import parse_config_typed
 
@@ -17,7 +17,7 @@ _SUPPORTED_OPTIMIZERS = {'adam'}
 # Public API
 # ---------------------------------------------------------------------------
 
-def load_config(path: Path) -> Dict[str, Any]:
+def load_config(path: Path) -> dict[str, Any]:
     """Load YAML configuration file.
 
     Args:
@@ -39,7 +39,7 @@ def load_config(path: Path) -> Dict[str, Any]:
     return config
 
 
-def validate_config(cfg: Dict[str, Any]) -> None:
+def validate_config(cfg: dict[str, Any]) -> None:
     """Validate configuration structure and values.
 
     Args:
@@ -76,7 +76,7 @@ def validate_config(cfg: Dict[str, Any]) -> None:
     _validate_eval(cfg['eval'])
 
 
-def validate_splits(cfg: Dict[str, Any]) -> None:
+def validate_splits(cfg: dict[str, Any]) -> None:
     """Validate split configuration.
 
     Args:
@@ -115,7 +115,7 @@ def validate_splits(cfg: Dict[str, Any]) -> None:
         raise ValueError(f"Split fractions must sum to 1.0, got {total}")
 
 
-def validate_tolerances(cfg: Dict[str, Any]) -> None:
+def validate_tolerances(cfg: dict[str, Any]) -> None:
     """Validate tolerance configuration.
 
     Args:
@@ -150,7 +150,7 @@ def validate_tolerances(cfg: Dict[str, Any]) -> None:
 # Private helpers
 # ---------------------------------------------------------------------------
 
-def _validate_run(cfg: Dict[str, Any]):
+def _validate_run(cfg: dict[str, Any]):
     """Validate run section; return (schema_version, mode)."""
     if 'run' not in cfg:
         raise ValueError("Missing required section: run")
@@ -185,7 +185,7 @@ def _validate_run(cfg: Dict[str, Any]):
     return schema_version, mode
 
 
-def _required_sections(schema_version: int, mode: str) -> List[str]:
+def _required_sections(schema_version: int, mode: str) -> list[str]:
     """Return the list of required top-level config sections."""
     base = ['run', 'roi', 'classes', 'domains', 'splits', 'render', 'augment', 'train', 'eval']
     if schema_version == 1 and mode != 'profile_classifier':
@@ -193,7 +193,7 @@ def _required_sections(schema_version: int, mode: str) -> List[str]:
     return base
 
 
-def _validate_roi(roi: Dict[str, Any]) -> None:
+def _validate_roi(roi: dict[str, Any]) -> None:
     for field in ('width_px', 'height_px', 'mm_per_px'):
         if field not in roi:
             raise ValueError(f"Missing roi.{field}")
@@ -201,7 +201,7 @@ def _validate_roi(roi: Dict[str, Any]) -> None:
             raise ValueError(f"roi.{field} must be a positive number")
 
 
-def _validate_classes(classes: Dict[str, Any]) -> None:
+def _validate_classes(classes: dict[str, Any]) -> None:
     if not classes:
         raise ValueError("classes cannot be empty")
     for class_name, count in classes.items():
@@ -225,7 +225,7 @@ def _validate_geometry_ranges(gr: Any) -> None:
             raise ValueError(f"geometry_ranges.{k} min > max")
 
 
-def _validate_domains(domains: Dict[str, Any]) -> None:
+def _validate_domains(domains: dict[str, Any]) -> None:
     if not domains:
         raise ValueError("domains cannot be empty")
     required = ['lighting_brightness', 'blur_sigma', 'noise_stddev']
@@ -239,7 +239,7 @@ def _validate_domains(domains: Dict[str, Any]) -> None:
                 raise ValueError(f"domains.{domain_name}.{field} min > max")
 
 
-def _validate_render(render: Dict[str, Any], schema_version: int, mode: str) -> None:
+def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> None:
     if 'backend' not in render:
         raise ValueError("Missing render.backend")
     backend = render['backend']
@@ -255,7 +255,7 @@ def _validate_render(render: Dict[str, Any], schema_version: int, mode: str) -> 
         raise ValueError(f"Unsupported render backend: {backend}")
 
 
-def _validate_render_2d(render: Dict[str, Any], schema_version: int) -> None:
+def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
     if schema_version == 1:
         required = ['backend', 'substrate_color', 'copper_color', 'component_color', 'solder_mask_alpha']
     else:
@@ -281,7 +281,7 @@ def _validate_render_2d(render: Dict[str, Any], schema_version: int) -> None:
         raise ValueError("render.solder_mask_alpha must be in [0, 1]")
 
 
-def _validate_render_3d(render: Dict[str, Any]) -> None:
+def _validate_render_3d(render: dict[str, Any]) -> None:
     blender = render.get('blender')
     if not isinstance(blender, dict):
         raise ValueError("render.blender must be a mapping for backend=blender_3d")
@@ -299,7 +299,7 @@ def _validate_render_3d(render: Dict[str, Any]) -> None:
         raise ValueError("render.blender.engine must be a non-empty string if provided")
 
 
-def _validate_augment(augment: Dict[str, Any]) -> None:
+def _validate_augment(augment: dict[str, Any]) -> None:
     required = ['rotation_deg_range', 'contrast_factor_range']
     # Brightness is sampled from domains.*.lighting_brightness; brightness_factor_range
     # is legacy/unused by the samplers and only validated when present.
@@ -315,7 +315,7 @@ def _validate_augment(augment: Dict[str, Any]) -> None:
             raise ValueError(f"augment.{field} min > max")
 
 
-def _validate_train(train: Dict[str, Any]) -> None:
+def _validate_train(train: dict[str, Any]) -> None:
     required = ['model', 'epochs', 'batch_size', 'lr', 'optimizer', 'weight_decay']
     for field in required:
         if field not in train:
@@ -338,7 +338,7 @@ def _validate_train(train: Dict[str, Any]) -> None:
         raise ValueError("train.lr must be a positive number")
 
 
-def _validate_eval(eval_cfg: Dict[str, Any]) -> None:
+def _validate_eval(eval_cfg: dict[str, Any]) -> None:
     if 'batch_size' not in eval_cfg:
         raise ValueError("Missing eval.batch_size")
     if not isinstance(eval_cfg['batch_size'], int) or eval_cfg['batch_size'] <= 0:

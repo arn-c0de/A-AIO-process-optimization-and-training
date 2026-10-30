@@ -6,7 +6,6 @@ Stage 2: Per-profile defect model classifies the defect state (OK/MISSING/MISALI
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
 
 import cv2
 import numpy as np
@@ -22,10 +21,10 @@ class TwoStageResult:
     """Result from two-stage classification."""
     profile_id: str
     profile_confidence: float
-    profile_probabilities: Dict[str, float]
+    profile_probabilities: dict[str, float]
     defect_class: str
     defect_confidence: float
-    defect_probabilities: Dict[str, float]
+    defect_probabilities: dict[str, float]
     review_flag: bool  # True if profile_confidence < threshold
 
 
@@ -67,7 +66,7 @@ class TwoStageClassifier:
         )
 
         # Lazy-loaded per-profile defect models
-        self._defect_models: Dict[str, tuple] = {}  # profile_id -> (model, class_names)
+        self._defect_models: dict[str, tuple] = {}  # profile_id -> (model, class_names)
 
     def _get_defect_model(self, profile_id: str):
         """Lazy-load defect model for the given profile."""

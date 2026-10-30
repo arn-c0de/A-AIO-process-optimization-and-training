@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from pathlib import Path
-from typing import Optional, Callable
+from collections.abc import Callable
 import threading
 
 from simple_sim.two_stage import TwoStageClassifier
@@ -10,10 +10,10 @@ from simple_sim.two_stage import TwoStageClassifier
 
 class BoardDetectionLogic:
     def __init__(self) -> None:
-        self._classifier: Optional[TwoStageClassifier] = None
-        self._profile_model_path: Optional[Path] = None
-        self._defect_bundle_path: Optional[Path] = None
-        self._device: Optional[str] = None
+        self._classifier: TwoStageClassifier | None = None
+        self._profile_model_path: Path | None = None
+        self._defect_bundle_path: Path | None = None
+        self._device: str | None = None
 
     def predict(
         self,

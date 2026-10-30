@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .models import FilterPopupPayload
 
 
-def refresh_profile_list(popup: Any, select_name: Optional[str] = None) -> None:
+def refresh_profile_list(popup: Any, select_name: str | None = None) -> None:
     names = sorted(popup.profiles.keys(), key=lambda s: s.lower())
     popup.lb_profiles.delete(0, "end")
     for n in names:
@@ -23,7 +23,7 @@ def refresh_profile_list(popup: Any, select_name: Optional[str] = None) -> None:
         popup._populate_left_filter_profiles()
 
 
-def selected_profile_name(popup: Any) -> Optional[str]:
+def selected_profile_name(popup: Any) -> str | None:
     sel = popup.lb_profiles.curselection()
     if not sel:
         return None
@@ -34,7 +34,7 @@ def selected_profile_name(popup: Any) -> Optional[str]:
 
 
 def sync_to_external_vars(popup: Any) -> None:
-    raw_values: Dict[str, Any] = {}
+    raw_values: dict[str, Any] = {}
     for key, var in popup.filter_vars.items():
         if isinstance(var, tk.BooleanVar):
             raw_values[key] = var.get()
@@ -52,7 +52,7 @@ def persist_active_profile(popup: Any) -> None:
         popup.profiles[popup.active_profile] = popup.get_current_values()
 
 
-def update_internal_vars(popup: Any, data: Dict[str, Any]) -> None:
+def update_internal_vars(popup: Any, data: dict[str, Any]) -> None:
     payload = FilterPopupPayload.from_mapping(data)
     normalized = payload.to_mapping()
     popup._suspend_live_sync = True
@@ -78,7 +78,7 @@ def update_internal_vars(popup: Any, data: Dict[str, Any]) -> None:
         popup._suspend_live_sync = False
 
 
-def load_profile_from_selection(popup: Any, _evt: Optional[tk.Event] = None) -> None:
+def load_profile_from_selection(popup: Any, _evt: tk.Event | None = None) -> None:
     name = selected_profile_name(popup)
     if not name:
         return

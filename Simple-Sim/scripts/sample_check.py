@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import random
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -62,7 +61,7 @@ def main() -> None:
     id_to_label = {r.id: r.class_name for r in label_rows}
 
     # Collect candidates per class for the requested split.
-    candidates: Dict[str, List[str]] = {c: [] for c in class_names}
+    candidates: dict[str, list[str]] = {c: [] for c in class_names}
     want_token = f"/{args.split}/"
     for sid, cls in id_to_label.items():
         if want_token not in sid:
@@ -71,7 +70,7 @@ def main() -> None:
             candidates[cls].append(sid)
 
     rng = random.Random(args.seed)
-    chosen: List[Tuple[str, str]] = []  # (id, gt)
+    chosen: list[tuple[str, str]] = []  # (id, gt)
     for cls in class_names:
         arr = candidates.get(cls, [])
         if not arr:

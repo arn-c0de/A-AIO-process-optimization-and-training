@@ -6,7 +6,7 @@ import queue
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 
@@ -31,16 +31,16 @@ class MergeLogic:
         except Exception:
             return str(p)
             
-    def scan_models(self) -> Dict[str, List[Tuple[str, Path]]]:
+    def scan_models(self) -> dict[str, list[tuple[str, Path]]]:
         root = self._model_root()
         root.mkdir(parents=True, exist_ok=True)
 
-        cand: List[Path] = []
+        cand: list[Path] = []
         cand.extend(sorted(root.glob("*.pt")))
         cand.extend(sorted((root / "versions").glob("**/*.pt")))
         cand.extend(sorted((root / "imports").glob("*.pt")))
         
-        bundle_dirs: List[Path] = []
+        bundle_dirs: list[Path] = []
         for p in sorted(root.glob("*.bundle")):
             if is_bundle_dir(p):
                 bundle_dirs.append(p)
@@ -52,9 +52,9 @@ class MergeLogic:
         for bd in bundle_dirs:
             cand.extend(sorted(bd.glob("*.pt")))
             
-        uniq: Dict[str, Path] = {str(p.resolve()): p for p in cand if p.is_file()}
+        uniq: dict[str, Path] = {str(p.resolve()): p for p in cand if p.is_file()}
 
-        profile_models: Dict[str, List[Tuple[str, Path]]] = {}
+        profile_models: dict[str, list[tuple[str, Path]]] = {}
         
         for p in uniq.values():
             profile_id, _, _, _ = self.load_model_meta(p, {})
@@ -73,12 +73,12 @@ class MergeLogic:
             
         return profile_models
         
-    def load_model_meta(self, model_path: Path, cache: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[float], Optional[float]]:
+    def load_model_meta(self, model_path: Path, cache: dict[str, Any]) -> tuple[str | None, str | None, float | None, float | None]:
         key = str(model_path.resolve())
         if key in cache:
             return cache[key]
 
-        result: Tuple[Optional[str], Optional[str], Optional[float], Optional[float]] = (None, None, None, None)
+        result: tuple[str | None, str | None, float | None, float | None] = (None, None, None, None)
         try:
             checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
             comp = checkpoint.get("component_profile")
@@ -92,7 +92,7 @@ class MergeLogic:
         cache[key] = result
         return result
 
-    def _bundle_root_for_path(self, p: Path) -> Optional[Path]:
+    def _bundle_root_for_path(self, p: Path) -> Path | None:
         try:
             rp = p.resolve()
             root = self._model_root().resolve()
@@ -107,11 +107,11 @@ class MergeLogic:
             cur = cur.parent
         return None
         
-    def do_merge(self, bundle_dir: Path, selected_weights: Dict[str, Path], model_meta_cache: Dict) -> Tuple[List[str], Dict[str, Any], Dict[str, Any]]:
+    def do_merge(self, bundle_dir: Path, selected_weights: dict[str, Path], model_meta_cache: dict) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
         bundle_dir.mkdir(parents=True, exist_ok=True)
         profiles_merged = []
-        model_details: Dict[str, Any] = {}
-        sources: Dict[str, Any] = {}
+        model_details: dict[str, Any] = {}
+        sources: dict[str, Any] = {}
 
         for profile_id, src_path in sorted(selected_weights.items()):
             dst = bundle_checkpoint_path(bundle_dir, profile_id, kind="best")
@@ -123,7 +123,7 @@ class MergeLogic:
             src_size = src_path.stat().st_size
             src_mtime = datetime.fromtimestamp(src_path.stat().st_mtime).isoformat(timespec="seconds")
             
-            entry: Dict[str, Any] = {
+            entry: dict[str, Any] = {
                 "source_path": str(src_path), "source_name": src_path.name, "profile_hash": phash,
                 "val_accuracy": val_acc, "val_f1": val_f1, "source_size_bytes": src_size, "source_modified": src_mtime,
             }
@@ -132,7 +132,7 @@ class MergeLogic:
             if bd is not None:
                 bd_key = str(bd)
                 if bd_key not in sources:
-                    src_obj: Dict[str, Any] = {"bundle_dir": bd_key}
+                    src_obj: dict[str, Any] = {"bundle_dir": bd_key}
                     try:
                         meta = read_bundle_meta(bd)
                         if meta: src_obj["bundle_meta"] = {"bundle_version": meta.bundle_version, "created_at": meta.created_at, "updated_at": meta.updated_at, "checkpoints": dict(meta.checkpoints)}
@@ -154,21 +154,21 @@ class MergeLogic:
             
         return profiles_merged, model_details, sources
         
-    def write_bundle_details(self, bundle_dir: Path, model_details: Dict[str, Any], sources: Optional[Dict[str, Any]] = None):
+    def write_bundle_details(self, bundle_dir: Path, model_details: dict[str, Any], sources: dict[str, Any] | None = None):
         details_path = bundle_dir / "bundle_details.json"
         now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         obj = {"created_at": now, "models": model_details, "sources": sources or {}}
         details_path.write_text(json.dumps(obj, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
-    def _read_bundle_details(self, bundle_dir: Path) -> Optional[Dict[str, Any]]:
+    def _read_bundle_details(self, bundle_dir: Path) -> dict[str, Any] | None:
         details_path = bundle_dir / "bundle_details.json"
         if not details_path.exists(): return None
         try: return json.loads(details_path.read_text(encoding="utf-8"))
         except Exception: return None
 
-    def get_existing_bundles(self) -> List[Path]:
+    def get_existing_bundles(self) -> list[Path]:
         root = self._model_root()
-        bundle_dirs: List[Path] = [p for p in sorted(root.glob("*.bundle")) if is_bundle_dir(p)]
+        bundle_dirs: list[Path] = [p for p in sorted(root.glob("*.bundle")) if is_bundle_dir(p)]
         bundles_subdir = root / "bundles"
         if bundles_subdir.exists():
             bundle_dirs.extend([p for p in sorted(bundles_subdir.iterdir()) if is_bundle_dir(p)])
@@ -177,10 +177,10 @@ class MergeLogic:
     def delete_bundle(self, bundle_path: Path):
         shutil.rmtree(bundle_path)
 
-    def do_merge_ensemble(self, out_path: Path, selected_weights: Dict[str, Path], log_q: queue.Queue):
-        items: List[Dict[str, Any]] = []
-        class_names: Optional[List[str]] = None
-        profiles: List[str] = []
+    def do_merge_ensemble(self, out_path: Path, selected_weights: dict[str, Path], log_q: queue.Queue):
+        items: list[dict[str, Any]] = []
+        class_names: list[str] | None = None
+        profiles: list[str] = []
 
         for profile_id, src_path in sorted(selected_weights.items()):
             log_q.put(f"[ensemble] loading {profile_id}: {src_path}\n")

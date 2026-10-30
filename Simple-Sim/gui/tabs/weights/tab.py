@@ -11,7 +11,7 @@ import tkinter as tk
 import torch
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
@@ -31,25 +31,25 @@ class WeightsTab(BaseTab):
         self.ui = WeightsUI(self, self.frame)
         self.logic = WeightsLogic(sim_root, self.log_q)
 
-        self._models: List[Path] = []
-        self._model_by_iid: Dict[str, Path] = {}
-        self._favorites: Dict[str, Dict[str, Any]] = {}
-        self._arena: Dict[str, Dict[str, Any]] = {}
+        self._models: list[Path] = []
+        self._model_by_iid: dict[str, Path] = {}
+        self._favorites: dict[str, dict[str, Any]] = {}
+        self._arena: dict[str, dict[str, Any]] = {}
 
-        self._group_assignments: Dict[str, str] = {}
-        self._custom_groups: List[str] = []
-        self._group_iids: Dict[str, str] = {}
-        self._drag_src_iid: Optional[str] = None
+        self._group_assignments: dict[str, str] = {}
+        self._custom_groups: list[str] = []
+        self._group_iids: dict[str, str] = {}
+        self._drag_src_iid: str | None = None
 
-        self._reports: List[Dict[str, Any]] = []
-        self._report_by_iid: Dict[str, Dict[str, Any]] = {}
+        self._reports: list[dict[str, Any]] = []
+        self._report_by_iid: dict[str, dict[str, Any]] = {}
 
-        self._cmp_dataset_dirs: List[Path] = []
-        self._cmp_dataset_labels: List[str] = []
-        self._cmp_dataset_by_label: Dict[str, Path] = {}
+        self._cmp_dataset_dirs: list[Path] = []
+        self._cmp_dataset_labels: list[str] = []
+        self._cmp_dataset_by_label: dict[str, Path] = {}
 
-        self._ui_tick_id: Optional[str] = None
-        self._profile_info_cache: Dict[Tuple[str, float], str] = {}
+        self._ui_tick_id: str | None = None
+        self._profile_info_cache: dict[tuple[str, float], str] = {}
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -81,7 +81,7 @@ class WeightsTab(BaseTab):
         if hasattr(self.ui, "list_cmp_datasets") and self.ui.list_cmp_datasets.size() > 0:
             if not self.ui.list_cmp_datasets.curselection(): self._select_current_dataset_for_compare()
 
-    def _store(self) -> Optional[SettingsStore]:
+    def _store(self) -> SettingsStore | None:
         return self.state.settings_store
 
     def _load_persisted_settings(self) -> None:
@@ -104,7 +104,7 @@ class WeightsTab(BaseTab):
                 if isinstance(parsed, dict): self._group_assignments = {str(k): str(v) for k, v in parsed.items() if k and v}
             except Exception: pass
 
-    def _persisted_var_bindings(self) -> List[Tuple[str, Any]]:
+    def _persisted_var_bindings(self) -> list[tuple[str, Any]]:
         return [("weights.split", self.ui.var_split), ("weights.device", self.ui.var_device),
                 ("weights.max_samples", self.ui.var_max_samples), ("weights.save_preds", self.ui.chk_save_preds),
                 ("weights.report_scope", self.ui.var_report_scope), ("weights.report_split", self.ui.var_report_split),
@@ -158,8 +158,8 @@ class WeightsTab(BaseTab):
         try: self.ui.list_cmp_datasets.selection_set(0, "end")
         except Exception: pass
 
-    def _selected_compare_datasets(self) -> List[Path]:
-        ds: List[Path] = []
+    def _selected_compare_datasets(self) -> list[Path]:
+        ds: list[Path] = []
         try:
             for i in self.ui.list_cmp_datasets.curselection():
                 label = str(self.ui.list_cmp_datasets.get(i))
@@ -168,12 +168,12 @@ class WeightsTab(BaseTab):
         if not ds and self.state.dataset_dir: ds = [self.state.dataset_dir]
         return [p for p in ds if p.exists() and p.is_dir()]
 
-    def _selected_model_path(self) -> Optional[Path]:
+    def _selected_model_path(self) -> Path | None:
         sel = self.ui.tree.selection()
         if not sel: return None
         return self._model_by_iid.get(sel[0])
 
-    def _selected_model_paths(self) -> List[Path]:
+    def _selected_model_paths(self) -> list[Path]:
         return [p for iid in self.ui.tree.selection() if (p := self._model_by_iid.get(iid))]
 
     def _is_favorited(self, p: Path) -> bool:
@@ -227,13 +227,13 @@ class WeightsTab(BaseTab):
         self._group_iids.clear()
 
         group_names = self._available_groups()
-        group_members: Dict[str, List[Path]] = {gn: [] for gn in group_names}
+        group_members: dict[str, list[Path]] = {gn: [] for gn in group_names}
         for p in self._models:
             group = self._group_for_path(p)
             group_members.setdefault(group, []).append(p)
         
-        display_values: List[str] = []
-        restore_selection: List[str] = []
+        display_values: list[str] = []
+        restore_selection: list[str] = []
         item_counter = 0
 
         for group in group_names:
@@ -273,8 +273,8 @@ class WeightsTab(BaseTab):
         self._refresh_reports()
         self._refresh_groups_menu()
 
-    def _available_groups(self) -> List[str]:
-        names: List[str] = ["Favorites", "Snapshots", "Imports"]
+    def _available_groups(self) -> list[str]:
+        names: list[str] = ["Favorites", "Snapshots", "Imports"]
         names.extend([g for g in self._custom_groups if g and g not in names])
         names.extend([v for v in sorted(set(self._group_assignments.values())) if v and v not in names])
         if "Uncategorized" not in names: names.append("Uncategorized")
@@ -293,7 +293,7 @@ class WeightsTab(BaseTab):
 
     def _is_group_header(self, iid: str) -> bool: return bool(iid and iid.startswith("group::"))
 
-    def _group_from_iid(self, iid: str) -> Optional[str]:
+    def _group_from_iid(self, iid: str) -> str | None:
         if not iid or "::" not in iid: return None
         return iid.split("::", 1)[1]
 
@@ -303,7 +303,7 @@ class WeightsTab(BaseTab):
         for group in self._available_groups():
             self.ui._groups_menu.add_command(label=group, command=lambda g=group: self._assign_selected_to_group(self._selected_model_paths(), g))
 
-    def _assign_selected_to_group(self, paths: List[Path], group: Optional[str]) -> None:
+    def _assign_selected_to_group(self, paths: list[Path], group: str | None) -> None:
         if not paths or not group: return
         fav_changed = False
         for p in paths:
@@ -385,7 +385,7 @@ class WeightsTab(BaseTab):
         if group := self._group_from_iid(target): self._assign_selected_to_group(self._selected_model_paths(), group)
         self._drag_src_iid = None
 
-    def _on_tree_select(self, _evt: Optional[object] = None) -> None:
+    def _on_tree_select(self, _evt: object | None = None) -> None:
         if not (sel := self.ui.tree.selection()): return
         if not (p := self._model_by_iid.get(sel[0])): return
 
@@ -395,7 +395,7 @@ class WeightsTab(BaseTab):
 
     def _profile_info_for(self, p: Path) -> str:
         """Profile suffix for the selection label; torch.load results are cached by (path, mtime)."""
-        try: key: Tuple[str, float] = (str(p.resolve()), p.stat().st_mtime)
+        try: key: tuple[str, float] = (str(p.resolve()), p.stat().st_mtime)
         except Exception: key = (str(p), -1.0)
         if (cached := self._profile_info_cache.get(key)) is not None: return cached
         try:
@@ -448,7 +448,7 @@ class WeightsTab(BaseTab):
         try: self.ui._models_menu.tk_popup(event.x_root, event.y_root)
         finally: self.ui._models_menu.grab_release()
 
-    def _hide_models_menu(self, _event: Optional[tk.Event] = None) -> None:
+    def _hide_models_menu(self, _event: tk.Event | None = None) -> None:
         try: self.ui._models_menu.unpost()
         except Exception: pass
         try: self.ui._reports_menu.unpost()
@@ -483,7 +483,7 @@ class WeightsTab(BaseTab):
     def _set_selected_as_compare_b(self) -> None:
         if p := self._selected_model_path(): self.ui.var_cmp_b.set(self.logic.rel_path(p))
 
-    def _active_model_path(self) -> Optional[Path]:
+    def _active_model_path(self) -> Path | None:
         if not (s := self.ui.var_active_model.get().strip()): return None
         return Path(s)
 
@@ -629,7 +629,7 @@ class WeightsTab(BaseTab):
         self.logic.stop_prediction()
         self.ui.var_status.set("status: stopping...")
 
-    def _path_from_combo(self, rel: str) -> Optional[Path]:
+    def _path_from_combo(self, rel: str) -> Path | None:
         if not rel: return None
         p = (self.logic.sim_root / rel).resolve() if not Path(rel).is_absolute() else Path(rel)
         if p.exists(): return p
@@ -647,7 +647,7 @@ class WeightsTab(BaseTab):
             self.logic.run_predict(p, self.state.dataset_dir, f"selected({p.name})", self.ui.var_split.get().strip(), self.ui.var_device.get().strip(), self.ui.var_max_samples.get().strip(), self.ui.chk_save_preds.get(), lambda *res: self.frame.after(0, self._on_predict_complete, *res))
         except Exception as e: messagebox.showerror("Error", str(e))
 
-    def _on_predict_complete(self, report_path: Optional[Path], was_stopped: bool) -> None:
+    def _on_predict_complete(self, report_path: Path | None, was_stopped: bool) -> None:
         if was_stopped: self.ui.var_status.set("status: stopped")
         else: self.ui.var_status.set("status: done")
         if report_path and report_path.exists(): self.ui.append_log(self.logic.short_report(report_path))
@@ -669,7 +669,7 @@ class WeightsTab(BaseTab):
                 self.log_q.put("[error] no dataset selected\n")
                 return
 
-            paired: List[Tuple[Path, Dict[str, Any], Dict[str, Any]]] = []
+            paired: list[tuple[Path, dict[str, Any], dict[str, Any]]] = []
 
             for ds in ds_dirs:
                 if self.logic.stop_evt.is_set(): break
@@ -706,7 +706,7 @@ class WeightsTab(BaseTab):
         selected_model = self._selected_model_path()
         ds_dir = self.state.dataset_dir
 
-        filtered: List[Dict[str, Any]] = []
+        filtered: list[dict[str, Any]] = []
         for r in self._reports:
             r_split = str(r.get("split") or "-")
             if split_filter != "any" and r_split != split_filter: continue
@@ -727,11 +727,11 @@ class WeightsTab(BaseTab):
                 if not ds_dir or str(r.get("dataset_path") or "") != str(ds_dir): continue
             filtered.append(r)
         
-        def ts_of(rr: Dict[str, Any]) -> float:
+        def ts_of(rr: dict[str, Any]) -> float:
             s = rr.get("timestamp") or ""
             try: return datetime.fromisoformat(str(s)).timestamp()
             except Exception: return os.path.getmtime(str(rr.get("_path") or ""))
-        def metric(rr: Dict[str, Any], k: str) -> float:
+        def metric(rr: dict[str, Any], k: str) -> float:
             try: return float((rr.get("metrics") or {}).get(k) or 0.0)
             except Exception: return 0.0
 

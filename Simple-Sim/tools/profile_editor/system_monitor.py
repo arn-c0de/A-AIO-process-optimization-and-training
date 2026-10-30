@@ -4,17 +4,16 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass(frozen=True)
 class SystemStats:
-    cpu_percent: Optional[float]
-    ram_percent: Optional[float]
-    gpu_percent: Optional[float]
+    cpu_percent: float | None
+    ram_percent: float | None
+    gpu_percent: float | None
 
 
-def _cpu_percent() -> Optional[float]:
+def _cpu_percent() -> float | None:
     try:
         import psutil  # type: ignore
 
@@ -30,7 +29,7 @@ def _cpu_percent() -> Optional[float]:
         return None
 
 
-def _ram_percent() -> Optional[float]:
+def _ram_percent() -> float | None:
     try:
         import psutil  # type: ignore
 
@@ -55,7 +54,7 @@ def _ram_percent() -> Optional[float]:
         return None
 
 
-def _gpu_percent_nvidia() -> Optional[float]:
+def _gpu_percent_nvidia() -> float | None:
     nvsmi = shutil.which("nvidia-smi")
     if not nvsmi:
         return None
@@ -94,7 +93,7 @@ def read_system_stats() -> SystemStats:
 
 
 def format_system_stats(stats: SystemStats) -> str:
-    def fmt(v: Optional[float]) -> str:
+    def fmt(v: float | None) -> str:
         return "n/a" if v is None else f"{v:.0f}%"
 
     return f"CPU {fmt(stats.cpu_percent)} | GPU {fmt(stats.gpu_percent)} | RAM {fmt(stats.ram_percent)}"

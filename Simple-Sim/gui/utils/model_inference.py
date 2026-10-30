@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -37,7 +37,7 @@ class ModelWrapper:
         """
         self.model_path = model_path
         self.device = torch.device(device)
-        self.model: Optional[nn.Module] = None
+        self.model: nn.Module | None = None
         self.class_names: list[str] = []
         self.transform = None
 
@@ -53,7 +53,7 @@ class ModelWrapper:
 
         self.transform = _INFERENCE_TRANSFORM
 
-    def predict(self, image_path: Path) -> Tuple[str, float, np.ndarray]:
+    def predict(self, image_path: Path) -> tuple[str, float, np.ndarray]:
         """Run inference on single image.
 
         Args:
@@ -88,7 +88,7 @@ class ModelWrapper:
         return predicted_class, confidence_value, probs_array
 
 
-def load_model(model_path: Path, device: str = 'cpu') -> Optional[ModelWrapper]:
+def load_model(model_path: Path, device: str = 'cpu') -> ModelWrapper | None:
     """Load model from checkpoint.
 
     Args:
@@ -105,7 +105,7 @@ def load_model(model_path: Path, device: str = 'cpu') -> Optional[ModelWrapper]:
         return None
 
 
-def predict_image(model: ModelWrapper, image_path: Path) -> Optional[Dict[str, Any]]:
+def predict_image(model: ModelWrapper, image_path: Path) -> dict[str, Any] | None:
     """Predict single image and return results as dictionary.
 
     Args:

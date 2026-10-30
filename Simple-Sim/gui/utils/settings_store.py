@@ -5,15 +5,16 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Sequence, Tuple, Union
+from typing import Any, Union
+from collections.abc import Iterable, Sequence
 
 
 @dataclass
 class SettingsStore:
     path: Path
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
     _dirty: bool = False
-    _after_id: Optional[str] = None
+    _after_id: str | None = None
     _after_widget: Any = None  # tk widget with after/after_cancel
 
     def load(self) -> None:
@@ -70,11 +71,11 @@ class SettingsStore:
 
 # A binding is ``(key, var)`` or ``(key, var, default)``; ``var`` is any Tk
 # variable-like object with ``get()``, ``set()`` and ``trace_add()``.
-VarBinding = Union[Tuple[str, Any], Tuple[str, Any, Any]]
+VarBinding = Union[tuple[str, Any], tuple[str, Any, Any]]
 
 
 def restore_persisted_vars(
-    store: Optional[SettingsStore],
+    store: SettingsStore | None,
     bindings: Iterable[VarBinding],
     *,
     skip_empty_strings: bool = False,
@@ -103,7 +104,7 @@ def restore_persisted_vars(
             pass
 
 
-def wire_vars_autosave(store: Optional[SettingsStore], bindings: Iterable[VarBinding], widget: Any) -> None:
+def wire_vars_autosave(store: SettingsStore | None, bindings: Iterable[VarBinding], widget: Any) -> None:
     """Install ``trace_add("write")`` callbacks that persist each variable (debounced via ``widget``)."""
     if store is None:
         return
@@ -121,7 +122,7 @@ def wire_vars_autosave(store: Optional[SettingsStore], bindings: Iterable[VarBin
 
 
 def bind_persisted_vars(
-    store: Optional[SettingsStore],
+    store: SettingsStore | None,
     bindings: Sequence[VarBinding],
     widget: Any,
     *,

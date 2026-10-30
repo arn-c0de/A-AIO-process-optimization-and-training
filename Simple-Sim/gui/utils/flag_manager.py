@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any
 from datetime import datetime
 
 _LOG = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ class FlagManager:
         """
         self.dataset_dir = Path(dataset_dir)
         self.flags_path = self.dataset_dir / "flags.jsonl"
-        self._flags: Dict[str, List[Dict[str, Any]]] = {}  # id -> list of flag dicts
+        self._flags: dict[str, list[dict[str, Any]]] = {}  # id -> list of flag dicts
         self._load_flags()
 
     def _load_flags(self) -> None:
@@ -87,7 +87,7 @@ class FlagManager:
         self._flags[sample_id].append(flag_dict)
         self._save_flags()
 
-    def remove_flag(self, sample_id: str, flag_type: Optional[str] = None) -> None:
+    def remove_flag(self, sample_id: str, flag_type: str | None = None) -> None:
         """Remove flag(s) from a sample.
 
         Args:
@@ -113,7 +113,7 @@ class FlagManager:
 
         self._save_flags()
 
-    def get_flags(self, sample_id: str) -> List[Dict[str, Any]]:
+    def get_flags(self, sample_id: str) -> list[dict[str, Any]]:
         """Get all flags for a sample.
 
         Args:
@@ -124,7 +124,7 @@ class FlagManager:
         """
         return self._flags.get(sample_id, [])
 
-    def get_all_flagged_samples(self) -> List[str]:
+    def get_all_flagged_samples(self) -> list[str]:
         """Get all sample IDs with flags.
 
         Returns:
@@ -132,7 +132,7 @@ class FlagManager:
         """
         return list(self._flags.keys())
 
-    def get_samples_by_flag_type(self, flag_type: str) -> List[str]:
+    def get_samples_by_flag_type(self, flag_type: str) -> list[str]:
         """Get sample IDs with specific flag type.
 
         Args:
@@ -147,7 +147,7 @@ class FlagManager:
                 result.append(sample_id)
         return result
 
-    def has_flag(self, sample_id: str, flag_type: Optional[str] = None) -> bool:
+    def has_flag(self, sample_id: str, flag_type: str | None = None) -> bool:
         """Check if sample has a flag.
 
         Args:
@@ -165,13 +165,13 @@ class FlagManager:
 
         return any(f['flag'] == flag_type for f in self._flags[sample_id])
 
-    def get_flag_summary(self) -> Dict[str, int]:
+    def get_flag_summary(self) -> dict[str, int]:
         """Get summary of flag counts by type.
 
         Returns:
             Dictionary mapping flag types to counts
         """
-        summary: Dict[str, int] = {}
+        summary: dict[str, int] = {}
 
         for flag_list in self._flags.values():
             for flag_dict in flag_list:

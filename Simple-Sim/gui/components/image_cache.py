@@ -3,7 +3,6 @@
 from __future__ import annotations
 from collections import OrderedDict
 from pathlib import Path
-from typing import Optional, Tuple
 import numpy as np
 import cv2
 from PIL import Image, ImageTk
@@ -12,8 +11,8 @@ from PIL import Image, ImageTk
 class ImageCache:
     """LRU cache for images with separate caches for thumbnails and full images."""
 
-    def __init__(self, thumb_size: Tuple[int, int] = (150, 150),
-                 full_size: Tuple[int, int] = (512, 512),
+    def __init__(self, thumb_size: tuple[int, int] = (150, 150),
+                 full_size: tuple[int, int] = (512, 512),
                  thumb_capacity: int = 200,
                  full_capacity: int = 20) -> None:
         """Initialize image cache.
@@ -33,7 +32,7 @@ class ImageCache:
         self._thumb_cache: OrderedDict[str, ImageTk.PhotoImage] = OrderedDict()
         self._full_cache: OrderedDict[str, np.ndarray] = OrderedDict()
 
-    def get_thumbnail(self, image_path: Path) -> Optional[ImageTk.PhotoImage]:
+    def get_thumbnail(self, image_path: Path) -> ImageTk.PhotoImage | None:
         """Get thumbnail from cache or load and cache it.
 
         Args:
@@ -67,7 +66,7 @@ class ImageCache:
             print(f"Failed to load thumbnail {image_path}: {e}")
             return None
 
-    def get_full_image(self, image_path: Path) -> Optional[np.ndarray]:
+    def get_full_image(self, image_path: Path) -> np.ndarray | None:
         """Get full-size image from cache or load and cache it.
 
         Args:

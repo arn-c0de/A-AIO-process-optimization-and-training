@@ -3,7 +3,7 @@
 import shutil
 import yaml
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 import numpy as np
 import cv2
 
@@ -41,10 +41,10 @@ def validate_dataset_files(data_dir: Path) -> None:
 
 def write_dataset(
     output_dir: Path,
-    images: Dict[str, np.ndarray],
-    meta_rows: List[MetaRow],
-    label_rows: List[LabelRow],
-    config: Dict[str, Any]
+    images: dict[str, np.ndarray],
+    meta_rows: list[MetaRow],
+    label_rows: list[LabelRow],
+    config: dict[str, Any]
 ) -> None:
     """Write complete dataset with atomic operation.
 

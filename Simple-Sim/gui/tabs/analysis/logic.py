@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 import torch
 import json
 import numpy as np
@@ -17,15 +16,15 @@ from simple_sim.metrics import compute_metrics
 class AnalysisLogic:
     def __init__(self, sim_root: Path):
         self.sim_root = sim_root
-        self.model: Optional[ModelWrapper] = None
+        self.model: ModelWrapper | None = None
 
-    def sim_data_roots(self) -> Tuple[Path, Path]:
+    def sim_data_roots(self) -> tuple[Path, Path]:
         return sim_data_roots(self.sim_root)
 
-    def get_datasets(self) -> List[Path]:
+    def get_datasets(self) -> list[Path]:
         return list_dataset_dirs(self.sim_root)
 
-    def load_dataset(self, dataset_dir: Path) -> Tuple[Dict[str, MetaRow], Dict[str, str], Dict[str, str], List[str]]:
+    def load_dataset(self, dataset_dir: Path) -> tuple[dict[str, MetaRow], dict[str, str], dict[str, str], list[str]]:
         meta_rows = read_jsonl(dataset_dir / "meta.jsonl", MetaRow)
         label_rows = read_jsonl(dataset_dir / "labels.jsonl", LabelRow)
         meta_dict = {row.id: row for row in meta_rows}
@@ -34,7 +33,7 @@ class AnalysisLogic:
         sample_ids = [row.id for row in meta_rows]
         return meta_dict, label_dict, profile_dict, sample_ids
 
-    def try_load_model(self, dataset_dir: Path, current_model_path: Optional[Path]) -> Optional[ModelWrapper]:
+    def try_load_model(self, dataset_dir: Path, current_model_path: Path | None) -> ModelWrapper | None:
         self.model = None
         manifest_hash = None
         manifest_path = dataset_dir / "dataset_manifest.json"
@@ -69,7 +68,7 @@ class AnalysisLogic:
             self.model = None
             return False
 
-    def _find_model_by_manifest_hash(self, manifest_hash: str) -> Optional[Path]:
+    def _find_model_by_manifest_hash(self, manifest_hash: str) -> Path | None:
         models_root = self.sim_root / "outputs" / "models"
         candidates = [p for p in models_root.glob("*.pt")]
         candidates.extend([p for p in (models_root / "imports").glob("*.pt")])
@@ -87,7 +86,7 @@ class AnalysisLogic:
         ckpt_hash = self._checkpoint_manifest_hash(path)
         return ckpt_hash == manifest_hash if ckpt_hash else False
 
-    def _checkpoint_manifest_hash(self, path: Path) -> Optional[str]:
+    def _checkpoint_manifest_hash(self, path: Path) -> str | None:
         try:
             checkpoint = torch.load(path, map_location="cpu", weights_only=False)
             return checkpoint.get("dataset_manifest_hash")
@@ -98,12 +97,12 @@ class AnalysisLogic:
     def analyze_dataset(
         self,
         dataset_dir: Path,
-        sample_ids: List[str],
-        meta_dict: Dict[str, MetaRow],
-        label_dict: Dict[str, str],
-        effective_label_dict: Optional[Dict[str, str]] = None,
-        feedback_summary: Optional[Dict] = None,
-    ) -> Dict:
+        sample_ids: list[str],
+        meta_dict: dict[str, MetaRow],
+        label_dict: dict[str, str],
+        effective_label_dict: dict[str, str] | None = None,
+        feedback_summary: dict | None = None,
+    ) -> dict:
         if not self.model:
             raise ValueError("No model loaded.")
 
@@ -174,7 +173,7 @@ class AnalysisLogic:
         ordered.extend(sorted([c for c in classes if c and c not in priority]))
         return ordered
 
-    def _compute_metrics(self, y_true_labels: list[str], y_pred_labels: list[str], class_names: list[str]) -> Dict:
+    def _compute_metrics(self, y_true_labels: list[str], y_pred_labels: list[str], class_names: list[str]) -> dict:
         if not y_true_labels or not y_pred_labels or not class_names:
             return {
                 "accuracy": 0.0,
