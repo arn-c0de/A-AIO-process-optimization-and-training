@@ -39,6 +39,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out_root", required=True)
     parser.add_argument("--samples", type=int, required=True)
     parser.add_argument("--device", default="CPU")
+    parser.add_argument("--engine", default="BLENDER_EEVEE", help="Render engine (BLENDER_EEVEE or CYCLES)")
     # Blender passes custom args after a `--` separator.
     argv = sys.argv
     if "--" in argv:
@@ -214,17 +215,40 @@ def _pad_positions_mm(footprint: str, nominal: Dict[str, float], *, mm_per_px: f
     ]
 
 
-def _configure_cycles(*, width_px: int, height_px: int, samples: int, seed: int, device: str) -> bpy.types.Scene:
+def _normalize_engine(engine: str) -> str:
+    e = str(engine or "").strip().upper()
+    if e in ("", "EEVEE", "BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
+        return "BLENDER_EEVEE"
+    return e
+
+
+def _configure_cycles(
+    *, width_px: int, height_px: int, samples: int, seed: int, device: str, engine: str = "BLENDER_EEVEE"
+) -> bpy.types.Scene:
     scene = bpy.context.scene
 
-    # Try EEVEE instead of Cycles for better color handling
-    scene.render.engine = "BLENDER_EEVEE"
+    # Honour the configured engine; EEVEE is the default (better color handling).
+    engine = _normalize_engine(engine)
+    if engine == "BLENDER_EEVEE":
+        try:
+            scene.render.engine = "BLENDER_EEVEE"
+        except TypeError:
+            # Blender 4.2+ renamed the enum to BLENDER_EEVEE_NEXT.
+            scene.render.engine = "BLENDER_EEVEE_NEXT"
 
-    # EEVEE settings for quality
-    scene.eevee.taa_render_samples = max(64, int(samples))
-    scene.eevee.use_gtao = True  # Ambient occlusion
-    scene.eevee.use_bloom = False  # No bloom (more realistic)
-    scene.eevee.use_ssr = True  # Screen space reflections
+        # EEVEE settings for quality (some flags were removed in newer Blender versions)
+        scene.eevee.taa_render_samples = max(64, int(samples))
+        for attr, value in (("use_gtao", True), ("use_bloom", False), ("use_ssr", True)):
+            try:
+                setattr(scene.eevee, attr, value)  # AO on, bloom off (more realistic), SSR on
+            except AttributeError:
+                pass
+    else:
+        scene.render.engine = engine
+        if engine == "CYCLES":
+            scene.cycles.samples = int(samples)
+            # Per-job noise seed keeps Cycles renders deterministic.
+            scene.cycles.seed = int(seed) % (2**31)  # Blender IntProperty is 32-bit
 
     # Disable compositor and sequencer
     scene.render.use_compositing = False
@@ -356,7 +380,7 @@ def _normalize_qfn_pad_spacing(footprint: str, nominal: Dict[str, Any]) -> Dict[
     return nominal_pads
 
 
-def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> None:
+def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str, engine: str = "BLENDER_EEVEE") -> None:
     seed = int(job.get("seed", 0))
     random.seed(seed)
 
@@ -369,7 +393,9 @@ def _build_scene_for_job(job: Dict[str, Any], *, samples: int, device: str) -> N
     augment = job.get("augment") or {}
     render_3d = job.get("render_3d") or {}
 
-    _configure_cycles(width_px=width_px, height_px=height_px, samples=samples, seed=seed, device=device)
+    _configure_cycles(
+        width_px=width_px, height_px=height_px, samples=samples, seed=seed, device=device, engine=engine
+    )
 
     m_solder, m_sub, m_cu, m_body = _build_material_set(render_3d)
 
@@ -660,7 +686,7 @@ def main() -> None:
     for i, job in enumerate(jobs, 1):
         try:
             _clean_scene()
-            _build_scene_for_job(job, samples=int(args.samples), device=str(args.device))
+            _build_scene_for_job(job, samples=int(args.samples), device=str(args.device), engine=str(args.engine))
             out_path = out_root / str(job["image_path"])
             out_path.parent.mkdir(parents=True, exist_ok=True)
             bpy.context.scene.render.filepath = str(out_path)

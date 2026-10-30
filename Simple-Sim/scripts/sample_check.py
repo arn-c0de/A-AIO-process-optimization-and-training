@@ -19,13 +19,13 @@ from typing import Dict, List, Tuple
 import cv2
 import numpy as np
 import torch
-from torchvision import transforms
 
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
+from simple_sim.data_loader import preprocess_bgr
 from simple_sim.models import load_checkpoint_model as _load_checkpoint_model
 
 
@@ -35,14 +35,7 @@ def load_checkpoint_model(model_path: Path, device: torch.device):
 
 
 def preprocess(img_bgr: np.ndarray) -> torch.Tensor:
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    tfm = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
-    return tfm(img_rgb)
+    return preprocess_bgr(img_bgr)
 
 
 def main() -> None:

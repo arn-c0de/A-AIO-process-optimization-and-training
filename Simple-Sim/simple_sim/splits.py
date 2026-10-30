@@ -16,7 +16,10 @@ def generate_splits(
 ) -> Dict[str, List[str]]:
     """Generate stratified train/val/test splits.
 
-    Stratifies by (domain, class) to ensure balanced distribution.
+    Stratifies by (domain, profile_id, class) to ensure balanced distribution.
+    profile_id comes from v2 label rows ("" for single-profile datasets).
+    Per-group counts use largest-remainder rounding; when a group has at
+    least 3 samples, every split with frac > 0 gets at least 1 (taken from train).
 
     Args:
         meta_rows: List of metadata rows
@@ -30,16 +33,20 @@ def generate_splits(
     # Create ID to label mapping
     id_to_label = {row.id: row.class_name for row in label_rows}
 
+    # Create ID to profile mapping (empty for single-profile / v1 labels)
+    id_to_profile = {row.id: getattr(row, 'profile_id', '') or '' for row in label_rows}
+
     # Create ID to domain mapping
     id_to_domain = {row.id: row.domain for row in meta_rows}
 
-    # Group samples by (domain, class)
+    # Group samples by (domain, profile, class)
     groups = defaultdict(list)
     for meta_row in meta_rows:
         sample_id = meta_row.id
         domain = id_to_domain[sample_id]
+        profile_id = id_to_profile.get(sample_id, '')
         class_name = id_to_label[sample_id]
-        groups[(domain, class_name)].append(sample_id)
+        groups[(domain, profile_id, class_name)].append(sample_id)
 
     # Extract split fractions
     train_frac = config['splits']['train_frac']
@@ -57,14 +64,13 @@ def generate_splits(
     rng = random.Random(run_seed)
 
     # Split each group stratified
-    for (domain, class_name), sample_ids in groups.items():
+    for sample_ids in groups.values():
         # Shuffle group
         sample_ids = sample_ids.copy()
         rng.shuffle(sample_ids)
 
         n = len(sample_ids)
-        n_train = int(n * train_frac)
-        n_val = int(n * val_frac)
+        n_train, n_val, _n_test = _split_counts(n, (train_frac, val_frac, test_frac))
         # Remaining goes to test to ensure all samples are used
 
         train_ids = sample_ids[:n_train]
@@ -80,6 +86,34 @@ def generate_splits(
         splits[split_name].sort()
 
     return splits
+
+
+def _split_counts(n: int, fracs) -> List[int]:
+    """Largest-remainder allocation of n samples over split fractions.
+
+    Fractions are normalised so the counts always sum to n. For n >= 3 every
+    split with frac > 0 gets at least 1 sample, borrowed from the largest
+    split (train in practice).
+    """
+    total = float(sum(fracs))
+    if n <= 0 or total <= 0:
+        return [n] + [0] * (len(fracs) - 1)
+
+    quotas = [n * f / total for f in fracs]
+    counts = [int(q) for q in quotas]
+    # Hand out the leftover samples by largest fractional part (ties: earlier split)
+    order = sorted(range(len(fracs)), key=lambda i: (-(quotas[i] - counts[i]), i))
+    for i in order[:n - sum(counts)]:
+        counts[i] += 1
+
+    if n >= 3:
+        for i, f in enumerate(fracs):
+            if f > 0 and counts[i] == 0:
+                donor = max(range(len(counts)), key=lambda j: (counts[j], -j))
+                counts[donor] -= 1
+                counts[i] += 1
+
+    return counts
 
 
 def assert_no_overlap(splits: Dict[str, List[str]]) -> None:

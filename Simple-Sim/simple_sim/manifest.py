@@ -273,6 +273,71 @@ def read_dataset_manifest(manifest_path: Path) -> Dict[str, Any]:
     return manifest
 
 
+def check_checkpoint_profile(
+    checkpoint: Dict[str, Any],
+    dataset_profile_id: str,
+    dataset_profile_hash: str,
+    *,
+    action: str,
+    allow_mismatch: Optional[bool] = None,
+    override_verb: str = "Continuing",
+    ckpt_label: str = "Model trained on",
+) -> Optional[str]:
+    """Guard a checkpoint against being used on a dataset of another profile.
+
+    Profile ID mismatch is a hard failure. ``allow_mismatch=None`` means the
+    caller has no override flag; ``True``/``False`` reflect an
+    ``--allow-profile-mismatch`` flag (True downgrades the failure to a warning).
+    A profile hash mismatch always only warns.
+
+    Args:
+        checkpoint: Loaded checkpoint dict
+        dataset_profile_id: Profile ID from resolve_dataset_profile()
+        dataset_profile_hash: Profile hash from resolve_dataset_profile()
+        action: Phrase for the error, e.g. "evaluate model on"
+        allow_mismatch: Override flag value, or None if the caller has none
+        override_verb: Leading verb of the override warning ("Resuming", ...)
+        ckpt_label: Label for the checkpoint profile line
+
+    Returns:
+        The checkpoint profile ID, or None for legacy checkpoints without metadata.
+    """
+    ckpt_profile = checkpoint.get('component_profile')
+    if not ckpt_profile:
+        print("WARNING: Checkpoint lacks profile metadata (legacy checkpoint)")
+        return None
+
+    ckpt_profile_id = ckpt_profile.get('profile_id')
+    ckpt_profile_hash = ckpt_profile.get('profile_hash')
+    label = f"{ckpt_label}:"
+    width = max(len(label), len("Dataset profile:")) + 1
+
+    # HARD FAIL by default: Profile ID mismatch
+    if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
+        if not allow_mismatch:
+            hint = (
+                "\n\nTo override (NOT recommended): pass --allow-profile-mismatch"
+                if allow_mismatch is not None else ""
+            )
+            raise ValueError(
+                f"Component profile mismatch:\n"
+                f"  {label:<{width}}{ckpt_profile_id}\n"
+                f"  {'Dataset profile:':<{width}}{dataset_profile_id}\n"
+                f"Cannot {action} different component type.{hint}"
+            )
+        print(f"WARNING: {override_verb} with component profile mismatch (--allow-profile-mismatch).")
+        print(f"  {label:<{width}}{ckpt_profile_id}")
+        print(f"  {'Dataset profile:':<{width}}{dataset_profile_id}")
+
+    # WARNING: Profile hash mismatch
+    if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
+        print("WARNING: Profile hash mismatch (different tolerance/geometry)")
+        print(f"  Checkpoint hash: {ckpt_profile_hash[:72]}...")
+        print(f"  Dataset hash:    {dataset_profile_hash[:72]}...")
+
+    return ckpt_profile_id
+
+
 def validate_manifest_profile(
     manifest: Dict[str, Any],
     expected_profile_id: str,

@@ -1,9 +1,11 @@
 """PyTorch Dataset for ROI images."""
 
+import os
 import warnings
 import cv2
+import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -15,10 +17,45 @@ from simple_sim.splits import read_split
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
-_IMAGENET_TRANSFORM = transforms.Compose([
+# Shared inference/training transform (RGB uint8 HWC -> normalised CHW tensor).
+IMAGENET_TRANSFORM = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
 ])
+_IMAGENET_TRANSFORM = IMAGENET_TRANSFORM  # backward-compatible alias
+
+
+def preprocess_bgr(img_bgr: np.ndarray) -> torch.Tensor:
+    """Convert a BGR image (cv2.imread) to a normalised model input tensor."""
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    return IMAGENET_TRANSFORM(img_rgb)
+
+
+def make_loader_kwargs(num_workers: int, device: torch.device, *, verbose: bool = True) -> Dict[str, Any]:
+    """Build shared DataLoader kwargs, auto-tuning workers for CUDA runs.
+
+    When the config leaves num_workers at 0 on CUDA, pick a worker count from
+    the CPU count. num_workers>0 can fail in restricted environments
+    (semaphores / shared memory perms), so CPU runs keep the configured value.
+    """
+    num_workers = int(num_workers or 0)
+    effective = num_workers
+    if device.type == "cuda" and effective <= 0:
+        cpu_count = max(1, int(os.cpu_count() or 1))
+        effective = max(2, min(8, cpu_count - 1 if cpu_count > 1 else 1))
+        if verbose:
+            print(f"  Num workers: {num_workers} (auto-tuned to {effective} for CUDA)")
+    elif verbose:
+        print(f"  Num workers: {effective}")
+
+    kwargs: Dict[str, Any] = {
+        "num_workers": effective,
+        "pin_memory": (device.type == "cuda"),
+    }
+    if effective > 0:
+        kwargs["persistent_workers"] = True
+        kwargs["prefetch_factor"] = 2
+    return kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +69,7 @@ class _BaseROIDataset(Dataset):
         self.data_dir = Path(data_dir)
         self.split = split
         self.return_id = return_id
-        self.transform = _IMAGENET_TRANSFORM
+        self.transform = IMAGENET_TRANSFORM
 
         split_file = self.data_dir / 'splits' / f'{split}.txt'
         self.sample_ids = read_split(split_file)
@@ -143,10 +180,11 @@ class ProfileDataset(_BaseROIDataset):
         Args:
             data_dir: Root directory of dataset
             split: Split name ('train', 'val', 'test')
-            profile_names: Sorted list of profile ID strings
+            profile_names: Ordered list of profile ID strings; the order defines
+                label indices and is kept as given (callers sort when training)
             return_id: If True, __getitem__ returns (image, label, sample_id, image_rel_path)
         """
-        self.profile_names = sorted(profile_names)
+        self.profile_names = list(profile_names)
         super().__init__(data_dir, split, return_id)
 
     def _init_label_mapping(self, label_rows: List[LabelRow]) -> None:

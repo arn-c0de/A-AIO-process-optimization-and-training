@@ -11,16 +11,10 @@ from typing import Dict
 import cv2
 import numpy as np
 import torch
-from torchvision import transforms
 
-from simple_sim.data_loader import IMAGENET_MEAN, IMAGENET_STD
+from simple_sim.data_loader import preprocess_bgr
 from simple_sim.model_bundle import bundle_checkpoint_path
 from simple_sim.models import model_from_checkpoint
-
-_PREPROCESS_TRANSFORM = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-])
 
 
 @dataclass
@@ -37,14 +31,13 @@ class TwoStageResult:
 
 def _load_model(checkpoint_path: Path, device: torch.device):
     """Load a ResNet18 checkpoint and return (model, class_names, checkpoint)."""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     return model_from_checkpoint(checkpoint, device), checkpoint['class_names'], checkpoint
 
 
 def _preprocess(img_bgr: np.ndarray) -> torch.Tensor:
     """Preprocess a BGR image to a normalized tensor."""
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    return _PREPROCESS_TRANSFORM(img_rgb)
+    return preprocess_bgr(img_bgr)
 
 
 class TwoStageClassifier:

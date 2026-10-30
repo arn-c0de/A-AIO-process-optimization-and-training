@@ -300,9 +300,14 @@ def _validate_render_3d(render: Dict[str, Any]) -> None:
 
 
 def _validate_augment(augment: Dict[str, Any]) -> None:
-    required = ['rotation_deg_range', 'brightness_factor_range', 'contrast_factor_range']
-    for field in required:
+    required = ['rotation_deg_range', 'contrast_factor_range']
+    # Brightness is sampled from domains.*.lighting_brightness; brightness_factor_range
+    # is legacy/unused by the samplers and only validated when present.
+    optional = ['brightness_factor_range']
+    for field in required + optional:
         if field not in augment:
+            if field in optional:
+                continue
             raise ValueError(f"Missing augment.{field}")
         if not isinstance(augment[field], list) or len(augment[field]) != 2:
             raise ValueError(f"augment.{field} must be a list of 2 numbers")
