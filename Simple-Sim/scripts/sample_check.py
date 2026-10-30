@@ -12,7 +12,6 @@ Example:
 from __future__ import annotations
 
 import argparse
-import json
 import random
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -20,27 +19,18 @@ from typing import Dict, List, Tuple
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
-from torchvision import models, transforms
+from torchvision import transforms
 
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
+from simple_sim.models import load_checkpoint_model as _load_checkpoint_model
 
 
 def load_checkpoint_model(model_path: Path, device: torch.device):
-    checkpoint = torch.load(model_path, map_location=device)
-    class_names = checkpoint["class_names"]
-    num_classes = len(class_names)
-
-    model = models.resnet18(weights=None)
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
-    model.eval()
+    model, class_names, _ = _load_checkpoint_model(model_path, device)
     return model, class_names
 
 

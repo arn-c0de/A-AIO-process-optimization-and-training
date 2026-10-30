@@ -10,7 +10,7 @@ Design goals:
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -201,10 +201,15 @@ def _apply_constraints(selected: List[str]) -> List[str]:
     return out
 
 
-def apply_realism_groups(augment: Dict[str, float], filt: Dict[str, Any]) -> Dict[str, float]:
+def apply_realism_groups(
+    augment: Dict[str, float],
+    filt: Dict[str, Any],
+    rng: Optional[np.random.Generator] = None,
+) -> Dict[str, float]:
     """Apply correlated realism groups on top of sampled augment values."""
     aug = dict(augment or {})
-    rng = np.random.default_rng()
+    if rng is None:
+        rng = np.random.default_rng()
     constraints_enabled = bool(filt.get("realism_constraints_enabled", True))
     policy = _resolve_policy(filt)
 
@@ -213,7 +218,9 @@ def apply_realism_groups(augment: Dict[str, float], filt: Dict[str, Any]) -> Dic
     aug["noise_stddev"] = _tri_sample(rng, 1.0, 3.0, 6.0)
     aug["brightness_factor"] = _tri_sample(rng, 0.96, 1.00, 1.05)
     aug["contrast_factor"] = _tri_sample(rng, 0.96, 1.00, 1.06)
-    aug["rotation_deg"] = _tri_sample(rng, -4.0, 0.0, 4.0)
+    # Keep the cardinal 0/90/180/270 base orientation, only replace the small jitter.
+    base_orientation_deg = (90.0 * round(float(aug.get("rotation_deg", 0.0) or 0.0) / 90.0)) % 360.0
+    aug["rotation_deg"] = base_orientation_deg + _tri_sample(rng, -4.0, 0.0, 4.0)
     aug["perspective_strength"] = 0.0
     aug["motion_blur_strength"] = 0.0
     aug["vignetting_strength"] = 0.0

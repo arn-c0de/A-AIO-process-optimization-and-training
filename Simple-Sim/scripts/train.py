@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import models
 from tqdm import tqdm
 import numpy as np
 
@@ -20,9 +19,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import ROIDataset
-from simple_sim.metrics import compute_metrics, format_metrics
+from simple_sim.metrics import compute_metrics
+from simple_sim.models import build_resnet18
 from simple_sim.telemetry import emit
-from simple_sim.manifest import read_dataset_manifest, hash_file
+from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile, hash_file
 from simple_sim.model_bundle import bundle_checkpoint_path, upsert_bundle_meta
 
 
@@ -174,7 +174,7 @@ def validate(model, loader, criterion, device, class_names, critical_classes=Non
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
-    avg_loss = total_loss / num_batches
+    avg_loss = total_loss / max(1, num_batches)
 
     # Compute metrics
     metrics = compute_metrics(
@@ -235,23 +235,17 @@ def main():
         )
 
     manifest = read_dataset_manifest(manifest_path)
-    mver = int(manifest.get('manifest_version', 1) or 1)
-    if mver == 1:
-        dataset_profile_id = manifest['component_profile']['profile_id']
-        dataset_profile_hash = manifest['component_profile']['profile_hash']
+    # Multi-profile (v2) datasets map to the logical profile "multi" for checkpoint metadata.
+    dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
+    if dataset_profile_id != "multi":
         print(f"Dataset Profile: {dataset_profile_id}")
-    elif mver == 2:
-        # Multi-profile dataset: treat as a special logical profile for checkpoint metadata.
-        dataset_profile_id = "multi"
-        dataset_profile_hash = "multi"
+    else:
         profiles = manifest.get('component_profiles') or []
         try:
             pids = [p.get('profile_id') for p in profiles if isinstance(p, dict)]
         except Exception:
             pids = []
         print(f"Dataset Profile: multi ({', '.join([x for x in pids if x])})")
-    else:
-        raise ValueError(f"Unsupported dataset manifest_version: {mver}")
 
     # "Multi-model" bundle support:
     # If --out is a directory (or ends with `.bundle`), write per-profile checkpoints into that dir.
@@ -339,22 +333,9 @@ def main():
 
     # Create model
     print("\nInitializing ResNet18...")
-    if pretrained:
-        try:
-            model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
-        except Exception as e:
-            # Pretrained weights may require network access on first run.
-            print(f"WARNING: Failed to load pretrained weights ({e}). Falling back to random init.")
-            model = models.resnet18(weights=None)
-    else:
-        model = models.resnet18(weights=None)
+    model = build_resnet18(num_classes, pretrained=pretrained)
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
-
-    # Modify final layer for our number of classes
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-
     model = model.to(device)
 
     # Loss and optimizer
@@ -410,12 +391,13 @@ def main():
         model.load_state_dict(checkpoint['model_state_dict'])
         try:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        except Exception:
+        except Exception as e:
             # Optimizer state may be missing or incompatible; continue with fresh optimizer state.
-            pass
+            print(f"WARNING: Could not restore optimizer state ({e}); using fresh optimizer state.")
         start_epoch = int(checkpoint.get('epoch', 0))
-        best_val_f1 = float(checkpoint.get('val_f1', checkpoint.get('val_f1', 0.0)) or 0.0)
-        best_epoch = int(checkpoint.get('epoch', 0))
+        # Prefer the tracked best score; older checkpoints only carry the F1 of their own epoch.
+        best_val_f1 = float(checkpoint.get('best_val_f1', checkpoint.get('val_f1', 0.0)) or 0.0)
+        best_epoch = int(checkpoint.get('best_epoch', checkpoint.get('epoch', 0)))
         print(f"  Resumed from epoch: {start_epoch}")
         print(f"  Resumed best val F1: {best_val_f1:.4f}")
 
@@ -480,6 +462,16 @@ def main():
             epoch_s=float(epoch_s),
         )
 
+        # Decide "best" before building the checkpoint so it carries the best-so-far score.
+        if args.out_mode == "last":
+            is_best = True
+        else:
+            # Always write --out at least once, even if no epoch beats the resumed/initial score.
+            is_best = val_f1 > best_val_f1 or not output_path.exists()
+        if is_best:
+            best_val_f1 = float(val_f1)
+            best_epoch = int(epoch + 1)
+
         # Save checkpoint(s)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         ckpt = {
@@ -488,6 +480,8 @@ def main():
             'optimizer_state_dict': optimizer.state_dict(),
             'val_f1': val_f1,
             'val_accuracy': val_acc,
+            'best_val_f1': best_val_f1,
+            'best_epoch': best_epoch,
             'class_names': class_names,
             'config': config,
 
@@ -503,25 +497,18 @@ def main():
         # Always save "last" so resume runs are observable.
         torch.save(ckpt, last_path)
 
-        if args.out_mode == "last":
-            torch.save(ckpt, output_path)
-            best_val_f1 = float(val_f1)
-            best_epoch = int(epoch + 1)
-        else:
-            # Save best model
-            if val_f1 > best_val_f1:
-                best_val_f1 = float(val_f1)
-                best_epoch = int(epoch + 1)
+        if is_best:
+            if args.out_mode != "last":
                 print(f"  ✓ New best model (F1: {best_val_f1:.4f})")
-                torch.save(ckpt, output_path)
+            torch.save(ckpt, output_path)
 
         # Bundle bookkeeping: keep a lightweight index of which profiles exist.
         if bundle_dir is not None:
             try:
                 if output_path.exists():
                     upsert_bundle_meta(bundle_dir, dataset_profile_id, output_path)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"WARNING: Failed to update bundle index in {bundle_dir}: {e}")
 
     print("\n" + "="*60)
     print("TRAINING COMPLETE")

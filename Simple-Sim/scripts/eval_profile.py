@@ -11,18 +11,13 @@ import json
 from pathlib import Path
 from datetime import datetime
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
-from torchvision import models
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import ProfileDataset
-from simple_sim.metrics import compute_metrics, format_metrics
-from simple_sim.telemetry import emit
-from simple_sim.manifest import read_dataset_manifest
-from simple_sim.schema import read_jsonl, LabelRow
+from simple_sim.metrics import format_metrics
+from simple_sim.models import build_resnet18
 from scripts.eval import evaluate
 
 
@@ -60,9 +55,7 @@ def main():
 
     # Create model
     print("\nInitializing model...")
-    model = models.resnet18()
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
+    model = build_resnet18(num_classes)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
 

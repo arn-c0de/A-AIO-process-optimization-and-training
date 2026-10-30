@@ -4,18 +4,18 @@ Stage 1: Profile classifier identifies which component type (profile) is present
 Stage 2: Per-profile defect model classifies the defect state (OK/MISSING/MISALIGNED/TOMBSTONE).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
-from torchvision import models, transforms
+from torchvision import transforms
 
 from simple_sim.data_loader import IMAGENET_MEAN, IMAGENET_STD
 from simple_sim.model_bundle import bundle_checkpoint_path
+from simple_sim.models import model_from_checkpoint
 
 _PREPROCESS_TRANSFORM = transforms.Compose([
     transforms.ToTensor(),
@@ -38,17 +38,7 @@ class TwoStageResult:
 def _load_model(checkpoint_path: Path, device: torch.device):
     """Load a ResNet18 checkpoint and return (model, class_names, checkpoint)."""
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    class_names = checkpoint['class_names']
-    num_classes = len(class_names)
-
-    model = models.resnet18(weights=None)
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(device)
-    model.eval()
-
-    return model, class_names, checkpoint
+    return model_from_checkpoint(checkpoint, device), checkpoint['class_names'], checkpoint
 
 
 def _preprocess(img_bgr: np.ndarray) -> torch.Tensor:

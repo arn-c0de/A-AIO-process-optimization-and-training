@@ -31,7 +31,7 @@ _EPS = 1e-6
 # Public API
 # ---------------------------------------------------------------------------
 
-def classify_defect(nominal: Dict[str, float], defect_params: Dict[str, Any], tolerances: Dict[str, Any]) -> str:
+def classify_defect(nominal: Dict[str, float], defect_params: Dict[str, Any], tolerances: Optional[Dict[str, Any]]) -> str:
     """Classify defect based on tolerances.
 
     Deterministic labeling based on threshold rules.
@@ -49,15 +49,21 @@ def classify_defect(nominal: Dict[str, float], defect_params: Dict[str, Any], to
     if defect_type in ('SOLDER_BRIDGE', 'CORNER_LIFT', 'MISSING'):
         return defect_type
 
+    # Same fallbacks as sample_defect_params() so profiles without tolerances still classify.
+    tolerances = tolerances or {}
+    ok_shift_px = float(tolerances.get('ok_shift_px', _DEFAULT_OK_SHIFT_PX))
+    ok_rotation_deg = float(tolerances.get('ok_rotation_deg', _DEFAULT_OK_ROT_DEG))
+    tombstone_tilt_deg = float(tolerances.get('tombstone_tilt_deg', _DEFAULT_TOMBSTONE_TILT))
+
     tilt_deg = abs(defect_params['tilt_deg'])
-    if tilt_deg >= tolerances['tombstone_tilt_deg']:
+    if tilt_deg >= tombstone_tilt_deg:
         return 'TOMBSTONE'
 
     shift_x = defect_params['shift_x']
     shift_y = defect_params['shift_y']
     rotation_deg = abs(defect_params['rotation_deg'])
     shift_magnitude = np.sqrt(shift_x**2 + shift_y**2)
-    if shift_magnitude > tolerances['ok_shift_px'] or rotation_deg > tolerances['ok_rotation_deg']:
+    if shift_magnitude > ok_shift_px or rotation_deg > ok_rotation_deg:
         return 'MISALIGNED'
 
     return 'OK'

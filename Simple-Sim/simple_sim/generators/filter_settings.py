@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Any, Dict, Optional
 
 
@@ -243,3 +245,27 @@ def clean_filter_values_for_popup() -> Dict[str, Any]:
         clean[f"{key}_max"] = value
 
     return clean
+
+
+def load_image_filters_env(var_name: str = "IMAGE_FILTERS") -> Dict[str, Any]:
+    """Read image-filter settings as JSON from an environment variable (GUI -> generator handoff)."""
+    raw = os.environ.get(var_name, "").strip()
+    if not raw:
+        return normalize_image_filters(None)
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        print(f"[warn] Invalid {var_name} JSON, using defaults.")
+        return normalize_image_filters(None)
+    return normalize_image_filters(parsed if isinstance(parsed, dict) else None)
+
+
+def augment_for_meta(augment: Dict[str, Any]) -> Dict[str, float]:
+    """Return the schema-compatible augment subset stored in MetaRow."""
+    return {
+        "blur_sigma": float(augment.get("blur_sigma", 0.0) or 0.0),
+        "noise_stddev": float(augment.get("noise_stddev", 0.0) or 0.0),
+        "brightness_factor": float(augment.get("brightness_factor", 1.0) or 1.0),
+        "contrast_factor": float(augment.get("contrast_factor", 1.0) or 1.0),
+        "rotation_deg": float(augment.get("rotation_deg", 0.0) or 0.0),
+    }

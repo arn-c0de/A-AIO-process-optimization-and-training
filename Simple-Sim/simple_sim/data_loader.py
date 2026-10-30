@@ -113,7 +113,11 @@ class ROIDataset(_BaseROIDataset):
         self.id_to_label: Dict[str, str] = {row.id: row.class_name for row in label_rows}
 
     def _sample_is_valid(self, sample_id: str) -> bool:
-        return sample_id in self.id_to_meta and sample_id in self.id_to_label
+        return (
+            sample_id in self.id_to_meta
+            and sample_id in self.id_to_label
+            and self.id_to_label[sample_id] in self.class_names
+        )
 
     def _get_label_index(self, sample_id: str) -> int:
         return self.class_names.index(self.id_to_label[sample_id])

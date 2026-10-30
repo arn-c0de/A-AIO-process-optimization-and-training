@@ -11,7 +11,7 @@ import hashlib
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from simple_sim import __version__ as _VERSION
 
@@ -145,9 +145,8 @@ def write_dataset_manifest(
         # Update stats (add to existing counts)
         manifest['dataset_stats']['total_samples'] += len(meta_rows)
 
-        for split_name, count in split_counts.items():
-            manifest['dataset_stats']['splits'][split_name] = \
-                manifest['dataset_stats']['splits'].get(split_name, 0) + count
+        # `splits` is the complete (already merged) split map, so overwrite instead of adding.
+        manifest['dataset_stats']['splits'] = dict(split_counts)
 
         for class_name, count in class_counts.items():
             manifest['dataset_stats']['classes'][class_name] = \
@@ -193,6 +192,21 @@ def write_dataset_manifest(
 
     _atomic_json_write(manifest_path, manifest)
     print(f"✓ Dataset manifest written: {manifest_path}")
+
+
+def resolve_dataset_profile(manifest: Dict[str, Any]) -> Tuple[str, str]:
+    """Return (profile_id, profile_hash) for a dataset manifest.
+
+    v1 manifests carry a single ``component_profile``; v2 (multi-profile)
+    manifests are mapped to the logical profile ``"multi"``.
+    """
+    mver = int(manifest.get('manifest_version', 1) or 1)
+    if mver == 1:
+        cp = manifest['component_profile']
+        return cp['profile_id'], cp['profile_hash']
+    if mver == 2:
+        return "multi", "multi"
+    raise ValueError(f"Unsupported dataset manifest_version: {mver}")
 
 
 def read_dataset_manifest(manifest_path: Path) -> Dict[str, Any]:
