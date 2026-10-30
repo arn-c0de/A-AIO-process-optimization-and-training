@@ -132,7 +132,12 @@ class Preview3D(ttk.Frame):
 
         self.meshes: list[BoxMesh] = []
         self._visibility_vars: dict[str, tk.BooleanVar] = {}
+        # Saved visibility flags by mesh name; applied when meshes are (re)created, so
+        # settings restored before the first profile load are not lost.
+        self._saved_visibility: dict[str, bool] = {}
         self._camera_initialized = False
+        # True if apply_user_settings restored a camera: the first profile load keeps it.
+        self._camera_restored = False
         self._last_profile_id = ""
         self._selected_name: str | None = None
         self._active_move_name: str | None = None
@@ -148,6 +153,9 @@ class Preview3D(ttk.Frame):
         self.canvas.bind("<ButtonRelease-1>", self._stop_drag)
         self.canvas.bind("<ButtonRelease-3>", self._stop_drag)
         self.canvas.bind("<MouseWheel>", self._on_wheel)
+        # X11 delivers wheel events as Button-4 (up) / Button-5 (down).
+        self.canvas.bind("<Button-4>", lambda _e: self._zoom_step(1.0))
+        self.canvas.bind("<Button-5>", lambda _e: self._zoom_step(-1.0))
 
     def set_profile_data(self, profile_data: dict[str, Any]) -> None:
         self.meshes = self._build_scene(profile_data or {})
@@ -155,8 +163,12 @@ class Preview3D(ttk.Frame):
 
         profile_id = str((profile_data.get("profile") or {}).get("profile_id") or "").strip()
         profile_changed = bool(profile_id and profile_id != self._last_profile_id)
+        # The first profile after startup counts as "changed"; keep a restored camera then.
+        keep_restored = profile_changed and not self._last_profile_id and self._camera_restored
 
-        if (not self._camera_initialized) or (profile_changed and self.auto_fit_on_profile_change.get()):
+        if (not self._camera_initialized) or (
+            profile_changed and self.auto_fit_on_profile_change.get() and not keep_restored
+        ):
             self.pan_x = 0.0
             self.pan_y = 0.0
             self._fit_distance_to_scene()
@@ -165,6 +177,7 @@ class Preview3D(ttk.Frame):
 
         if profile_id:
             self._last_profile_id = profile_id
+        self._sync_zoom_slider()
         self.redraw()
 
     def _reset_camera(self) -> None:
@@ -184,7 +197,7 @@ class Preview3D(ttk.Frame):
         for mesh in self.meshes:
             var = self._visibility_vars.get(mesh.name)
             if var is None:
-                var = tk.BooleanVar(value=True)
+                var = tk.BooleanVar(value=self._saved_visibility.get(mesh.name, True))
             keep[mesh.name] = var
         self._visibility_vars = keep
 
@@ -275,7 +288,11 @@ class Preview3D(ttk.Frame):
         self.redraw()
 
     def _on_wheel(self, event: tk.Event) -> None:
-        delta = -1.0 if event.delta < 0 else 1.0
+        if not event.delta:
+            return
+        self._zoom_step(-1.0 if event.delta < 0 else 1.0)
+
+    def _zoom_step(self, delta: float) -> None:
         if self.invert_zoom.get():
             delta = -delta
         self.distance *= 0.92 if delta > 0 else 1.08
@@ -300,6 +317,8 @@ class Preview3D(ttk.Frame):
         self.redraw()
 
     def _on_component_visibility_changed(self) -> None:
+        for name, var in self._visibility_vars.items():
+            self._saved_visibility[name] = bool(var.get())
         self._emit_settings_changed()
         self.redraw()
 
@@ -457,7 +476,10 @@ class Preview3D(ttk.Frame):
                 )
                 idx += 1
         elif footprint in {"sot23", "qfn_32", "qfn"}:
-            offsets = [(-pad_sx * 0.5, -pad_sy * 0.5), (pad_sx * 0.5, -pad_sy * 0.5), (0.0, pad_sy * 0.5)]
+            # SOT-23 matches blender/render_batch.py: pads 1/2 on the left column
+            # (y = -/+ pad_spacing_y/2), pad 3 on the right at y = 0. pad_spacing is
+            # the left/right column distance; _emit_geometry_updates_from_scene inverts this.
+            offsets = [(-pad_sx * 0.5, -pad_sy * 0.5), (-pad_sx * 0.5, pad_sy * 0.5), (pad_sx * 0.5, 0.0)]
             if footprint.startswith("qfn"):
                 offsets = [
                     (-pad_sx * 0.45, -pad_sy * 0.45),
@@ -466,11 +488,13 @@ class Preview3D(ttk.Frame):
                     (pad_sx * 0.45, pad_sy * 0.45),
                 ]
             for i, (ox, oy) in enumerate(offsets, start=1):
+                # render_batch.py draws the two SOT-23 left pads at 0.8x pad_height.
+                ph = pad_h * 0.8 if footprint == "sot23" and i < 3 else pad_h
                 pads.append(
                     self._box(
                         f"pad_{i}",
                         (ox, oy, pad_t * 0.5),
-                        (pad_w, pad_h, pad_t),
+                        (pad_w, ph, pad_t),
                         "#bd7a33",
                         "#d79c5f",
                         movable=True,
@@ -735,6 +759,7 @@ class Preview3D(ttk.Frame):
         elif self._scene_footprint == "sot23":
             p1, p2, p3 = m("pad_1"), m("pad_2"), m("pad_3")
             if p1 and p2 and p3:
+                # Inverse of the SOT-23 layout in _build_scene (left column = pads 1/2, right = pad 3).
                 left_x = (p1.center[0] + p2.center[0]) * 0.5
                 spacing = abs(p3.center[0] - left_x) / scale
                 spacing_y = abs(p2.center[1] - p1.center[1]) / scale
@@ -775,7 +800,10 @@ class Preview3D(ttk.Frame):
                 "pan_x": float(self.pan_x),
                 "pan_y": float(self.pan_y),
             },
-            "component_visibility": {k: bool(v.get()) for k, v in self._visibility_vars.items()},
+            "component_visibility": {
+                **self._saved_visibility,
+                **{k: bool(v.get()) for k, v in self._visibility_vars.items()},
+            },
         }
 
     def apply_user_settings(self, data: dict[str, Any]) -> None:
@@ -798,12 +826,14 @@ class Preview3D(ttk.Frame):
                 self.pan_x = float(cam.get("pan_x", self.pan_x))
                 self.pan_y = float(cam.get("pan_y", self.pan_y))
                 self._camera_initialized = True
+                self._camera_restored = bool(cam)
             except Exception:
                 pass
 
         vis = data.get("component_visibility") or {}
         if isinstance(vis, dict):
             for name, flag in vis.items():
+                self._saved_visibility[str(name)] = bool(flag)
                 if name in self._visibility_vars:
                     self._visibility_vars[name].set(bool(flag))
 
