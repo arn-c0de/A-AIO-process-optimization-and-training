@@ -39,6 +39,20 @@ class PipelineLogic:
         
         self._profile_config_cache: Dict[str, Dict[str, Any]] = {}
 
+        # True while the start_pipeline loop thread is alive (also between runs, when no process is running).
+        self.loop_running: bool = False
+        # Marshals a zero-arg callable onto the Tk main thread; the tab sets this (e.g. via frame.after).
+        self.ui_call: Optional[Callable[[Callable[[], None]], None]] = None
+        # Done-event of the currently active events.jsonl tailer (only one tailer at a time).
+        self._tail_done: Optional[threading.Event] = None
+        self._tail_lock = threading.Lock()
+        # Checkpoint metadata cache keyed by (resolved path, mtime_ns, size).
+        self._ckpt_meta_cache: Dict[tuple[str, int, int], Dict[str, Any]] = {}
+        self._ckpt_meta_lock = threading.Lock()
+
+    def is_busy(self) -> bool:
+        return self.loop_running or self.is_process_running()
+
     def is_process_running(self) -> bool:
         p = self.proc
         if p is None:
@@ -73,88 +87,93 @@ class PipelineLogic:
         self.stop_evt.clear()
         self.current_run_iteration = 0
         self.total_run_count = run_count
+        self.loop_running = True
 
         def _run_pipeline_loop_thread():
-            while run_count == -1 or self.current_run_iteration < run_count:
-                if self.stop_evt.is_set():
-                    log_callback(f"\n=== Pipeline stopped by user after {self.current_run_iteration} runs ===\n")
-                    break
+            try:
+                while run_count == -1 or self.current_run_iteration < run_count:
+                    if self.stop_evt.is_set():
+                        log_callback(f"\n=== Pipeline stopped by user after {self.current_run_iteration} runs ===\n")
+                        break
 
-                self.current_run_iteration += 1
+                    self.current_run_iteration += 1
                 
-                # Update status display
-                if run_count > 0:
-                    self._safe_set_var(status_vars.get("run_progress"), f"run: {self.current_run_iteration}/{run_count}")
-                else:
-                    self._safe_set_var(status_vars.get("run_progress"), f"run: {self.current_run_iteration} (∞)")
+                    # Update status display
+                    if run_count > 0:
+                        self._ui_set_var(status_vars.get("run_progress"), f"run: {self.current_run_iteration}/{run_count}")
+                    else:
+                        self._ui_set_var(status_vars.get("run_progress"), f"run: {self.current_run_iteration} (∞)")
+
+                    log_callback(f"\n{'='*60}\n")
+                    log_callback(f"Pipeline Run {self.current_run_iteration}" + (f"/{run_count}" if run_count > 0 else " (continuous)") + "\n")
+                    log_callback(f"{'='*60}\n\n")
+
+                    overall_ok = True
+                    for spec in run_specs:
+                        if self.stop_evt.is_set():
+                            overall_ok = False
+                            break
+                    
+                        pid = spec.get("profile_id", "")
+                        cfg = spec.get("config", "")
+                        out_dir = spec.get("out_dir", "")
+                        model_path = spec.get("model_path", "")
+
+                        log_callback(f"[profile] {pid}\n")
+                        log_callback(f"[config]  {cfg}\n")
+                        log_callback(f"[out]     {out_dir}\n")
+                        if task == "full": log_callback(f"[model]   {model_path}\n")
+                        log_callback("\n")
+
+                        status_vars["dataset_dir"] = Path(out_dir)
+
+                        ok = self._run_single_pipeline(
+                            out_dir, dataset_mode=dataset_mode, task=task, config_path=cfg, model_path=model_path,
+                            image_filters=image_filters,
+                            status_vars=status_vars, log_callback=log_callback, event_callback=event_callback
+                        )
+                        overall_ok = overall_ok and bool(ok)
+
+                        if task == "full":
+                            try:
+                                mp = self._resolve_model_path(model_path)
+                                if mp.exists():
+                                    self._write_model_meta(mp, run_i=self.current_run_iteration, dataset_dir=status_vars["dataset_dir"], dataset_mode=dataset_mode, out_dir=self._resolve_out_dir(out_dir))
+                                snap_every = status_vars["snap_every"]
+                                if status_vars["autosnap"] and mp.exists() and mp.is_file() and self.current_run_iteration % snap_every == 0:
+                                    snap = self._snapshot_model_checkpoint(
+                                        mp,
+                                        run_i=self.current_run_iteration,
+                                        snap_every=snap_every,
+                                        snap_keep=status_vars.get("snap_keep", 30),
+                                    )
+                                    if snap: log_callback(f"[model snapshot] {snap}\n")
+                            except Exception: pass
+
+                    success = overall_ok
+                    if success and run_complete_callback is not None:
+                        try:
+                            success = bool(run_complete_callback(self.current_run_iteration, run_specs, log_callback))
+                        except Exception as e:
+                            log_callback(f"[post-run] failed: {e}\n")
+                            success = False
+
+                    if not success and run_count != 1: log_callback(f"\n⚠ Run {self.current_run_iteration} failed, but continuing...\n")
+
+                    ui_update_callback()
+
+                    if run_count != 1 and not self.stop_evt.is_set(): self.stop_evt.wait(2)
 
                 log_callback(f"\n{'='*60}\n")
-                log_callback(f"Pipeline Run {self.current_run_iteration}" + (f"/{run_count}" if run_count > 0 else " (continuous)") + "\n")
-                log_callback(f"{'='*60}\n\n")
+                log_callback(f"All pipeline runs complete! Total: {self.current_run_iteration}\n")
+                log_callback(f"{'='*60}\n")
+            except Exception as e: log_callback(f"\n[pipeline] loop crashed: {e}\n")
+            finally:
+                self.loop_running = False
+                ui_reset_callback()
 
-                overall_ok = True
-                for spec in run_specs:
-                    if self.stop_evt.is_set():
-                        overall_ok = False
-                        break
-                    
-                    pid = spec.get("profile_id", "")
-                    cfg = spec.get("config", "")
-                    out_dir = spec.get("out_dir", "")
-                    model_path = spec.get("model_path", "")
-
-                    log_callback(f"[profile] {pid}\n")
-                    log_callback(f"[config]  {cfg}\n")
-                    log_callback(f"[out]     {out_dir}\n")
-                    if task == "full": log_callback(f"[model]   {model_path}\n")
-                    log_callback("\n")
-
-                    status_vars["dataset_dir"] = Path(out_dir)
-
-                    ok = self._run_single_pipeline(
-                        out_dir, dataset_mode=dataset_mode, task=task, config_path=cfg, model_path=model_path,
-                        image_filters=image_filters,
-                        status_vars=status_vars, log_callback=log_callback, event_callback=event_callback
-                    )
-                    overall_ok = overall_ok and bool(ok)
-
-                    if task == "full":
-                        try:
-                            mp = self._resolve_model_path(model_path)
-                            if mp.exists():
-                                self._write_model_meta(mp, run_i=self.current_run_iteration, dataset_dir=status_vars["dataset_dir"], dataset_mode=dataset_mode, out_dir=self._resolve_out_dir(out_dir))
-                            snap_every = status_vars["snap_every"]
-                            if status_vars["autosnap"] and mp.exists() and mp.is_file() and self.current_run_iteration % snap_every == 0:
-                                snap = self._snapshot_model_checkpoint(
-                                    mp,
-                                    run_i=self.current_run_iteration,
-                                    snap_every=snap_every,
-                                    snap_keep=status_vars.get("snap_keep", 30),
-                                )
-                                if snap: log_callback(f"[model snapshot] {snap}\n")
-                        except Exception: pass
-
-                success = overall_ok
-                if success and run_complete_callback is not None:
-                    try:
-                        success = bool(run_complete_callback(self.current_run_iteration, run_specs, log_callback))
-                    except Exception as e:
-                        log_callback(f"[post-run] failed: {e}\n")
-                        success = False
-
-                if not success and run_count != 1: log_callback(f"\n⚠ Run {self.current_run_iteration} failed, but continuing...\n")
-
-                ui_update_callback()
-
-                if run_count != 1 and not self.stop_evt.is_set(): time.sleep(2)
-
-            log_callback(f"\n{'='*60}\n")
-            log_callback(f"All pipeline runs complete! Total: {self.current_run_iteration}\n")
-            log_callback(f"{'='*60}\n")
-
-            ui_reset_callback()
-
-        threading.Thread(target=_run_pipeline_loop_thread, daemon=True).start()
+        try: threading.Thread(target=_run_pipeline_loop_thread, daemon=True).start()
+        except Exception: self.loop_running = False; raise
 
     def _run_single_pipeline(self, out_dir: str, *, dataset_mode: str, task: str, config_path: str, model_path: str,
                              image_filters: Dict[str, Any],
@@ -198,32 +217,42 @@ class PipelineLogic:
         else: raise ValueError(f"Unknown task: {task}")
 
         try:
-            self.proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env, start_new_session=True)
-            p = self.proc
-            t_stdout = threading.Thread(target=self._read_process_output_thread, args=(p, log_callback), daemon=True)
-            t_events = threading.Thread(target=self._tail_events_thread, args=(event_callback,), daemon=True)
-            t_stdout.start()
-            t_events.start()
-            
-            self._safe_set_var(status_vars.get("phase"), "running")
-            self.proc.wait()
-            rc = self.proc.returncode
+            p = self.launch_process(cmd, env, log_callback, event_callback)
+            self._ui_set_var(status_vars.get("phase"), "running")
+            p.wait()
+            rc = p.returncode
             self.proc = None
-
-            cleanup = self._temp_merge_cleanup_dir
-            self._temp_merge_cleanup_dir = None
-            if cleanup is not None:
-                try:
-                    if rc == 0: shutil.rmtree(cleanup); log_callback(f"[merge] cleaned up temp dataset: {cleanup}\n")
-                    else: log_callback(f"[merge] keeping temp dataset (rc={rc}): {cleanup}\n")
-                except Exception as e: log_callback(f"[merge] cleanup failed: {cleanup} ({e})\n")
-
             return rc == 0
 
         except Exception as e:
             log_callback(f"\nError running pipeline: {e}\n")
             self.proc = None
             return False
+
+    def launch_process(self, cmd: List[str], env: Dict[str, str], log_callback: Callable[[str], None], event_callback: Callable[[Dict[str, Any]], None],
+                       on_exit: Optional[Callable[[Optional[int]], None]] = None) -> subprocess.Popen[str]:
+        """Start cmd as self.proc with one stdout reader and one events.jsonl tailer bound to this run.
+
+        The tailer starts at the current end of the event log (no replay of older runs) and stops after a final
+        drain once the reader saw EOF/process exit. on_exit(rc) runs on the reader thread after that."""
+        try: start_pos = self.event_log_path.stat().st_size
+        except Exception: start_pos = 0
+        done = threading.Event()
+        with self._tail_lock:
+            if self._tail_done is not None: self._tail_done.set()  # retire any previous tailer
+            self._tail_done = done
+        try: self.proc = p = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env, start_new_session=True)
+        except Exception: done.set(); raise
+        threading.Thread(target=self._read_process_output_thread, args=(p, log_callback), kwargs={"done": done, "on_exit": on_exit}, daemon=True).start()
+        threading.Thread(target=self._tail_events_thread, args=(event_callback,), kwargs={"done": done, "start_pos": start_pos}, daemon=True).start()
+        return p
+
+    def cleanup_temp_merge_dir(self, cleanup: Optional[Path], rc: Optional[int], log_callback: Callable[[str], None]) -> None:
+        if cleanup is None: return
+        try:
+            if rc == 0: shutil.rmtree(cleanup); log_callback(f"[merge] cleaned up temp dataset: {cleanup}\n")
+            else: log_callback(f"[merge] keeping temp dataset (rc={rc}): {cleanup}\n")
+        except Exception as e: log_callback(f"[merge] cleanup failed: {cleanup} ({e})\n")
 
     def stop_pipeline(self) -> None:
         self.stop_evt.set()
@@ -247,7 +276,17 @@ class PipelineLogic:
             
             threading.Timer(2.0, _kill_later).start()
 
-    def _read_process_output_thread(self, proc: subprocess.Popen[str], log_callback: Callable[[str], None]) -> None:
+    def _read_process_output_thread(self, proc: subprocess.Popen[str], log_callback: Callable[[str], None], *,
+                                    done: Optional[threading.Event] = None, on_exit: Optional[Callable[[Optional[int]], None]] = None) -> None:
+        try: self._read_process_output(proc, log_callback)
+        finally:
+            rc = proc.poll()
+            if done is not None: done.set()
+            if on_exit is not None:
+                try: on_exit(rc)
+                except Exception as e: self.log_q.put(f"[process exit hook] failed: {e}\n")
+
+    def _read_process_output(self, proc: subprocess.Popen[str], log_callback: Callable[[str], None]) -> None:
         fp = proc.stdout
         assert fp is not None
 
@@ -304,38 +343,44 @@ class PipelineLogic:
         rc = proc.poll()
         if rc is None:
             try:
-                rc = proc.wait(timeout=0.2)
+                rc = proc.wait(timeout=0.2 if self.stop_evt.is_set() else None)
             except Exception:
                 pass
         self.log_q.put(f"\n[process exited rc={rc}]\n")
 
-    def _safe_set_var(self, tk_var: Any, value: str) -> None:
-        try:
-            if tk_var is not None:
-                tk_var.set(value)
-        except Exception:
-            pass
+    def _ui_set_var(self, tk_var: Any, value: str) -> None:
+        """Set a Tk variable on the main thread (via ui_call when called from a worker thread)."""
+        if tk_var is None: return
+        def _apply() -> None:
+            try: tk_var.set(value)
+            except Exception as e: self.log_q.put(f"[ui] failed to set status var: {e}\n")
+        if threading.current_thread() is threading.main_thread() or self.ui_call is None: _apply(); return
+        try: self.ui_call(_apply)
+        except Exception as e: self.log_q.put(f"[ui] failed to schedule status update: {e}\n")
 
-    def _tail_events_thread(self, event_callback: Callable[[Dict[str, Any]], None]) -> None:
+    def _tail_events_thread(self, event_callback: Callable[[Dict[str, Any]], None], *, done: Optional[threading.Event] = None, start_pos: int = 0) -> None:
+        """Tail events.jsonl from start_pos until done is set (then drain once more); resets on truncation."""
         path = self.event_log_path
-        for _ in range(200):
-            if self.stop_evt.is_set(): return
-            if path.exists(): break
-            time.sleep(0.05)
-
-        pos = 0
-        while not self.stop_evt.is_set():
+        done = done or self.stop_evt
+        pos, partial = max(0, int(start_pos)), ""
+        while True:
+            finished = done.is_set()
             try:
-                if not path.exists(): time.sleep(0.1); continue
-                with open(path, encoding="utf-8") as f:
-                    f.seek(pos)
-                    for line in f:
-                        line = line.strip()
-                        if not line: continue
-                        event_callback(json.loads(line))
-                    pos = f.tell()
-            except Exception: time.sleep(0.1)
-            time.sleep(0.1)
+                if path.exists():
+                    if path.stat().st_size < pos: pos, partial = 0, ""  # truncated (run_pipeline.sh resets the log)
+                    with open(path, encoding="utf-8") as f:
+                        f.seek(pos)
+                        chunk = f.read()
+                        pos = f.tell()
+                    lines = (partial + chunk).split("\n")
+                    partial = lines.pop()  # keep an incomplete trailing line for the next read
+                    for line in lines:
+                        if not (line := line.strip()): continue
+                        try: event_callback(json.loads(line))
+                        except Exception: pass
+            except Exception: pass
+            if finished: return
+            done.wait(0.1)
 
     def _write_model_meta(self, model_path: Path, *, run_i: int, dataset_dir: Optional[Path], dataset_mode: str, out_dir: Path) -> None:
         meta = {
@@ -429,11 +474,40 @@ class PipelineLogic:
             if model_path.is_dir(): return "multi", None
         except Exception: pass
         try:
-            checkpoint = torch.load(model_path, map_location='cpu')
-            if isinstance(comp := checkpoint.get("component_profile"), dict):
+            meta = self.read_checkpoint_meta(model_path)
+            if isinstance(comp := meta.get("component_profile"), dict):
                 return comp.get("profile_id"), comp.get("profile_hash")
         except Exception: pass
         return None, None
+
+    @staticmethod
+    def _ckpt_cache_key(p: Path) -> Optional[tuple[str, int, int]]:
+        try: st = (rp := Path(p).resolve()).stat(); return (str(rp), int(st.st_mtime_ns), int(st.st_size))
+        except Exception: return None
+
+    def cached_checkpoint_meta(self, p: Path) -> Optional[Dict[str, Any]]:
+        """Cached metadata for a checkpoint file, or None if not cached (or the file changed)."""
+        if (key := self._ckpt_cache_key(p)) is None: return {"error": "missing"}
+        with self._ckpt_meta_lock: return self._ckpt_meta_cache.get(key)
+
+    def read_checkpoint_meta(self, p: Path) -> Dict[str, Any]:
+        """{component_profile, class_names[, error]} of a .pt checkpoint; cached by (path, mtime, size). Slow when uncached."""
+        if (key := self._ckpt_cache_key(p)) is None: return {"error": "missing"}
+        with self._ckpt_meta_lock:
+            if (hit := self._ckpt_meta_cache.get(key)) is not None: return hit
+        meta: Dict[str, Any]
+        try:
+            ckpt = torch.load(key[0], map_location="cpu", weights_only=False)
+            if not isinstance(ckpt, dict): ckpt = {}
+            comp = ckpt.get("component_profile")
+            names = ckpt.get("class_names")
+            meta = {"component_profile": dict(comp) if isinstance(comp, dict) else None, "class_names": list(names) if isinstance(names, (list, tuple)) else None}
+            del ckpt
+        except Exception as e: meta = {"component_profile": None, "class_names": None, "error": str(e)}
+        with self._ckpt_meta_lock:
+            for k in [k for k in self._ckpt_meta_cache if k[0] == key[0] and k != key]: self._ckpt_meta_cache.pop(k, None)  # drop stale versions
+            self._ckpt_meta_cache[key] = meta
+        return meta
 
     def get_all_model_paths(self) -> List[Path]:
         root = self.sim_root / "outputs" / "models"
@@ -474,11 +548,10 @@ class PipelineLogic:
         rel_out_ds = str(out_ds.resolve().relative_to(self.sim_root.resolve()) if str(out_ds).startswith(str(self.sim_root)) else str(out_ds))
         rel_out_model = str(out_model.resolve().relative_to(self.sim_root.resolve()) if str(out_model).startswith(str(self.sim_root)) else str(out_model))
         
-        cmd = [
-            "./.venv/bin/python", "scripts/generate_profile_dataset.py", "--config", rel_cfg, "--out", rel_out_ds,
-            "&&", "./.venv/bin/python", "scripts/train_profile.py", "--data", rel_out_ds, "--out", rel_out_model,
-        ]
-        cmd_q = " ".join(shlex.quote(x) for x in cmd)
+        # "&&" must stay a shell operator, so quote each command separately.
+        gen = ["./.venv/bin/python", "scripts/generate_profile_dataset.py", "--config", rel_cfg, "--out", rel_out_ds]
+        train = ["./.venv/bin/python", "scripts/train_profile.py", "--data", rel_out_ds, "--out", rel_out_model]
+        cmd_q = shlex.join(gen) + " && " + shlex.join(train)
         log_callback(f"\n[build profile model] preset={preset}\nconfig: {cfg}\ndata:   {out_ds}\nout:    {out_model}\n[cmd] {cmd_q}\n\n")
         run_simple_cmd_callback([cmd_q])
 

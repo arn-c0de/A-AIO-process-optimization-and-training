@@ -7,7 +7,6 @@ import os
 import queue
 import threading
 import time
-import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
@@ -16,7 +15,6 @@ import shutil
 import shlex
 import tempfile
 
-import torch
 import yaml
 
 from gui.tabs.core.base import BaseTab
@@ -168,6 +166,7 @@ class PipelineControlTab(BaseTab):
 
         self.ui = PipelineUI(self, self.frame)
         self.logic = PipelineLogic(sim_root, self.log_q, self.event_q, self.event_log_path)
+        self.logic.ui_call = lambda fn: self.frame.after(0, fn)
 
         self._thumb_refs = []  # keep PhotoImage references
         self._recent_imgs: list[str] = []
@@ -207,6 +206,9 @@ class PipelineControlTab(BaseTab):
         self._model_paths: list[Path] = []
         self._all_model_combo_values: list[str] = []
         self._model_profile_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
+        self._model_meta_gen: int = 0  # bumps per _refresh_models so stale background loads are dropped
+        self._compat_after_id: Optional[str] = None
+        self._compat_loading: set[str] = set()
 
         self._profile_paths: list[Path] = []
         self._dataset_milestones: dict[str, int] = {}
@@ -228,7 +230,7 @@ class PipelineControlTab(BaseTab):
         self._load_persisted_settings()
         self._wire_settings_autosave()
         self._apply_profile_model_lock()
-        self.ui.var_model.trace("w", lambda *args: self._check_profile_compatibility())
+        self.ui.var_model.trace("w", lambda *args: self._schedule_profile_compat_check())
         self._tick_ui()
 
     def _ensure_initial_placeholder_dataset(self) -> None:
@@ -308,12 +310,6 @@ class PipelineControlTab(BaseTab):
         realism_profile = str(image_filters.get("realism_profile_id", "profile_industrial_cam"))
 
         filter_toggles = [k for k, v in image_filters.items() if isinstance(k, str) and k.startswith("enable_") and k != "enable" and bool(v)]
-        filter_summary = (
-            f"Mode: {filter_mode}\n"
-            f"Enabled: {'yes' if bool(image_filters.get('enable', True)) else 'no'}\n"
-            f"Realism active: {'yes' if (filter_mode == 'realism' and realism_enabled) else 'no'}\n"
-            f"Enabled toggles: {len(filter_toggles)}"
-        )
         filter_details = (
             f"filter_mode={filter_mode}\n"
             f"enable={bool(image_filters.get('enable', True))}\n"
@@ -569,7 +565,6 @@ class PipelineControlTab(BaseTab):
     def _apply_filter_settings_dict(self, data: Dict[str, Any]) -> None:
         if not isinstance(data, dict):
             return
-        extras: Dict[str, Any] = {}
         self._filter_popup_extras = extract_filter_popup_extras(data)
         # Existing filters
         self.ui.var_filter_cardinal_rotation_90.set(bool(data.get("cardinal_rotation_90", True)))
@@ -913,7 +908,7 @@ class PipelineControlTab(BaseTab):
         self.ui.set_profile_model_combo_state("disabled" if locked else "readonly")
 
     def _build_profile_model(self) -> None:
-        if self.logic.is_process_running():
+        if self.logic.is_busy():
             self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first.")
             return
 
@@ -1189,7 +1184,7 @@ class PipelineControlTab(BaseTab):
         return patched_specs
     
     def _start_pipeline(self, *, task: str) -> None:
-        if self.logic.is_process_running(): return
+        if self.logic.is_busy(): return
         
         run_mode, dataset_mode = self.ui.var_run_mode.get(), self.ui.var_dataset_mode.get()
         out_dir = ""
@@ -1326,10 +1321,14 @@ class PipelineControlTab(BaseTab):
     def stop_pipeline(self) -> None:
         self.logic.stop_pipeline()
 
-    def _run_simple_cmd(self, args: list[str], extra_env: Optional[Dict[str, str]] = None) -> None:
-        if self.logic.is_process_running():
+    def _run_simple_cmd(self, args: list[str], extra_env: Optional[Dict[str, str]] = None, *, cleanup_dir: Optional[Path] = None) -> bool:
+        # cleanup_dir (or a pending logic._temp_merge_cleanup_dir) is removed when this process exits with rc=0.
+        cleanup_dir = cleanup_dir or self.logic._temp_merge_cleanup_dir
+        self.logic._temp_merge_cleanup_dir = None
+        if self.logic.is_busy():
             self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first.")
-            return
+            if cleanup_dir is not None: self.logic.cleanup_temp_merge_dir(cleanup_dir, 0, self._append_log)
+            return False
 
         self.ui.set_run_buttons_state(True)
         self.logic.stop_evt.clear()
@@ -1345,12 +1344,16 @@ class PipelineControlTab(BaseTab):
         shell_cmd = args[0] if len(args) == 1 else shlex.join(args)
         cmd = ["bash", "-lc", shell_cmd]
 
-        self.logic.proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env, start_new_session=True)
-        p = self.logic.proc
-        
-        threading.Thread(target=self.logic._read_process_output_thread, args=(p, self._append_log), daemon=True).start()
-        threading.Thread(target=self.logic._tail_events_thread, args=(self._handle_event,), daemon=True).start()
+        def on_exit(rc: Optional[int]) -> None:  # reader thread; logging goes through log_q
+            if cleanup_dir is not None: self.logic.cleanup_temp_merge_dir(cleanup_dir, rc, self._append_log)
+
+        try: self.logic.launch_process(cmd, env, self._append_log, self._handle_event, on_exit=on_exit)
+        except Exception as e:
+            self._append_log(f"\nError starting command: {e}\n"); self.ui.set_run_buttons_state(False)
+            if cleanup_dir is not None: self.logic.cleanup_temp_merge_dir(cleanup_dir, 0, self._append_log)
+            return False
         self.ui.var_phase.set("running cmd")
+        return True
 
     def _handle_event(self, evt: Dict[str, Any]) -> None:
         # Event tailing runs in a worker thread; marshal to the Tk thread.
@@ -1445,7 +1448,7 @@ class PipelineControlTab(BaseTab):
         except queue.Empty:
             pass
         
-        if not self.logic.is_process_running():
+        if not self.logic.is_busy():
             if self.ui.btn_start["state"] == "disabled" or self.ui.btn_start_generate["state"] == "disabled": self.ui.set_run_buttons_state(False)
 
         self._maybe_refresh_thumbnails()
@@ -1570,7 +1573,7 @@ class PipelineControlTab(BaseTab):
 
     def _refresh_datasets(self) -> None:
         self._dataset_catalog.reload()
-        sim_data, runs, versions = self.sim_root / "outputs" / "sim_data", self.sim_root / "outputs" / "sim_data" / "runs", self.sim_root / "outputs" / "sim_data" / "versions"
+        runs, versions = self.sim_root / "outputs" / "sim_data" / "runs", self.sim_root / "outputs" / "sim_data" / "versions"
         runs.mkdir(parents=True, exist_ok=True); versions.mkdir(parents=True, exist_ok=True)
 
         cand: list[Path] = [p for p in runs.iterdir() if p.is_dir()]
@@ -1715,12 +1718,34 @@ class PipelineControlTab(BaseTab):
     def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
         return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
+    @staticmethod
+    def _profile_from_meta(meta: Optional[Dict[str, Any]]) -> tuple[Optional[str], Optional[str]]:
+        comp = (meta or {}).get("component_profile")
+        return (comp.get("profile_id"), comp.get("profile_hash")) if isinstance(comp, dict) else (None, None)
+
     def _refresh_models(self) -> None:
         paths = self.logic.get_all_model_paths()
         self._model_paths = paths
         self._model_profile_cache.clear()
+        self._model_meta_gen += 1
+        gen, uncached = self._model_meta_gen, []
         for p in self._model_paths:
-            self._model_profile_cache[str(p.resolve())] = self.logic.load_model_profile(p)
+            key = str(p.resolve())
+            if p.is_dir(): self._model_profile_cache[key] = ("multi", None); continue
+            if (meta := self.logic.cached_checkpoint_meta(p)) is None: uncached.append(p); continue
+            self._model_profile_cache[key] = self._profile_from_meta(meta)
+
+        if uncached:
+            # torch.load of every checkpoint is slow: do it off the Tk thread and re-filter when done.
+            def worker() -> None:
+                res = {str(p.resolve()): self._profile_from_meta(self.logic.read_checkpoint_meta(p)) for p in uncached}
+                def apply() -> None:
+                    if gen != self._model_meta_gen: return
+                    self._model_profile_cache.update(res)
+                    self._update_model_dropdown_for_dataset(); self._schedule_profile_compat_check()
+                try: self.frame.after(0, apply)
+                except Exception: pass
+            threading.Thread(target=worker, daemon=True).start()
 
         values = [str(p.resolve().relative_to(self.sim_root.resolve())) if p.is_relative_to(self.sim_root) else str(p) for p in paths]
         self._all_model_combo_values = values
@@ -1752,7 +1777,7 @@ class PipelineControlTab(BaseTab):
         
         self.ui.set_model_combo_values(values)
         if values:
-            if (current := self.ui.var_model.get().strip()) not in values: self.ui.var_model.set(values[0])
+            if self.ui.var_model.get().strip() not in values: self.ui.var_model.set(values[0])
         else: self.ui.var_model.set("")
 
     def _add_new_model(self) -> None:
@@ -1977,6 +2002,17 @@ class PipelineControlTab(BaseTab):
 
         except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load profile:\n{str(e)}")
 
+    def _schedule_profile_compat_check(self, delay_ms: int = 300) -> None:
+        # Debounce: var_model is written repeatedly while typing/refreshing; check only after edits settle.
+        if self._compat_after_id is not None:
+            try: self.frame.after_cancel(self._compat_after_id)
+            except Exception: pass
+        self._compat_after_id = self.frame.after(delay_ms, self._run_scheduled_profile_compat_check)
+
+    def _run_scheduled_profile_compat_check(self) -> None:
+        self._compat_after_id = None
+        self._check_profile_compatibility()
+
     def _check_profile_compatibility(self) -> None:
         try:
             if not (ds := self._selected_dataset_dir()): self.ui.var_profile_compat.set(""); return
@@ -1999,8 +2035,21 @@ class PipelineControlTab(BaseTab):
                     self.ui.var_profile_compat.set(f"⚠ Multi-model: no weights for {ds_profile_id}"); self.ui.lbl_profile_compat.configure(foreground="orange"); return
                 model_path = cand
 
-            checkpoint = torch.load(model_path, map_location='cpu')
-            if not (model_profile := checkpoint.get('component_profile')):
+            if (meta := self.logic.cached_checkpoint_meta(model_path)) is None:
+                # Uncached: load metadata in the background, then re-run this check on the Tk thread.
+                self.ui.var_profile_compat.set("… checking model profile"); self.ui.lbl_profile_compat.configure(foreground="gray")
+                if (key := str(model_path.resolve())) not in self._compat_loading:
+                    self._compat_loading.add(key)
+                    def worker() -> None:
+                        try: self.logic.read_checkpoint_meta(model_path)
+                        finally:
+                            def done() -> None: self._compat_loading.discard(key); self._schedule_profile_compat_check(0)
+                            try: self.frame.after(0, done)
+                            except Exception: pass
+                    threading.Thread(target=worker, daemon=True).start()
+                return
+            if meta.get("error"): self.ui.var_profile_compat.set(""); return
+            if not (model_profile := meta.get('component_profile')):
                 self.ui.var_profile_compat.set("⚠ Model has no profile (legacy)"); self.ui.lbl_profile_compat.configure(foreground="orange"); return
 
             model_profile_id, model_profile_hash = model_profile.get('profile_id'), model_profile.get('profile_hash')
@@ -2101,7 +2150,7 @@ class PipelineControlTab(BaseTab):
             self.ui.var_dataset_profile.set("Profile: ⚠ Error loading manifest"); self._set_dataset_samples_info("Samples: error", "")
             _LOG.warning("Failed to load dataset manifest: %s", e)
 
-        self._check_profile_compatibility(); self._apply_dataset_settings(ds)
+        self._schedule_profile_compat_check(); self._apply_dataset_settings(ds)
 
         if (img_dir := ds / "images").exists():
             for p in sorted(img_dir.glob("*.png"))[-12:]: self._recent_imgs.append(str(p))
@@ -2121,7 +2170,7 @@ class PipelineControlTab(BaseTab):
 
     def _delete_dataset(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
-        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before deleting datasets."); return
+        if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before deleting datasets."); return
         if not self.ui.ask_yes_no("Delete dataset", f"Delete dataset folder?\n\n{ds}"): return
         try: shutil.rmtree(ds); self._append_log(f"\n[deleted dataset {ds}]\n")
         except Exception as e: self.ui.show_messagebox("error", "Delete failed", str(e))
@@ -2132,7 +2181,7 @@ class PipelineControlTab(BaseTab):
         if not ds:
             self.ui.show_messagebox("info", "Delete images", "No dataset selected.")
             return
-        if self.logic.is_process_running():
+        if self.logic.is_busy():
             self.ui.show_messagebox("warning", "Busy", "Stop the running process before editing datasets.")
             return
 
@@ -2165,7 +2214,7 @@ class PipelineControlTab(BaseTab):
         if not src_ds:
             self.ui.show_messagebox("info", "Move images", "No source dataset selected.")
             return
-        if self.logic.is_process_running():
+        if self.logic.is_busy():
             self.ui.show_messagebox("warning", "Busy", "Stop the running process before editing datasets.")
             return
 
@@ -2301,7 +2350,7 @@ class PipelineControlTab(BaseTab):
         return f"{sample.sample_id} | class={sample.class_name} | split={sample.split} | image={Path(sample.image_path).name}"
 
     def _create_new_dataset(self) -> None:
-        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before creating datasets."); return
+        if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before creating datasets."); return
 
         initial = self.logic.slugify_name(self.ui.var_name.get())
         if not (new_name := self.ui.ask_string("Create dataset", "New dataset folder name (will be created under outputs/sim_data/runs):", initialvalue=initial)): return
@@ -2325,7 +2374,7 @@ class PipelineControlTab(BaseTab):
 
     def _snapshot_dataset_selected(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
-        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before snapshotting datasets."); return
+        if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before snapshotting datasets."); return
 
         versions_root = self.sim_root / "outputs" / "sim_data" / "versions"
         versions_root.mkdir(parents=True, exist_ok=True)
@@ -2347,13 +2396,13 @@ class PipelineControlTab(BaseTab):
                     rel = Path(dirpath).relative_to(ds)
                     for fn in filenames: link_or_copy_file(Path(dirpath) / fn, dst / rel / fn)
                 self.log_q.put(f"[snapshot dataset] done: {dst}\n")
-            except Exception as e: self.log_q.put(f"[snapshot dataset] failed: {e}\n"); shutil.rmtree(dst)
+            except Exception as e: self.log_q.put(f"[snapshot dataset] failed: {e}\n"); shutil.rmtree(dst, ignore_errors=True)
             finally: self.frame.after(0, self._refresh_datasets)
         threading.Thread(target=worker, daemon=True).start()
 
     def _rename_dataset_selected(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
-        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before renaming datasets."); return
+        if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before renaming datasets."); return
 
         sim_data = (self.sim_root / "outputs" / "sim_data").resolve()
         runs = (sim_data / "runs").resolve()
@@ -2432,7 +2481,7 @@ class PipelineControlTab(BaseTab):
         if len(dss) > 1:
             if not (strat := self._ask_multi_dataset_train_strategy(dss)): return
             if strat in ("merge_keep", "merge_temp"):
-                if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first."); return
+                if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first."); return
                 
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 name = ""
@@ -2453,6 +2502,7 @@ class PipelineControlTab(BaseTab):
                 for ds in dss: self._append_log(f"  - {ds}\n")
                 self._append_log("\n")
 
+                self.logic.loop_running = True; self.logic.stop_evt.clear()  # keep Busy guards closed until training starts
                 def worker() -> None:
                     try:
                         self.log_q.put(f"[merge] building merged dataset: {out_ds}\n")
@@ -2460,6 +2510,11 @@ class PipelineControlTab(BaseTab):
                         self.log_q.put(f"[merge] done: {out_ds}\n")
 
                         def kick_off_train() -> None:
+                            self.logic.loop_running = False
+                            if self.logic.stop_evt.is_set():
+                                self._append_log("[merge] stopped by user; training not started\n")
+                                if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
+                                self._refresh_datasets(); return
                             try:
                                 if strat == "merge_keep": self._select_dataset(out_ds)
                                 else: self._refresh_datasets()
@@ -2467,16 +2522,18 @@ class PipelineControlTab(BaseTab):
 
                             argv = ["./.venv/bin/python", "scripts/train.py", "--data", str(out_ds), "--out", str(model_out)]
                             cmd = " ".join(shlex.quote(x) for x in argv)
-                            if delete_after: self.logic._temp_merge_cleanup_dir = out_ds
-                            self._run_simple_cmd([cmd])
+                            self._run_simple_cmd([cmd], cleanup_dir=out_ds if delete_after else None)
 
                         self.frame.after(0, kick_off_train)
                     except Exception as e:
                         self.log_q.put(f"[merge] failed: {e}\n")
-                        if delete_after:
-                            try: shutil.rmtree(out_ds)
-                            except Exception: pass
-                threading.Thread(target=worker, daemon=True).start(); return
+                        if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
+                        def _merge_failed_ui() -> None: self.logic.loop_running = False
+                        self.frame.after(0, _merge_failed_ui)
+                self.ui.set_run_buttons_state(True)
+                try: threading.Thread(target=worker, daemon=True).start()
+                except Exception: self.logic.loop_running = False; raise
+                return
 
         model_s = self.ui.var_model.get().strip()
         model_out = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
@@ -2563,7 +2620,7 @@ class PipelineControlTab(BaseTab):
             for ds in dss:
                 if not (pid := self.logic.get_dataset_profile_id(ds)): missing.append(f"{ds} (missing profile metadata)"); continue
                 try:
-                    if not (ckpt := bundle_checkpoint_path(model_path, pid, kind="best")).exists(): missing.append(f"{pid} (no checkpoint in bundle)")
+                    if not bundle_checkpoint_path(model_path, pid, kind="best").exists(): missing.append(f"{pid} (no checkpoint in bundle)")
                 except Exception: missing.append(f"{pid} (bundle lookup failed)")
             if missing: self.ui.show_messagebox("error", "Missing bundle checkpoints", "The selected model bundle does not have checkpoints for all selected datasets.\n\n" + "\n".join(missing)); return
 
