@@ -8,11 +8,11 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-import os
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.settings_store import SettingsStore
+from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_dataset_labels
+from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 
 from .ui import PredictionsUI
 from .logic import PredictionsLogic
@@ -83,25 +83,8 @@ class PredictionsTab(BaseTab):
         st = self._store()
         if st is None:
             return
-        for key, var in [
-            ("pred.dataset_selection", self.ui.var_dataset),
-            ("pred.model_selection", self.ui.var_model),
-            ("pred.split", self.ui.var_split),
-            ("pred.device", self.ui.var_device),
-            ("pred.max_samples", self.ui.var_max_samples),
-            ("pred.profile_model", self.ui.var_profile_model),
-        ]:
-            v = st.get(key)
-            if v is None:
-                continue
-            try:
-                var.set(v)
-            except Exception:
-                pass
+        restore_persisted_vars(st, self._persisted_var_bindings())
         try:
-            self.ui.chk_save_preds.set(bool(st.get("pred.save_preds", True)))
-            self.ui.chk_auto_train_bundle.set(bool(st.get("pred.auto_train_bundle", False)))
-            self.ui.var_multi_datasets.set(bool(st.get("pred.multi_datasets", False)))
             raw = st.get("pred.multi_dataset_paths_json")
             if isinstance(raw, str) and raw.strip():
                 obj = json.loads(raw)
@@ -110,29 +93,25 @@ class PredictionsTab(BaseTab):
         except Exception:
             self._multi_dataset_paths = []
 
-    def _wire_settings_autosave(self) -> None:
-        st = self._store()
-        if st is None:
-            return
-        
-        def bind(var, key: str) -> None:
-            def cb(*_a) -> None:
-                try:
-                    st.set(key, var.get())
-                    st.schedule_save(self.frame)
-                except Exception:
-                    pass
-            var.trace_add("write", cb)
+    def _persisted_var_bindings(self) -> List[Tuple[Any, ...]]:
+        # (key, var[, default]); defaults are applied when the key was never persisted.
+        return [
+            ("pred.dataset_selection", self.ui.var_dataset),
+            ("pred.model_selection", self.ui.var_model),
+            ("pred.split", self.ui.var_split),
+            ("pred.device", self.ui.var_device),
+            ("pred.max_samples", self.ui.var_max_samples),
+            ("pred.profile_model", self.ui.var_profile_model),
+            ("pred.save_preds", self.ui.chk_save_preds, True),
+            ("pred.auto_train_bundle", self.ui.chk_auto_train_bundle, False),
+            ("pred.multi_datasets", self.ui.var_multi_datasets, False),
+        ]
 
-        bind(self.ui.var_dataset, "pred.dataset_selection")
-        bind(self.ui.var_model, "pred.model_selection")
-        bind(self.ui.var_split, "pred.split")
-        bind(self.ui.var_device, "pred.device")
-        bind(self.ui.var_max_samples, "pred.max_samples")
-        bind(self.ui.var_profile_model, "pred.profile_model")
-        bind(self.ui.var_multi_datasets, "pred.multi_datasets")
-        bind(self.ui.chk_save_preds, "pred.save_preds")
-        bind(self.ui.chk_auto_train_bundle, "pred.auto_train_bundle")
+    def _wire_settings_autosave(self) -> None:
+        wire_vars_autosave(self._store(), self._persisted_var_bindings(), self.frame)
+
+    def on_close(self) -> None:
+        self.logic.stop_predictions()
 
     def _persist_multi_dataset_paths(self) -> None:
         st = self._store()
@@ -339,38 +318,12 @@ class PredictionsTab(BaseTab):
             prev_selected = self.state.dataset_dir
 
         cand = self.logic.get_datasets()
-
-        def is_version(p: Path) -> bool:
-            try:
-                return str(p.resolve()).startswith(str((self.sim_root / "outputs" / "sim_data" / "versions").resolve()) + os.sep)
-            except Exception: return False
-
-        def sort_key(p: Path) -> tuple:
-            return (1, -p.stat().st_mtime, p.name) if is_version(p) else (0, p.name)
-
-        cand.sort(key=sort_key)
+        cand.sort(key=lambda p: dataset_sort_key(self.sim_root, p))
         self._dataset_dirs = cand
 
-        def display(p: Path) -> str:
-            try:
-                rp = p.resolve()
-                runs_base = (self.sim_root / "outputs" / "sim_data" / "runs").resolve()
-                versions_base = (self.sim_root / "outputs" / "sim_data" / "versions").resolve()
-                if str(rp).startswith(str(runs_base) + os.sep): return rp.name
-                if str(rp).startswith(str(versions_base) + os.sep): return f"{rp.parent.name}:{rp.name}"
-            except Exception: pass
-            return p.name
-
-        self._dataset_by_label = {}
-        labels: List[str] = []
-        seen: Dict[str, int] = {}
-        for p in cand:
-            base = display(p)
-            n = seen.get(base, 0) + 1
-            seen[base] = n
-            label = base if n == 1 else f"{base} ({n})"
-            labels.append(label)
-            self._dataset_by_label[label] = p
+        runs, versions = sim_data_roots(self.sim_root)
+        self._dataset_by_label = unique_dataset_labels(cand, runs_root=runs, versions_root=versions)
+        labels: List[str] = list(self._dataset_by_label)
 
         self.ui.combo_dataset["values"] = labels
         cur = self.ui.var_dataset.get().strip()

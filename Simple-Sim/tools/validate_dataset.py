@@ -26,8 +26,18 @@ def validate_dataset(data_dir: Path, seed_mismatch_log_limit: int = 5) -> bool:
         True if all validations pass, False otherwise
     """
     data_dir = Path(data_dir)
-    all_checks_passed = True
     emit("validate_start", dataset_dir=str(data_dir))
+    ok = False
+    try:
+        ok = _run_checks(data_dir, seed_mismatch_log_limit)
+        return ok
+    finally:
+        # Always emit validate_done (also on early returns/exceptions) so the GUI leaves "validating".
+        emit("validate_done", dataset_dir=str(data_dir), ok=ok)
+
+
+def _run_checks(data_dir: Path, seed_mismatch_log_limit: int) -> bool:
+    all_checks_passed = True
 
     print("="*60)
     print("DATASET VALIDATION")
@@ -180,10 +190,19 @@ def validate_dataset(data_dir: Path, seed_mismatch_log_limit: int = 5) -> bool:
     import yaml
 
     config_path = data_dir / 'config.yaml'
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
-
-    run_seed = config['run']['seed']
+    run_seed = None
+    if not config_path.exists():
+        # Already reported as missing in check 1.
+        print("  ✗ SKIP: config.yaml missing, cannot verify seeds")
+        all_checks_passed = False
+    else:
+        try:
+            with open(config_path) as f:
+                config = yaml.safe_load(f)
+            run_seed = config['run']['seed']
+        except Exception as e:
+            print(f"  ✗ FAIL: cannot read run.seed from config.yaml - {e}")
+            all_checks_passed = False
     checked = 0
     mismatches = 0
 
@@ -205,7 +224,7 @@ def validate_dataset(data_dir: Path, seed_mismatch_log_limit: int = 5) -> bool:
     strict_determinism = not ((manifest_version == 2) or (extend_len > 1))
 
     logged_mismatch_examples = 0
-    for meta_row in meta_rows[:20]:  # Check first 20 samples
+    for meta_row in (meta_rows[:20] if run_seed is not None else []):  # Check first 20 samples
         try:
             run_id, domain, split, index = parse_sample_id(meta_row.id)
             expected_seed = derive_sample_seed(run_seed, domain, index)
@@ -221,7 +240,9 @@ def validate_dataset(data_dir: Path, seed_mismatch_log_limit: int = 5) -> bool:
             print(f"  ✗ Error checking {meta_row.id}: {e}")
             all_checks_passed = False
 
-    if mismatches == 0:
+    if run_seed is None:
+        pass
+    elif mismatches == 0:
         print(f"  ✓ Determinism verified ({checked} samples checked)")
     else:
         suppressed = max(0, mismatches - logged_mismatch_examples)
@@ -241,12 +262,10 @@ def validate_dataset(data_dir: Path, seed_mismatch_log_limit: int = 5) -> bool:
     if all_checks_passed:
         print("✓ ALL VALIDATIONS PASSED")
         print("="*60)
-        emit("validate_done", dataset_dir=str(data_dir), ok=True)
         return True
     else:
         print("✗ SOME VALIDATIONS FAILED")
         print("="*60)
-        emit("validate_done", dataset_dir=str(data_dir), ok=False)
         return False
 
 

@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from gui.utils.dataset_catalog import list_dataset_dirs
+from gui.utils.process import run_streaming, terminate_process
 from simple_sim.model_bundle import bundle_checkpoint_path
 
 
@@ -21,16 +23,7 @@ class PredictionsLogic:
         self.stop_evt = threading.Event()
 
     def get_datasets(self) -> List[Path]:
-        sim_data = self.sim_root / "outputs" / "sim_data"
-        runs = sim_data / "runs"
-        versions = sim_data / "versions"
-        runs.mkdir(parents=True, exist_ok=True)
-        versions.mkdir(parents=True, exist_ok=True)
-
-        cand: List[Path] = []
-        cand.extend([p for p in runs.iterdir() if p.is_dir()])
-        cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
-        return cand
+        return list_dataset_dirs(self.sim_root)
 
     def get_models(self) -> List[Path]:
         root = self.sim_root / "outputs" / "models"
@@ -53,11 +46,10 @@ class PredictionsLogic:
 
     def stop_predictions(self) -> None:
         self.stop_evt.set()
-        if self.proc and self.proc.poll() is None:
-            try:
-                self.proc.terminate()
-            except Exception:
-                pass
+        terminate_process(self.proc)
+
+    def _set_proc(self, proc: subprocess.Popen[str]) -> None:
+        self.proc = proc
 
     def resolve_dataset_path(self, s: str) -> Path:
         p = Path(s)
@@ -121,22 +113,14 @@ class PredictionsLogic:
                                 self.log_q.put(f"[bundle] missing '{profile_id}.pt' -> training into bundle...\n")
                                 self.log_q.put("[cmd] " + " ".join(cmd_train) + "\n")
                                 try:
-                                    # Track as self.proc so Stop can terminate the training run.
-                                    proc = self.proc = subprocess.Popen(
+                                    # Track as self.proc (on_start) so Stop can terminate the training run.
+                                    rc = run_streaming(
                                         cmd_train,
-                                        cwd=str(self.sim_root),
-                                        stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT,
-                                        text=True,
-                                        bufsize=1,
+                                        cwd=self.sim_root,
+                                        log_q=self.log_q,
+                                        stop_evt=self.stop_evt,
+                                        on_start=self._set_proc,
                                     )
-                                    assert proc.stdout is not None
-                                    for line in proc.stdout:
-                                        if self.stop_evt.is_set():
-                                            proc.terminate()
-                                            break
-                                        self.log_q.put(line)
-                                    rc = proc.wait()
                                     if self.stop_evt.is_set():
                                         self.log_q.put("\n[stopped]\n")
                                         break
@@ -172,19 +156,9 @@ class PredictionsLogic:
 
                     report_path: Optional[Path] = None
                     preds_path: Optional[Path] = None
-                    self.proc = subprocess.Popen(
-                        cmd,
-                        cwd=str(self.sim_root),
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        bufsize=1,
-                    )
-                    assert self.proc.stdout is not None
-                    for line in self.proc.stdout:
-                        if self.stop_evt.is_set():
-                            break
-                        self.log_q.put(line)
+
+                    def on_line(line: str) -> None:
+                        nonlocal report_path, preds_path
                         if "Report saved to:" in line:
                             try:
                                 report_path = Path(line.split("Report saved to:", 1)[-1].strip())
@@ -195,8 +169,15 @@ class PredictionsLogic:
                                 preds_path = Path(line.split("Predictions saved to:", 1)[-1].strip())
                             except Exception:
                                 preds_path = None
-                    
-                    rc = self.proc.wait()
+
+                    rc = run_streaming(
+                        cmd,
+                        cwd=self.sim_root,
+                        log_q=self.log_q,
+                        stop_evt=self.stop_evt,
+                        on_line=on_line,
+                        on_start=self._set_proc,
+                    )
                     if self.stop_evt.is_set():
                         self.log_q.put("\n[stopped]\n")
                         break

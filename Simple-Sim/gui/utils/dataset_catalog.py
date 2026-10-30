@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from gui.utils.settings_store import SettingsStore
 
@@ -42,6 +42,62 @@ def dataset_display_name(dataset_dir: Path, *, runs_root: Path, versions_root: P
     except Exception:
         pass
     return dataset_dir.name
+
+
+def sim_data_roots(sim_root: Path, *, create: bool = True) -> Tuple[Path, Path]:
+    """Return ``(runs_root, versions_root)`` under ``outputs/sim_data`` (created by default)."""
+    sim_data = Path(sim_root) / "outputs" / "sim_data"
+    runs = sim_data / "runs"
+    versions = sim_data / "versions"
+    if create:
+        runs.mkdir(parents=True, exist_ok=True)
+        versions.mkdir(parents=True, exist_ok=True)
+    return runs, versions
+
+
+def list_dataset_dirs(sim_root: Path) -> List[Path]:
+    """Unsorted dataset directories: ``runs/*`` followed by snapshot ``versions/*/*``."""
+    runs, versions = sim_data_roots(sim_root)
+    cand: List[Path] = [p for p in runs.iterdir() if p.is_dir()]
+    cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
+    return cand
+
+
+def is_snapshot_dataset(sim_root: Path, dataset_dir: Path) -> bool:
+    """True when ``dataset_dir`` lives under ``outputs/sim_data/versions``."""
+    _runs, versions = sim_data_roots(sim_root, create=False)
+    try:
+        return str(dataset_dir.resolve()).startswith(str(versions.resolve()) + os.sep)
+    except Exception:
+        return False
+
+
+def dataset_sort_key(sim_root: Path, dataset_dir: Path) -> tuple:
+    """Runs first (by name), then snapshots newest-first."""
+    if is_snapshot_dataset(sim_root, dataset_dir):
+        try:
+            mtime = dataset_dir.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+        return (1, -mtime, dataset_dir.name)
+    return (0, dataset_dir.name)
+
+
+def sorted_dataset_dirs(sim_root: Path) -> List[Path]:
+    """``list_dataset_dirs`` sorted with ``dataset_sort_key``."""
+    return sorted(list_dataset_dirs(sim_root), key=lambda p: dataset_sort_key(sim_root, p))
+
+
+def unique_dataset_labels(dataset_dirs: Iterable[Path], *, runs_root: Path, versions_root: Path) -> Dict[str, Path]:
+    """Map display labels to dataset dirs, suffixing duplicates as ``name (2)``, ``name (3)``..."""
+    out: Dict[str, Path] = {}
+    seen: Dict[str, int] = {}
+    for p in dataset_dirs:
+        base = dataset_display_name(p, runs_root=runs_root, versions_root=versions_root)
+        n = seen.get(base, 0) + 1
+        seen[base] = n
+        out[base if n == 1 else f"{base} ({n})"] = p
+    return out
 
 
 class DatasetCatalog:

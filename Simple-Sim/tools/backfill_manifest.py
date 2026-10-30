@@ -21,6 +21,7 @@ import yaml
 import sys
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -28,12 +29,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 
+STATUS_OK = "ok"
+STATUS_SKIPPED = "skipped"
+STATUS_FAILED = "failed"
+
 
 def backfill_dataset(
     data_dir: Path,
     default_profile_id: str = "chip_0603_resistor@1",
-    profiles_dir: Path = None
-) -> bool:
+    profiles_dir: Optional[Path] = None
+) -> str:
     """Add manifest to legacy dataset.
 
     Args:
@@ -42,7 +47,8 @@ def backfill_dataset(
         profiles_dir: Directory containing profile YAML files
 
     Returns:
-        True if successful, False if skipped or failed
+        STATUS_OK if a manifest was written, STATUS_SKIPPED if one already
+        existed, STATUS_FAILED otherwise
     """
     print(f"\nProcessing: {data_dir}")
 
@@ -50,7 +56,7 @@ def backfill_dataset(
     manifest_path = data_dir / "dataset_manifest.json"
     if manifest_path.exists():
         print("  ✓ Manifest already exists, skipping")
-        return False
+        return STATUS_SKIPPED
 
     # Validate dataset structure
     config_path = data_dir / "config.yaml"
@@ -59,7 +65,7 @@ def backfill_dataset(
 
     if not all([config_path.exists(), meta_path.exists(), labels_path.exists()]):
         print("  ✗ Invalid dataset structure (missing config.yaml, meta.jsonl, or labels.jsonl)")
-        return False
+        return STATUS_FAILED
 
     # Load config
     try:
@@ -67,7 +73,7 @@ def backfill_dataset(
             config = yaml.safe_load(f)
     except Exception as e:
         print(f"  ✗ Failed to load config: {e}")
-        return False
+        return STATUS_FAILED
 
     run_id = config.get('run', {}).get('run_id', 'unknown')
 
@@ -84,14 +90,14 @@ def backfill_dataset(
     if not profile_path.exists():
         print(f"  ✗ Profile not found: {profile_path}")
         print(f"     Available profiles: {list(profiles_dir.glob('*.yaml'))}")
-        return False
+        return STATUS_FAILED
 
     # Load profile and compute hash
     try:
         profile_hash_str = hash_profile(profile_path)
     except Exception as e:
         print(f"  ✗ Failed to hash profile: {e}")
-        return False
+        return STATUS_FAILED
 
     # Load dataset stats
     try:
@@ -99,12 +105,12 @@ def backfill_dataset(
         label_rows = read_jsonl(labels_path, LabelRow)
     except Exception as e:
         print(f"  ✗ Failed to load dataset: {e}")
-        return False
+        return STATUS_FAILED
 
     # Compute stats
     splits = {'train': [], 'val': [], 'test': []}
     for meta in meta_rows:
-        splits[meta.split].append(meta.id)
+        splits.setdefault(meta.split, []).append(meta.id)
 
     class_counts = {}
     for label in label_rows:
@@ -151,7 +157,7 @@ def backfill_dataset(
             json.dump(manifest, f, indent=2)
     except Exception as e:
         print(f"  ✗ Failed to write manifest: {e}")
-        return False
+        return STATUS_FAILED
 
     print("  ✓ Manifest created")
     print(f"     Profile: {profile_id}")
@@ -159,7 +165,7 @@ def backfill_dataset(
     print(f"     Samples: {len(meta_rows)}")
     print(f"     Classes: {class_counts}")
 
-    return True
+    return STATUS_OK
 
 
 def main():
@@ -193,17 +199,11 @@ Examples:
 
     profiles_dir = Path(args.profiles_dir) if args.profiles_dir else None
 
-    success_count = 0
-    skip_count = 0
-    fail_count = 0
+    counts = {STATUS_OK: 0, STATUS_SKIPPED: 0, STATUS_FAILED: 0}
 
     if args.data:
         # Single dataset
-        result = backfill_dataset(Path(args.data), args.profile, profiles_dir)
-        if result:
-            success_count += 1
-        else:
-            skip_count += 1
+        counts[backfill_dataset(Path(args.data), args.profile, profiles_dir)] += 1
 
     elif args.data_root:
         # Batch process
@@ -220,24 +220,18 @@ Examples:
         print(f"Found {len(datasets)} dataset(s) in: {root_dir}")
 
         for data_dir in datasets:
-            result = backfill_dataset(data_dir, args.profile, profiles_dir)
-            if result:
-                success_count += 1
-            elif result is False:
-                skip_count += 1
-            else:
-                fail_count += 1
+            counts[backfill_dataset(data_dir, args.profile, profiles_dir)] += 1
 
     # Summary
     print("\n" + "="*60)
     print("BACKFILL SUMMARY")
     print("="*60)
-    print(f"Success: {success_count}")
-    print(f"Skipped: {skip_count}")
-    print(f"Failed:  {fail_count}")
+    print(f"Success: {counts[STATUS_OK]}")
+    print(f"Skipped: {counts[STATUS_SKIPPED]}")
+    print(f"Failed:  {counts[STATUS_FAILED]}")
     print("="*60)
 
-    return 0 if fail_count == 0 else 1
+    return 0 if counts[STATUS_FAILED] == 0 else 1
 
 
 if __name__ == '__main__':

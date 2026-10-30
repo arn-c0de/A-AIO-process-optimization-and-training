@@ -71,6 +71,9 @@ def delete_samples(dataset_dir: Path, sample_ids: Iterable[str]) -> DatasetEditS
 
     write_jsonl(dataset_dir / "meta.jsonl", keep_meta)
     write_jsonl(dataset_dir / "labels.jsonl", keep_labels)
+    split_files = _read_split_files(dataset_dir)
+    if split_files:
+        _write_split_files(dataset_dir, _remove_from_splits(split_files, set(selected)))
     recompute_manifest_stats(dataset_dir)
 
     for sample_id in selected:
@@ -123,6 +126,13 @@ def move_samples(
     new_dst_meta = list(dst_meta)
     new_dst_labels = list(dst_labels)
 
+    src_splits = _read_split_files(src_dataset_dir)
+    dst_splits = _read_split_files(dst_dataset_dir)
+    src_split_of: Dict[str, str] = {}
+    for split_name, ids in src_splits.items():
+        for sid in ids:
+            src_split_of.setdefault(sid, split_name)
+
     try:
         for src_id in selected:
             src_meta_row = src_meta_by_id[src_id]
@@ -130,6 +140,9 @@ def move_samples(
 
             new_id = _dedupe_sample_id(src_meta_row.id, dst_ids)
             dst_ids.add(new_id)
+            # Keep the split assignment the sample had in the source dataset;
+            # samples not listed in any split file default to train.
+            dst_splits.setdefault(src_split_of.get(src_id, "train"), []).append(new_id)
 
             dst_image_rel = _dedupe_image_path(src_meta_row.image_path, dst_image_paths)
             dst_image_paths.add(dst_image_rel)
@@ -173,6 +186,10 @@ def move_samples(
         write_jsonl(src_dataset_dir / "labels.jsonl", new_src_labels)
         write_jsonl(dst_dataset_dir / "meta.jsonl", new_dst_meta)
         write_jsonl(dst_dataset_dir / "labels.jsonl", new_dst_labels)
+
+        if src_splits:
+            _write_split_files(src_dataset_dir, _remove_from_splits(src_splits, selected_set))
+        _write_split_files(dst_dataset_dir, dst_splits)
 
         recompute_manifest_stats(src_dataset_dir)
         recompute_manifest_stats(dst_dataset_dir)
@@ -219,6 +236,35 @@ def recompute_manifest_stats(dataset_dir: Path) -> None:
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     tmp_path.replace(manifest_path)
+
+
+def _read_split_files(dataset_dir: Path) -> Dict[str, List[str]]:
+    """Return ``{split_name: [ids]}`` for every ``splits/*.txt`` file present."""
+    splits_dir = Path(dataset_dir) / "splits"
+    if not splits_dir.is_dir():
+        return {}
+    out: Dict[str, List[str]] = {}
+    for split_file in sorted(splits_dir.glob("*.txt")):
+        with open(split_file, encoding="utf-8") as f:
+            out[split_file.stem] = [line.strip() for line in f if line.strip()]
+    return out
+
+
+def _remove_from_splits(splits: Dict[str, List[str]], removed: set[str]) -> Dict[str, List[str]]:
+    return {name: [sid for sid in ids if sid not in removed] for name, ids in splits.items()}
+
+
+def _write_split_files(dataset_dir: Path, splits: Dict[str, List[str]]) -> None:
+    """Atomically (tmp + replace) write each split file."""
+    splits_dir = Path(dataset_dir) / "splits"
+    splits_dir.mkdir(parents=True, exist_ok=True)
+    for split_name, ids in splits.items():
+        split_file = splits_dir / f"{split_name}.txt"
+        tmp_path = split_file.with_suffix(".txt.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for sid in ids:
+                f.write(sid + "\n")
+        tmp_path.replace(split_file)
 
 
 def _read_rows(dataset_dir: Path) -> Tuple[List[MetaRow], List[LabelRow]]:

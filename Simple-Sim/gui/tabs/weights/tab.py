@@ -15,7 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.settings_store import SettingsStore
+from gui.utils.dataset_catalog import sim_data_roots, unique_dataset_labels
+from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 from .ui import WeightsUI
 from .logic import WeightsLogic
 from datetime import datetime
@@ -48,6 +49,7 @@ class WeightsTab(BaseTab):
         self._cmp_dataset_by_label: Dict[str, Path] = {}
 
         self._ui_tick_id: Optional[str] = None
+        self._profile_info_cache: Dict[Tuple[str, float], str] = {}
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -85,16 +87,9 @@ class WeightsTab(BaseTab):
     def _load_persisted_settings(self) -> None:
         st = self._store()
         if st is None: return
-        for key, var in [("weights.split", self.ui.var_split), ("weights.device", self.ui.var_device),
-                         ("weights.max_samples", self.ui.var_max_samples), ("weights.save_preds", self.ui.chk_save_preds),
-                         ("weights.report_scope", self.ui.var_report_scope), ("weights.report_split", self.ui.var_report_split),
-                         ("weights.report_sort", self.ui.var_report_sort), ("weights.compare_a", self.ui.var_cmp_a),
-                         ("weights.compare_b", self.ui.var_cmp_b)]:
-            # Explicit None check: False/"" are valid persisted values (e.g. unchecked "save preds").
-            if (v := st.get(key)) is not None:
-                try: var.set(v)
-                except Exception: pass
-        
+        # Explicit None check inside the helper: False/"" are valid persisted values (e.g. unchecked "save preds").
+        restore_persisted_vars(st, self._persisted_var_bindings())
+
         self._refresh_reports()
         custom_raw = st.get("weights.custom_groups")
         if isinstance(custom_raw, str):
@@ -109,15 +104,18 @@ class WeightsTab(BaseTab):
                 if isinstance(parsed, dict): self._group_assignments = {str(k): str(v) for k, v in parsed.items() if k and v}
             except Exception: pass
 
+    def _persisted_var_bindings(self) -> List[Tuple[str, Any]]:
+        return [("weights.split", self.ui.var_split), ("weights.device", self.ui.var_device),
+                ("weights.max_samples", self.ui.var_max_samples), ("weights.save_preds", self.ui.chk_save_preds),
+                ("weights.report_scope", self.ui.var_report_scope), ("weights.report_split", self.ui.var_report_split),
+                ("weights.report_sort", self.ui.var_report_sort), ("weights.compare_a", self.ui.var_cmp_a),
+                ("weights.compare_b", self.ui.var_cmp_b)]
+
     def _wire_settings_autosave(self) -> None:
-        st = self._store()
-        if st is None: return
-        for var, key in [(self.ui.var_split, "weights.split"), (self.ui.var_device, "weights.device"),
-                         (self.ui.var_max_samples, "weights.max_samples"), (self.ui.chk_save_preds, "weights.save_preds"),
-                         (self.ui.var_report_scope, "weights.report_scope"), (self.ui.var_report_split, "weights.report_split"),
-                         (self.ui.var_report_sort, "weights.report_sort"), (self.ui.var_cmp_a, "weights.compare_a"),
-                         (self.ui.var_cmp_b, "weights.compare_b")]:
-            var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
+        wire_vars_autosave(self._store(), self._persisted_var_bindings(), self.frame)
+
+    def on_close(self) -> None:
+        self.logic.stop_prediction()
 
     def _tick_ui(self) -> None:
         while True:
@@ -131,17 +129,9 @@ class WeightsTab(BaseTab):
         
         old_sel = {str(self.ui.list_cmp_datasets.get(i)) for i in self.ui.list_cmp_datasets.curselection()}
 
-        self._cmp_dataset_labels = []
-        self._cmp_dataset_by_label = {}
-        seen: dict[str, int] = {}
-        for p in cand:
-            runs, versions = self.logic._model_root().parent / "sim_data" / "runs", self.logic._model_root().parent / "sim_data" / "versions"
-            base = self.logic._display_for_dataset(p, runs=runs, versions=versions)
-            n = seen.get(base, 0) + 1
-            seen[base] = n
-            label = base if n == 1 else f"{base} ({n})"
-            self._cmp_dataset_labels.append(label)
-            self._cmp_dataset_by_label[label] = p
+        runs, versions = sim_data_roots(self.sim_root)
+        self._cmp_dataset_by_label = unique_dataset_labels(cand, runs_root=runs, versions_root=versions)
+        self._cmp_dataset_labels = list(self._cmp_dataset_by_label)
 
         self.ui.list_cmp_datasets.delete(0, "end")
         for label in self._cmp_dataset_labels:
@@ -156,10 +146,10 @@ class WeightsTab(BaseTab):
         try: self.ui.list_cmp_datasets.selection_clear(0, "end")
         except Exception: return
         if not self.state.dataset_dir: return
-        runs, versions = self.logic._model_root().parent / "sim_data" / "runs", self.logic._model_root().parent / "sim_data" / "versions"
+        runs, versions = sim_data_roots(self.sim_root)
         want = self.logic._display_for_dataset(self.state.dataset_dir, runs=runs, versions=versions)
         for idx, label in enumerate(self._cmp_dataset_labels):
-            if label == want or (p := self._cmp_dataset_by_label.get(label)) == self.state.dataset_dir:
+            if label == want or self._cmp_dataset_by_label.get(label) == self.state.dataset_dir:
                 self.ui.list_cmp_datasets.selection_set(idx)
                 self.ui.list_cmp_datasets.see(idx)
                 return
@@ -399,9 +389,17 @@ class WeightsTab(BaseTab):
         if not (sel := self.ui.tree.selection()): return
         if not (p := self._model_by_iid.get(sel[0])): return
 
-        profile_info = "";
+        profile_info = self._profile_info_for(p)
+        self.ui.var_selected_model.set(f"selected: {self.logic.rel_path(p)}{profile_info}")
+        if self.ui.var_report_scope.get() == "selected_model": self._refresh_reports()
+
+    def _profile_info_for(self, p: Path) -> str:
+        """Profile suffix for the selection label; torch.load results are cached by (path, mtime)."""
+        try: key: Tuple[str, float] = (str(p.resolve()), p.stat().st_mtime)
+        except Exception: key = (str(p), -1.0)
+        if (cached := self._profile_info_cache.get(key)) is not None: return cached
         try:
-            checkpoint = torch.load(p, map_location='cpu')
+            checkpoint = torch.load(p, map_location="cpu", weights_only=False)
             profile_data = checkpoint.get('component_profile')
             if profile_data:
                 profile_id = profile_data.get('profile_id', 'unknown')
@@ -410,8 +408,8 @@ class WeightsTab(BaseTab):
                 profile_info = f" | Profile: {profile_id} ({hash_short}...)"
             else: profile_info = " | Profile: ⚠ No profile (legacy)"
         except Exception: profile_info = " | Profile: ⚠ Error loading"
-        self.ui.var_selected_model.set(f"selected: {self.logic.rel_path(p)}{profile_info}")
-        if self.ui.var_report_scope.get() == "selected_model": self._refresh_reports()
+        self._profile_info_cache[key] = profile_info
+        return profile_info
 
     def _on_models_right_click(self, event: tk.Event) -> None:
         self._refresh_groups_menu()
