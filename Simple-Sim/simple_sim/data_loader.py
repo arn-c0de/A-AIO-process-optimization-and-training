@@ -5,7 +5,7 @@ import warnings
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -31,7 +31,7 @@ def preprocess_bgr(img_bgr: np.ndarray) -> torch.Tensor:
     return IMAGENET_TRANSFORM(img_rgb)
 
 
-def make_loader_kwargs(num_workers: int, device: torch.device, *, verbose: bool = True) -> Dict[str, Any]:
+def make_loader_kwargs(num_workers: int, device: torch.device, *, verbose: bool = True) -> dict[str, Any]:
     """Build shared DataLoader kwargs, auto-tuning workers for CUDA runs.
 
     When the config leaves num_workers at 0 on CUDA, pick a worker count from
@@ -48,7 +48,7 @@ def make_loader_kwargs(num_workers: int, device: torch.device, *, verbose: bool 
     elif verbose:
         print(f"  Num workers: {effective}")
 
-    kwargs: Dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "num_workers": effective,
         "pin_memory": (device.type == "cuda"),
     }
@@ -95,7 +95,7 @@ class _BaseROIDataset(Dataset):
 
     # Subclasses implement these two hooks:
 
-    def _init_label_mapping(self, label_rows: List[LabelRow]) -> None:
+    def _init_label_mapping(self, label_rows: list[LabelRow]) -> None:
         raise NotImplementedError
 
     def _sample_is_valid(self, sample_id: str) -> bool:
@@ -118,7 +118,7 @@ class _BaseROIDataset(Dataset):
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         return self.transform(img_rgb)
 
-    def __getitem__(self, idx: int) -> Union[Tuple[torch.Tensor, int], Tuple[torch.Tensor, int, str, str]]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | tuple[torch.Tensor, int, str, str]:
         sample_id = self.samples[idx]
         img_tensor = self._load_tensor(sample_id)
         label_idx = self._get_label_index(sample_id)
@@ -134,7 +134,7 @@ class _BaseROIDataset(Dataset):
 class ROIDataset(_BaseROIDataset):
     """PyTorch Dataset for PCB ROI images, labelled by defect class."""
 
-    def __init__(self, data_dir: Path, split: str, class_names: List[str], return_id: bool = False):
+    def __init__(self, data_dir: Path, split: str, class_names: list[str], return_id: bool = False):
         """Initialize dataset.
 
         Args:
@@ -146,8 +146,8 @@ class ROIDataset(_BaseROIDataset):
         self.class_names = class_names
         super().__init__(data_dir, split, return_id)
 
-    def _init_label_mapping(self, label_rows: List[LabelRow]) -> None:
-        self.id_to_label: Dict[str, str] = {row.id: row.class_name for row in label_rows}
+    def _init_label_mapping(self, label_rows: list[LabelRow]) -> None:
+        self.id_to_label: dict[str, str] = {row.id: row.class_name for row in label_rows}
 
     def _sample_is_valid(self, sample_id: str) -> bool:
         return (
@@ -159,7 +159,7 @@ class ROIDataset(_BaseROIDataset):
     def _get_label_index(self, sample_id: str) -> int:
         return self.class_names.index(self.id_to_label[sample_id])
 
-    def get_class_distribution(self) -> Dict[str, int]:
+    def get_class_distribution(self) -> dict[str, int]:
         """Return class name → sample count for this split."""
         dist = {name: 0 for name in self.class_names}
         for sid in self.samples:
@@ -174,7 +174,7 @@ class ProfileDataset(_BaseROIDataset):
     Requires v2 labels with profile_id set.
     """
 
-    def __init__(self, data_dir: Path, split: str, profile_names: List[str], return_id: bool = False):
+    def __init__(self, data_dir: Path, split: str, profile_names: list[str], return_id: bool = False):
         """Initialize profile dataset.
 
         Args:
@@ -187,8 +187,8 @@ class ProfileDataset(_BaseROIDataset):
         self.profile_names = list(profile_names)
         super().__init__(data_dir, split, return_id)
 
-    def _init_label_mapping(self, label_rows: List[LabelRow]) -> None:
-        self.id_to_profile: Dict[str, str] = {row.id: row.profile_id for row in label_rows}
+    def _init_label_mapping(self, label_rows: list[LabelRow]) -> None:
+        self.id_to_profile: dict[str, str] = {row.id: row.profile_id for row in label_rows}
 
     def _sample_is_valid(self, sample_id: str) -> bool:
         return (
@@ -200,7 +200,7 @@ class ProfileDataset(_BaseROIDataset):
     def _get_label_index(self, sample_id: str) -> int:
         return self.profile_names.index(self.id_to_profile[sample_id])
 
-    def get_class_distribution(self) -> Dict[str, int]:
+    def get_class_distribution(self) -> dict[str, int]:
         """Return profile name → sample count for this split."""
         dist = {name: 0 for name in self.profile_names}
         for sid in self.samples:

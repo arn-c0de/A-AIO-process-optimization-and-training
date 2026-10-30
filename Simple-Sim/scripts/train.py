@@ -4,7 +4,6 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional
 import yaml
 import time
 import torch
@@ -26,7 +25,7 @@ from simple_sim.manifest import check_checkpoint_profile, read_dataset_manifest,
 from simple_sim.model_bundle import bundle_checkpoint_path, upsert_bundle_meta
 
 
-def train_epoch(model, loader, criterion, optimizer, device, *, use_amp: bool = False, scaler: Optional[torch.cuda.amp.GradScaler] = None):
+def train_epoch(model, loader, criterion, optimizer, device, *, use_amp: bool = False, scaler: torch.cuda.amp.GradScaler | None = None):
     """Train for one epoch.
 
     Args:

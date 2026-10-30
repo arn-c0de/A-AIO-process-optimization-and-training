@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from gui.state import UiState
@@ -22,7 +22,7 @@ class BoardDetectionTab(BaseTab):
         super().__init__(parent, sim_root, state)
         self.ui = BoardDetectionUI(self, self.frame)
         self.logic = BoardDetectionLogic()
-        self._result: Optional[TwoStageResult] = None
+        self._result: TwoStageResult | None = None
 
     def build_ui(self) -> None:
         self.ui.build_ui()

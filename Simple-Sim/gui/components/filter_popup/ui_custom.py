@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .ui_realism import build_realism_controls
 
@@ -128,7 +128,7 @@ def build_filter_controls(popup: Any, parent: ttk.Frame) -> None:
     ttk.Button(btns, text="Close", command=popup._handle_close).pack(side="right")
 
 
-def add_filter_sections(popup: Any, parent: ttk.Frame, current: Dict[str, Any]) -> None:
+def add_filter_sections(popup: Any, parent: ttk.Frame, current: dict[str, Any]) -> None:
     """Add all filter sections with controls."""
     popup._rotation_row_state_cb = None
 
@@ -143,7 +143,7 @@ def add_filter_sections(popup: Any, parent: ttk.Frame, current: Dict[str, Any]) 
         default_strength: float,
         min_v: float = 0.0,
         max_v: float = 2.0,
-        enable_var: Optional[tk.BooleanVar] = None,
+        enable_var: tk.BooleanVar | None = None,
     ) -> None:
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=(3, 0))

@@ -4,7 +4,6 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Optional, List
 import threading
 from collections import Counter
 from datetime import datetime
@@ -36,12 +35,12 @@ class AnalysisTab(BaseTab):
         self.effective_label_dict: dict[str, str] = {}
         self.profile_dict: dict[str, str] = {}
         self.sample_date_dict: dict[str, str] = {}
-        self.feedback_manager: Optional[FeedbackManager] = None
+        self.feedback_manager: FeedbackManager | None = None
         self.feedback_latest_by_sample: dict[str, dict] = {}
-        self.current_sample_id: Optional[str] = None
+        self.current_sample_id: str | None = None
         self.visible_sample_ids: list[str] = []
         self.visible_sample_item_by_id: dict[str, str] = {}
-        self._filter_after_id: Optional[str] = None
+        self._filter_after_id: str | None = None
         self._dataset_by_display: dict[str, Path] = {}
         self._dataset_catalog = DatasetCatalog(sim_root, state.settings_store)
         self._selected_profiles: set[str] = set()
@@ -74,7 +73,7 @@ class AnalysisTab(BaseTab):
         self._load_dataset()
         self._try_load_model()
 
-    def _store(self) -> Optional[SettingsStore]:
+    def _store(self) -> SettingsStore | None:
         return self.state.settings_store
 
     def _load_persisted_settings(self) -> None:
@@ -156,7 +155,7 @@ class AnalysisTab(BaseTab):
             return
         self._refresh_datasets()
 
-    def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
+    def _on_dataset_selected(self, _evt: object | None = None) -> None:
         if not (ds := self._dataset_by_display.get(self.ui.var_dataset.get().strip())): return
         self.state.dataset_dir = ds
         try: self.parent.event_generate("<<DatasetChanged>>", when="tail")
@@ -447,7 +446,7 @@ class AnalysisTab(BaseTab):
             status += f" @ {ts}"
         self.ui.set_feedback_status(status)
 
-    def _on_profile_filter_selected(self, _evt: Optional[object] = None) -> None:
+    def _on_profile_filter_selected(self, _evt: object | None = None) -> None:
         self._selected_profiles = set()
         self._update_profile_multi_label()
         st = self._store()
@@ -530,7 +529,7 @@ class AnalysisTab(BaseTab):
             out[sid] = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts > 0 else "-"
         return out
 
-    def _on_feedback_history_select(self, _event: Optional[object] = None) -> None:
+    def _on_feedback_history_select(self, _event: object | None = None) -> None:
         sid = self.ui.selected_feedback_sample_id()
         if not sid:
             return
@@ -583,7 +582,7 @@ class AnalysisTab(BaseTab):
             note = str(entry.get("note") or "").strip()
             tree.insert("", "end", iid=f"h::{idx}", values=(ts_short, sid, action, corrected, note))
 
-        def _open_selected(_event: Optional[object] = None) -> None:
+        def _open_selected(_event: object | None = None) -> None:
             sel = tree.selection()
             if not sel:
                 return
@@ -607,8 +606,8 @@ class AnalysisTab(BaseTab):
         ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="right")
         ttk.Button(btns, text="Open Selected", command=_open_selected).pack(side="right", padx=(0, 8))
 
-    def _selected_sample_ids(self) -> List[str]:
-        selected: List[str] = []
+    def _selected_sample_ids(self) -> list[str]:
+        selected: list[str] = []
         try:
             for item in self.ui.tree.selection():
                 if item in self.meta_dict:
@@ -618,7 +617,7 @@ class AnalysisTab(BaseTab):
 
         if selected:
             seen = set()
-            ordered: List[str] = []
+            ordered: list[str] = []
             for sample_id in selected:
                 if sample_id in seen:
                     continue

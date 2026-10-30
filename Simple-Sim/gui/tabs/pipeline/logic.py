@@ -9,7 +9,8 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, List, Callable
+from typing import Any
+from collections.abc import Callable
 import shutil
 from datetime import datetime
 import re
@@ -25,29 +26,29 @@ from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, w
 
 
 class PipelineLogic:
-    def __init__(self, sim_root: Path, log_q: queue.Queue[str], event_q: queue.Queue[Dict[str, Any]], event_log_path: Path):
+    def __init__(self, sim_root: Path, log_q: queue.Queue[str], event_q: queue.Queue[dict[str, Any]], event_log_path: Path):
         self.sim_root = sim_root
         self.log_q = log_q
         self.event_q = event_q
         self.event_log_path = event_log_path
 
-        self.proc: Optional[subprocess.Popen[str]] = None
+        self.proc: subprocess.Popen[str] | None = None
         self.stop_evt = threading.Event()
-        self._temp_merge_cleanup_dir: Optional[Path] = None
+        self._temp_merge_cleanup_dir: Path | None = None
 
-        self._last_snap_sig: Optional[tuple[int, int]] = None  # (mtime_ns, size)
+        self._last_snap_sig: tuple[int, int] | None = None  # (mtime_ns, size)
         
-        self._profile_config_cache: Dict[str, Dict[str, Any]] = {}
+        self._profile_config_cache: dict[str, dict[str, Any]] = {}
 
         # True while the start_pipeline loop thread is alive (also between runs, when no process is running).
         self.loop_running: bool = False
         # Marshals a zero-arg callable onto the Tk main thread; the tab sets this (e.g. via frame.after).
-        self.ui_call: Optional[Callable[[Callable[[], None]], None]] = None
+        self.ui_call: Callable[[Callable[[], None]], None] | None = None
         # Done-event of the currently active events.jsonl tailer (only one tailer at a time).
-        self._tail_done: Optional[threading.Event] = None
+        self._tail_done: threading.Event | None = None
         self._tail_lock = threading.Lock()
         # Checkpoint metadata cache keyed by (resolved path, mtime_ns, size).
-        self._ckpt_meta_cache: Dict[tuple[str, int, int], Dict[str, Any]] = {}
+        self._ckpt_meta_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
         self._ckpt_meta_lock = threading.Lock()
 
     def is_busy(self) -> bool:
@@ -79,11 +80,11 @@ class PipelineLogic:
         return (self.sim_root / p).resolve()
 
     def start_pipeline(self, run_specs: list[dict[str, str]], run_count: int, dataset_mode: str, task: str,
-                       image_filters: Dict[str, Any],
-                       event_callback: Callable[[Dict[str, Any]], None], log_callback: Callable[[str], None],
+                       image_filters: dict[str, Any],
+                       event_callback: Callable[[dict[str, Any]], None], log_callback: Callable[[str], None],
                        ui_update_callback: Callable[[], None], ui_reset_callback: Callable[[], None],
                        status_vars: dict,
-                       run_complete_callback: Optional[Callable[[int, list[dict[str, str]], Callable[[str], None]], bool]] = None) -> None:
+                       run_complete_callback: Callable[[int, list[dict[str, str]], Callable[[str], None]], bool] | None = None) -> None:
         self.stop_evt.clear()
         self.current_run_iteration = 0
         self.total_run_count = run_count
@@ -176,8 +177,8 @@ class PipelineLogic:
         except Exception: self.loop_running = False; raise
 
     def _run_single_pipeline(self, out_dir: str, *, dataset_mode: str, task: str, config_path: str, model_path: str,
-                             image_filters: Dict[str, Any],
-                             status_vars: dict, log_callback: Callable[[str], None], event_callback: Callable[[Dict[str, Any]], None]) -> bool:
+                             image_filters: dict[str, Any],
+                             status_vars: dict, log_callback: Callable[[str], None], event_callback: Callable[[dict[str, Any]], None]) -> bool:
         eventlog = self.event_log_path
         cfg = str(config_path).strip()
         model_path = str(model_path).strip()
@@ -229,8 +230,8 @@ class PipelineLogic:
             self.proc = None
             return False
 
-    def launch_process(self, cmd: List[str], env: Dict[str, str], log_callback: Callable[[str], None], event_callback: Callable[[Dict[str, Any]], None],
-                       on_exit: Optional[Callable[[Optional[int]], None]] = None) -> subprocess.Popen[str]:
+    def launch_process(self, cmd: list[str], env: dict[str, str], log_callback: Callable[[str], None], event_callback: Callable[[dict[str, Any]], None],
+                       on_exit: Callable[[int | None], None] | None = None) -> subprocess.Popen[str]:
         """Start cmd as self.proc with one stdout reader and one events.jsonl tailer bound to this run.
 
         The tailer starts at the current end of the event log (no replay of older runs) and stops after a final
@@ -247,7 +248,7 @@ class PipelineLogic:
         threading.Thread(target=self._tail_events_thread, args=(event_callback,), kwargs={"done": done, "start_pos": start_pos}, daemon=True).start()
         return p
 
-    def cleanup_temp_merge_dir(self, cleanup: Optional[Path], rc: Optional[int], log_callback: Callable[[str], None]) -> None:
+    def cleanup_temp_merge_dir(self, cleanup: Path | None, rc: int | None, log_callback: Callable[[str], None]) -> None:
         if cleanup is None: return
         try:
             if rc == 0: shutil.rmtree(cleanup); log_callback(f"[merge] cleaned up temp dataset: {cleanup}\n")
@@ -277,7 +278,7 @@ class PipelineLogic:
             threading.Timer(2.0, _kill_later).start()
 
     def _read_process_output_thread(self, proc: subprocess.Popen[str], log_callback: Callable[[str], None], *,
-                                    done: Optional[threading.Event] = None, on_exit: Optional[Callable[[Optional[int]], None]] = None) -> None:
+                                    done: threading.Event | None = None, on_exit: Callable[[int | None], None] | None = None) -> None:
         try: self._read_process_output(proc, log_callback)
         finally:
             rc = proc.poll()
@@ -358,7 +359,7 @@ class PipelineLogic:
         try: self.ui_call(_apply)
         except Exception as e: self.log_q.put(f"[ui] failed to schedule status update: {e}\n")
 
-    def _tail_events_thread(self, event_callback: Callable[[Dict[str, Any]], None], *, done: Optional[threading.Event] = None, start_pos: int = 0) -> None:
+    def _tail_events_thread(self, event_callback: Callable[[dict[str, Any]], None], *, done: threading.Event | None = None, start_pos: int = 0) -> None:
         """Tail events.jsonl from start_pos until done is set (then drain once more); resets on truncation."""
         path = self.event_log_path
         done = done or self.stop_evt
@@ -382,7 +383,7 @@ class PipelineLogic:
             if finished: return
             done.wait(0.1)
 
-    def _write_model_meta(self, model_path: Path, *, run_i: int, dataset_dir: Optional[Path], dataset_mode: str, out_dir: Path) -> None:
+    def _write_model_meta(self, model_path: Path, *, run_i: int, dataset_dir: Path | None, dataset_mode: str, out_dir: Path) -> None:
         meta = {
             "timestamp": datetime.now().isoformat(timespec="seconds"), "run_iteration": int(run_i),
             "dataset_mode": dataset_mode, "dataset_dir": str(dataset_dir) if dataset_dir else None,
@@ -390,7 +391,7 @@ class PipelineLogic:
         }
         Path(str(model_path) + ".meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
-    def _snapshot_model_checkpoint(self, model_path: Path, *, run_i: int, snap_every: int, snap_keep: int) -> Optional[Path]:
+    def _snapshot_model_checkpoint(self, model_path: Path, *, run_i: int, snap_every: int, snap_keep: int) -> Path | None:
         try:
             model_path = Path(model_path)
             if not model_path.exists(): return None
@@ -446,7 +447,7 @@ class PipelineLogic:
             update_callback(size_b)
         threading.Thread(target=worker, daemon=True).start()
 
-    def get_dataset_profile_id(self, ds: Path) -> Optional[str]:
+    def get_dataset_profile_id(self, ds: Path) -> str | None:
         if not ds: return None
         manifest_path = ds / "dataset_manifest.json"
         if not manifest_path.exists(): return None
@@ -458,7 +459,7 @@ class PipelineLogic:
             return None
         except Exception: return None
 
-    def get_dataset_profile_hash(self, ds: Path) -> Optional[str]:
+    def get_dataset_profile_hash(self, ds: Path) -> str | None:
         if not ds: return None
         manifest_path = ds / "dataset_manifest.json"
         if not manifest_path.exists(): return None
@@ -469,7 +470,7 @@ class PipelineLogic:
             return None
         except Exception: return None
 
-    def load_model_profile(self, model_path: Path) -> tuple[Optional[str], Optional[str]]:
+    def load_model_profile(self, model_path: Path) -> tuple[str | None, str | None]:
         try:
             if model_path.is_dir(): return "multi", None
         except Exception: pass
@@ -481,21 +482,21 @@ class PipelineLogic:
         return None, None
 
     @staticmethod
-    def _ckpt_cache_key(p: Path) -> Optional[tuple[str, int, int]]:
+    def _ckpt_cache_key(p: Path) -> tuple[str, int, int] | None:
         try: st = (rp := Path(p).resolve()).stat(); return (str(rp), int(st.st_mtime_ns), int(st.st_size))
         except Exception: return None
 
-    def cached_checkpoint_meta(self, p: Path) -> Optional[Dict[str, Any]]:
+    def cached_checkpoint_meta(self, p: Path) -> dict[str, Any] | None:
         """Cached metadata for a checkpoint file, or None if not cached (or the file changed)."""
         if (key := self._ckpt_cache_key(p)) is None: return {"error": "missing"}
         with self._ckpt_meta_lock: return self._ckpt_meta_cache.get(key)
 
-    def read_checkpoint_meta(self, p: Path) -> Dict[str, Any]:
+    def read_checkpoint_meta(self, p: Path) -> dict[str, Any]:
         """{component_profile, class_names[, error]} of a .pt checkpoint; cached by (path, mtime, size). Slow when uncached."""
         if (key := self._ckpt_cache_key(p)) is None: return {"error": "missing"}
         with self._ckpt_meta_lock:
             if (hit := self._ckpt_meta_cache.get(key)) is not None: return hit
-        meta: Dict[str, Any]
+        meta: dict[str, Any]
         try:
             ckpt = torch.load(key[0], map_location="cpu", weights_only=False)
             if not isinstance(ckpt, dict): ckpt = {}
@@ -509,7 +510,7 @@ class PipelineLogic:
             self._ckpt_meta_cache[key] = meta
         return meta
 
-    def get_all_model_paths(self) -> List[Path]:
+    def get_all_model_paths(self) -> list[Path]:
         root = self.sim_root / "outputs" / "models"
         root.mkdir(parents=True, exist_ok=True)
         cand: list[Path] = []
@@ -520,7 +521,7 @@ class PipelineLogic:
         cand.extend(sorted((root / "versions").glob("**/*.pt")))
         return list({str(p.resolve()): p for p in cand if p.is_file() or p.is_dir()}.values())
 
-    def get_profile_classifier_models(self) -> List[Path]:
+    def get_profile_classifier_models(self) -> list[Path]:
         root = self.sim_root / "outputs" / "models"
         cand: list[Path] = []
         if root.exists():
@@ -528,7 +529,7 @@ class PipelineLogic:
             cand.extend(sorted(root.glob("**/profile_classifier_*.pt")))
         return list({str(p.resolve()): p for p in cand if p.is_file()}.values())
 
-    def build_profile_model(self, preset: str, config_path_str: str, out_ds_str: str, out_model_str: str, log_callback: Callable[[str], None], run_simple_cmd_callback: Callable[[List[str], Optional[Dict[str, str]]], None]) -> None:
+    def build_profile_model(self, preset: str, config_path_str: str, out_ds_str: str, out_model_str: str, log_callback: Callable[[str], None], run_simple_cmd_callback: Callable[[list[str], dict[str, str] | None], None]) -> None:
         if preset == "full":
             cfg = self.sim_root / "configs" / "run_profile_cls.yaml"
             out_ds = self.sim_root / "outputs" / "sim_data" / "runs" / "run_profile_cls"
@@ -555,12 +556,12 @@ class PipelineLogic:
         log_callback(f"\n[build profile model] preset={preset}\nconfig: {cfg}\ndata:   {out_ds}\nout:    {out_model}\n[cmd] {cmd_q}\n\n")
         run_simple_cmd_callback([cmd_q])
 
-    def get_profile_paths(self, render_backend: str) -> List[Path]:
+    def get_profile_paths(self, render_backend: str) -> list[Path]:
         profiles_dir = self.sim_root / "configs" / "profiles"
         profiles_dir.mkdir(parents=True, exist_ok=True)
         profile_files = sorted(profiles_dir.glob("*.yaml"))
 
-        values: List[str] = []
+        values: list[str] = []
         for p in profile_files:
             try:
                 data = yaml.safe_load(p.read_text(encoding="utf-8"))
@@ -611,7 +612,7 @@ class PipelineLogic:
         log_callback(f"[profile] created placeholder dataset manifest for {out_dir.name}\n")
         return True
 
-    def config_for_profile(self, profile_id: str, want_backend: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def config_for_profile(self, profile_id: str, want_backend: str | None = None) -> dict[str, Any] | None:
         cache_key = f"{profile_id}|{want_backend or ''}"
         if cache_key in self._profile_config_cache: return self._profile_config_cache[cache_key]
 
@@ -650,7 +651,7 @@ class PipelineLogic:
         self._profile_config_cache[cache_key] = best_entry
         return best_entry
 
-    def _datasets_require_bundle(self, dss: List[Path], get_dataset_profile_id_func: Callable[[Path], Optional[str]]) -> bool:
+    def _datasets_require_bundle(self, dss: list[Path], get_dataset_profile_id_func: Callable[[Path], str | None]) -> bool:
         pids: set[str] = set()
         for ds in dss:
             if pid := get_dataset_profile_id_func(ds): pids.add(pid)
@@ -662,8 +663,8 @@ class PipelineLogic:
 
     def _prepare_merge_sources(
         self,
-        sources: List[Path],
-    ) -> tuple[str, Dict[str, Dict[str, str]], Dict[str, Dict[str, str]], dict, str, tuple[str, ...], int, int]:
+        sources: list[Path],
+    ) -> tuple[str, dict[str, dict[str, str]], dict[str, dict[str, str]], dict, str, tuple[str, ...], int, int]:
         cfg0_path = sources[0] / "config.yaml"
         if not cfg0_path.exists():
             raise FileNotFoundError(f"Missing config.yaml in {sources[0]}")
@@ -677,8 +678,8 @@ class PipelineLogic:
         roi0 = cfg0.get("roi") or {}
         roi0_w, roi0_h = int(roi0.get("width_px") or 0), int(roi0.get("height_px") or 0)
 
-        src_default_profiles: Dict[str, Dict[str, str]] = {}
-        all_profiles: Dict[str, Dict[str, str]] = {}
+        src_default_profiles: dict[str, dict[str, str]] = {}
+        all_profiles: dict[str, dict[str, str]] = {}
         run_id = sources[0].name
         for ds in sources:
             manifest_path = ds / "dataset_manifest.json"
@@ -742,17 +743,17 @@ class PipelineLogic:
     def _merge_source_rows(
         self,
         *,
-        sources: List[Path],
+        sources: list[Path],
         run_id: str,
-        src_default_profiles: Dict[str, Dict[str, str]],
+        src_default_profiles: dict[str, dict[str, str]],
         images_dir: Path,
         target_w: int,
         target_h: int,
-    ) -> tuple[list[MetaRow], list[LabelRow], Dict[str, List[str]]]:
+    ) -> tuple[list[MetaRow], list[LabelRow], dict[str, list[str]]]:
         meta_out: list[MetaRow] = []
         label_out: list[LabelRow] = []
-        split_counters: Dict[str, int] = {}
-        splits: Dict[str, List[str]] = {"train": [], "val": [], "test": []}
+        split_counters: dict[str, int] = {}
+        splits: dict[str, list[str]] = {"train": [], "val": [], "test": []}
 
         def link_or_copy(src: Path, dst: Path) -> None:
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -820,7 +821,7 @@ class PipelineLogic:
 
         return meta_out, label_out, splits
 
-    def merge_datasets_for_training(self, sources: List[Path], out_dir: Path, log_callback: Callable[[str], None], log_error_callback: Callable[[str], None]) -> None:
+    def merge_datasets_for_training(self, sources: list[Path], out_dir: Path, log_callback: Callable[[str], None], log_error_callback: Callable[[str], None]) -> None:
         out_dir = Path(out_dir)
         if out_dir.exists(): raise FileExistsError(f"Output directory already exists: {out_dir}")
         out_dir.mkdir(parents=True, exist_ok=False)
@@ -852,7 +853,7 @@ class PipelineLogic:
             Path(out_dir / "config.yaml").write_text(yaml.safe_dump(cfg_out, sort_keys=False), encoding="utf-8")
         except Exception: Path(out_dir / "config.yaml").write_text(cfg0_text, encoding="utf-8")
 
-        uniq_profiles: Dict[str, Dict[str, str]] = dict(all_profiles)
+        uniq_profiles: dict[str, dict[str, str]] = dict(all_profiles)
         for row in label_out:
             pid = str(getattr(row, "profile_id", "") or "").strip()
             if pid and pid not in uniq_profiles:

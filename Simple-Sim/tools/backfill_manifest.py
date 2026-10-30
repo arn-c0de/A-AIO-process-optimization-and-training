@@ -21,7 +21,6 @@ import yaml
 import sys
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -37,7 +36,7 @@ STATUS_FAILED = "failed"
 def backfill_dataset(
     data_dir: Path,
     default_profile_id: str = "chip_0603_resistor@1",
-    profiles_dir: Optional[Path] = None
+    profiles_dir: Path | None = None
 ) -> str:
     """Add manifest to legacy dataset.
 

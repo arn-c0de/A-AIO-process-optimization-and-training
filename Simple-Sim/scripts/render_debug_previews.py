@@ -27,7 +27,8 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -49,7 +50,7 @@ BACKEND_3D = "blender_3d"
 BACKEND_CHOICES = [BACKEND_2D, BACKEND_3D, "both", "auto"]
 
 # (profile_id, backend, defect, rel_image_path)
-PreviewRec = Tuple[str, str, str, str]
+PreviewRec = tuple[str, str, str, str]
 
 
 @dataclass(frozen=True)
@@ -62,13 +63,13 @@ class RenderSettings:
     device: str
 
 
-def _shared_settings_path(sim_root: Path, explicit_path: Optional[str] = None) -> Path:
+def _shared_settings_path(sim_root: Path, explicit_path: str | None = None) -> Path:
     if explicit_path:
         return Path(explicit_path).expanduser().resolve()
     return (Path(sim_root) / "outputs" / "gui" / "settings.json").resolve()
 
 
-def _read_settings_json(path: Path) -> Dict[str, Any]:
+def _read_settings_json(path: Path) -> dict[str, Any]:
     try:
         if not path.exists():
             return {}
@@ -78,14 +79,14 @@ def _read_settings_json(path: Path) -> Dict[str, Any]:
         return {}
 
 
-def _write_settings_json(path: Path, data: Dict[str, Any]) -> None:
+def _write_settings_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     tmp.replace(path)
 
 
-def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _normalize_filter_settings(d: dict[str, Any] | None = None) -> dict[str, Any]:
     src = d or {}
 
     def _bool(name: str, default: bool) -> bool:
@@ -168,7 +169,7 @@ def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, 
     }
 
 
-def _filter_settings_to_profile_store(d: Dict[str, Any]) -> Dict[str, Any]:
+def _filter_settings_to_profile_store(d: dict[str, Any]) -> dict[str, Any]:
     n = _normalize_filter_settings(d)
     out = {
         # Existing filters
@@ -234,11 +235,11 @@ def _filter_settings_to_profile_store(d: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[str, Any]], str, Dict[str, Any]]:
+def _load_shared_filter_profiles(settings_path: Path) -> tuple[dict[str, dict[str, Any]], str, dict[str, Any]]:
     data = _read_settings_json(settings_path)
     raw_profiles = str(data.get("pipeline.filter_profiles_json", "") or "").strip()
     active = str(data.get("pipeline.filter_profile_active", "") or "").strip() or "Default"
-    profiles: Dict[str, Dict[str, Any]] = {}
+    profiles: dict[str, dict[str, Any]] = {}
     if raw_profiles:
         try:
             obj = json.loads(raw_profiles)
@@ -307,7 +308,7 @@ def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[st
     return profiles, active, current
 
 
-def _save_shared_filter_profiles(settings_path: Path, profiles: Dict[str, Dict[str, Any]], active: str, current: Dict[str, Any]) -> None:
+def _save_shared_filter_profiles(settings_path: Path, profiles: dict[str, dict[str, Any]], active: str, current: dict[str, Any]) -> None:
     data = _read_settings_json(settings_path)
     data["pipeline.filter_profiles_json"] = json.dumps(profiles, ensure_ascii=True)
     data["pipeline.filter_profile_active"] = str(active)
@@ -355,7 +356,7 @@ def _save_shared_filter_profiles(settings_path: Path, profiles: Dict[str, Dict[s
     _write_settings_json(settings_path, data)
 
 
-def _apply_filter_overrides_to_augment(augment: Dict[str, float], image_filters: Optional[Dict[str, Any]]) -> Dict[str, float]:
+def _apply_filter_overrides_to_augment(augment: dict[str, float], image_filters: dict[str, Any] | None) -> dict[str, float]:
     from simple_sim.generators.opencv_2d import apply_image_filter_overrides  # type: ignore
 
     # Debug preview uses clean base augment values (blur/noise=0, brightness/contrast=1).
@@ -378,7 +379,7 @@ def _apply_filter_overrides_to_augment(augment: Dict[str, float], image_filters:
     return apply_image_filter_overrides(a, f)
 
 
-def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[Dict[str, Any]]) -> None:
+def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[dict[str, Any]]) -> None:
     import cv2  # type: ignore
     from simple_sim.generators.opencv_2d import (  # type: ignore
         apply_blur,
@@ -480,10 +481,10 @@ def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[Dict[str, Any]
 
 
 def _sample_nominal_geometry(
-    roi_config: Dict[str, Any],
+    roi_config: dict[str, Any],
     rng: np.random.Generator,
-    geometry_ranges: Optional[Dict[str, Any]] = None,
-) -> Dict[str, float]:
+    geometry_ranges: dict[str, Any] | None = None,
+) -> dict[str, float]:
     """Local copy of the nominal sampler (kept here to avoid OpenCV dependency).
 
     Generator 2D imports OpenCV at module import time; previews only need the sampler.
@@ -497,7 +498,7 @@ def _sample_nominal_geometry(
     }
     gr = geometry_ranges or {}
 
-    def _range(name: str) -> Tuple[float, float]:
+    def _range(name: str) -> tuple[float, float]:
         r = gr.get(name, defaults[name])
         return float(r[0]), float(r[1])
 
@@ -507,7 +508,7 @@ def _sample_nominal_geometry(
     component_length = rng.uniform(*_range("component_length"))
     component_width = rng.uniform(*_range("component_width"))
 
-    result: Dict[str, float] = {
+    result: dict[str, float] = {
         "pad_width": float(pad_width),
         "pad_height": float(pad_height),
         "pad_spacing": float(pad_spacing),
@@ -523,7 +524,7 @@ def _sample_nominal_geometry(
     return result
 
 
-def _get_rotation_jitter_range(cfg: Optional[Dict[str, Any]]) -> Tuple[float, float]:
+def _get_rotation_jitter_range(cfg: dict[str, Any] | None) -> tuple[float, float]:
     """Read augment.rotation_deg_range from config, fallback to [0, 0]."""
     augment_cfg = (cfg or {}).get("augment") or {}
     rr = augment_cfg.get("rotation_deg_range", [0.0, 0.0])
@@ -539,9 +540,9 @@ def _get_rotation_jitter_range(cfg: Optional[Dict[str, Any]]) -> Tuple[float, fl
 def _sample_preview_augment(
     rng: np.random.Generator,
     *,
-    rotation_jitter_range: Tuple[float, float],
+    rotation_jitter_range: tuple[float, float],
     enable_cardinal_rotation_90: bool = True,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Preview augment: keep image clean but randomize global orientation like dataset generation."""
     base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0])) if enable_cardinal_rotation_90 else 0.0
     rot_min, rot_max = rotation_jitter_range
@@ -560,9 +561,9 @@ def _sanitize_dir_name(s: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._@+-]+", "_", s).strip("_") or "profile"
 
 
-def _iter_profile_ids(profiles_dir: Path) -> List[str]:
+def _iter_profile_ids(profiles_dir: Path) -> list[str]:
     # Profile files are `<profile_id>.yaml` where profile_id contains '@'.
-    ids: List[str] = []
+    ids: list[str] = []
     for p in sorted(Path(profiles_dir).glob("*.yaml")):
         if p.name.startswith("."):
             continue
@@ -570,7 +571,7 @@ def _iter_profile_ids(profiles_dir: Path) -> List[str]:
     return ids
 
 
-def _profile_backends(profile: Dict[str, Any]) -> set[str]:
+def _profile_backends(profile: dict[str, Any]) -> set[str]:
     b = (profile.get("profile") or {}).get("supported_render_backends") or []
     out = set()
     for x in b:
@@ -580,10 +581,10 @@ def _profile_backends(profile: Dict[str, Any]) -> set[str]:
     return out
 
 
-def _discover_profiles(profiles_dir: Path, *, backend_mode: str) -> List[Tuple[str, Dict[str, Any], set[str]]]:
+def _discover_profiles(profiles_dir: Path, *, backend_mode: str) -> list[tuple[str, dict[str, Any], set[str]]]:
     """Discover profiles supporting 2D and/or 3D."""
     backend_mode = str(backend_mode or "auto")
-    out: List[Tuple[str, Dict[str, Any], set[str]]] = []
+    out: list[tuple[str, dict[str, Any], set[str]]] = []
     for pid in _iter_profile_ids(profiles_dir):
         try:
             prof = load_profile(pid, profiles_dir)
@@ -601,7 +602,7 @@ def _discover_profiles(profiles_dir: Path, *, backend_mode: str) -> List[Tuple[s
     return out
 
 
-def _parse_csv_list(s: Optional[str]) -> List[str]:
+def _parse_csv_list(s: str | None) -> list[str]:
     if not s:
         return []
     parts = []
@@ -612,13 +613,13 @@ def _parse_csv_list(s: Optional[str]) -> List[str]:
     return parts
 
 
-def _parse_selection(selection: str, n: int) -> List[int]:
+def _parse_selection(selection: str, n: int) -> list[int]:
     """Parse '1,2,4-6,all' into 0-based indices."""
     selection = (selection or "").strip().lower()
     if selection in {"a", "all", "*"}:
         return list(range(n))
 
-    idxs: List[int] = []
+    idxs: list[int] = []
     for part in selection.split(","):
         part = part.strip()
         if not part:
@@ -650,10 +651,10 @@ def _parse_selection(selection: str, n: int) -> List[int]:
     return final
 
 
-def _find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: str) -> List[Path]:
+def _find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: str) -> list[Path]:
     configs_dir = Path(configs_dir)
     backend = str(backend)
-    hits: List[Path] = []
+    hits: list[Path] = []
     for p in sorted(configs_dir.glob("*.yaml")):
         try:
             cfg = load_config(p)
@@ -668,19 +669,19 @@ def _find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: s
 
 
 def _auto_select_profiles_with_missing_previews(
-    discovered: List[Tuple[str, Dict[str, Any], set[str]]],
+    discovered: list[tuple[str, dict[str, Any], set[str]]],
     *,
     profiles_dir: Path,
     out_root: Path,
     backend_mode: str,
     states_override: str,
-) -> List[str]:
+) -> list[str]:
     """Return profile IDs that are new/incomplete in preview output.
 
     A profile is selected when at least one expected preview image is missing for
     the requested backend mode and defect states.
     """
-    selected: List[str] = []
+    selected: list[str] = []
     for pid, prof, backends in discovered:
         defect_types = _parse_csv_list(states_override) or list(prof.get("defect_set") or [])
         if not defect_types:
@@ -719,7 +720,7 @@ def _auto_select_profiles_with_missing_previews(
     return selected
 
 
-def _settings_from_config(cfg: Dict[str, Any]) -> RenderSettings:
+def _settings_from_config(cfg: dict[str, Any]) -> RenderSettings:
     validate_config(cfg)
     roi = cfg["roi"]
     blender = (cfg.get("render") or {}).get("blender") or {}
@@ -735,12 +736,12 @@ def _settings_from_config(cfg: Dict[str, Any]) -> RenderSettings:
 
 def _load_preview_config_for_backend(
     *,
-    forced_cfg: Optional[Dict[str, Any]],
+    forced_cfg: dict[str, Any] | None,
     sim_root: Path,
     configs_dir: Path,
     profile_id: str,
     backend: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if forced_cfg is not None:
         cfg = forced_cfg
         validate_config(cfg)
@@ -762,7 +763,7 @@ def _load_preview_config_for_backend(
 def _apply_3d_settings_overrides(
     settings: RenderSettings,
     *,
-    roi_override: Optional[Tuple[int, int, float]],
+    roi_override: tuple[int, int, float] | None,
     blender_override: str,
     samples_override: int,
     device_override: str,
@@ -807,13 +808,13 @@ def _apply_3d_settings_overrides(
     return settings
 
 
-def _write_index_html(out_root: Path, previews: List[PreviewRec]) -> None:
+def _write_index_html(out_root: Path, previews: list[PreviewRec]) -> None:
     """previews: list of (profile_id, backend, defect, rel_image_path)."""
     out_root = Path(out_root)
     index_path = out_root / "index.html"
 
     # Group by profile id
-    by_profile: Dict[str, List[Tuple[str, str, str]]] = {}
+    by_profile: dict[str, list[tuple[str, str, str]]] = {}
     for pid, backend, defect, rel_path in previews:
         by_profile.setdefault(pid, []).append((backend, defect, rel_path))
 
@@ -867,10 +868,10 @@ def _write_index_html(out_root: Path, previews: List[PreviewRec]) -> None:
     index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _collect_existing_previews(out_root: Path) -> List[PreviewRec]:
+def _collect_existing_previews(out_root: Path) -> list[PreviewRec]:
     """Scan existing preview PNG files and return preview records."""
     out_root = Path(out_root)
-    recs: List[PreviewRec] = []
+    recs: list[PreviewRec] = []
     for img_path in sorted((out_root / "previews").glob("*/*/*.png")):
         try:
             rel = img_path.relative_to(out_root)
@@ -889,14 +890,14 @@ def _collect_existing_previews(out_root: Path) -> List[PreviewRec]:
 
 def _open_tk_viewer(
     out_root: Path,
-    previews: List[PreviewRec],
+    previews: list[PreviewRec],
     *,
-    sim_root: Optional[Path] = None,
-    profiles_dir: Optional[Path] = None,
-    configs_dir: Optional[Path] = None,
-    all_profiles: Optional[List[Tuple[str, Dict[str, Any], set[str]]]] = None,
-    render_settings: Optional[Dict[str, Any]] = None,
-    selected_profile_ids: Optional[List[str]] = None,
+    sim_root: Path | None = None,
+    profiles_dir: Path | None = None,
+    configs_dir: Path | None = None,
+    all_profiles: list[tuple[str, dict[str, Any], set[str]]] | None = None,
+    render_settings: dict[str, Any] | None = None,
+    selected_profile_ids: list[str] | None = None,
 ) -> None:
     """Open an interactive Tkinter viewer for rendered previews with rerun capabilities."""
     # Import lazily so the script can still run on systems without Tk installed.
@@ -927,7 +928,7 @@ def _open_tk_viewer(
 
     def _load_items():
         """Load image items from current preview list."""
-        items: List[Tuple[str, str, str, Path]] = []
+        items: list[tuple[str, str, str, Path]] = []
         for pid, backend, defect, rel in state.previews:
             if state.backend_filter != "both" and backend != state.backend_filter:
                 continue
@@ -959,7 +960,7 @@ def _open_tk_viewer(
         controls = ttk.Frame(top)
         controls.pack(fill="x", pady=(0, 10))
 
-        def _profiles_for_backend(mode: str) -> List[str]:
+        def _profiles_for_backend(mode: str) -> list[str]:
             mode = str(mode or "both")
             if mode == "both":
                 return [pid for pid, _prof, _b in all_profiles]
@@ -1020,7 +1021,7 @@ def _open_tk_viewer(
 
         shared_profiles, shared_active_profile, shared_current_filter = _load_shared_filter_profiles(settings_file)
         current_image_filters = dict(shared_current_filter)
-        extra_filter_values: Dict[str, Any] = {
+        extra_filter_values: dict[str, Any] = {
             k: v for k, v in current_image_filters.items()
             if isinstance(k, str) and is_filter_popup_extra_key(k)
         }
@@ -1065,7 +1066,7 @@ def _open_tk_viewer(
         filter_enable_sharpen_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_sharpen", False)))
         filter_sharpen_strength_var = tk.DoubleVar(value=float(current_image_filters.get("sharpen_strength", 1.0)))
 
-        def _current_filters_from_vars() -> Dict[str, Any]:
+        def _current_filters_from_vars() -> dict[str, Any]:
             base = _normalize_filter_settings(
                 {
                     "cardinal_rotation_90": bool(filter_cardinal_rotation_90_var.get()),
@@ -1112,7 +1113,7 @@ def _open_tk_viewer(
             base.update(extra_filter_values)
             return base
 
-        def _apply_filters_to_vars(d: Dict[str, Any]) -> None:
+        def _apply_filters_to_vars(d: dict[str, Any]) -> None:
             x = _normalize_filter_settings(d)
             extra_filter_values.clear()
             for k, v in d.items():
@@ -1158,7 +1159,7 @@ def _open_tk_viewer(
             filter_enable_sharpen_var.set(bool(x["enable_sharpen"]))
             filter_sharpen_strength_var.set(float(x["sharpen_strength"]))
 
-        def _persist_filters(active_name: Optional[str] = None) -> None:
+        def _persist_filters(active_name: str | None = None) -> None:
             nonlocal shared_active_profile
             cur = _current_filters_from_vars()
             if active_name:
@@ -1173,7 +1174,7 @@ def _open_tk_viewer(
 
         def _open_filter_popup() -> None:
             """Open shared image filter popup."""
-            def on_close(updated_profiles: Dict[str, Dict[str, Any]], updated_active: str) -> None:
+            def on_close(updated_profiles: dict[str, dict[str, Any]], updated_active: str) -> None:
                 nonlocal shared_active_profile, shared_profiles
                 shared_profiles = updated_profiles
                 shared_active_profile = updated_active
@@ -1193,7 +1194,7 @@ def _open_tk_viewer(
                 else:
                     messagebox.showinfo(title, message, parent=root)
 
-            def ask_string(title: str, prompt: str, initial: str = "") -> Optional[str]:
+            def ask_string(title: str, prompt: str, initial: str = "") -> str | None:
                 from tkinter import simpledialog
                 return simpledialog.askstring(title, prompt, initialvalue=initial, parent=root)
 
@@ -1282,7 +1283,7 @@ def _open_tk_viewer(
                         raise RuntimeError(f"Profile {selected_pid!r} does not support backend={mode!r}")
 
                     run_id = int(time.time() * 1000000) if use_variable_seeds else None
-                    all_new_previews: List[PreviewRec] = []
+                    all_new_previews: list[PreviewRec] = []
 
                     for backend in backends_to_render:
                         cfg = _load_preview_config_for_backend(
@@ -1447,7 +1448,7 @@ def _open_tk_viewer(
                     roi_override = render_settings.get("roi_override")
 
                     mode = backend_var.get()
-                    all_new_previews: List[PreviewRec] = []
+                    all_new_previews: list[PreviewRec] = []
 
                     for idx, (pid, _prof_cached, _backends_cached) in enumerate(all_profiles, 1):
                         # Always reload profile from disk so edits are picked up without restart.
@@ -1645,8 +1646,8 @@ def _open_tk_viewer(
     pad = 10
     cols = 4
 
-    photo_refs: List[Any] = []
-    zoom_photo_refs: List[Any] = []
+    photo_refs: list[Any] = []
+    zoom_photo_refs: list[Any] = []
 
     def _open_zoom_popup(path: Path, title: str) -> None:
         try:
@@ -1738,17 +1739,17 @@ def _open_tk_viewer(
 def _build_preview_jobs(
     *,
     profile_id: str,
-    profile: Dict[str, Any],
+    profile: dict[str, Any],
     settings: RenderSettings,
     out_root: Path,
     seed_base: int,
     defect_types: Sequence[str],
-    run_id: Optional[int] = None,
+    run_id: int | None = None,
     backend: str = BACKEND_3D,
-    rotation_jitter_range: Tuple[float, float] = (0.0, 0.0),
+    rotation_jitter_range: tuple[float, float] = (0.0, 0.0),
     enable_cardinal_rotation_90: bool = True,
-    image_filters: Optional[Dict[str, Any]] = None,
-) -> Tuple[List[Dict[str, Any]], List[PreviewRec]]:
+    image_filters: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[PreviewRec]]:
     """Return (jobs, preview_records). preview_records is for index.html.
 
     If run_id is provided, it will be included in seed generation to create
@@ -1766,8 +1767,8 @@ def _build_preview_jobs(
         "mm_per_px": float(settings.mm_per_px),
     }
 
-    jobs: List[Dict[str, Any]] = []
-    previews: List[PreviewRec] = []
+    jobs: list[dict[str, Any]] = []
+    previews: list[PreviewRec] = []
 
     profile_dir = _sanitize_dir_name(profile_id)
     for i, defect_type in enumerate(defect_types):
@@ -1857,15 +1858,15 @@ def main() -> None:
         raise SystemExit(f"No profiles found under: {profiles_dir}")
 
     # Load settings: either one config for all, or auto match per profile/backend.
-    forced_cfg: Optional[Dict[str, Any]] = None
-    forced_backend: Optional[str] = None
+    forced_cfg: dict[str, Any] | None = None
+    forced_backend: str | None = None
     if args.config:
         forced_cfg = load_config(sim_root / args.config)
         validate_config(forced_cfg)
         forced_backend = str((forced_cfg.get("render") or {}).get("backend", ""))
 
     # Optional ROI override parsing
-    roi_override: Optional[Tuple[int, int, float]] = None
+    roi_override: tuple[int, int, float] | None = None
     if args.roi:
         m = re.match(r"^\\s*(\\d+)x(\\d+)@([0-9]*\\.?[0-9]+)\\s*$", str(args.roi))
         if not m:
@@ -1911,7 +1912,7 @@ def main() -> None:
         raise SystemExit(f"No profiles match backend={backend_mode!r} under: {profiles_dir}")
 
     # Determine selected profile ids
-    selected_ids: List[str] = []
+    selected_ids: list[str] = []
     if args.all:
         selected_ids = [pid for pid, _prof, _b in discovered]
     else:
@@ -1981,19 +1982,19 @@ def main() -> None:
             return
         raise SystemExit("No profiles selected and no new/incomplete profiles found.")
 
-    pid_to_entry: Dict[str, Tuple[str, Dict[str, Any], set[str]]] = {pid: (pid, prof, b) for pid, prof, b in discovered_all}
+    pid_to_entry: dict[str, tuple[str, dict[str, Any], set[str]]] = {pid: (pid, prof, b) for pid, prof, b in discovered_all}
     missing = [pid for pid in selected_ids if pid not in pid_to_entry]
     if missing:
         raise SystemExit(f"Unknown profiles: {missing}")
 
-    selected_entries: List[Tuple[str, Dict[str, Any], set[str]]] = []
+    selected_entries: list[tuple[str, dict[str, Any], set[str]]] = []
     for pid in selected_ids:
         _pid, prof, b = pid_to_entry[pid]
         selected_entries.append((pid, prof, b))
 
-    previews_for_index: List[PreviewRec] = []
-    all_jobs: List[Dict[str, Any]] = []
-    per_profile_settings: List[RenderSettings] = []
+    previews_for_index: list[PreviewRec] = []
+    all_jobs: list[dict[str, Any]] = []
+    per_profile_settings: list[RenderSettings] = []
 
     # Translate legacy flags into --view behavior if explicitly set.
     if args.open_browser is True:

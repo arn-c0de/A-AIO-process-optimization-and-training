@@ -6,18 +6,19 @@ import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any
+from collections.abc import Callable
 
 from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
 
 
-StatusCallback = Callable[[str, Optional[Path]], None]
+StatusCallback = Callable[[str, Path | None], None]
 
 
 @dataclass(frozen=True)
 class RenderRequest:
-    profile_data: Dict[str, Any]
-    run_data: Dict[str, Any]
+    profile_data: dict[str, Any]
+    run_data: dict[str, Any]
 
 
 class BlenderLivePreviewWorker:
@@ -29,7 +30,7 @@ class BlenderLivePreviewWorker:
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
         self._running = True
-        self._pending: Optional[RenderRequest] = None
+        self._pending: RenderRequest | None = None
         self._thread = threading.Thread(target=self._loop, name="blender-live-preview", daemon=True)
         self._thread.start()
 
@@ -142,7 +143,7 @@ class BlenderLivePreviewWorker:
         return img_path
 
     @staticmethod
-    def _nominal_from_ranges(geometry_ranges: Dict[str, Any]) -> Dict[str, float]:
+    def _nominal_from_ranges(geometry_ranges: dict[str, Any]) -> dict[str, float]:
         def mid(name: str, fallback: float) -> float:
             raw = geometry_ranges.get(name, [fallback, fallback])
             if isinstance(raw, list) and len(raw) == 2:

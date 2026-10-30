@@ -16,7 +16,6 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
 
 
 BUNDLE_META_NAME = "bundle.json"
@@ -71,10 +70,10 @@ class BundleMeta:
     bundle_version: int
     created_at: str
     updated_at: str
-    checkpoints: Dict[str, str]  # profile_id -> filename
+    checkpoints: dict[str, str]  # profile_id -> filename
 
 
-def read_bundle_meta(bundle_dir: Path) -> Optional[BundleMeta]:
+def read_bundle_meta(bundle_dir: Path) -> BundleMeta | None:
     """Read and parse ``bundle.json`` from *bundle_dir*.
 
     Args:
@@ -106,7 +105,7 @@ def read_bundle_meta(bundle_dir: Path) -> Optional[BundleMeta]:
         return None
 
 
-def _checkpoint_profile_id(ckpt_path: Path) -> Optional[str]:
+def _checkpoint_profile_id(ckpt_path: Path) -> str | None:
     """Best-effort read of ``component_profile.profile_id`` from a checkpoint."""
     try:
         import torch
@@ -118,13 +117,13 @@ def _checkpoint_profile_id(ckpt_path: Path) -> Optional[str]:
         return None
 
 
-def scan_bundle_checkpoints(bundle_dir: Path) -> Dict[str, str]:
+def scan_bundle_checkpoints(bundle_dir: Path) -> dict[str, str]:
     """Rebuild a profile_id -> filename index from the ``*.pt`` files in *bundle_dir*.
 
     ``*_last.pt`` files are skipped. The profile ID is read from the checkpoint
     metadata when possible, otherwise the filename stem is used.
     """
-    checkpoints: Dict[str, str] = {}
+    checkpoints: dict[str, str] = {}
     for pt in sorted(Path(bundle_dir).glob("*.pt")):
         if pt.stem.endswith("_last"):
             continue
@@ -133,7 +132,7 @@ def scan_bundle_checkpoints(bundle_dir: Path) -> Dict[str, str]:
     return checkpoints
 
 
-def _quarantine_corrupt_meta(meta_path: Path) -> Optional[Path]:
+def _quarantine_corrupt_meta(meta_path: Path) -> Path | None:
     """Move an unreadable ``bundle.json`` aside so it is not silently overwritten."""
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     backup = meta_path.with_name(f"{meta_path.name}.corrupt-{stamp}")
@@ -160,7 +159,7 @@ def upsert_bundle_meta(bundle_dir: Path, profile_id: str, ckpt_path: Path) -> No
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     meta_path = bundle_dir / BUNDLE_META_NAME
     meta = read_bundle_meta(bundle_dir)
-    checkpoints: Dict[str, str]
+    checkpoints: dict[str, str]
     if meta is None and meta_path.exists():
         # Unparseable index: keep a backup and rebuild from the checkpoints on disk
         # instead of rewriting the index with only the current profile.

@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 _LOG = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class FeedbackManager:
         self,
         sample_id: str,
         verdict: str,
-        corrected_class: Optional[str] = None,
+        corrected_class: str | None = None,
         note: str = "",
     ) -> dict[str, Any]:
         """Append one feedback entry to feedback.jsonl."""
@@ -84,11 +84,11 @@ class FeedbackManager:
         self._latest_by_sample[sample_id] = entry
         return entry
 
-    def latest_feedback_for(self, sample_id: str) -> Optional[dict[str, Any]]:
+    def latest_feedback_for(self, sample_id: str) -> dict[str, Any] | None:
         """Return latest feedback entry for a sample if available."""
         return self._latest_by_sample.get(sample_id)
 
-    def latest_feedback_by_sample(self) -> Dict[str, dict[str, Any]]:
+    def latest_feedback_by_sample(self) -> dict[str, dict[str, Any]]:
         """Return copy of latest-per-sample map."""
         return dict(self._latest_by_sample)
 

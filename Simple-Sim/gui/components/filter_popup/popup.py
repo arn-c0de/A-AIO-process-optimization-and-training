@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any
+from collections.abc import Callable
 
 from simple_sim.generators.filter_settings import (
     clean_filter_values_for_popup,
@@ -58,16 +59,16 @@ class FilterPopup:
     def __init__(
         self,
         parent: tk.Widget,
-        profiles: Dict[str, Dict[str, Any]],
+        profiles: dict[str, dict[str, Any]],
         active_profile: str,
-        on_close: Callable[[Dict[str, Dict[str, Any]], str], None],
-        get_current_values: Callable[[], Dict[str, Any]],
-        set_current_values: Callable[[Dict[str, Any]], None],
+        on_close: Callable[[dict[str, dict[str, Any]], str], None],
+        get_current_values: Callable[[], dict[str, Any]],
+        set_current_values: Callable[[dict[str, Any]], None],
         float_or_default: Callable[[str, float], float],
         show_messagebox: Callable[[str, str, str], None],
-        ask_string: Callable[[str, str, str], Optional[str]],
+        ask_string: Callable[[str, str, str], str | None],
         ask_yes_no: Callable[[str, str], bool],
-        sim_root: Optional[str] = None,
+        sim_root: str | None = None,
     ):
         self.profiles = profiles
         self.active_profile = active_profile
@@ -78,10 +79,10 @@ class FilterPopup:
         self.show_messagebox = show_messagebox
         self.ask_string = ask_string
         self.ask_yes_no = ask_yes_no
-        self._sim_root: Optional[str] = str(sim_root) if sim_root is not None else None
+        self._sim_root: str | None = str(sim_root) if sim_root is not None else None
 
-        self._preview_profiles_2d: Set[str] = set()
-        self._preview_profiles_3d: Set[str] = set()
+        self._preview_profiles_2d: set[str] = set()
+        self._preview_profiles_3d: set[str] = set()
         self._preview_is_rendering: bool = False
         self._preview_photo: Any = None
 
@@ -138,7 +139,7 @@ class FilterPopup:
     def _build_filter_controls(self, parent: ttk.Frame) -> None:
         build_filter_controls(self, parent)
 
-    def _build_realism_controls(self, parent: ttk.Frame, current: Dict[str, Any]) -> None:
+    def _build_realism_controls(self, parent: ttk.Frame, current: dict[str, Any]) -> None:
         build_realism_controls(self, parent, current)
 
     def _set_realism_defaults(self) -> None:
@@ -192,7 +193,7 @@ class FilterPopup:
     def _populate_left_filter_profiles(self) -> None:
         populate_left_filter_profiles(self)
 
-    def _on_left_preview_profile_selected(self, _evt: Optional[tk.Event] = None) -> None:
+    def _on_left_preview_profile_selected(self, _evt: tk.Event | None = None) -> None:
         on_left_preview_profile_selected(self, _evt)
 
     def _render_left_preview(self) -> None:
@@ -201,19 +202,19 @@ class FilterPopup:
     def _populate_preview_profiles(self) -> None:
         populate_preview_profiles(self)
 
-    def _on_preview_profile_selected(self, _evt: Optional[tk.Event] = None) -> None:
+    def _on_preview_profile_selected(self, _evt: tk.Event | None = None) -> None:
         on_preview_profile_selected(self, _evt)
 
-    def _get_preview_filter_values(self) -> Dict[str, Any]:
+    def _get_preview_filter_values(self) -> dict[str, Any]:
         return get_preview_filter_values(self)
 
     def _render_preview(self) -> None:
         render_preview(self)
 
-    def _do_render_2d_preview(self, profile_id: str, filter_vals: Dict[str, Any]) -> None:
+    def _do_render_2d_preview(self, profile_id: str, filter_vals: dict[str, Any]) -> None:
         do_render_2d_preview(self, profile_id, filter_vals)
 
-    def _do_render_3d_preview(self, profile_id: str, filter_vals: Dict[str, Any]) -> None:
+    def _do_render_3d_preview(self, profile_id: str, filter_vals: dict[str, Any]) -> None:
         do_render_3d_preview(self, profile_id, filter_vals)
 
     def _show_preview_image(self, img_bgr: Any, profile_id: str = "", backend: str = "2D") -> None:
@@ -241,14 +242,14 @@ class FilterPopup:
         return "break"
 
     # Custom/Realism tab helpers
-    def _add_filter_sections(self, parent: ttk.Frame, current: Dict[str, Any]) -> None:
+    def _add_filter_sections(self, parent: ttk.Frame, current: dict[str, Any]) -> None:
         add_filter_sections(self, parent, current)
 
     # Controller delegates
-    def _refresh_profile_list(self, select_name: Optional[str] = None) -> None:
+    def _refresh_profile_list(self, select_name: str | None = None) -> None:
         refresh_profile_list(self, select_name)
 
-    def _selected_profile_name(self) -> Optional[str]:
+    def _selected_profile_name(self) -> str | None:
         return selected_profile_name(self)
 
     def _persist_active_profile(self) -> None:
@@ -257,10 +258,10 @@ class FilterPopup:
     def _sync_to_external_vars(self) -> None:
         sync_to_external_vars(self)
 
-    def _update_internal_vars(self, data: Dict[str, Any]) -> None:
+    def _update_internal_vars(self, data: dict[str, Any]) -> None:
         update_internal_vars(self, data)
 
-    def _load_profile_from_selection(self, _evt: Optional[tk.Event] = None) -> None:
+    def _load_profile_from_selection(self, _evt: tk.Event | None = None) -> None:
         load_profile_from_selection(self, _evt)
 
     def _new_profile(self) -> None:
@@ -284,10 +285,10 @@ class FilterPopup:
     def _set_clean_filters(self) -> None:
         set_clean_filters(self)
 
-    def _get_default_values(self) -> Dict[str, Any]:
+    def _get_default_values(self) -> dict[str, Any]:
         return default_filter_values_for_popup()
 
-    def _get_clean_values(self) -> Dict[str, Any]:
+    def _get_clean_values(self) -> dict[str, Any]:
         return clean_filter_values_for_popup()
 
     def _update_rotation_row_state(self) -> None:
@@ -299,16 +300,16 @@ class FilterPopup:
 
 def open_filter_popup(
     parent: tk.Widget,
-    profiles: Dict[str, Dict[str, Any]],
+    profiles: dict[str, dict[str, Any]],
     active_profile: str,
-    on_close: Callable[[Dict[str, Dict[str, Any]], str], None],
-    get_current_values: Callable[[], Dict[str, Any]],
-    set_current_values: Callable[[Dict[str, Any]], None],
+    on_close: Callable[[dict[str, dict[str, Any]], str], None],
+    get_current_values: Callable[[], dict[str, Any]],
+    set_current_values: Callable[[dict[str, Any]], None],
     float_or_default: Callable[[str, float], float],
     show_messagebox: Callable[[str, str, str], None],
-    ask_string: Callable[[str, str, str], Optional[str]],
+    ask_string: Callable[[str, str, str], str | None],
     ask_yes_no: Callable[[str, str], bool],
-    sim_root: Optional[str] = None,
+    sim_root: str | None = None,
 ) -> None:
     FilterPopup(
         parent=parent,

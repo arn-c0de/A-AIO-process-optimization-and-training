@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -46,9 +46,9 @@ class RunInfo:
     dataset_dir: Path
     split: str
     total_samples: int
-    split_sizes: Dict[str, int]
-    class_distribution: Dict[str, int]
-    class_list: List[str]
+    split_sizes: dict[str, int]
+    class_distribution: dict[str, int]
+    class_list: list[str]
 
 
 def dataset_info(data_dir: Path) -> RunInfo:
@@ -56,7 +56,7 @@ def dataset_info(data_dir: Path) -> RunInfo:
     meta_rows = read_jsonl(data_dir / "meta.jsonl", MetaRow)
     label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
 
-    split_sizes: Dict[str, int] = {}
+    split_sizes: dict[str, int] = {}
     for s in ["train", "val", "test"]:
         p = data_dir / "splits" / f"{s}.txt"
         if p.exists():
@@ -65,7 +65,7 @@ def dataset_info(data_dir: Path) -> RunInfo:
         else:
             split_sizes[s] = 0
 
-    class_dist: Dict[str, int] = {}
+    class_dist: dict[str, int] = {}
     for r in label_rows:
         class_dist[r.class_name] = class_dist.get(r.class_name, 0) + 1
 
@@ -80,7 +80,7 @@ def dataset_info(data_dir: Path) -> RunInfo:
     )
 
 
-def build_dataset(data_dir: Path, split: str, class_names: List[str], return_id: bool = True):
+def build_dataset(data_dir: Path, split: str, class_names: list[str], return_id: bool = True):
     if split in ("train", "val", "test"):
         return ROIDataset(data_dir, split, class_names, return_id=return_id)
     if split == "all":
@@ -110,8 +110,8 @@ def _unique_path(p: Path) -> Path:
     return parent / f"{stem}_{time.time_ns()}{suf}"
 
 
-def load_previous_reports(search_dirs: List[Path], model_stem: str) -> List[Dict[str, Any]]:
-    reports: List[Dict[str, Any]] = []
+def load_previous_reports(search_dirs: list[Path], model_stem: str) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
     for d in search_dirs:
         if not d.exists():
             continue
@@ -130,9 +130,9 @@ def load_previous_reports(search_dirs: List[Path], model_stem: str) -> List[Dict
     return reports
 
 
-def load_all_reports(search_dirs: List[Path]) -> List[Dict[str, Any]]:
+def load_all_reports(search_dirs: list[Path]) -> list[dict[str, Any]]:
     """Load any eval/batch reports from the given directories."""
-    reports: List[Dict[str, Any]] = []
+    reports: list[dict[str, Any]] = []
     seen_paths = set()
     for d in search_dirs:
         if not d.exists():
@@ -156,7 +156,7 @@ def load_all_reports(search_dirs: List[Path]) -> List[Dict[str, Any]]:
     return reports
 
 
-def metric_value(report: Dict[str, Any], key: str, critical_class: Optional[str]) -> Optional[float]:
+def metric_value(report: dict[str, Any], key: str, critical_class: str | None) -> float | None:
     """Extract a comparable scalar value from a report."""
     try:
         metrics = report["metrics"]
@@ -188,7 +188,7 @@ def parse_iso_ts(s: str) -> float:
         return 0.0
 
 
-def _basename(p: Optional[str]) -> str:
+def _basename(p: str | None) -> str:
     if not p:
         return "-"
     try:
@@ -197,7 +197,7 @@ def _basename(p: Optional[str]) -> str:
         return str(p)
 
 
-def best_report(reports: List[Dict[str, Any]], key: str) -> Optional[Dict[str, Any]]:
+def best_report(reports: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
     best = None
     best_v = None
     for r in reports:
@@ -244,7 +244,7 @@ def main() -> None:
 
     # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
     effective_model_path = requested_model_path
-    dataset_profile_id: Optional[str] = None
+    dataset_profile_id: str | None = None
     if requested_model_path.exists() and requested_model_path.is_dir():
         manifest_path = data_dir / "dataset_manifest.json"
         if not manifest_path.exists():
@@ -283,7 +283,7 @@ def main() -> None:
 
     # --- GT profile mapping (from v2 labels, if available) ---
     # We build this regardless of --profile-model so reports/preds can still carry GT profile metadata.
-    gt_profile_map: Dict[str, str] = {}  # sample id -> GT profile_id
+    gt_profile_map: dict[str, str] = {}  # sample id -> GT profile_id
     try:
         label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
         for lr in label_rows:
@@ -294,9 +294,9 @@ def main() -> None:
         gt_profile_map = {}
 
     # --- Profile classifier (optional two-stage) ---
-    profile_model_path: Optional[Path] = None
+    profile_model_path: Path | None = None
     profile_model = None
-    profile_class_names: List[str] = []
+    profile_class_names: list[str] = []
     if args.profile_model:
         profile_model_path = Path(args.profile_model)
         if not profile_model_path.exists():
@@ -319,13 +319,13 @@ def main() -> None:
         msg = str(exc).lower()
         return ("out of memory" in msg) and ("cuda" in msg or "cudnn" in msg)
 
-    def _run_predict_once(curr_device: torch.device, curr_model: torch.nn.Module, curr_profile_model: Optional[torch.nn.Module], curr_batch_size: int):
+    def _run_predict_once(curr_device: torch.device, curr_model: torch.nn.Module, curr_profile_model: torch.nn.Module | None, curr_batch_size: int):
         loader = DataLoader(ds, batch_size=curr_batch_size, shuffle=False, num_workers=num_workers)
-        y_true_local: List[int] = []
-        y_pred_local: List[int] = []
-        profile_gt_local: List[str] = []
-        profile_pred_local: List[str] = []
-        preds_rows_local: List[Dict[str, Any]] = []
+        y_true_local: list[int] = []
+        y_pred_local: list[int] = []
+        profile_gt_local: list[str] = []
+        profile_pred_local: list[str] = []
+        preds_rows_local: list[dict[str, Any]] = []
 
         t0_local = time.perf_counter()
         ema_ips_local = None
@@ -474,7 +474,7 @@ def main() -> None:
     print(format_metrics(metrics, class_names))
 
     # Profile metrics (when profile preds were available and GT labels were available)
-    profile_metrics: Optional[Dict[str, Any]] = None
+    profile_metrics: dict[str, Any] | None = None
     if profile_gt_labels:
         # Build index arrays for profile metrics
         all_profile_names = sorted(set(profile_gt_labels) | set(profile_pred_labels))

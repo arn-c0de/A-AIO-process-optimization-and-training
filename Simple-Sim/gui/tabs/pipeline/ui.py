@@ -4,7 +4,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Callable, Tuple
+from typing import Any
+from collections.abc import Callable
 
 from PIL import Image, ImageTk
 import cv2
@@ -141,7 +142,7 @@ class PipelineUI:
         self.lbl_profile_compat: ttk.Label
         self.var_run_progress: tk.StringVar = tk.StringVar(value="run: -")
         
-        self._thumb_refs: List[ImageTk.PhotoImage] = []
+        self._thumb_refs: list[ImageTk.PhotoImage] = []
 
         # Precise mode
         self.btn_precise_settings: ttk.Button
@@ -416,12 +417,12 @@ class PipelineUI:
         self.btn_stop.configure(state="normal" if running else "disabled")
         self.btn_filters.configure(state="disabled" if running else "normal")
 
-    def update_stats_bar(self, cpu_pct: Optional[float], ram_info: Optional[Tuple[float, int, int]], gpu_pct: Optional[float]):
+    def update_stats_bar(self, cpu_pct: float | None, ram_info: tuple[float, int, int] | None, gpu_pct: float | None):
         return
 
     fmt_bytes = staticmethod(fmt_bytes)
 
-    def refresh_thumbnails(self, recent_imgs: List[str], dataset_dir: Optional[Path], label_dict: Dict[str, str], image_to_sample: Dict[str, str], meta_by_sample: Dict[str, MetaRow], meta_by_image_rel: Dict[str, MetaRow], draw_defect_overlay_func: Callable[..., Any]) -> None:
+    def refresh_thumbnails(self, recent_imgs: list[str], dataset_dir: Path | None, label_dict: dict[str, str], image_to_sample: dict[str, str], meta_by_sample: dict[str, MetaRow], meta_by_image_rel: dict[str, MetaRow], draw_defect_overlay_func: Callable[..., Any]) -> None:
         self._thumb_refs.clear()
         for i, lbl in enumerate(self.img_labels):
             if i >= len(recent_imgs):
@@ -463,7 +464,7 @@ class PipelineUI:
         self.var_ds_samples.set(text)
         self.lbl_ds_samples.configure(foreground=color)
 
-    def set_profile_model_combo_values(self, values: List[str]) -> None:
+    def set_profile_model_combo_values(self, values: list[str]) -> None:
         self.combo_profile_model["values"] = values
 
     def set_profile_model_combo_state(self, state: str) -> None:
@@ -474,10 +475,10 @@ class PipelineUI:
         self.btn_profiles_multi_pick.configure(state="normal" if enabled else "disabled")
         self.entry_profiles_multi.configure(state="normal" if enabled else "disabled")
 
-    def set_profile_combo_values(self, values: List[str]) -> None:
+    def set_profile_combo_values(self, values: list[str]) -> None:
         self.profile_combo["values"] = values
 
-    def set_model_combo_values(self, values: List[str]) -> None:
+    def set_model_combo_values(self, values: list[str]) -> None:
         self.model_combo["values"] = values
 
     def show_messagebox(self, type: str, title: str, message: str) -> None:
@@ -494,16 +495,16 @@ class PipelineUI:
     def ask_yes_no(self, title: str, message: str) -> bool:
         return messagebox.askyesno(title, message)
 
-    def ask_string(self, title: str, prompt: str, initialvalue: str = "") -> Optional[str]:
+    def ask_string(self, title: str, prompt: str, initialvalue: str = "") -> str | None:
         return simpledialog.askstring(title, prompt, initialvalue=initialvalue, parent=self.frame)
 
-    def open_file_dialog(self, title: str, filetypes: List[Tuple[str, str]], initialdir: str) -> Optional[str]:
+    def open_file_dialog(self, title: str, filetypes: list[tuple[str, str]], initialdir: str) -> str | None:
         return filedialog.askopenfilename(title=title, filetypes=filetypes, initialdir=initialdir)
 
-    def open_dir_dialog(self, title: str, initialdir: str) -> Optional[str]:
+    def open_dir_dialog(self, title: str, initialdir: str) -> str | None:
         return filedialog.askdirectory(title=title, initialdir=initialdir)
     
-    def set_dataset_combo_values(self, values: List[str]) -> None:
+    def set_dataset_combo_values(self, values: list[str]) -> None:
         self.dataset_combo["values"] = values
 
     def toggle_dataset_multi_widgets(self, enabled: bool, tooltip_text_func: Callable[[], str]) -> None:

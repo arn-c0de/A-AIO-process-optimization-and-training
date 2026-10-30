@@ -15,7 +15,7 @@ import signal
 import subprocess
 import threading
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Union
+from collections.abc import Callable, Sequence
 
 
 def _is_group_leader(proc: subprocess.Popen) -> bool:
@@ -43,7 +43,7 @@ def _signal_process(proc: subprocess.Popen, sig: int) -> None:
         pass
 
 
-def terminate_process(proc: Optional[subprocess.Popen], *, kill_after: Optional[float] = 2.0) -> None:
+def terminate_process(proc: subprocess.Popen | None, *, kill_after: float | None = 2.0) -> None:
     """Send SIGTERM to ``proc`` (its whole process group if it leads one).
 
     Non-blocking: when ``kill_after`` is set, a timer escalates to SIGKILL if
@@ -78,14 +78,14 @@ def terminate_process(proc: Optional[subprocess.Popen], *, kill_after: Optional[
 def run_streaming(
     cmd: Sequence[str],
     *,
-    cwd: Union[str, Path],
-    log_q: "queue.Queue[str]",
-    stop_evt: Optional[threading.Event] = None,
-    env: Optional[Dict[str, str]] = None,
-    on_line: Optional[Callable[[str], None]] = None,
-    on_start: Optional[Callable[[subprocess.Popen], None]] = None,
+    cwd: str | Path,
+    log_q: queue.Queue[str],
+    stop_evt: threading.Event | None = None,
+    env: dict[str, str] | None = None,
+    on_line: Callable[[str], None] | None = None,
+    on_start: Callable[[subprocess.Popen], None] | None = None,
     start_new_session: bool = True,
-) -> Optional[int]:
+) -> int | None:
     """Run ``cmd`` and stream its combined stdout/stderr lines into ``log_q``.
 
     - ``on_start(proc)`` is called right after the process starts (callers use
@@ -142,4 +142,4 @@ def _abort(proc: subprocess.Popen) -> None:
     except Exception:
         pass
 
-__all__: List[str] = ["run_streaming", "terminate_process"]
+__all__: list[str] = ["run_streaming", "terminate_process"]

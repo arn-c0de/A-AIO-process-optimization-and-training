@@ -3,7 +3,6 @@
 from __future__ import annotations
 from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Optional
 import threading
 
 from gui.tabs.core.base import BaseTab
@@ -18,7 +17,7 @@ class ValidationTab(BaseTab):
         super().__init__(parent, sim_root, state)
         self.ui = ValidationUI(self, self.frame)
         self.logic = ValidationLogic(sim_root)
-        self.validation_results: Optional[dict] = None
+        self.validation_results: dict | None = None
         self._dataset_by_label: dict[str, Path] = {}
 
     def build_ui(self) -> None:

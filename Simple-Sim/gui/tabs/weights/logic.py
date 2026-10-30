@@ -11,7 +11,7 @@ import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from gui.utils.dataset_catalog import dataset_display_name, sorted_dataset_dirs
 from gui.utils.paths import model_root
@@ -25,17 +25,17 @@ class WeightsLogic:
     def __init__(self, sim_root: Path, log_q: queue.Queue[str]) -> None:
         self.sim_root = sim_root
         self.log_q = log_q
-        self.proc: Optional[subprocess.Popen[str]] = None
+        self.proc: subprocess.Popen[str] | None = None
         self.stop_evt = threading.Event()
 
     def _model_root(self) -> Path:
         return model_root(self.sim_root)
 
-    def get_models(self) -> List[Path]:
+    def get_models(self) -> list[Path]:
         root = self._model_root()
         root.mkdir(parents=True, exist_ok=True)
 
-        cand: List[Path] = []
+        cand: list[Path] = []
         cand.extend(sorted(root.glob("*.pt")))
         cand.extend(sorted((root / "versions").glob("**/*.pt")))
         cand.extend(sorted((root / "imports").glob("*.pt")))
@@ -44,7 +44,7 @@ class WeightsLogic:
         if bundles_subdir.exists():
             cand.extend([p for p in sorted(bundles_subdir.iterdir()) if p.is_dir()])
 
-        uniq: Dict[str, Path] = {}
+        uniq: dict[str, Path] = {}
         for p in cand:
             try:
                 if p.is_file() or p.is_dir():
@@ -65,9 +65,9 @@ class WeightsLogic:
     def _arena_path(self) -> Path:
         return self.sim_root / "outputs" / "models" / "arena.json"
 
-    def load_favorites(self) -> Dict[str, Dict[str, Any]]:
+    def load_favorites(self) -> dict[str, dict[str, Any]]:
         p = self._favorites_path()
-        favorites: Dict[str, Dict[str, Any]] = {}
+        favorites: dict[str, dict[str, Any]] = {}
         if not p.exists():
             return favorites
         try:
@@ -87,7 +87,7 @@ class WeightsLogic:
                 favorites[rp] = it
         return favorites
 
-    def save_favorites(self, favorites: Dict[str, Dict[str, Any]]) -> None:
+    def save_favorites(self, favorites: dict[str, dict[str, Any]]) -> None:
         p = self._favorites_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         favs = list(favorites.values())
@@ -95,9 +95,9 @@ class WeightsLogic:
         obj = {"favorites": favs}
         p.write_text(json.dumps(obj, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
-    def load_arena(self) -> Dict[str, Dict[str, Any]]:
+    def load_arena(self) -> dict[str, dict[str, Any]]:
         p = self._arena_path()
-        arena: Dict[str, Dict[str, Any]] = {}
+        arena: dict[str, dict[str, Any]] = {}
         if not p.exists():
             return arena
         try:
@@ -117,7 +117,7 @@ class WeightsLogic:
                 arena[rp] = it
         return arena
 
-    def save_arena(self, arena: Dict[str, Dict[str, Any]]) -> None:
+    def save_arena(self, arena: dict[str, dict[str, Any]]) -> None:
         p = self._arena_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         items = list(arena.values())
@@ -125,7 +125,7 @@ class WeightsLogic:
         obj = {"arena_models": items}
         p.write_text(json.dumps(obj, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
-    def add_to_arena(self, paths: List[Path], arena: Dict[str, Dict[str, Any]]) -> None:
+    def add_to_arena(self, paths: list[Path], arena: dict[str, dict[str, Any]]) -> None:
         for p in paths:
             rel = self.rel_path(p)
             if rel in arena:
@@ -136,7 +136,7 @@ class WeightsLogic:
                 "note": "",
             }
 
-    def remove_from_arena(self, paths: List[Path], arena: Dict[str, Dict[str, Any]]) -> None:
+    def remove_from_arena(self, paths: list[Path], arena: dict[str, dict[str, Any]]) -> None:
         for p in paths:
             rel = self.rel_path(p)
             if rel in arena:
@@ -270,7 +270,7 @@ class WeightsLogic:
         else:
             p.unlink()
 
-    def show_model_profile_info(self, p: Path) -> Tuple[str, Optional[str]]:
+    def show_model_profile_info(self, p: Path) -> tuple[str, str | None]:
         try:
             checkpoint = torch.load(p, map_location="cpu", weights_only=False)
             profile_data = checkpoint.get('component_profile')
@@ -329,7 +329,7 @@ class WeightsLogic:
     def _set_proc(self, proc: subprocess.Popen[str]) -> None:
         self.proc = proc
 
-    def _predict_cmd(self, model_path: Path, data_dir: Path, split: str, device: str, max_samples_s: str, save_preds: bool) -> Tuple[List[str], Path]:
+    def _predict_cmd(self, model_path: Path, data_dir: Path, split: str, device: str, max_samples_s: str, save_preds: bool) -> tuple[list[str], Path]:
         if model_path.exists() and model_path.is_dir():
             manifest_path = data_dir / "dataset_manifest.json"
             if not manifest_path.exists():
@@ -354,7 +354,7 @@ class WeightsLogic:
         out_dir = data_dir / "predictions" / "weights_tab"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        cmd: List[str] = [
+        cmd: list[str] = [
             "bash", str(self.sim_root / "predict.sh"), "--model", str(model_path), "--data", str(data_dir), "--split", split, "--out-dir", str(out_dir),
         ]
         if device != "auto": cmd.extend(["--device", device])
@@ -369,8 +369,8 @@ class WeightsLogic:
         self.log_q.put(f"\n[run] {label}\n")
 
         def worker() -> None:
-            report_path: Optional[Path] = None
-            out_dir: Optional[Path] = None
+            report_path: Path | None = None
+            out_dir: Path | None = None
 
             def on_line(line: str) -> None:
                 nonlocal report_path
@@ -393,7 +393,7 @@ class WeightsLogic:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def run_predict_blocking(self, model_path: Path, data_dir: Path, label: str, split: str, device: str, max_samples_s: str, save_preds: bool) -> Optional[Dict[str, Any]]:
+    def run_predict_blocking(self, model_path: Path, data_dir: Path, label: str, split: str, device: str, max_samples_s: str, save_preds: bool) -> dict[str, Any] | None:
         try:
             cmd, out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
         except Exception as e:
@@ -404,7 +404,7 @@ class WeightsLogic:
         if self.stop_evt.is_set(): return None
         self.log_q.put(f"\n$ {' '.join(cmd)}\n")
         self.log_q.put(f"[run] {label}\n")
-        report_path: Optional[Path] = None
+        report_path: Path | None = None
         class_mismatch = False
 
         def on_line(line: str) -> None:
@@ -454,15 +454,15 @@ class WeightsLogic:
             except Exception: pass
         return "-"
 
-    def _read_model_meta(self, p: Path) -> Optional[Dict[str, Any]]:
+    def _read_model_meta(self, p: Path) -> dict[str, Any] | None:
         mp = Path(str(p) + ".meta.json")
         if not mp.exists(): return None
         try: obj = json.loads(mp.read_text(encoding="utf-8"))
         except Exception: return None
         return obj if isinstance(obj, dict) else None
 
-    def _report_search_dirs(self) -> List[Path]:
-        dirs: List[Path] = [self.sim_root / "outputs" / "models", self.sim_root / "outputs" / "models" / "history"]
+    def _report_search_dirs(self) -> list[Path]:
+        dirs: list[Path] = [self.sim_root / "outputs" / "models", self.sim_root / "outputs" / "models" / "history"]
         sim_data = self.sim_root / "outputs" / "sim_data"
         runs = sim_data / "runs"
         versions = sim_data / "versions"
@@ -479,8 +479,8 @@ class WeightsLogic:
         seen = set()
         return [d for d in dirs if (rp := str(d.resolve())) not in seen and not seen.add(rp)]
 
-    def load_reports(self) -> List[Dict[str, Any]]:
-        reports: List[Dict[str, Any]] = []
+    def load_reports(self) -> list[dict[str, Any]]:
+        reports: list[dict[str, Any]] = []
         seen_paths = set()
         for d in self._report_search_dirs():
             if not d.exists(): continue
@@ -508,14 +508,14 @@ class WeightsLogic:
         lines.append("-" * 60 + "\n")
         return "\n".join(lines)
 
-    def compare_summary_multi(self, paired: List[Tuple[Path, Dict[str, Any], Dict[str, Any]]], model_a: Path, model_b: Path, split: str) -> str:
-        def metric(r: Dict[str, Any], k: str) -> Optional[float]:
+    def compare_summary_multi(self, paired: list[tuple[Path, dict[str, Any], dict[str, Any]]], model_a: Path, model_b: Path, split: str) -> str:
+        def metric(r: dict[str, Any], k: str) -> float | None:
             try: return float((r.get("metrics") or {}).get(k))
             except Exception: return None
-        def seen(r: Dict[str, Any]) -> int:
+        def seen(r: dict[str, Any]) -> int:
             try: return int(r.get("seen_samples") or 0)
             except Exception: return 0
-        def wavg(which: str, k: str) -> Optional[float]:
+        def wavg(which: str, k: str) -> float | None:
             num, den = 0.0, 0.0
             for _ds, ra, rb in paired:
                 r, s = (ra if which == "A" else rb), seen(ra if which == "A" else rb)
@@ -529,18 +529,18 @@ class WeightsLogic:
         if f1_a is not None and f1_b is not None and abs(f1_a - f1_b) > eps: winner = "A" if f1_a > f1_b else "B"
         elif acc_a is not None and acc_b is not None and abs(acc_a - acc_b) > eps: winner = "A" if acc_a > acc_b else "B"
 
-        lines: List[str] = ["\n[compare multi]", f"  split: {split}", f"  datasets ({len(paired)}): {', '.join([ds.name for ds, _, _ in paired])}"]
+        lines: list[str] = ["\n[compare multi]", f"  split: {split}", f"  datasets ({len(paired)}): {', '.join([ds.name for ds, _, _ in paired])}"]
         if acc_a is not None and acc_b is not None: lines.append(f"  accuracy (wavg): A={acc_a:.4f}  B={acc_b:.4f}  delta(B-A)={acc_b-acc_a:+.4f}")
         if f1_a is not None and f1_b is not None: lines.append(f"  macro_f1 (wavg):  A={f1_a:.4f}  B={f1_b:.4f}  delta(B-A)={f1_b-f1_a:+.4f}")
         lines.append(f"  winner: {winner}")
         lines.append(f"  A: {model_a.name}\n  B: {model_b.name}\n")
         return "\n".join(lines)
 
-    def compare_summary(self, ra: Dict[str, Any], rb: Dict[str, Any], model_a: Path, model_b: Path, split: str) -> str:
-        def fmetric(r: Dict[str, Any], k: str) -> Optional[float]:
+    def compare_summary(self, ra: dict[str, Any], rb: dict[str, Any], model_a: Path, model_b: Path, split: str) -> str:
+        def fmetric(r: dict[str, Any], k: str) -> float | None:
             try: return float((r.get("metrics") or {}).get(k))
             except Exception: return None
-        def fn_rate(r: Dict[str, Any], cls: str) -> Optional[float]:
+        def fn_rate(r: dict[str, Any], cls: str) -> float | None:
             try: return float((r.get("metrics") or {}).get("critical_fn_rates", {}).get(cls))
             except Exception: return None
 
@@ -553,14 +553,14 @@ class WeightsLogic:
         if f1_a is not None and f1_b is not None and abs(f1_a - f1_b) > eps: winner = "A" if f1_a > f1_b else "B"
         elif acc_a is not None and acc_b is not None and abs(acc_a - acc_b) > eps: winner = "A" if acc_a > acc_b else "B"
 
-        lines: List[str] = ["\n[compare]", f"  dataset: {dsname}   split: {split}", f"  A: {model_a.name}  (runs={runs_a})", f"  B: {model_b.name}  (runs={runs_b})"]
+        lines: list[str] = ["\n[compare]", f"  dataset: {dsname}   split: {split}", f"  A: {model_a.name}  (runs={runs_a})", f"  B: {model_b.name}  (runs={runs_b})"]
         if acc_a is not None and acc_b is not None: lines.append(f"  accuracy: A={acc_a:.4f}  B={acc_b:.4f}  delta(B-A)={acc_b-acc_a:+.4f}")
         if f1_a is not None and f1_b is not None: lines.append(f"  macro_f1:  A={f1_a:.4f}  B={f1_b:.4f}  delta(B-A)={f1_b-f1_a:+.4f}")
         if cfn_a is not None and cfn_b is not None: lines.append(f"  MISALIGNED FN rate: A={cfn_a:.4f}  B={cfn_b:.4f}  delta(B-A)={cfn_b-cfn_a:+.4f}")
         lines.append(f"  winner: {winner}\n")
         return "\n".join(lines)
 
-    def get_cmp_datasets(self) -> List[Path]:
+    def get_cmp_datasets(self) -> list[Path]:
         return sorted_dataset_dirs(self.sim_root)
 
     def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
@@ -593,7 +593,7 @@ class WeightsLogic:
             pass
         return "Samples: -"
 
-    def get_dataset_classes(self, ds: Path) -> List[str]:
+    def get_dataset_classes(self, ds: Path) -> list[str]:
         classes: set[str] = set()
         labels_path = ds / "labels.jsonl"
         if not labels_path.exists():
@@ -615,7 +615,7 @@ class WeightsLogic:
             return []
         return sorted(classes)
 
-    def get_model_classes(self, model_path: Path) -> List[str]:
+    def get_model_classes(self, model_path: Path) -> list[str]:
         try:
             p = model_path
             if p.is_dir():

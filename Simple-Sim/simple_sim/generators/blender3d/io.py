@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 
-def write_jobs_jsonl(path: Path, jobs: Iterable[Dict[str, Any]]) -> None:
+def write_jobs_jsonl(path: Path, jobs: Iterable[dict[str, Any]]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:

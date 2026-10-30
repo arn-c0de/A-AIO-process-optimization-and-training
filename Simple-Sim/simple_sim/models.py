@@ -1,7 +1,7 @@
 """Shared model construction and checkpoint loading (ResNet18 classifiers + ensembles)."""
 
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -28,7 +28,7 @@ def build_resnet18(num_classes: int, pretrained: bool = False) -> nn.Module:
     return model
 
 
-def model_from_checkpoint(checkpoint: Dict[str, Any], device: Union[str, torch.device]) -> nn.Module:
+def model_from_checkpoint(checkpoint: dict[str, Any], device: str | torch.device) -> nn.Module:
     """Build a ResNet18 from a single-model checkpoint dict and put it in eval mode on ``device``."""
     model = build_resnet18(len(checkpoint["class_names"]))
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -40,7 +40,7 @@ def model_from_checkpoint(checkpoint: Dict[str, Any], device: Union[str, torch.d
 class EnsembleModel(nn.Module):
     """Average the logits of several sub-models (softmax is applied by the caller)."""
 
-    def __init__(self, parts: List[nn.Module]) -> None:
+    def __init__(self, parts: list[nn.Module]) -> None:
         super().__init__()
         self.parts = nn.ModuleList(parts)
 
@@ -54,8 +54,8 @@ class EnsembleModel(nn.Module):
 
 
 def load_checkpoint_model(
-    model_path: Path, device: Union[str, torch.device]
-) -> Tuple[nn.Module, List[str], Dict[str, Any]]:
+    model_path: Path, device: str | torch.device
+) -> tuple[nn.Module, list[str], dict[str, Any]]:
     """Load a single-model or ensemble checkpoint.
 
     Returns ``(model, class_names, checkpoint)`` with the model in eval mode on ``device``.
@@ -69,7 +69,7 @@ def load_checkpoint_model(
         if not class_names or not isinstance(items, list) or not items:
             raise ValueError(f"Invalid ensemble checkpoint (missing class_names/models): {model_path}")
 
-        sub_models: List[nn.Module] = []
+        sub_models: list[nn.Module] = []
         for it in items:
             if not isinstance(it, dict):
                 continue

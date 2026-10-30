@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -11,10 +11,10 @@ from .realism import apply_realism_groups
 
 
 def apply_image_filter_overrides(
-    augment: Dict[str, float],
-    image_filters: Optional[Dict[str, Any]],
-    rng: Optional[np.random.Generator] = None,
-) -> Dict[str, float]:
+    augment: dict[str, float],
+    image_filters: dict[str, Any] | None,
+    rng: np.random.Generator | None = None,
+) -> dict[str, float]:
     """Apply toggle + strength overrides to sampled augment params.
 
     Pass the per-sample ``rng`` to keep randomized filters reproducible; without it a
@@ -173,12 +173,12 @@ def apply_image_filter_overrides(
 
 
 def sample_augment_params(
-    augment_config: Dict[str, Any],
-    domain_config: Dict[str, Any],
+    augment_config: dict[str, Any],
+    domain_config: dict[str, Any],
     rng: np.random.Generator,
     *,
     enable_cardinal_rotation_90: bool = True,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Sample augmentation parameters."""
     blur_min, blur_max = domain_config["blur_sigma"]
     noise_min, noise_max = domain_config["noise_stddev"]

@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from gui.state import UiState
@@ -19,9 +19,9 @@ class PerformanceWidgets:
     var_cpu: tk.StringVar
     var_gpu: tk.StringVar
     var_ram: tk.StringVar
-    pb_cpu: Optional[ttk.Progressbar]
-    pb_gpu: Optional[ttk.Progressbar]
-    pb_ram: Optional[ttk.Progressbar]
+    pb_cpu: ttk.Progressbar | None
+    pb_gpu: ttk.Progressbar | None
+    pb_ram: ttk.Progressbar | None
 
 
 class BaseTab:
@@ -100,9 +100,9 @@ class BaseTab:
         ttk.Label(perf_frame, textvariable=var_gpu, width=label_width).grid(row=0, column=1, sticky="w", padx=(6, 0))
         ttk.Label(perf_frame, textvariable=var_ram, width=label_width).grid(row=0, column=2, sticky="w", padx=(6, 0))
 
-        pb_cpu: Optional[ttk.Progressbar] = None
-        pb_gpu: Optional[ttk.Progressbar] = None
-        pb_ram: Optional[ttk.Progressbar] = None
+        pb_cpu: ttk.Progressbar | None = None
+        pb_gpu: ttk.Progressbar | None = None
+        pb_ram: ttk.Progressbar | None = None
 
         if with_bars:
             pb_cpu = ttk.Progressbar(perf_frame, orient="horizontal", mode="determinate", maximum=100, length=bar_length)

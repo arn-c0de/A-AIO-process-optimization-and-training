@@ -11,7 +11,7 @@ import hashlib
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from simple_sim import __version__ as _VERSION
 
@@ -40,7 +40,7 @@ def hash_file(file_path: Path) -> str:
     return f"sha256:{hash_obj.hexdigest()}"
 
 
-def _get_git_commit() -> Optional[str]:
+def _get_git_commit() -> str | None:
     """Get current git commit hash (short).
 
     Returns:
@@ -61,9 +61,9 @@ def _get_git_commit() -> Optional[str]:
     return None
 
 
-def _compute_class_counts(label_rows: List[Any]) -> Dict[str, int]:
+def _compute_class_counts(label_rows: list[Any]) -> dict[str, int]:
     """Return class_name → count mapping for a list of LabelRow instances."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for row in label_rows:
         counts[row.class_name] = counts.get(row.class_name, 0) + 1
     return counts
@@ -83,9 +83,9 @@ def write_dataset_manifest(
     profile_id: str,
     profile_hash: str,
     profile_path: str,
-    meta_rows: List[Any],
-    label_rows: List[Any],
-    splits: Dict[str, List[str]],
+    meta_rows: list[Any],
+    label_rows: list[Any],
+    splits: dict[str, list[str]],
     extend: bool = False
 ) -> None:
     """Write or update dataset manifest.
@@ -194,7 +194,7 @@ def write_dataset_manifest(
     print(f"✓ Dataset manifest written: {manifest_path}")
 
 
-def resolve_dataset_profile(manifest: Dict[str, Any]) -> Tuple[str, str]:
+def resolve_dataset_profile(manifest: dict[str, Any]) -> tuple[str, str]:
     """Return (profile_id, profile_hash) for a dataset manifest.
 
     v1 manifests carry a single ``component_profile``; v2 (multi-profile)
@@ -209,7 +209,7 @@ def resolve_dataset_profile(manifest: Dict[str, Any]) -> Tuple[str, str]:
     raise ValueError(f"Unsupported dataset manifest_version: {mver}")
 
 
-def read_dataset_manifest(manifest_path: Path) -> Dict[str, Any]:
+def read_dataset_manifest(manifest_path: Path) -> dict[str, Any]:
     """Read and validate dataset manifest.
 
     Supports manifest_version 1 (single profile) and manifest_version 2 (multi-profile).
@@ -274,15 +274,15 @@ def read_dataset_manifest(manifest_path: Path) -> Dict[str, Any]:
 
 
 def check_checkpoint_profile(
-    checkpoint: Dict[str, Any],
+    checkpoint: dict[str, Any],
     dataset_profile_id: str,
     dataset_profile_hash: str,
     *,
     action: str,
-    allow_mismatch: Optional[bool] = None,
+    allow_mismatch: bool | None = None,
     override_verb: str = "Continuing",
     ckpt_label: str = "Model trained on",
-) -> Optional[str]:
+) -> str | None:
     """Guard a checkpoint against being used on a dataset of another profile.
 
     Profile ID mismatch is a hard failure. ``allow_mismatch=None`` means the
@@ -339,7 +339,7 @@ def check_checkpoint_profile(
 
 
 def validate_manifest_profile(
-    manifest: Dict[str, Any],
+    manifest: dict[str, Any],
     expected_profile_id: str,
     expected_profile_hash: str,
     *,
@@ -385,10 +385,10 @@ def validate_manifest_profile(
 def write_multi_profile_manifest(
     output_dir: Path,
     run_id: str,
-    profiles: List[Dict[str, str]],
-    meta_rows: List[Any],
-    label_rows: List[Any],
-    splits: Dict[str, List[str]],
+    profiles: list[dict[str, str]],
+    meta_rows: list[Any],
+    label_rows: list[Any],
+    splits: dict[str, list[str]],
     script_name: str = "scripts/generate_profile_dataset.py",
 ) -> None:
     """Write a multi-profile dataset manifest (manifest_version 2).
@@ -410,7 +410,7 @@ def write_multi_profile_manifest(
     split_counts = {k: len(v) for k, v in splits.items()}
 
     # Profile sample counts
-    profile_counts: Dict[str, int] = {}
+    profile_counts: dict[str, int] = {}
     for label_row in label_rows:
         pid = getattr(label_row, 'profile_id', '')
         if pid:

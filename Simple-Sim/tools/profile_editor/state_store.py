@@ -2,21 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Callable, Sequence
 
 import yaml
 
 from .yaml_io import dump_yaml, load_yaml, save_yaml
 
-PathKey = Tuple[str, ...]
+PathKey = tuple[str, ...]
 Listener = Callable[[str, str], None]
 
 
 @dataclass
 class DocumentState:
-    path: Optional[Path] = None
-    data: Dict[str, Any] | None = None
-    text_error: Optional[str] = None
+    path: Path | None = None
+    data: dict[str, Any] | None = None
+    text_error: str | None = None
     dirty: bool = False
 
 
@@ -26,7 +27,7 @@ class EditorStateStore:
     def __init__(self):
         self.profile = DocumentState(data={})
         self.run = DocumentState(data={})
-        self._listeners: List[Listener] = []
+        self._listeners: list[Listener] = []
 
     def add_listener(self, listener: Listener) -> None:
         self._listeners.append(listener)
@@ -127,7 +128,7 @@ class EditorStateStore:
             return parsed
         return raw_text
 
-    def _set_path_value(self, data: Dict[str, Any], path: PathKey, value: Any) -> None:
+    def _set_path_value(self, data: dict[str, Any], path: PathKey, value: Any) -> None:
         cursor: Any = data
         for key in path[:-1]:
             nxt = cursor.get(key)
@@ -138,8 +139,8 @@ class EditorStateStore:
         cursor[path[-1]] = value
 
 
-def flatten_leaf_paths(data: Dict[str, Any], prefix: PathKey = ()) -> List[Tuple[PathKey, Any]]:
-    leaves: List[Tuple[PathKey, Any]] = []
+def flatten_leaf_paths(data: dict[str, Any], prefix: PathKey = ()) -> list[tuple[PathKey, Any]]:
+    leaves: list[tuple[PathKey, Any]] = []
     for key, value in data.items():
         p = prefix + (str(key),)
         if isinstance(value, dict):

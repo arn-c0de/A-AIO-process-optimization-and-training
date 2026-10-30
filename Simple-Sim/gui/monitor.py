@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -61,10 +60,10 @@ class MonitorAppTabbed:
         self.state = UiState()
 
         # Tab instances (lazy loaded)
-        self.tabs: Dict[str, BaseTab] = {}
+        self.tabs: dict[str, BaseTab] = {}
         self._tab_order: list[str] = []
         self.current_tab: str = ""
-        self._perf_tick_id: Optional[str] = None
+        self._perf_tick_id: str | None = None
         self._stats = SystemStatsSampler()
 
         self._build_ui()

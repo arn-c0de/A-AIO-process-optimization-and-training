@@ -4,16 +4,15 @@ import itertools
 import random
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
 from simple_sim.schema import MetaRow, LabelRow
 
 
 def generate_splits(
-    meta_rows: List[MetaRow],
-    label_rows: List[LabelRow],
-    config: Dict,
+    meta_rows: list[MetaRow],
+    label_rows: list[LabelRow],
+    config: dict,
     run_seed: int
-) -> Dict[str, List[str]]:
+) -> dict[str, list[str]]:
     """Generate stratified train/val/test splits.
 
     Stratifies by (domain, profile_id, class) to ensure balanced distribution.
@@ -88,7 +87,7 @@ def generate_splits(
     return splits
 
 
-def _split_counts(n: int, fracs) -> List[int]:
+def _split_counts(n: int, fracs) -> list[int]:
     """Largest-remainder allocation of n samples over split fractions.
 
     Fractions are normalised so the counts always sum to n. For n >= 3 every
@@ -116,7 +115,7 @@ def _split_counts(n: int, fracs) -> List[int]:
     return counts
 
 
-def assert_no_overlap(splits: Dict[str, List[str]]) -> None:
+def assert_no_overlap(splits: dict[str, list[str]]) -> None:
     """Verify that splits have no overlapping sample IDs.
 
     Works for any number of named splits.
@@ -139,7 +138,7 @@ def assert_no_overlap(splits: Dict[str, List[str]]) -> None:
         raise ValueError("Split overlap detected: " + ", ".join(errors))
 
 
-def write_splits(output_dir: Path, splits: Dict[str, List[str]]) -> None:
+def write_splits(output_dir: Path, splits: dict[str, list[str]]) -> None:
     """Write split files to disk.
 
     Args:
@@ -157,7 +156,7 @@ def write_splits(output_dir: Path, splits: Dict[str, List[str]]) -> None:
                 f.write(sample_id + '\n')
 
 
-def read_split(split_file: Path) -> List[str]:
+def read_split(split_file: Path) -> list[str]:
     """Read sample IDs from split file.
 
     Args:
@@ -174,7 +173,7 @@ def read_split(split_file: Path) -> List[str]:
         return [line.strip() for line in f if line.strip()]
 
 
-def check_class_coverage(splits: Dict[str, List[str]], label_rows: List[LabelRow]) -> List[str]:
+def check_class_coverage(splits: dict[str, list[str]], label_rows: list[LabelRow]) -> list[str]:
     """Check if all splits contain all classes.
 
     Args:

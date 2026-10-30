@@ -6,7 +6,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 def _open_zoom_image_popup(popup: Any, pil_img: Any, title: str) -> None:
@@ -147,7 +147,7 @@ def populate_preview_profiles(popup: Any) -> None:
         popup._preview_status_var.set("No component profiles found.")
 
 
-def on_preview_profile_selected(popup: Any, _evt: Optional[tk.Event] = None) -> None:
+def on_preview_profile_selected(popup: Any, _evt: tk.Event | None = None) -> None:
     """Skip separator header items in the combobox."""
     v = popup._preview_profile_var.get()
     if not v.startswith("──"):
@@ -164,9 +164,9 @@ def on_preview_profile_selected(popup: Any, _evt: Optional[tk.Event] = None) -> 
     popup._preview_profile_var.set("")
 
 
-def get_preview_filter_values(popup: Any) -> Dict[str, Any]:
+def get_preview_filter_values(popup: Any) -> dict[str, Any]:
     """Collect current filter values directly from the popup's internal vars."""
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for key, var in popup.filter_vars.items():
         if isinstance(var, tk.BooleanVar):
             result[key] = bool(var.get())
@@ -202,7 +202,7 @@ def render_preview(popup: Any) -> None:
         threading.Thread(target=popup._do_render_2d_preview, args=(pid, filter_vals), daemon=True).start()
 
 
-def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: Dict[str, Any]) -> None:
+def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> None:
     """Background thread: render a 2D preview and schedule UI update."""
     try:
         import sys
@@ -227,7 +227,7 @@ def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: Dict[str, Any
         tolerances = profile.get("tolerances")
         component_color = (profile.get("render") or {}).get("component_color_bgr", [20, 20, 20])
 
-        render_cfg: Dict[str, Any] = {
+        render_cfg: dict[str, Any] = {
             "substrate_color": [40, 90, 40],
             "copper_color": [60, 120, 180],
             "component_color": list(component_color),
@@ -235,7 +235,7 @@ def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: Dict[str, Any
 
         rng = np.random.default_rng(42)
         nominal = sample_nominal_geometry({}, rng, geometry_ranges)
-        defect_params: Dict[str, Any] = {
+        defect_params: dict[str, Any] = {
             "type": "OK",
             "shift_x": 0.0,
             "shift_y": 0.0,
@@ -243,7 +243,7 @@ def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: Dict[str, Any
             "tilt_deg": 0.0,
         }
 
-        base_aug: Dict[str, Any] = {
+        base_aug: dict[str, Any] = {
             "blur_sigma": 1.0,
             "noise_stddev": 8.0,
             "brightness_factor": 1.1,
@@ -252,7 +252,7 @@ def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: Dict[str, Any
         }
         augment = apply_image_filter_overrides(base_aug, filter_vals)
 
-        roi_sizes: Dict[str, tuple] = {
+        roi_sizes: dict[str, tuple] = {
             "soic_16": (600, 600),
             "qfn32": (320, 320),
             "sot23": (256, 256),
@@ -274,7 +274,7 @@ def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: Dict[str, Any
         popup.top.after(0, lambda: setattr(popup, "_preview_is_rendering", False))
 
 
-def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: Dict[str, Any]) -> None:
+def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> None:
     """Background thread: render a 3D preview via Blender and schedule UI update."""
     try:
         import sys
@@ -334,7 +334,7 @@ def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: Dict[str, Any
         nominal = sample_nominal_geometry({}, rng, geometry_ranges)
         defect = sample_defect_params("OK", rng, tolerances=tolerances)
 
-        base_augment: Dict[str, Any] = {
+        base_augment: dict[str, Any] = {
             "blur_sigma": 1.0,
             "noise_stddev": 8.0,
             "brightness_factor": 1.1,
@@ -589,7 +589,7 @@ def populate_left_filter_profiles(popup: Any) -> None:
             status.set("No component profiles found.")
 
 
-def on_left_preview_profile_selected(popup: Any, _evt: Optional[tk.Event] = None) -> None:
+def on_left_preview_profile_selected(popup: Any, _evt: tk.Event | None = None) -> None:
     """Skip separator header items in the left combo."""
     v = popup._left_preview_profile_var.get()
     if not v.startswith("──"):
@@ -640,7 +640,7 @@ def render_left_preview(popup: Any) -> None:
         ).start()
 
 
-def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: Dict[str, Any]) -> None:
+def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> None:
     """Background thread: 2D render for the left preview panel."""
     try:
         import sys
@@ -665,7 +665,7 @@ def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: Dict[str, A
         tolerances = profile.get("tolerances")
         component_color = (profile.get("render") or {}).get("component_color_bgr", [20, 20, 20])
 
-        render_cfg: Dict[str, Any] = {
+        render_cfg: dict[str, Any] = {
             "substrate_color": [40, 90, 40],
             "copper_color": [60, 120, 180],
             "component_color": list(component_color),
@@ -673,7 +673,7 @@ def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: Dict[str, A
 
         rng = np.random.default_rng(42)
         nominal = sample_nominal_geometry({}, rng, geometry_ranges)
-        defect_params: Dict[str, Any] = {
+        defect_params: dict[str, Any] = {
             "type": "OK",
             "shift_x": 0.0,
             "shift_y": 0.0,
@@ -681,7 +681,7 @@ def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: Dict[str, A
             "tilt_deg": 0.0,
         }
 
-        base_aug: Dict[str, Any] = {
+        base_aug: dict[str, Any] = {
             "blur_sigma": 1.0,
             "noise_stddev": 8.0,
             "brightness_factor": 1.1,
@@ -690,7 +690,7 @@ def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: Dict[str, A
         }
         augment = apply_image_filter_overrides(base_aug, filter_vals)
 
-        roi_sizes: Dict[str, tuple] = {
+        roi_sizes: dict[str, tuple] = {
             "soic_16": (600, 600),
             "qfn32": (320, 320),
             "sot23": (256, 256),
@@ -712,7 +712,7 @@ def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: Dict[str, A
         popup.top.after(0, lambda: setattr(popup, "_left_preview_is_rendering", False))
 
 
-def _left_render_3d_thread(popup: Any, profile_id: str, filter_vals: Dict[str, Any]) -> None:
+def _left_render_3d_thread(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> None:
     """Background thread: 3D (Blender) render for the left preview panel."""
     try:
         import sys
@@ -773,7 +773,7 @@ def _left_render_3d_thread(popup: Any, profile_id: str, filter_vals: Dict[str, A
         nominal = sample_nominal_geometry({}, rng, geometry_ranges)
         defect = sample_defect_params("OK", rng, tolerances=tolerances)
 
-        base_augment: Dict[str, Any] = {
+        base_augment: dict[str, Any] = {
             "blur_sigma": 1.0,
             "noise_stddev": 8.0,
             "brightness_factor": 1.1,

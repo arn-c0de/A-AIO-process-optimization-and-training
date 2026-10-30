@@ -3,7 +3,7 @@
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .tab import ValidationTab
@@ -13,7 +13,7 @@ class ValidationUI:
     def __init__(self, tab: ValidationTab, parent: ttk.Frame):
         self.tab = tab
         self.frame = ttk.Frame(parent, padding=10)
-        self.check_vars: Dict[str, tk.BooleanVar] = {}
+        self.check_vars: dict[str, tk.BooleanVar] = {}
         self.results_text: tk.Text
         self.flag_tree: ttk.Treeview
         self.var_dataset: tk.StringVar

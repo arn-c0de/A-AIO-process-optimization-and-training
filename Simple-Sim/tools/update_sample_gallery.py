@@ -19,7 +19,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
@@ -81,8 +81,8 @@ def _stable_int_seed(*parts: str) -> int:
     return int(h[:12], 16)
 
 
-def _iter_run_configs(configs_dir: Path) -> List[Path]:
-    out: List[Path] = []
+def _iter_run_configs(configs_dir: Path) -> list[Path]:
+    out: list[Path] = []
     for p in sorted(Path(configs_dir).glob("run_*.yaml")):
         if p.name.startswith("."):
             continue
@@ -95,7 +95,7 @@ def _find_matching_run_cfg(
     configs_dir: Path,
     profile_id: str,
     backend: str,
-) -> Tuple[Optional[Dict[str, Any]], Optional[Path]]:
+) -> tuple[dict[str, Any] | None, Path | None]:
     """Find a run_*.yaml that uses `run.component_profile == profile_id` and `render.backend == backend`."""
     for cfg_path in _iter_run_configs(configs_dir):
         try:
@@ -111,14 +111,14 @@ def _find_matching_run_cfg(
     return None, None
 
 
-def _profile_defect_set(profile: Dict[str, Any]) -> List[str]:
+def _profile_defect_set(profile: dict[str, Any]) -> list[str]:
     ds = profile.get("defect_set") or []
     if isinstance(ds, list) and ds:
         return [str(x) for x in ds]
     return list(STANDARD_CLASSES)
 
 
-def _merge_component_color(render_cfg: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_component_color(render_cfg: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     # Match the pipeline behavior: schema v2 run configs can omit component_color and pull from the profile.
     out = dict(render_cfg or {})
     if "component_color" not in out:
@@ -131,12 +131,12 @@ def _merge_component_color(render_cfg: Dict[str, Any], profile: Dict[str, Any]) 
 def _render_one_2d(
     *,
     profile_id: str,
-    profile: Dict[str, Any],
-    cfg: Dict[str, Any],
+    profile: dict[str, Any],
+    cfg: dict[str, Any],
     out_path: Path,
     defect_type: str,
     seed_base: int,
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     roi_cfg = cfg.get("roi") or {"width_px": 256, "height_px": 256, "mm_per_px": 0.01}
     roi_w = int(roi_cfg.get("width_px", 256))
     roi_h = int(roi_cfg.get("height_px", 256))
@@ -182,12 +182,12 @@ def _build_3d_job(
     *,
     project_root: Path,
     profile_id: str,
-    profile: Dict[str, Any],
-    cfg: Dict[str, Any],
+    profile: dict[str, Any],
+    cfg: dict[str, Any],
     out_path: Path,
     defect_type: str,
     seed_base: int,
-) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     roi_cfg = cfg.get("roi") or {"width_px": 256, "height_px": 256, "mm_per_px": 0.01}
     mm_per_px = float(roi_cfg.get("mm_per_px", 0.01))
     roi_w = int(roi_cfg.get("width_px", 256))
@@ -220,7 +220,7 @@ def _build_3d_job(
     return job, nominal, defect
 
 
-def _overlay_in_place(path: Path, defect: Dict[str, Any], nominal: Dict[str, Any]) -> None:
+def _overlay_in_place(path: Path, defect: dict[str, Any], nominal: dict[str, Any]) -> None:
     img = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError(f"Failed to read rendered image: {path}")
@@ -231,11 +231,11 @@ def _overlay_in_place(path: Path, defect: Dict[str, Any], nominal: Dict[str, Any
 
 def _collect_existing_entries(
     profile_gallery: Path, profile_id: str, render_backend: str, project_root: Path
-) -> List[Tuple[str, str, str, str, str]]:
+) -> list[tuple[str, str, str, str, str]]:
     """Gallery entries for images already on disk (used for skipped backends)."""
     if not profile_gallery.is_dir():
         return []
-    out: List[Tuple[str, str, str, str, str]] = []
+    out: list[tuple[str, str, str, str, str]] = []
     for img in sorted(profile_gallery.glob("*.png")):
         rel = img.relative_to(project_root)
         out.append((profile_id, profile_id, img.stem, str(rel), render_backend))
@@ -294,7 +294,7 @@ def main() -> None:
     entries: list[tuple[str, str, str, str, str]] = []
 
     # Optional ROI override parsing
-    roi_override: Optional[Tuple[int, int, float]] = None
+    roi_override: tuple[int, int, float] | None = None
     if args.roi:
         import re
         m = re.match(r"^\s*(\d+)x(\d+)@([0-9]*\.?[0-9]+)\s*$", str(args.roi))
@@ -305,7 +305,7 @@ def main() -> None:
     # Stage 3D jobs and run Blender in batches grouped by (exe, samples, device).
     # We can't mix sample counts in a single Blender invocation because render_batch.py
     # takes samples via a single CLI flag.
-    staged_3d_groups: Dict[Tuple[str, int, str], Dict[str, Any]] = {}
+    staged_3d_groups: dict[tuple[str, int, str], dict[str, Any]] = {}
 
     for profile_path in profiles:
         profile_data = read_profile(profile_path)
@@ -414,8 +414,8 @@ def main() -> None:
 
         for gi, (group_key, group) in enumerate(sorted(staged_3d_groups.items(), key=lambda kv: kv[0]), 1):
             exe, samples, device = group_key
-            jobs: List[Dict[str, Any]] = group["jobs"]
-            overlays: List[Tuple[Path, Dict[str, Any], Dict[str, Any]]] = group["overlays"]
+            jobs: list[dict[str, Any]] = group["jobs"]
+            overlays: list[tuple[Path, dict[str, Any], dict[str, Any]]] = group["overlays"]
             if not jobs:
                 continue
 

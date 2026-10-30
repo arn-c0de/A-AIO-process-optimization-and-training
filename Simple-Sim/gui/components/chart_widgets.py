@@ -7,11 +7,10 @@ matplotlib.use('TkAgg')
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
-from typing import Dict, List
 
 
 def create_confusion_matrix_widget(parent: tk.Widget, confusion_matrix: np.ndarray,
-                                   class_names: List[str]) -> FigureCanvasTkAgg:
+                                   class_names: list[str]) -> FigureCanvasTkAgg:
     """Create confusion matrix heatmap widget.
 
     Args:
@@ -57,7 +56,7 @@ def create_confusion_matrix_widget(parent: tk.Widget, confusion_matrix: np.ndarr
 
 
 def create_class_distribution_widget(parent: tk.Widget,
-                                     class_counts: Dict[str, int],
+                                     class_counts: dict[str, int],
                                      title: str = "Class Distribution") -> FigureCanvasTkAgg:
     """Create class distribution bar chart widget.
 
@@ -146,7 +145,7 @@ def create_histogram_widget(parent: tk.Widget, data: np.ndarray,
 def create_scatter_plot_widget(parent: tk.Widget,
                                x_data: np.ndarray, y_data: np.ndarray,
                                labels: np.ndarray,
-                               class_names: List[str],
+                               class_names: list[str],
                                xlabel: str, ylabel: str,
                                title: str) -> FigureCanvasTkAgg:
     """Create scatter plot widget with class-colored points.

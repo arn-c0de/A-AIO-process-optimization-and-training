@@ -6,15 +6,15 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
     confusion_matrix as sklearn_confusion_matrix
 )
-from typing import Dict, List, Any, Optional
+from typing import Any
 
 
 def compute_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
-    class_names: List[str],
-    critical_classes: Optional[List[str]] = None
-) -> Dict[str, Any]:
+    class_names: list[str],
+    critical_classes: list[str] | None = None
+) -> dict[str, Any]:
     """Compute comprehensive classification metrics.
 
     Args:
@@ -77,7 +77,7 @@ def compute_metrics(
 
 def check_success_criteria(
     val_accuracy: float,
-    metrics: Dict[str, Any],
+    metrics: dict[str, Any],
     entity: str = "class",
     ascii_only: bool = False,
 ) -> bool:
@@ -118,7 +118,7 @@ def check_success_criteria(
     return all_passed
 
 
-def format_metrics(metrics: Dict[str, Any], class_names: List[str]) -> str:
+def format_metrics(metrics: dict[str, Any], class_names: list[str]) -> str:
     """Format metrics for console output.
 
     Args:

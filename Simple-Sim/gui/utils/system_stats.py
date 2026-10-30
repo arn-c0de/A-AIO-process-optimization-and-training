@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from typing import Optional, Tuple
 
 
-def read_ram_info() -> Optional[Tuple[float, int, int]]:
+def read_ram_info() -> tuple[float, int, int] | None:
     """Return (used_percent, used_bytes, total_bytes) from /proc/meminfo, or None."""
     try:
         total_kb, avail_kb = None, None
@@ -27,7 +26,7 @@ def read_ram_info() -> Optional[Tuple[float, int, int]]:
         return None
 
 
-def read_gpu_percent(timeout_s: float = 0.5) -> Optional[float]:
+def read_gpu_percent(timeout_s: float = 0.5) -> float | None:
     """Return GPU utilization (first GPU) via nvidia-smi, or None."""
     try:
         proc = subprocess.run(
@@ -54,14 +53,14 @@ class SystemStatsSampler:
     """
 
     def __init__(self, gpu_interval_s: float = 1.0) -> None:
-        self._cpu_prev_total: Optional[int] = None
-        self._cpu_prev_idle: Optional[int] = None
-        self._gpu_pct: Optional[float] = None
+        self._cpu_prev_total: int | None = None
+        self._cpu_prev_idle: int | None = None
+        self._gpu_pct: float | None = None
         self._gpu_interval_s = gpu_interval_s
         self._stop = threading.Event()
-        self._gpu_thread: Optional[threading.Thread] = None
+        self._gpu_thread: threading.Thread | None = None
 
-    def cpu_percent(self) -> Optional[float]:
+    def cpu_percent(self) -> float | None:
         try:
             with open("/proc/stat", encoding="utf-8") as f:
                 line = f.readline().strip()
@@ -81,10 +80,10 @@ class SystemStatsSampler:
         except Exception:
             return None
 
-    def ram_info(self) -> Optional[Tuple[float, int, int]]:
+    def ram_info(self) -> tuple[float, int, int] | None:
         return read_ram_info()
 
-    def gpu_percent(self) -> Optional[float]:
+    def gpu_percent(self) -> float | None:
         """Return the most recent GPU sample (starts the polling thread on first use)."""
         if self._gpu_thread is None:
             self._gpu_thread = threading.Thread(target=self._gpu_loop, daemon=True)
