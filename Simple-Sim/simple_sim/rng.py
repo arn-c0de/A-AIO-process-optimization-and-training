@@ -67,8 +67,8 @@ def parse_sample_id(sample_id: str) -> tuple:
 
     try:
         index = int(index_str)
-    except ValueError:
-        raise ValueError(f"Invalid index in sample ID: {sample_id}")
+    except ValueError as e:
+        raise ValueError(f"Invalid index in sample ID: {sample_id}") from e
 
     return run_id, domain, split, index
 

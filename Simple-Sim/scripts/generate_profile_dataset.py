@@ -107,7 +107,7 @@ def generate_profile_dataset(
 
         for class_name, count in classes.items():
             progress = tqdm(range(count), desc=f"{pid}/{class_name}")
-            for i in progress:
+            for _i in progress:
                 seed = derive_sample_seed(run_seed, domain_name, global_index)
                 rng = np.random.default_rng(seed)
 

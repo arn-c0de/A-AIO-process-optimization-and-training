@@ -148,7 +148,7 @@ def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:
             try:
                 data = json.loads(line)
             except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON at line {line_num}: {e}")
+                raise ValueError(f"Invalid JSON at line {line_num}: {e}") from e
 
             # Check for unknown fields using dataclass introspection
             if not dataclasses.is_dataclass(schema_cls):
@@ -170,7 +170,7 @@ def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:
                 row = schema_cls(**data)
                 rows.append(row)
             except (TypeError, ValueError) as e:
-                raise ValueError(f"Schema validation failed at line {line_num}: {e}")
+                raise ValueError(f"Schema validation failed at line {line_num}: {e}") from e
 
     return rows
 

@@ -25,16 +25,16 @@ except Exception as e:
         "Tkinter is not available. On Ubuntu/Debian install it with:\n"
         "  sudo apt-get install python3-tk\n"
         f"Original error: {e}"
-    )
+    ) from e
 
 try:
-    pass
+    import PIL  # noqa: F401  (dependency check: thumbnails need Pillow)
 except Exception as e:
     raise SystemExit(
         "Pillow is required for thumbnails. Install dependencies:\n"
         "  .venv/bin/python -m pip install -r requirements.txt\n"
         f"Original error: {e}"
-    )
+    ) from e
 
 from gui.state import UiState
 from gui.tabs import BaseTab

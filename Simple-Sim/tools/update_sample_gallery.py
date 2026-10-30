@@ -440,7 +440,7 @@ def main() -> None:
                     f"- device: {device!r}\n"
                     f"- jobs: {jobs_path}\n"
                     f"- error: {e}"
-                )
+                ) from e
 
             print("Applying overlays to 3D renders...")
             for path, defect, nominal in overlays:
