@@ -3,12 +3,12 @@
 from __future__ import annotations
 import numpy as np
 import cv2
-from typing import Dict, Any
+from typing import Any
 import math
 
 
-def draw_defect_overlay(img: np.ndarray, defect_params: Dict[str, Any],
-                        nominal: Dict[str, float]) -> np.ndarray:
+def draw_defect_overlay(img: np.ndarray, defect_params: dict[str, Any],
+                        nominal: dict[str, float]) -> np.ndarray:
     """Draw defect visualization overlay on image.
 
     Args:

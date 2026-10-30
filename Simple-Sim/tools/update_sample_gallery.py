@@ -14,13 +14,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
@@ -48,7 +47,7 @@ def discover_profiles(profiles_dir: Path) -> list[Path]:
 def read_profile(profile_path: Path) -> dict:
     """Load profile YAML and return its contents."""
     try:
-        with open(profile_path, "r", encoding="utf-8") as f:
+        with open(profile_path, encoding="utf-8") as f:
             return yaml.safe_load(f)
     except Exception as e:
         print(f"  Error reading {profile_path}: {e}")
@@ -82,8 +81,8 @@ def _stable_int_seed(*parts: str) -> int:
     return int(h[:12], 16)
 
 
-def _iter_run_configs(configs_dir: Path) -> List[Path]:
-    out: List[Path] = []
+def _iter_run_configs(configs_dir: Path) -> list[Path]:
+    out: list[Path] = []
     for p in sorted(Path(configs_dir).glob("run_*.yaml")):
         if p.name.startswith("."):
             continue
@@ -96,7 +95,7 @@ def _find_matching_run_cfg(
     configs_dir: Path,
     profile_id: str,
     backend: str,
-) -> Tuple[Optional[Dict[str, Any]], Optional[Path]]:
+) -> tuple[dict[str, Any] | None, Path | None]:
     """Find a run_*.yaml that uses `run.component_profile == profile_id` and `render.backend == backend`."""
     for cfg_path in _iter_run_configs(configs_dir):
         try:
@@ -112,14 +111,14 @@ def _find_matching_run_cfg(
     return None, None
 
 
-def _profile_defect_set(profile: Dict[str, Any]) -> List[str]:
+def _profile_defect_set(profile: dict[str, Any]) -> list[str]:
     ds = profile.get("defect_set") or []
     if isinstance(ds, list) and ds:
         return [str(x) for x in ds]
     return list(STANDARD_CLASSES)
 
 
-def _merge_component_color(render_cfg: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_component_color(render_cfg: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     # Match the pipeline behavior: schema v2 run configs can omit component_color and pull from the profile.
     out = dict(render_cfg or {})
     if "component_color" not in out:
@@ -132,12 +131,12 @@ def _merge_component_color(render_cfg: Dict[str, Any], profile: Dict[str, Any]) 
 def _render_one_2d(
     *,
     profile_id: str,
-    profile: Dict[str, Any],
-    cfg: Dict[str, Any],
+    profile: dict[str, Any],
+    cfg: dict[str, Any],
     out_path: Path,
     defect_type: str,
     seed_base: int,
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     roi_cfg = cfg.get("roi") or {"width_px": 256, "height_px": 256, "mm_per_px": 0.01}
     roi_w = int(roi_cfg.get("width_px", 256))
     roi_h = int(roi_cfg.get("height_px", 256))
@@ -183,12 +182,12 @@ def _build_3d_job(
     *,
     project_root: Path,
     profile_id: str,
-    profile: Dict[str, Any],
-    cfg: Dict[str, Any],
+    profile: dict[str, Any],
+    cfg: dict[str, Any],
     out_path: Path,
     defect_type: str,
     seed_base: int,
-) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     roi_cfg = cfg.get("roi") or {"width_px": 256, "height_px": 256, "mm_per_px": 0.01}
     mm_per_px = float(roi_cfg.get("mm_per_px", 0.01))
     roi_w = int(roi_cfg.get("width_px", 256))
@@ -221,7 +220,7 @@ def _build_3d_job(
     return job, nominal, defect
 
 
-def _overlay_in_place(path: Path, defect: Dict[str, Any], nominal: Dict[str, Any]) -> None:
+def _overlay_in_place(path: Path, defect: dict[str, Any], nominal: dict[str, Any]) -> None:
     img = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError(f"Failed to read rendered image: {path}")
@@ -229,6 +228,19 @@ def _overlay_in_place(path: Path, defect: Dict[str, Any], nominal: Dict[str, Any
     ok = cv2.imwrite(str(path), out)
     if not ok:
         raise RuntimeError(f"Failed to write overlay image: {path}")
+
+def _collect_existing_entries(
+    profile_gallery: Path, profile_id: str, render_backend: str, project_root: Path
+) -> list[tuple[str, str, str, str, str]]:
+    """Gallery entries for images already on disk (used for skipped backends)."""
+    if not profile_gallery.is_dir():
+        return []
+    out: list[tuple[str, str, str, str, str]] = []
+    for img in sorted(profile_gallery.glob("*.png")):
+        rel = img.relative_to(project_root)
+        out.append((profile_id, profile_id, img.stem, str(rel), render_backend))
+    return out
+
 
 import re
 def generate_slug(text: str) -> str:
@@ -270,8 +282,11 @@ def main() -> None:
 
     print(f"Found {len(profiles)} profile(s)")
 
-    # Clean previous gallery
-    if gallery_dir.exists():
+    # Clean previous gallery (never on --dry-run, which must not touch existing images).
+    # With --skip-2d/--skip-3d only the profile dirs that are regenerated are cleared
+    # (per profile below), so images of the skipped backend survive.
+    partial_run = bool(args.skip_2d or args.skip_3d)
+    if gallery_dir.exists() and not args.dry_run and not partial_run:
         shutil.rmtree(gallery_dir)
     gallery_dir.mkdir(parents=True, exist_ok=True)
 
@@ -279,10 +294,10 @@ def main() -> None:
     entries: list[tuple[str, str, str, str, str]] = []
 
     # Optional ROI override parsing
-    roi_override: Optional[Tuple[int, int, float]] = None
+    roi_override: tuple[int, int, float] | None = None
     if args.roi:
         import re
-        m = re.match(r"^\\s*(\\d+)x(\\d+)@([0-9]*\\.?[0-9]+)\\s*$", str(args.roi))
+        m = re.match(r"^\s*(\d+)x(\d+)@([0-9]*\.?[0-9]+)\s*$", str(args.roi))
         if not m:
             raise SystemExit(f"Invalid --roi format: {args.roi!r} (expected WIDTHxHEIGHT@MM_PER_PX)")
         roi_override = (int(m.group(1)), int(m.group(2)), float(m.group(3)))
@@ -290,7 +305,7 @@ def main() -> None:
     # Stage 3D jobs and run Blender in batches grouped by (exe, samples, device).
     # We can't mix sample counts in a single Blender invocation because render_batch.py
     # takes samples via a single CLI flag.
-    staged_3d_groups: Dict[Tuple[str, int, str], Dict[str, Any]] = {}
+    staged_3d_groups: dict[tuple[str, int, str], dict[str, Any]] = {}
 
     for profile_path in profiles:
         profile_data = read_profile(profile_path)
@@ -303,6 +318,18 @@ def main() -> None:
         print(f"\nProcessing profile: {profile_id} [{render_backend}]")
 
         profile_gallery = gallery_dir / profile_id
+
+        skipped = (render_backend == "opencv_2d" and args.skip_2d) or (render_backend == "blender_3d" and args.skip_3d)
+        if skipped:
+            flag = "--skip-2d" if render_backend == "opencv_2d" else "--skip-3d"
+            kept = _collect_existing_entries(profile_gallery, profile_id, render_backend, project_root)
+            entries.extend(kept)
+            print(f"  [skip] {'2D' if render_backend == 'opencv_2d' else '3D'} generation disabled via {flag}"
+                  f" (keeping {len(kept)} existing image(s))")
+            continue
+
+        if render_backend in ("opencv_2d", "blender_3d") and partial_run and not args.dry_run and profile_gallery.exists():
+            shutil.rmtree(profile_gallery)
         profile_gallery.mkdir(parents=True, exist_ok=True)
 
         # Resolve render settings from a matching run_*.yaml if available.
@@ -335,9 +362,6 @@ def main() -> None:
         defect_types = _profile_defect_set(profile_data)
 
         if render_backend == "opencv_2d":
-            if args.skip_2d:
-                print("  [skip] 2D generation disabled via --skip-2d")
-                continue
             for class_name in defect_types:
                 dst = profile_gallery / f"{class_name}.png"
                 if not args.dry_run:
@@ -354,10 +378,6 @@ def main() -> None:
                 print(f"  {class_name:12} [{render_backend}]: -> {rel}" + ("" if cfg_path is None else f" (cfg: {cfg_path.name})"))
 
         elif render_backend == "blender_3d":
-            if args.skip_3d:
-                print("  [skip] 3D generation disabled via --skip-3d")
-                continue
-
             blender_cfg = (cfg.get("render") or {}).get("blender") or {}
             this_exe = str(args.blender or blender_cfg.get("executable", "blender"))
             this_samples = int(args.samples or blender_cfg.get("samples", 64))
@@ -394,8 +414,8 @@ def main() -> None:
 
         for gi, (group_key, group) in enumerate(sorted(staged_3d_groups.items(), key=lambda kv: kv[0]), 1):
             exe, samples, device = group_key
-            jobs: List[Dict[str, Any]] = group["jobs"]
-            overlays: List[Tuple[Path, Dict[str, Any], Dict[str, Any]]] = group["overlays"]
+            jobs: list[dict[str, Any]] = group["jobs"]
+            overlays: list[tuple[Path, dict[str, Any], dict[str, Any]]] = group["overlays"]
             if not jobs:
                 continue
 
@@ -420,7 +440,7 @@ def main() -> None:
                     f"- device: {device!r}\n"
                     f"- jobs: {jobs_path}\n"
                     f"- error: {e}"
-                )
+                ) from e
 
             print("Applying overlays to 3D renders...")
             for path, defect, nominal in overlays:

@@ -1,23 +1,24 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any
+from collections.abc import Callable
 
 from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
 
 
-StatusCallback = Callable[[str, Optional[Path]], None]
+StatusCallback = Callable[[str, Path | None], None]
 
 
 @dataclass(frozen=True)
 class RenderRequest:
-    profile_data: Dict[str, Any]
-    run_data: Dict[str, Any]
+    profile_data: dict[str, Any]
+    run_data: dict[str, Any]
 
 
 class BlenderLivePreviewWorker:
@@ -29,11 +30,16 @@ class BlenderLivePreviewWorker:
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
         self._running = True
-        self._pending: Optional[RenderRequest] = None
+        self._pending: RenderRequest | None = None
         self._thread = threading.Thread(target=self._loop, name="blender-live-preview", daemon=True)
         self._thread.start()
 
     def submit(self, req: RenderRequest) -> None:
+        # Snapshot the dicts: callers pass live store data that the UI thread keeps mutating.
+        req = RenderRequest(
+            profile_data=copy.deepcopy(req.profile_data),
+            run_data=copy.deepcopy(req.run_data),
+        )
         with self._cv:
             self._pending = req
             self._cv.notify()
@@ -78,8 +84,7 @@ class BlenderLivePreviewWorker:
         if not isinstance(profile_data.get("render_3d"), dict):
             raise ValueError("profile.render_3d missing")
 
-        profile_id = str(((profile_data.get("profile") or {}).get("profile_id") or "profile")).strip() or "profile"
-        footprint = str(((profile_data.get("component") or {}).get("footprint") or "chip_2pad")).strip() or "chip_2pad"
+        footprint = str((profile_data.get("component") or {}).get("footprint") or "chip_2pad").strip() or "chip_2pad"
         nominal_dims = ((profile_data.get("component") or {}).get("nominal_dims_mm") or {})
         geometry_ranges = profile_data.get("geometry_ranges") or {}
 
@@ -138,7 +143,7 @@ class BlenderLivePreviewWorker:
         return img_path
 
     @staticmethod
-    def _nominal_from_ranges(geometry_ranges: Dict[str, Any]) -> Dict[str, float]:
+    def _nominal_from_ranges(geometry_ranges: dict[str, Any]) -> dict[str, float]:
         def mid(name: str, fallback: float) -> float:
             raw = geometry_ranges.get(name, [fallback, fallback])
             if isinstance(raw, list) and len(raw) == 2:

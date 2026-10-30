@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any
+from typing import Any
 
 import torch
 import torch.nn as nn
-from torchvision import models, transforms
+from torchvision import transforms
 import cv2
 import numpy as np
 
 from simple_sim.data_loader import IMAGENET_MEAN, IMAGENET_STD
+from simple_sim.models import load_checkpoint_model
 
 _LOG = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class ModelWrapper:
         """
         self.model_path = model_path
         self.device = torch.device(device)
-        self.model: Optional[nn.Module] = None
+        self.model: nn.Module | None = None
         self.class_names: list[str] = []
         self.transform = None
 
@@ -47,22 +48,12 @@ class ModelWrapper:
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model not found: {self.model_path}")
 
-        # Load checkpoint
-        checkpoint = torch.load(self.model_path, map_location=self.device)
-        self.class_names = checkpoint['class_names']
-        num_classes = len(self.class_names)
-
-        # Create model
-        self.model = models.resnet18()
-        num_features = self.model.fc.in_features
-        self.model.fc = nn.Linear(num_features, num_classes)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.model = self.model.to(self.device)
-        self.model.eval()
+        # Shared loader: builds the ResNet18 head (or an ensemble) and puts it in eval mode on device.
+        self.model, self.class_names, _checkpoint = load_checkpoint_model(self.model_path, self.device)
 
         self.transform = _INFERENCE_TRANSFORM
 
-    def predict(self, image_path: Path) -> Tuple[str, float, np.ndarray]:
+    def predict(self, image_path: Path) -> tuple[str, float, np.ndarray]:
         """Run inference on single image.
 
         Args:
@@ -97,7 +88,7 @@ class ModelWrapper:
         return predicted_class, confidence_value, probs_array
 
 
-def load_model(model_path: Path, device: str = 'cpu') -> Optional[ModelWrapper]:
+def load_model(model_path: Path, device: str = 'cpu') -> ModelWrapper | None:
     """Load model from checkpoint.
 
     Args:
@@ -114,7 +105,7 @@ def load_model(model_path: Path, device: str = 'cpu') -> Optional[ModelWrapper]:
         return None
 
 
-def predict_image(model: ModelWrapper, image_path: Path) -> Optional[Dict[str, Any]]:
+def predict_image(model: ModelWrapper, image_path: Path) -> dict[str, Any] | None:
     """Predict single image and return results as dictionary.
 
     Args:

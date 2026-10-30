@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 import json
 from datetime import datetime
 
+from gui.utils.dataset_catalog import list_dataset_dirs
 from gui.utils.validation_suite import run_validation_suite
 from gui.utils.flag_manager import FlagManager
 
@@ -19,19 +20,10 @@ class ValidationLogic:
     def set_dataset(self, dataset_dir: Path) -> None:
         self.flag_manager = FlagManager(dataset_dir)
 
-    def get_datasets(self) -> List[Path]:
-        sim_data = self.sim_root / "outputs" / "sim_data"
-        runs = sim_data / "runs"
-        versions = sim_data / "versions"
-        runs.mkdir(parents=True, exist_ok=True)
-        versions.mkdir(parents=True, exist_ok=True)
-        
-        cand: list[Path] = []
-        cand.extend([p for p in runs.iterdir() if p.is_dir()])
-        cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
-        return cand
+    def get_datasets(self) -> list[Path]:
+        return list_dataset_dirs(self.sim_root)
 
-    def run_validation(self, dataset_dir: Path, checks: Dict[str, bool]) -> Dict[str, Any]:
+    def run_validation(self, dataset_dir: Path, checks: dict[str, bool]) -> dict[str, Any]:
         results = run_validation_suite(
             dataset_dir,
             run_schema=checks.get("schema", False),
@@ -51,12 +43,12 @@ class ValidationLogic:
 
         return results
 
-    def get_all_flagged_samples(self) -> List[str]:
+    def get_all_flagged_samples(self) -> list[str]:
         if not self.flag_manager:
             return []
         return self.flag_manager.get_all_flagged_samples()
 
-    def get_flags(self, sample_id: str) -> List[Dict[str, str]]:
+    def get_flags(self, sample_id: str) -> list[dict[str, str]]:
         if not self.flag_manager:
             return []
         return self.flag_manager.get_flags(sample_id)
@@ -70,7 +62,7 @@ class ValidationLogic:
             for sample_id in self.flag_manager.get_all_flagged_samples():
                 self.flag_manager.remove_flag(sample_id)
 
-    def export_report(self, results: Dict[str, Any], dataset_dir: Path) -> str:
+    def export_report(self, results: dict[str, Any], dataset_dir: Path) -> str:
         output_path = dataset_dir / f"validation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
         try:

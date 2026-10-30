@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Iterator, Type
+from collections.abc import Iterable, Iterator
 
 from gui.tabs.analysis.tab import AnalysisTab
 from gui.tabs.board_detection.tab import BoardDetectionTab
@@ -20,7 +20,7 @@ from gui.tabs.weights.tab import WeightsTab
 class TabSpec:
     key: str
     title: str
-    cls: Type[BaseTab]
+    cls: type[BaseTab]
 
 
 class TabRegistry:

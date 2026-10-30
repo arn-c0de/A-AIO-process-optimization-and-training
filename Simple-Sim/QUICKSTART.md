@@ -4,7 +4,7 @@ Get started with Simple-Sim in 5 minutes.
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.10+ (required by matplotlib>=3.10.8)
 - 2GB disk space
 - (Optional) CUDA-capable GPU for faster training
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import tkinter as tk
 from tkinter import ttk
@@ -24,13 +23,13 @@ class HQPreviewPanel(ttk.Frame):
         self.canvas.pack(fill="both", expand=True, padx=6, pady=(0, 6))
 
         self._img = None
-        self._img_path: Optional[Path] = None
+        self._img_path: Path | None = None
         self.canvas.bind("<Configure>", lambda _e: self._redraw())
 
     def set_status(self, status: str) -> None:
         self.status_var.set(status)
 
-    def set_image(self, path: Optional[Path]) -> None:
+    def set_image(self, path: Path | None) -> None:
         self._img_path = Path(path) if path else None
         self.path_var.set(str(self._img_path) if self._img_path else "")
         self._redraw()

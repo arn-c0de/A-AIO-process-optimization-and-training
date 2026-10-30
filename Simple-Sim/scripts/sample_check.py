@@ -12,47 +12,29 @@ Example:
 from __future__ import annotations
 
 import argparse
-import json
 import random
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
-from torchvision import models, transforms
 
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
+from simple_sim.data_loader import preprocess_bgr
+from simple_sim.models import load_checkpoint_model as _load_checkpoint_model
 
 
 def load_checkpoint_model(model_path: Path, device: torch.device):
-    checkpoint = torch.load(model_path, map_location=device)
-    class_names = checkpoint["class_names"]
-    num_classes = len(class_names)
-
-    model = models.resnet18(weights=None)
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
-    model.eval()
+    model, class_names, _ = _load_checkpoint_model(model_path, device)
     return model, class_names
 
 
 def preprocess(img_bgr: np.ndarray) -> torch.Tensor:
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    tfm = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
-    return tfm(img_rgb)
+    return preprocess_bgr(img_bgr)
 
 
 def main() -> None:
@@ -79,7 +61,7 @@ def main() -> None:
     id_to_label = {r.id: r.class_name for r in label_rows}
 
     # Collect candidates per class for the requested split.
-    candidates: Dict[str, List[str]] = {c: [] for c in class_names}
+    candidates: dict[str, list[str]] = {c: [] for c in class_names}
     want_token = f"/{args.split}/"
     for sid, cls in id_to_label.items():
         if want_token not in sid:
@@ -88,7 +70,7 @@ def main() -> None:
             candidates[cls].append(sid)
 
     rng = random.Random(args.seed)
-    chosen: List[Tuple[str, str]] = []  # (id, gt)
+    chosen: list[tuple[str, str]] = []  # (id, gt)
     for cls in class_names:
         arr = candidates.get(cls, [])
         if not arr:
@@ -129,7 +111,7 @@ def main() -> None:
             img_path = data_dir / meta.image_path
             img_bgr = cv2.imread(str(img_path))
             if img_bgr is None:
-                raise IOError(f"Failed to load image: {img_path}")
+                raise OSError(f"Failed to load image: {img_path}")
             xs.append(preprocess(img_bgr))
             ids.append(sid)
             gts.append(gt)

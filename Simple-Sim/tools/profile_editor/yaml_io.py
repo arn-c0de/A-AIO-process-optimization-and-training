@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 
@@ -10,7 +10,7 @@ class YamlError(Exception):
     """Raised when YAML cannot be read/written."""
 
 
-def load_yaml(path: Path) -> Dict[str, Any]:
+def load_yaml(path: Path) -> dict[str, Any]:
     path = Path(path)
     if not path.exists():
         raise YamlError(f"YAML file not found: {path}")
@@ -26,11 +26,11 @@ def load_yaml(path: Path) -> Dict[str, Any]:
     return data
 
 
-def dump_yaml(data: Dict[str, Any]) -> str:
+def dump_yaml(data: dict[str, Any]) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=False)
 
 
-def save_yaml(path: Path, data: Dict[str, Any]) -> None:
+def save_yaml(path: Path, data: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")

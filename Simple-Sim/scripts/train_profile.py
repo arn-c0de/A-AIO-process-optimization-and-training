@@ -7,7 +7,6 @@ Usage:
 
 import argparse
 import sys
-import os
 from pathlib import Path
 import yaml
 import time
@@ -15,13 +14,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import models
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.data_loader import ProfileDataset
-from simple_sim.metrics import compute_metrics, format_metrics
+from simple_sim.data_loader import ProfileDataset, make_loader_kwargs
+from simple_sim.models import build_resnet18
+from simple_sim.rng import resolve_train_seed, seed_everything
 from simple_sim.telemetry import emit
 from simple_sim.manifest import read_dataset_manifest, hash_file
 from simple_sim.schema import read_jsonl, LabelRow
@@ -47,8 +45,12 @@ def main():
 
     # Load config from dataset
     config_path = data_dir / 'config.yaml'
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:
         config = yaml.safe_load(f)
+
+    # Reproducibility: seed Python/NumPy/PyTorch from the dataset config.
+    train_seed = resolve_train_seed(config)
+    seed_everything(train_seed)
 
     # Load manifest and get profile list
     manifest_path = data_dir / 'dataset_manifest.json'
@@ -69,11 +71,12 @@ def main():
         raise ValueError(f"Profile classifier requires 2+ profiles, found: {profile_names}")
 
     num_classes = len(profile_names)
-    print(f"Profile classifier training")
+    print("Profile classifier training")
     print(f"  Dataset: {data_dir}")
     print(f"  Profiles ({num_classes}): {profile_names}")
     print(f"  Device: {device}")
     print(f"  AMP: {use_amp}")
+    print(f"  Seed: {train_seed}")
 
     # Extract training parameters
     train_config = config['train']
@@ -82,14 +85,7 @@ def main():
     lr = train_config['lr']
     weight_decay = train_config['weight_decay']
     pretrained = train_config.get('pretrained', True)
-    num_workers = int(train_config.get('num_workers', 0) or 0)
-    effective_num_workers = num_workers
-    if device.type == "cuda" and effective_num_workers <= 0:
-        cpu_count = max(1, int(os.cpu_count() or 1))
-        effective_num_workers = max(2, min(8, cpu_count - 1 if cpu_count > 1 else 1))
-        print(f"  Num workers: {num_workers} (auto-tuned to {effective_num_workers} for CUDA)")
-    else:
-        print(f"  Num workers: {effective_num_workers}")
+    loader_kwargs = make_loader_kwargs(train_config.get('num_workers', 0), device)
 
     # Create datasets
     print("\nLoading datasets...")
@@ -109,31 +105,14 @@ def main():
         if count == 0:
             raise ValueError(f"Profile '{name}' has 0 training samples. Check dataset generation.")
 
-    loader_kwargs = {
-        "num_workers": effective_num_workers,
-        "pin_memory": (device.type == "cuda"),
-    }
-    if effective_num_workers > 0:
-        loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = 2
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
     # Create model
     print("\nInitializing ResNet18...")
-    if pretrained:
-        try:
-            model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
-        except Exception as e:
-            print(f"WARNING: Failed to load pretrained weights ({e}). Falling back to random init.")
-            model = models.resnet18(weights=None)
-    else:
-        model = models.resnet18(weights=None)
+    model = build_resnet18(num_classes, pretrained=pretrained)
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
-
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()

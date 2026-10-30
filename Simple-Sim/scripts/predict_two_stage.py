@@ -46,7 +46,7 @@ def main():
     print(f"  Confidence: {result.profile_confidence:.4f}")
     if result.review_flag:
         print(f"  ** REVIEW FLAG: confidence below {args.min_confidence} **")
-    print(f"  All probabilities:")
+    print("  All probabilities:")
     for name, prob in sorted(result.profile_probabilities.items(), key=lambda x: -x[1]):
         print(f"    {name:<30} {prob:.4f}")
 
@@ -54,7 +54,7 @@ def main():
     print("Stage 2: Defect Classification")
     print(f"  Predicted defect: {result.defect_class}")
     print(f"  Confidence: {result.defect_confidence:.4f}")
-    print(f"  All probabilities:")
+    print("  All probabilities:")
     for name, prob in sorted(result.defect_probabilities.items(), key=lambda x: -x[1]):
         print(f"    {name:<15} {prob:.4f}")
 

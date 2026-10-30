@@ -75,7 +75,8 @@ PY
 
 if (( ${#missing_mods[@]} )); then
   echo "[info] Missing Python modules in venv: ${missing_mods[*]}"
-  "$PYTHON_BIN" -m pip install -q --upgrade pip
+  # Best-effort: must not abort offline runs under `set -e`.
+  "$PYTHON_BIN" -m pip install -q --upgrade pip || true
 
   # Install minimal deps (fast) but ensure they're listed in requirements.txt.
   to_install=()

@@ -25,9 +25,10 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -35,13 +36,14 @@ import numpy as np
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from gui.components.filter_popup import open_filter_popup
-from gui.utils.filter_profile_store import is_filter_popup_extra_key, parse_bool_like
-
 from simple_sim.config import load_config, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generators.blender_3d import write_jobs_jsonl, render_blender_batch
+from simple_sim.generators.filter_settings import default_filter_values_for_popup, normalize_image_filters
+from simple_sim.generators.opencv2d.geometry import sample_nominal_geometry
 from simple_sim.profile_hash import load_profile
+
+from gui.utils.filter_profile_store import is_filter_popup_extra_key, parse_bool_like
 
 
 BACKEND_2D = "opencv_2d"
@@ -49,7 +51,7 @@ BACKEND_3D = "blender_3d"
 BACKEND_CHOICES = [BACKEND_2D, BACKEND_3D, "both", "auto"]
 
 # (profile_id, backend, defect, rel_image_path)
-PreviewRec = Tuple[str, str, str, str]
+PreviewRec = tuple[str, str, str, str]
 
 
 @dataclass(frozen=True)
@@ -60,15 +62,16 @@ class RenderSettings:
     blender_executable: str
     cycles_samples: int
     device: str
+    engine: str = "BLENDER_EEVEE"
 
 
-def _shared_settings_path(sim_root: Path, explicit_path: Optional[str] = None) -> Path:
+def _shared_settings_path(sim_root: Path, explicit_path: str | None = None) -> Path:
     if explicit_path:
         return Path(explicit_path).expanduser().resolve()
     return (Path(sim_root) / "outputs" / "gui" / "settings.json").resolve()
 
 
-def _read_settings_json(path: Path) -> Dict[str, Any]:
+def _read_settings_json(path: Path) -> dict[str, Any]:
     try:
         if not path.exists():
             return {}
@@ -78,284 +81,109 @@ def _read_settings_json(path: Path) -> Dict[str, Any]:
         return {}
 
 
-def _write_settings_json(path: Path, data: Dict[str, Any]) -> None:
+def _write_settings_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     tmp.replace(path)
 
 
-def _normalize_filter_settings(d: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    src = d or {}
-
-    def _bool(name: str, default: bool) -> bool:
-        v = src.get(name, default)
-        if isinstance(v, bool):
-            return v
-        if isinstance(v, (int, float)):
-            return bool(v)
-        if isinstance(v, str):
-            return v.strip().lower() in {"1", "true", "yes", "on"}
-        return default
-
-    def _f(name: str, default: float, lo: float = 0.0, hi: float = 4.0) -> float:
-        try:
-            x = float(src.get(name, default))
-        except Exception:
-            x = float(default)
-        return max(lo, min(hi, x))
-
-    def _s(name: str, default: str) -> str:
-        return str(src.get(name, default) or default)
-
-    return {
-        # Existing filters
-        "cardinal_rotation_90": _bool("cardinal_rotation_90", True),
-        "enable_rotation": _bool("enable_rotation", True),
-        "enable_blur": _bool("enable_blur", True),
-        "enable_grain": _bool("enable_grain", True),
-        "enable_brightness": _bool("enable_brightness", True),
-        "enable_contrast": _bool("enable_contrast", True),
-        "rotation_strength": _f("rotation_strength", 1.0),
-        "blur_strength": _f("blur_strength", 1.0),
-        "grain_strength": _f("grain_strength", 1.0),
-        "brightness_strength": _f("brightness_strength", 1.0),
-        "contrast_strength": _f("contrast_strength", 1.0),
-        # High priority new filters
-        "enable_perspective": _bool("enable_perspective", False),
-        "perspective_strength": _f("perspective_strength", 1.0, 0.0, 2.0),
-        "enable_motion_blur": _bool("enable_motion_blur", True),
-        "motion_blur_strength": _f("motion_blur_strength", 1.0, 0.0, 3.0),
-        "enable_saturation": _bool("enable_saturation", True),
-        "saturation_factor": _f("saturation_factor", 1.0, 0.5, 1.5),
-        "enable_hue_shift": _bool("enable_hue_shift", True),
-        "hue_shift_deg": _f("hue_shift_deg", 0.0, -30.0, 30.0),
-        "enable_shadow": _bool("enable_shadow", True),
-        "shadow_strength": _f("shadow_strength", 0.3, 0.0, 0.8),
-        "enable_reflection": _bool("enable_reflection", False),
-        "reflection_strength": _f("reflection_strength", 0.5, 0.0, 1.0),
-        # Medium/Low priority new filters
-        "enable_vignetting": _bool("enable_vignetting", False),
-        "vignetting_strength": _f("vignetting_strength", 1.0, 0.0, 2.0),
-        "enable_chromatic_aberration": _bool("enable_chromatic_aberration", False),
-        "chromatic_strength": _f("chromatic_strength", 1.0, 0.0, 2.0),
-        "enable_jpeg_compression": _bool("enable_jpeg_compression", False),
-        "jpeg_quality": int(_f("jpeg_quality", 85, 50, 95)),
-        "enable_color_temperature": _bool("enable_color_temperature", False),
-        "color_temperature_kelvin": int(_f("color_temperature_kelvin", 5500, 2500, 7500)),
-        "enable_lens_distortion": _bool("enable_lens_distortion", False),
-        "distortion_k1": _f("distortion_k1", 0.0, -0.3, 0.3),
-        "enable_dust": _bool("enable_dust", False),
-        "dust_density": _f("dust_density", 0.3, 0.0, 1.0),
-        "enable_sharpen": _bool("enable_sharpen", False),
-        "sharpen_strength": _f("sharpen_strength", 1.0, 0.0, 2.0),
-        # Realism mode
-        "filter_mode": _s("filter_mode", "custom"),
-        "realism_enabled": _bool("realism_enabled", False),
-        "realism_constraints_enabled": _bool("realism_constraints_enabled", True),
-        "realism_profile_id": _s("realism_profile_id", "profile_industrial_cam"),
-        "realism_k_prob_0": _f("realism_k_prob_0", 0.60, 0.0, 1.0),
-        "realism_k_prob_1": _f("realism_k_prob_1", 0.35, 0.0, 1.0),
-        "realism_k_prob_2": _f("realism_k_prob_2", 0.05, 0.0, 1.0),
-        "realism_group_G1_prob": _f("realism_group_G1_prob", 0.35, 0.0, 1.0),
-        "realism_group_G2_prob": _f("realism_group_G2_prob", 0.15, 0.0, 1.0),
-        "realism_group_G3_prob": _f("realism_group_G3_prob", 0.20, 0.0, 1.0),
-        "realism_group_G4_prob": _f("realism_group_G4_prob", 0.25, 0.0, 1.0),
-        "realism_group_G5_prob": _f("realism_group_G5_prob", 0.12, 0.0, 1.0),
-        "realism_group_G6_prob": _f("realism_group_G6_prob", 0.18, 0.0, 1.0),
-        "realism_group_G7_prob": _f("realism_group_G7_prob", 0.10, 0.0, 1.0),
-        "realism_group_G8_prob": _f("realism_group_G8_prob", 0.08, 0.0, 1.0),
-    }
+def _normalize_filter_settings(d: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Normalize image-filter values with the defaults shared by GUI and generator."""
+    return normalize_image_filters(d)
 
 
-def _filter_settings_to_profile_store(d: Dict[str, Any]) -> Dict[str, Any]:
-    n = _normalize_filter_settings(d)
-    out = {
-        # Existing filters
-        "cardinal_rotation_90": bool(n["cardinal_rotation_90"]),
-        "enable_rotation": bool(n["enable_rotation"]),
-        "enable_blur": bool(n["enable_blur"]),
-        "enable_grain": bool(n["enable_grain"]),
-        "enable_brightness": bool(n["enable_brightness"]),
-        "enable_contrast": bool(n["enable_contrast"]),
-        "rotation_strength": f"{float(n['rotation_strength']):.2f}",
-        "blur_strength": f"{float(n['blur_strength']):.2f}",
-        "grain_strength": f"{float(n['grain_strength']):.2f}",
-        "brightness_strength": f"{float(n['brightness_strength']):.2f}",
-        "contrast_strength": f"{float(n['contrast_strength']):.2f}",
-        # High priority new filters
-        "enable_perspective": bool(n["enable_perspective"]),
-        "perspective_strength": f"{float(n['perspective_strength']):.2f}",
-        "enable_motion_blur": bool(n["enable_motion_blur"]),
-        "motion_blur_strength": f"{float(n['motion_blur_strength']):.2f}",
-        "enable_saturation": bool(n["enable_saturation"]),
-        "saturation_factor": f"{float(n['saturation_factor']):.2f}",
-        "enable_hue_shift": bool(n["enable_hue_shift"]),
-        "hue_shift_deg": f"{float(n['hue_shift_deg']):.2f}",
-        "enable_shadow": bool(n["enable_shadow"]),
-        "shadow_strength": f"{float(n['shadow_strength']):.2f}",
-        "enable_reflection": bool(n["enable_reflection"]),
-        "reflection_strength": f"{float(n['reflection_strength']):.2f}",
-        # Medium/Low priority new filters
-        "enable_vignetting": bool(n["enable_vignetting"]),
-        "vignetting_strength": f"{float(n['vignetting_strength']):.2f}",
-        "enable_chromatic_aberration": bool(n["enable_chromatic_aberration"]),
-        "chromatic_strength": f"{float(n['chromatic_strength']):.2f}",
-        "enable_jpeg_compression": bool(n["enable_jpeg_compression"]),
-        "jpeg_quality": str(int(n["jpeg_quality"])),
-        "enable_color_temperature": bool(n["enable_color_temperature"]),
-        "color_temperature_kelvin": str(int(n["color_temperature_kelvin"])),
-        "enable_lens_distortion": bool(n["enable_lens_distortion"]),
-        "distortion_k1": f"{float(n['distortion_k1']):.2f}",
-        "enable_dust": bool(n["enable_dust"]),
-        "dust_density": f"{float(n['dust_density']):.2f}",
-        "enable_sharpen": bool(n["enable_sharpen"]),
-        "sharpen_strength": f"{float(n['sharpen_strength']):.2f}",
-    }
-    for k, v in d.items():
-        if not isinstance(k, str):
-            continue
-        if not is_filter_popup_extra_key(k):
-            continue
-        if k.endswith("_randomize") or k.endswith("_enabled"):
-            out[k] = parse_bool_like(v, default=False)
-        elif k == "filter_mode" or k.endswith("_profile_id"):
-            out[k] = str(v)
-        elif k.endswith("_min") or k.endswith("_max"):
-            try:
-                out[k] = f"{float(v):.2f}"
-            except Exception:
-                pass
-        elif k.startswith("realism_"):
-            try:
-                out[k] = f"{float(v):.4f}"
-            except Exception:
-                pass
+def _encode_filter_store_value(key: str, value: Any) -> Any:
+    """Encode one normalized filter value in the popup/profile-store format."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.4f}" if key.startswith("realism_") else f"{value:.2f}"
+    return value
+
+
+def _filter_settings_to_profile_store(d: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return ``d`` merged over ``existing`` and encoded like the GUI filter popup stores it.
+
+    Every key the shared normalizer knows is (re)encoded; all other keys from the
+    stored profile and from ``d`` are kept verbatim so filters this script does not
+    know about survive a load/save round trip.
+    """
+    merged: dict[str, Any] = {}
+    for src in (existing, d):
+        for k, v in (src or {}).items():
+            if isinstance(k, str):
+                merged[k] = v
+    out = dict(merged)
+    for k, v in normalize_image_filters(merged).items():
+        out[k] = _encode_filter_store_value(k, v)
     return out
 
 
-def _load_shared_filter_profiles(settings_path: Path) -> Tuple[Dict[str, Dict[str, Any]], str, Dict[str, Any]]:
+def _flat_filter_setting_keys() -> list[str]:
+    """Filter keys mirrored as flat ``pipeline.filter.<key>`` entries in settings.json."""
+    return [
+        k for k in default_filter_values_for_popup()
+        if k != "enable" and not is_filter_popup_extra_key(k)
+    ]
+
+
+def _load_shared_filter_profiles(settings_path: Path) -> tuple[dict[str, dict[str, Any]], str, dict[str, Any]]:
     data = _read_settings_json(settings_path)
     raw_profiles = str(data.get("pipeline.filter_profiles_json", "") or "").strip()
     active = str(data.get("pipeline.filter_profile_active", "") or "").strip() or "Default"
-    profiles: Dict[str, Dict[str, Any]] = {}
+    profiles: dict[str, dict[str, Any]] = {}
     if raw_profiles:
         try:
             obj = json.loads(raw_profiles)
             if isinstance(obj, dict):
                 for k, v in obj.items():
                     if isinstance(k, str) and isinstance(v, dict):
-                        profiles[k] = _filter_settings_to_profile_store(v)
+                        # Keep stored profiles verbatim (no key stripping).
+                        profiles[k] = dict(v)
         except Exception:
             profiles = {}
 
-    current = _normalize_filter_settings(
-        {
-            # Existing filters
-            "cardinal_rotation_90": data.get("pipeline.filter.cardinal_rotation_90", True),
-            "enable_rotation": data.get("pipeline.filter.enable_rotation", True),
-            "enable_blur": data.get("pipeline.filter.enable_blur", True),
-            "enable_grain": data.get("pipeline.filter.enable_grain", True),
-            "enable_brightness": data.get("pipeline.filter.enable_brightness", True),
-            "enable_contrast": data.get("pipeline.filter.enable_contrast", True),
-            "rotation_strength": data.get("pipeline.filter.rotation_strength", 1.0),
-            "blur_strength": data.get("pipeline.filter.blur_strength", 1.0),
-            "grain_strength": data.get("pipeline.filter.grain_strength", 1.0),
-            "brightness_strength": data.get("pipeline.filter.brightness_strength", 1.0),
-            "contrast_strength": data.get("pipeline.filter.contrast_strength", 1.0),
-            # High priority new filters
-            "enable_perspective": data.get("pipeline.filter.enable_perspective", False),
-            "perspective_strength": data.get("pipeline.filter.perspective_strength", 1.0),
-            "enable_motion_blur": data.get("pipeline.filter.enable_motion_blur", True),
-            "motion_blur_strength": data.get("pipeline.filter.motion_blur_strength", 1.0),
-            "enable_saturation": data.get("pipeline.filter.enable_saturation", True),
-            "saturation_factor": data.get("pipeline.filter.saturation_factor", 1.0),
-            "enable_hue_shift": data.get("pipeline.filter.enable_hue_shift", True),
-            "hue_shift_deg": data.get("pipeline.filter.hue_shift_deg", 0.0),
-            "enable_shadow": data.get("pipeline.filter.enable_shadow", True),
-            "shadow_strength": data.get("pipeline.filter.shadow_strength", 0.3),
-            "enable_reflection": data.get("pipeline.filter.enable_reflection", False),
-            "reflection_strength": data.get("pipeline.filter.reflection_strength", 0.5),
-            # Medium/Low priority new filters
-            "enable_vignetting": data.get("pipeline.filter.enable_vignetting", False),
-            "vignetting_strength": data.get("pipeline.filter.vignetting_strength", 1.0),
-            "enable_chromatic_aberration": data.get("pipeline.filter.enable_chromatic_aberration", False),
-            "chromatic_strength": data.get("pipeline.filter.chromatic_strength", 1.0),
-            "enable_jpeg_compression": data.get("pipeline.filter.enable_jpeg_compression", False),
-            "jpeg_quality": data.get("pipeline.filter.jpeg_quality", 85),
-            "enable_color_temperature": data.get("pipeline.filter.enable_color_temperature", False),
-            "color_temperature_kelvin": data.get("pipeline.filter.color_temperature_kelvin", 5500),
-            "enable_lens_distortion": data.get("pipeline.filter.enable_lens_distortion", False),
-            "distortion_k1": data.get("pipeline.filter.distortion_k1", 0.0),
-            "enable_dust": data.get("pipeline.filter.enable_dust", False),
-            "dust_density": data.get("pipeline.filter.dust_density", 0.3),
-            "enable_sharpen": data.get("pipeline.filter.enable_sharpen", False),
-            "sharpen_strength": data.get("pipeline.filter.sharpen_strength", 1.0),
-        }
-    )
     if not profiles:
-        profiles = {"Default": _filter_settings_to_profile_store(current)}
+        legacy = {
+            k: data[f"pipeline.filter.{k}"]
+            for k in _flat_filter_setting_keys()
+            if f"pipeline.filter.{k}" in data
+        }
+        profiles = {"Default": _filter_settings_to_profile_store(legacy)}
         active = "Default"
     if active not in profiles:
         active = sorted(profiles.keys(), key=lambda s: s.lower())[0]
     active_profile = profiles.get(active, {})
     current = _normalize_filter_settings(active_profile)
-    if isinstance(active_profile, dict):
-        for k, v in active_profile.items():
-            if isinstance(k, str) and is_filter_popup_extra_key(k):
-                current[k] = v
+    for k, v in active_profile.items():
+        if isinstance(k, str) and k not in current:
+            current[k] = v
     return profiles, active, current
 
 
-def _save_shared_filter_profiles(settings_path: Path, profiles: Dict[str, Dict[str, Any]], active: str, current: Dict[str, Any]) -> None:
+def _save_shared_filter_profiles(settings_path: Path, profiles: dict[str, dict[str, Any]], active: str, current: dict[str, Any]) -> None:
     data = _read_settings_json(settings_path)
     data["pipeline.filter_profiles_json"] = json.dumps(profiles, ensure_ascii=True)
     data["pipeline.filter_profile_active"] = str(active)
 
     cur = _normalize_filter_settings(current)
-    data["pipeline.filter.cardinal_rotation_90"] = bool(cur["cardinal_rotation_90"])
-    data["pipeline.filter.enable_rotation"] = bool(cur["enable_rotation"])
-    data["pipeline.filter.enable_blur"] = bool(cur["enable_blur"])
-    data["pipeline.filter.enable_grain"] = bool(cur["enable_grain"])
-    data["pipeline.filter.enable_brightness"] = bool(cur["enable_brightness"])
-    data["pipeline.filter.enable_contrast"] = bool(cur["enable_contrast"])
-    data["pipeline.filter.rotation_strength"] = f"{float(cur['rotation_strength']):.2f}"
-    data["pipeline.filter.blur_strength"] = f"{float(cur['blur_strength']):.2f}"
-    data["pipeline.filter.grain_strength"] = f"{float(cur['grain_strength']):.2f}"
-    data["pipeline.filter.brightness_strength"] = f"{float(cur['brightness_strength']):.2f}"
-    data["pipeline.filter.contrast_strength"] = f"{float(cur['contrast_strength']):.2f}"
-    # High priority new filters
-    data["pipeline.filter.enable_perspective"] = bool(cur["enable_perspective"])
-    data["pipeline.filter.perspective_strength"] = f"{float(cur['perspective_strength']):.2f}"
-    data["pipeline.filter.enable_motion_blur"] = bool(cur["enable_motion_blur"])
-    data["pipeline.filter.motion_blur_strength"] = f"{float(cur['motion_blur_strength']):.2f}"
-    data["pipeline.filter.enable_saturation"] = bool(cur["enable_saturation"])
-    data["pipeline.filter.saturation_factor"] = f"{float(cur['saturation_factor']):.2f}"
-    data["pipeline.filter.enable_hue_shift"] = bool(cur["enable_hue_shift"])
-    data["pipeline.filter.hue_shift_deg"] = f"{float(cur['hue_shift_deg']):.2f}"
-    data["pipeline.filter.enable_shadow"] = bool(cur["enable_shadow"])
-    data["pipeline.filter.shadow_strength"] = f"{float(cur['shadow_strength']):.2f}"
-    data["pipeline.filter.enable_reflection"] = bool(cur["enable_reflection"])
-    data["pipeline.filter.reflection_strength"] = f"{float(cur['reflection_strength']):.2f}"
-    # Medium/Low priority new filters
-    data["pipeline.filter.enable_vignetting"] = bool(cur["enable_vignetting"])
-    data["pipeline.filter.vignetting_strength"] = f"{float(cur['vignetting_strength']):.2f}"
-    data["pipeline.filter.enable_chromatic_aberration"] = bool(cur["enable_chromatic_aberration"])
-    data["pipeline.filter.chromatic_strength"] = f"{float(cur['chromatic_strength']):.2f}"
-    data["pipeline.filter.enable_jpeg_compression"] = bool(cur["enable_jpeg_compression"])
-    data["pipeline.filter.jpeg_quality"] = str(int(cur["jpeg_quality"]))
-    data["pipeline.filter.enable_color_temperature"] = bool(cur["enable_color_temperature"])
-    data["pipeline.filter.color_temperature_kelvin"] = str(int(cur["color_temperature_kelvin"]))
-    data["pipeline.filter.enable_lens_distortion"] = bool(cur["enable_lens_distortion"])
-    data["pipeline.filter.distortion_k1"] = f"{float(cur['distortion_k1']):.2f}"
-    data["pipeline.filter.enable_dust"] = bool(cur["enable_dust"])
-    data["pipeline.filter.dust_density"] = f"{float(cur['dust_density']):.2f}"
-    data["pipeline.filter.enable_sharpen"] = bool(cur["enable_sharpen"])
-    data["pipeline.filter.sharpen_strength"] = f"{float(cur['sharpen_strength']):.2f}"
+    for k in _flat_filter_setting_keys():
+        v = cur[k]
+        if isinstance(v, bool):
+            data[f"pipeline.filter.{k}"] = v
+        elif isinstance(v, int):
+            data[f"pipeline.filter.{k}"] = str(v)
+        elif isinstance(v, float):
+            data[f"pipeline.filter.{k}"] = f"{v:.2f}"
+        else:
+            data[f"pipeline.filter.{k}"] = v
     _write_settings_json(settings_path, data)
 
 
-def _apply_filter_overrides_to_augment(augment: Dict[str, float], image_filters: Optional[Dict[str, Any]]) -> Dict[str, float]:
+def _apply_filter_overrides_to_augment(augment: dict[str, float], image_filters: dict[str, Any] | None) -> dict[str, float]:
     from simple_sim.generators.opencv_2d import apply_image_filter_overrides  # type: ignore
 
     # Debug preview uses clean base augment values (blur/noise=0, brightness/contrast=1).
@@ -378,152 +206,18 @@ def _apply_filter_overrides_to_augment(augment: Dict[str, float], image_filters:
     return apply_image_filter_overrides(a, f)
 
 
-def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[Dict[str, Any]]) -> None:
-    import cv2  # type: ignore
-    from simple_sim.generators.opencv_2d import (  # type: ignore
-        apply_blur,
-        apply_noise,
-        apply_brightness,
-        apply_contrast,
-        apply_saturation,
-        apply_hue_shift,
-        apply_color_temperature,
-        apply_vignetting,
-        apply_chromatic_aberration,
-        apply_lens_distortion,
-        apply_motion_blur,
-        apply_sharpen,
-        apply_shadow,
-        apply_reflection,
-        apply_dust_particles,
-        apply_jpeg_compression,
-        apply_perspective_transform,
-    )
+def _postprocess_rendered_previews(out_root: Path, jobs: Sequence[dict[str, Any]]) -> None:
+    """Apply the dataset generator's Blender post-filters to preview renders.
 
-    for j in jobs:
-        aug = (j.get("augment") or {})
-        blur_sigma = float(aug.get("blur_sigma", 0.0) or 0.0)
-        noise_stddev = float(aug.get("noise_stddev", 0.0) or 0.0)
-        brightness_factor = float(aug.get("brightness_factor", 1.0) or 1.0)
-        contrast_factor = float(aug.get("contrast_factor", 1.0) or 1.0)
-        saturation_factor = float(aug.get("saturation_factor", 1.0) or 1.0)
-        hue_shift_deg = float(aug.get("hue_shift_deg", 0.0) or 0.0)
-        color_temperature_kelvin = int(aug.get("color_temperature_kelvin", 5500) or 5500)
-        vignetting_strength = float(aug.get("vignetting_strength", 0.0) or 0.0)
-        chromatic_strength = float(aug.get("chromatic_strength", 0.0) or 0.0)
-        distortion_k1 = float(aug.get("distortion_k1", 0.0) or 0.0)
-        distortion_k2 = float(aug.get("distortion_k2", 0.0) or 0.0)
-        motion_blur_strength = float(aug.get("motion_blur_strength", 0.0) or 0.0)
-        motion_blur_angle = float(aug.get("motion_blur_angle", 0.0) or 0.0)
-        sharpen_strength = float(aug.get("sharpen_strength", 0.0) or 0.0)
-        shadow_strength = float(aug.get("shadow_strength", 0.0) or 0.0)
-        shadow_size = float(aug.get("shadow_size", 0.2) or 0.2)
-        reflection_strength = float(aug.get("reflection_strength", 0.0) or 0.0)
-        reflection_size = float(aug.get("reflection_size", 0.15) or 0.15)
-        dust_density = float(aug.get("dust_density", 0.0) or 0.0)
-        dust_size = float(aug.get("dust_size", 2.0) or 2.0)
-        jpeg_quality = int(aug.get("jpeg_quality", 100) or 100)
-        perspective_strength = float(aug.get("perspective_strength", 0.0) or 0.0)
-        perspective_angle_x = float(aug.get("perspective_angle_x", 0.0) or 0.0)
-        perspective_angle_y = float(aug.get("perspective_angle_y", 0.0) or 0.0)
-        rotation_deg = float(aug.get("rotation_deg", 0.0) or 0.0)
-        if (
-            blur_sigma <= 1e-6
-            and noise_stddev <= 1e-6
-            and abs(brightness_factor - 1.0) <= 1e-6
-            and abs(contrast_factor - 1.0) <= 1e-6
-            and abs(saturation_factor - 1.0) <= 1e-6
-            and abs(hue_shift_deg) <= 1e-6
-            and color_temperature_kelvin == 5500
-            and vignetting_strength <= 1e-6
-            and chromatic_strength <= 1e-6
-            and abs(distortion_k1) <= 1e-6
-            and abs(distortion_k2) <= 1e-6
-            and motion_blur_strength <= 1e-6
-            and sharpen_strength <= 1e-6
-            and shadow_strength <= 1e-6
-            and reflection_strength <= 1e-6
-            and dust_density <= 1e-6
-            and jpeg_quality >= 100
-            and perspective_strength <= 1e-6
-            and abs(rotation_deg) <= 1e-6
-        ):
-            continue
-        p = (Path(out_root) / str(j.get("image_path", ""))).resolve()
-        img = cv2.imread(str(p), cv2.IMREAD_COLOR)
-        if img is None:
-            continue
-        rng = np.random.default_rng(int(j.get("seed", 0)))
-        img = apply_blur(img, blur_sigma)
-        img = apply_noise(img, noise_stddev, rng)
-        img = apply_brightness(img, brightness_factor)
-        img = apply_contrast(img, contrast_factor)
-        img = apply_saturation(img, saturation_factor)
-        img = apply_hue_shift(img, hue_shift_deg)
-        img = apply_color_temperature(img, color_temperature_kelvin)
-        img = apply_vignetting(img, vignetting_strength)
-        img = apply_chromatic_aberration(img, chromatic_strength)
-        img = apply_lens_distortion(img, distortion_k1, distortion_k2)
-        img = apply_motion_blur(img, motion_blur_strength, motion_blur_angle)
-        img = apply_sharpen(img, sharpen_strength)
-        img = apply_shadow(img, shadow_strength, shadow_size, rng)
-        img = apply_reflection(img, reflection_strength, reflection_size, rng)
-        img = apply_dust_particles(img, dust_density, dust_size, rng)
-        img = apply_jpeg_compression(img, jpeg_quality)
-        img = apply_perspective_transform(img, perspective_strength, perspective_angle_x, perspective_angle_y)
-        if abs(rotation_deg) > 0.1:
-            h, w = img.shape[:2]
-            center = (w // 2, h // 2)
-            m = cv2.getRotationMatrix2D(center, rotation_deg, 1.0)
-            img = cv2.warpAffine(img, m, (w, h), borderMode=cv2.BORDER_REPLICATE)
-        cv2.imwrite(str(p), img)
-
-
-def _sample_nominal_geometry(
-    roi_config: Dict[str, Any],
-    rng: np.random.Generator,
-    geometry_ranges: Optional[Dict[str, Any]] = None,
-) -> Dict[str, float]:
-    """Local copy of the nominal sampler (kept here to avoid OpenCV dependency).
-
-    Generator 2D imports OpenCV at module import time; previews only need the sampler.
+    Reuses scripts/generate.py so previews match generated datasets. Rotation is not
+    re-applied: render_batch.py already rotates the Blender scene by augment.rotation_deg.
     """
-    defaults = {
-        "pad_width": [25.0, 35.0],
-        "pad_height": [30.0, 40.0],
-        "pad_spacing": [50.0, 65.0],
-        "component_length": [55.0, 65.0],
-        "component_width": [25.0, 35.0],
-    }
-    gr = geometry_ranges or {}
+    from scripts.generate import _postprocess_blender_images
 
-    def _range(name: str) -> Tuple[float, float]:
-        r = gr.get(name, defaults[name])
-        return float(r[0]), float(r[1])
-
-    pad_width = rng.uniform(*_range("pad_width"))
-    pad_height = rng.uniform(*_range("pad_height"))
-    pad_spacing = rng.uniform(*_range("pad_spacing"))
-    component_length = rng.uniform(*_range("component_length"))
-    component_width = rng.uniform(*_range("component_width"))
-
-    result: Dict[str, float] = {
-        "pad_width": float(pad_width),
-        "pad_height": float(pad_height),
-        "pad_spacing": float(pad_spacing),
-        "component_length": float(component_length),
-        "component_width": float(component_width),
-    }
-
-    # Optional for multi-pad footprints (e.g. SOT-23, QFN)
-    if "pad_spacing_y" in gr:
-        lo, hi = float(gr["pad_spacing_y"][0]), float(gr["pad_spacing_y"][1])
-        result["pad_spacing_y"] = float(rng.uniform(lo, hi))
-
-    return result
+    _postprocess_blender_images(list(jobs), Path(out_root))
 
 
-def _get_rotation_jitter_range(cfg: Optional[Dict[str, Any]]) -> Tuple[float, float]:
+def _get_rotation_jitter_range(cfg: dict[str, Any] | None) -> tuple[float, float]:
     """Read augment.rotation_deg_range from config, fallback to [0, 0]."""
     augment_cfg = (cfg or {}).get("augment") or {}
     rr = augment_cfg.get("rotation_deg_range", [0.0, 0.0])
@@ -539,9 +233,9 @@ def _get_rotation_jitter_range(cfg: Optional[Dict[str, Any]]) -> Tuple[float, fl
 def _sample_preview_augment(
     rng: np.random.Generator,
     *,
-    rotation_jitter_range: Tuple[float, float],
+    rotation_jitter_range: tuple[float, float],
     enable_cardinal_rotation_90: bool = True,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Preview augment: keep image clean but randomize global orientation like dataset generation."""
     base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0])) if enable_cardinal_rotation_90 else 0.0
     rot_min, rot_max = rotation_jitter_range
@@ -560,9 +254,9 @@ def _sanitize_dir_name(s: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._@+-]+", "_", s).strip("_") or "profile"
 
 
-def _iter_profile_ids(profiles_dir: Path) -> List[str]:
+def _iter_profile_ids(profiles_dir: Path) -> list[str]:
     # Profile files are `<profile_id>.yaml` where profile_id contains '@'.
-    ids: List[str] = []
+    ids: list[str] = []
     for p in sorted(Path(profiles_dir).glob("*.yaml")):
         if p.name.startswith("."):
             continue
@@ -570,7 +264,7 @@ def _iter_profile_ids(profiles_dir: Path) -> List[str]:
     return ids
 
 
-def _profile_backends(profile: Dict[str, Any]) -> set[str]:
+def _profile_backends(profile: dict[str, Any]) -> set[str]:
     b = (profile.get("profile") or {}).get("supported_render_backends") or []
     out = set()
     for x in b:
@@ -580,10 +274,10 @@ def _profile_backends(profile: Dict[str, Any]) -> set[str]:
     return out
 
 
-def _discover_profiles(profiles_dir: Path, *, backend_mode: str) -> List[Tuple[str, Dict[str, Any], set[str]]]:
+def _discover_profiles(profiles_dir: Path, *, backend_mode: str) -> list[tuple[str, dict[str, Any], set[str]]]:
     """Discover profiles supporting 2D and/or 3D."""
     backend_mode = str(backend_mode or "auto")
-    out: List[Tuple[str, Dict[str, Any], set[str]]] = []
+    out: list[tuple[str, dict[str, Any], set[str]]] = []
     for pid in _iter_profile_ids(profiles_dir):
         try:
             prof = load_profile(pid, profiles_dir)
@@ -601,7 +295,7 @@ def _discover_profiles(profiles_dir: Path, *, backend_mode: str) -> List[Tuple[s
     return out
 
 
-def _parse_csv_list(s: Optional[str]) -> List[str]:
+def _parse_csv_list(s: str | None) -> list[str]:
     if not s:
         return []
     parts = []
@@ -612,13 +306,13 @@ def _parse_csv_list(s: Optional[str]) -> List[str]:
     return parts
 
 
-def _parse_selection(selection: str, n: int) -> List[int]:
+def _parse_selection(selection: str, n: int) -> list[int]:
     """Parse '1,2,4-6,all' into 0-based indices."""
     selection = (selection or "").strip().lower()
     if selection in {"a", "all", "*"}:
         return list(range(n))
 
-    idxs: List[int] = []
+    idxs: list[int] = []
     for part in selection.split(","):
         part = part.strip()
         if not part:
@@ -650,10 +344,10 @@ def _parse_selection(selection: str, n: int) -> List[int]:
     return final
 
 
-def _find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: str) -> List[Path]:
+def _find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: str) -> list[Path]:
     configs_dir = Path(configs_dir)
     backend = str(backend)
-    hits: List[Path] = []
+    hits: list[Path] = []
     for p in sorted(configs_dir.glob("*.yaml")):
         try:
             cfg = load_config(p)
@@ -668,19 +362,19 @@ def _find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: s
 
 
 def _auto_select_profiles_with_missing_previews(
-    discovered: List[Tuple[str, Dict[str, Any], set[str]]],
+    discovered: list[tuple[str, dict[str, Any], set[str]]],
     *,
     profiles_dir: Path,
     out_root: Path,
     backend_mode: str,
     states_override: str,
-) -> List[str]:
+) -> list[str]:
     """Return profile IDs that are new/incomplete in preview output.
 
     A profile is selected when at least one expected preview image is missing for
     the requested backend mode and defect states.
     """
-    selected: List[str] = []
+    selected: list[str] = []
     for pid, prof, backends in discovered:
         defect_types = _parse_csv_list(states_override) or list(prof.get("defect_set") or [])
         if not defect_types:
@@ -719,7 +413,7 @@ def _auto_select_profiles_with_missing_previews(
     return selected
 
 
-def _settings_from_config(cfg: Dict[str, Any]) -> RenderSettings:
+def _settings_from_config(cfg: dict[str, Any]) -> RenderSettings:
     validate_config(cfg)
     roi = cfg["roi"]
     blender = (cfg.get("render") or {}).get("blender") or {}
@@ -730,90 +424,199 @@ def _settings_from_config(cfg: Dict[str, Any]) -> RenderSettings:
         blender_executable=str(blender.get("executable", "blender")),
         cycles_samples=int(blender.get("samples", 64)),
         device=str(blender.get("device", "CPU")),
+        engine=str(blender.get("engine", "BLENDER_EEVEE")),
     )
 
 
 def _load_preview_config_for_backend(
     *,
-    forced_cfg: Optional[Dict[str, Any]],
+    forced_cfg: dict[str, Any] | None,
     sim_root: Path,
     configs_dir: Path,
     profile_id: str,
     backend: str,
-) -> Dict[str, Any]:
+    forced_label: str = "",
+) -> tuple[dict[str, Any], str]:
+    """Return (config, source description) for one profile/backend.
+
+    A forced config (--config) is used only for its own backend; other backends
+    (e.g. with --backend=both) fall back to per-profile auto matching.
+    """
     if forced_cfg is not None:
-        cfg = forced_cfg
-        validate_config(cfg)
-        cfg_backend = str((cfg.get("render") or {}).get("backend", ""))
-        if cfg_backend != backend:
-            raise RuntimeError(f"Forced --config backend={cfg_backend!r} does not match requested backend={backend!r}")
-        return cfg
+        cfg_backend = str((forced_cfg.get("render") or {}).get("backend", ""))
+        if cfg_backend == backend:
+            validate_config(forced_cfg)
+            return forced_cfg, f"(forced) {forced_label}".rstrip()
 
     matches = _find_matching_run_configs(configs_dir, profile_id=profile_id, backend=backend)
     if matches:
         cfg = load_config(matches[0])
+        try:
+            rel = str(matches[0].relative_to(sim_root))
+        except Exception:
+            rel = str(matches[0])
+        cfg_src = f"(auto) {rel}"
     else:
         fallback = "configs/run_0001.yaml" if backend == BACKEND_2D else "configs/run_0001_3d.yaml"
-        cfg = load_config(sim_root / fallback)
+        cfg = load_config(Path(sim_root) / fallback)
+        cfg_src = f"(fallback) {fallback}"
     validate_config(cfg)
-    return cfg
+    return cfg, cfg_src
 
 
 def _apply_3d_settings_overrides(
     settings: RenderSettings,
     *,
-    roi_override: Optional[Tuple[int, int, float]],
+    roi_override: tuple[int, int, float] | None,
     blender_override: str,
     samples_override: int,
     device_override: str,
 ) -> RenderSettings:
     if roi_override is not None:
         w, h, mpp = roi_override
-        settings = RenderSettings(
-            roi_width_px=int(w),
-            roi_height_px=int(h),
-            mm_per_px=float(mpp),
-            blender_executable=settings.blender_executable,
-            cycles_samples=settings.cycles_samples,
-            device=settings.device,
-        )
+        settings = replace(settings, roi_width_px=int(w), roi_height_px=int(h), mm_per_px=float(mpp))
     if blender_override:
-        settings = RenderSettings(
-            roi_width_px=settings.roi_width_px,
-            roi_height_px=settings.roi_height_px,
-            mm_per_px=settings.mm_per_px,
-            blender_executable=str(blender_override),
-            cycles_samples=settings.cycles_samples,
-            device=settings.device,
-        )
+        settings = replace(settings, blender_executable=str(blender_override))
     if samples_override and int(samples_override) > 0:
-        settings = RenderSettings(
-            roi_width_px=settings.roi_width_px,
-            roi_height_px=settings.roi_height_px,
-            mm_per_px=settings.mm_per_px,
-            blender_executable=settings.blender_executable,
-            cycles_samples=int(samples_override),
-            device=settings.device,
-        )
+        settings = replace(settings, cycles_samples=int(samples_override))
     if device_override:
-        settings = RenderSettings(
-            roi_width_px=settings.roi_width_px,
-            roi_height_px=settings.roi_height_px,
-            mm_per_px=settings.mm_per_px,
-            blender_executable=settings.blender_executable,
-            cycles_samples=settings.cycles_samples,
-            device=str(device_override),
-        )
+        settings = replace(settings, device=str(device_override))
     return settings
 
 
-def _write_index_html(out_root: Path, previews: List[PreviewRec]) -> None:
+def _resolve_defect_types(profile: dict[str, Any], states_override: str | None) -> list[str]:
+    defect_types = _parse_csv_list(states_override) or list(profile.get("defect_set") or [])
+    return defect_types or ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+
+
+def _preview_rel_path(profile_id: str, backend: str, defect_type: str) -> str:
+    return f"previews/{_sanitize_dir_name(profile_id)}/{backend}/{str(defect_type)}.png"
+
+
+def _resolve_2d_roi(cfg: dict[str, Any], roi_override: tuple[int, int, float] | None) -> tuple[int, int, float]:
+    if roi_override is not None:
+        return int(roi_override[0]), int(roi_override[1]), float(roi_override[2])
+    roi = cfg["roi"]
+    return int(roi["width_px"]), int(roi["height_px"]), float(roi["mm_per_px"])
+
+
+def _render_2d_previews(
+    *,
+    profile_id: str,
+    profile: dict[str, Any],
+    cfg: dict[str, Any],
+    out_root: Path,
+    seed_base: int,
+    defect_types: Sequence[str],
+    run_id: int | None,
+    roi_override: tuple[int, int, float] | None,
+    image_filters: dict[str, Any] | None,
+    enable_cardinal_rotation_90: bool,
+) -> list[PreviewRec]:
+    """Render one OpenCV 2D preview per defect state; return preview records."""
+    import cv2  # type: ignore
+    from simple_sim.generators.opencv_2d import render_roi  # type: ignore
+
+    backend = BACKEND_2D
+    w, h, mpp = _resolve_2d_roi(cfg, roi_override)
+    roi_cfg = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
+
+    render_cfg = dict(cfg["render"])
+    # schema v2: allow render.component_color to come from profile.
+    if "component_color" not in render_cfg and "render" in profile:
+        render_cfg["component_color"] = profile["render"]["component_color_bgr"]
+
+    footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
+    geometry_ranges = profile.get("geometry_ranges") or {}
+    tolerances = profile.get("tolerances")
+    rotation_jitter_range = _get_rotation_jitter_range(cfg)
+
+    recs: list[PreviewRec] = []
+    for defect_type in defect_types:
+        if run_id is not None:
+            seed_str = f"{int(seed_base)}|{profile_id}|{backend}|{str(defect_type)}|{int(run_id)}"
+        else:
+            seed_str = f"{int(seed_base)}|{profile_id}|{backend}|{str(defect_type)}"
+        hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
+        seed = int(hh[:12], 16)
+        rng = np.random.default_rng(seed)
+        augment = _sample_preview_augment(
+            rng,
+            rotation_jitter_range=rotation_jitter_range,
+            enable_cardinal_rotation_90=bool(enable_cardinal_rotation_90),
+        )
+        augment = _apply_filter_overrides_to_augment(augment, image_filters)
+        nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
+        defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
+        img = render_roi(
+            nominal=nominal,
+            defect_params=defect,
+            augment=augment,
+            roi_size=(int(w), int(h)),
+            config=render_cfg,
+            tolerances=tolerances,
+            rng=rng,
+            footprint=footprint,
+        )
+        rel_path = _preview_rel_path(profile_id, backend, str(defect_type))
+        out_path = (Path(out_root) / rel_path).resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(out_path), img):
+            raise OSError(f"Failed to write image: {out_path}")
+        recs.append((profile_id, backend, str(defect_type), rel_path))
+    return recs
+
+
+def _render_3d_previews(
+    *,
+    sim_root: Path,
+    profile_id: str,
+    profile: dict[str, Any],
+    settings: RenderSettings,
+    out_root: Path,
+    seed_base: int,
+    defect_types: Sequence[str],
+    run_id: int | None,
+    rotation_jitter_range: tuple[float, float],
+    image_filters: dict[str, Any] | None,
+    enable_cardinal_rotation_90: bool,
+    jobs_path: Path,
+) -> list[PreviewRec]:
+    """Render one Blender 3D preview per defect state (single Blender batch)."""
+    jobs, recs = _build_preview_jobs(
+        profile_id=profile_id,
+        profile=profile,
+        settings=settings,
+        out_root=out_root,
+        seed_base=int(seed_base),
+        defect_types=defect_types,
+        run_id=run_id,
+        backend=BACKEND_3D,
+        rotation_jitter_range=rotation_jitter_range,
+        enable_cardinal_rotation_90=bool(enable_cardinal_rotation_90),
+        image_filters=image_filters,
+    )
+    write_jobs_jsonl(jobs_path, jobs)
+    render_blender_batch(
+        sim_root=sim_root,
+        jobs_path=jobs_path,
+        output_root=out_root,
+        blender_executable=settings.blender_executable,
+        cycles_samples=settings.cycles_samples,
+        device=settings.device,
+        engine=settings.engine,
+    )
+    _postprocess_rendered_previews(out_root, jobs)
+    return recs
+
+
+def _write_index_html(out_root: Path, previews: list[PreviewRec]) -> None:
     """previews: list of (profile_id, backend, defect, rel_image_path)."""
     out_root = Path(out_root)
     index_path = out_root / "index.html"
 
     # Group by profile id
-    by_profile: Dict[str, List[Tuple[str, str, str]]] = {}
+    by_profile: dict[str, list[tuple[str, str, str]]] = {}
     for pid, backend, defect, rel_path in previews:
         by_profile.setdefault(pid, []).append((backend, defect, rel_path))
 
@@ -867,10 +670,10 @@ def _write_index_html(out_root: Path, previews: List[PreviewRec]) -> None:
     index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _collect_existing_previews(out_root: Path) -> List[PreviewRec]:
+def _collect_existing_previews(out_root: Path) -> list[PreviewRec]:
     """Scan existing preview PNG files and return preview records."""
     out_root = Path(out_root)
-    recs: List[PreviewRec] = []
+    recs: list[PreviewRec] = []
     for img_path in sorted((out_root / "previews").glob("*/*/*.png")):
         try:
             rel = img_path.relative_to(out_root)
@@ -889,20 +692,20 @@ def _collect_existing_previews(out_root: Path) -> List[PreviewRec]:
 
 def _open_tk_viewer(
     out_root: Path,
-    previews: List[PreviewRec],
+    previews: list[PreviewRec],
     *,
-    sim_root: Optional[Path] = None,
-    profiles_dir: Optional[Path] = None,
-    configs_dir: Optional[Path] = None,
-    all_profiles: Optional[List[Tuple[str, Dict[str, Any], set[str]]]] = None,
-    render_settings: Optional[Dict[str, Any]] = None,
-    selected_profile_ids: Optional[List[str]] = None,
+    sim_root: Path | None = None,
+    profiles_dir: Path | None = None,
+    configs_dir: Path | None = None,
+    all_profiles: list[tuple[str, dict[str, Any], set[str]]] | None = None,
+    render_settings: dict[str, Any] | None = None,
+    selected_profile_ids: list[str] | None = None,
 ) -> None:
     """Open an interactive Tkinter viewer for rendered previews with rerun capabilities."""
     # Import lazily so the script can still run on systems without Tk installed.
     try:
         import tkinter as tk
-        from tkinter import ttk, simpledialog
+        from tkinter import ttk, messagebox
     except Exception as exc:
         raise RuntimeError(f"Tkinter not available: {exc}") from exc
 
@@ -911,6 +714,7 @@ def _open_tk_viewer(
     except Exception as exc:
         raise RuntimeError(f"Pillow (PIL) not available: {exc}") from exc
 
+    import queue
     import threading
 
     out_root = Path(out_root)
@@ -927,7 +731,7 @@ def _open_tk_viewer(
 
     def _load_items():
         """Load image items from current preview list."""
-        items: List[Tuple[str, str, str, Path]] = []
+        items: list[tuple[str, str, str, Path]] = []
         for pid, backend, defect, rel in state.previews:
             if state.backend_filter != "both" and backend != state.backend_filter:
                 continue
@@ -937,7 +741,7 @@ def _open_tk_viewer(
         return items
 
     root = tk.Tk()
-    root.title(f"Simple-Sim Debug Previews")
+    root.title("Simple-Sim Debug Previews")
     root.geometry("1200x900")
 
     top = ttk.Frame(root, padding=10)
@@ -959,7 +763,7 @@ def _open_tk_viewer(
         controls = ttk.Frame(top)
         controls.pack(fill="x", pady=(0, 10))
 
-        def _profiles_for_backend(mode: str) -> List[str]:
+        def _profiles_for_backend(mode: str) -> list[str]:
             mode = str(mode or "both")
             if mode == "both":
                 return [pid for pid, _prof, _b in all_profiles]
@@ -1019,151 +823,44 @@ def _open_tk_viewer(
         variable_seeds_check.pack(side="left", padx=(0, 15))
 
         shared_profiles, shared_active_profile, shared_current_filter = _load_shared_filter_profiles(settings_file)
-        current_image_filters = dict(shared_current_filter)
-        extra_filter_values: Dict[str, Any] = {
-            k: v for k, v in current_image_filters.items()
-            if isinstance(k, str) and is_filter_popup_extra_key(k)
-        }
+        # Current filter values in profile-store (popup) format. Unknown keys are kept
+        # so a save never strips filters this viewer does not know about.
+        filter_values: dict[str, Any] = _filter_settings_to_profile_store(
+            shared_current_filter,
+            shared_profiles.get(shared_active_profile),
+        )
+        cardinal_rotation_90_var = tk.BooleanVar(
+            value=parse_bool_like(filter_values.get("cardinal_rotation_90", True), default=True)
+        )
 
-        filter_cardinal_rotation_90_var = tk.BooleanVar(value=bool(current_image_filters.get("cardinal_rotation_90", True)))
-        filter_enable_rotation_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_rotation", True)))
-        filter_enable_blur_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_blur", True)))
-        filter_enable_grain_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_grain", True)))
-        filter_enable_brightness_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_brightness", True)))
-        filter_enable_contrast_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_contrast", True)))
-        filter_rotation_strength_var = tk.DoubleVar(value=float(current_image_filters.get("rotation_strength", 1.0)))
-        filter_blur_strength_var = tk.DoubleVar(value=float(current_image_filters.get("blur_strength", 1.0)))
-        filter_grain_strength_var = tk.DoubleVar(value=float(current_image_filters.get("grain_strength", 1.0)))
-        filter_brightness_strength_var = tk.DoubleVar(value=float(current_image_filters.get("brightness_strength", 1.0)))
-        filter_contrast_strength_var = tk.DoubleVar(value=float(current_image_filters.get("contrast_strength", 1.0)))
-        # High priority new filters
-        filter_enable_perspective_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_perspective", False)))
-        filter_perspective_strength_var = tk.DoubleVar(value=float(current_image_filters.get("perspective_strength", 1.0)))
-        filter_enable_motion_blur_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_motion_blur", True)))
-        filter_motion_blur_strength_var = tk.DoubleVar(value=float(current_image_filters.get("motion_blur_strength", 1.0)))
-        filter_enable_saturation_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_saturation", True)))
-        filter_saturation_factor_var = tk.DoubleVar(value=float(current_image_filters.get("saturation_factor", 1.0)))
-        filter_enable_hue_shift_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_hue_shift", True)))
-        filter_hue_shift_deg_var = tk.DoubleVar(value=float(current_image_filters.get("hue_shift_deg", 0.0)))
-        filter_enable_shadow_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_shadow", True)))
-        filter_shadow_strength_var = tk.DoubleVar(value=float(current_image_filters.get("shadow_strength", 0.3)))
-        filter_enable_reflection_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_reflection", False)))
-        filter_reflection_strength_var = tk.DoubleVar(value=float(current_image_filters.get("reflection_strength", 0.5)))
-        # Medium/Low priority new filters
-        filter_enable_vignetting_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_vignetting", False)))
-        filter_vignetting_strength_var = tk.DoubleVar(value=float(current_image_filters.get("vignetting_strength", 1.0)))
-        filter_enable_chromatic_aberration_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_chromatic_aberration", False)))
-        filter_chromatic_strength_var = tk.DoubleVar(value=float(current_image_filters.get("chromatic_strength", 1.0)))
-        filter_enable_jpeg_compression_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_jpeg_compression", False)))
-        filter_jpeg_quality_var = tk.DoubleVar(value=float(current_image_filters.get("jpeg_quality", 85)))
-        filter_enable_color_temperature_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_color_temperature", False)))
-        filter_color_temperature_kelvin_var = tk.DoubleVar(value=float(current_image_filters.get("color_temperature_kelvin", 5500)))
-        filter_enable_lens_distortion_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_lens_distortion", False)))
-        filter_distortion_k1_var = tk.DoubleVar(value=float(current_image_filters.get("distortion_k1", 0.0)))
-        filter_enable_dust_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_dust", False)))
-        filter_dust_density_var = tk.DoubleVar(value=float(current_image_filters.get("dust_density", 0.3)))
-        filter_enable_sharpen_var = tk.BooleanVar(value=bool(current_image_filters.get("enable_sharpen", False)))
-        filter_sharpen_strength_var = tk.DoubleVar(value=float(current_image_filters.get("sharpen_strength", 1.0)))
+        def _current_filter_store() -> dict[str, Any]:
+            """Current filter values in profile-store format (main thread only)."""
+            d = dict(filter_values)
+            d["cardinal_rotation_90"] = bool(cardinal_rotation_90_var.get())
+            return d
 
-        def _current_filters_from_vars() -> Dict[str, Any]:
-            base = _normalize_filter_settings(
-                {
-                    "cardinal_rotation_90": bool(filter_cardinal_rotation_90_var.get()),
-                    "enable_rotation": bool(filter_enable_rotation_var.get()),
-                    "enable_blur": bool(filter_enable_blur_var.get()),
-                    "enable_grain": bool(filter_enable_grain_var.get()),
-                    "enable_brightness": bool(filter_enable_brightness_var.get()),
-                    "enable_contrast": bool(filter_enable_contrast_var.get()),
-                    "rotation_strength": float(filter_rotation_strength_var.get()),
-                    "blur_strength": float(filter_blur_strength_var.get()),
-                    "grain_strength": float(filter_grain_strength_var.get()),
-                    "brightness_strength": float(filter_brightness_strength_var.get()),
-                    "contrast_strength": float(filter_contrast_strength_var.get()),
-                    # High priority new filters
-                    "enable_perspective": bool(filter_enable_perspective_var.get()),
-                    "perspective_strength": float(filter_perspective_strength_var.get()),
-                    "enable_motion_blur": bool(filter_enable_motion_blur_var.get()),
-                    "motion_blur_strength": float(filter_motion_blur_strength_var.get()),
-                    "enable_saturation": bool(filter_enable_saturation_var.get()),
-                    "saturation_factor": float(filter_saturation_factor_var.get()),
-                    "enable_hue_shift": bool(filter_enable_hue_shift_var.get()),
-                    "hue_shift_deg": float(filter_hue_shift_deg_var.get()),
-                    "enable_shadow": bool(filter_enable_shadow_var.get()),
-                    "shadow_strength": float(filter_shadow_strength_var.get()),
-                    "enable_reflection": bool(filter_enable_reflection_var.get()),
-                    "reflection_strength": float(filter_reflection_strength_var.get()),
-                    # Medium/Low priority new filters
-                    "enable_vignetting": bool(filter_enable_vignetting_var.get()),
-                    "vignetting_strength": float(filter_vignetting_strength_var.get()),
-                    "enable_chromatic_aberration": bool(filter_enable_chromatic_aberration_var.get()),
-                    "chromatic_strength": float(filter_chromatic_strength_var.get()),
-                    "enable_jpeg_compression": bool(filter_enable_jpeg_compression_var.get()),
-                    "jpeg_quality": float(filter_jpeg_quality_var.get()),
-                    "enable_color_temperature": bool(filter_enable_color_temperature_var.get()),
-                    "color_temperature_kelvin": float(filter_color_temperature_kelvin_var.get()),
-                    "enable_lens_distortion": bool(filter_enable_lens_distortion_var.get()),
-                    "distortion_k1": float(filter_distortion_k1_var.get()),
-                    "enable_dust": bool(filter_enable_dust_var.get()),
-                    "dust_density": float(filter_dust_density_var.get()),
-                    "enable_sharpen": bool(filter_enable_sharpen_var.get()),
-                    "sharpen_strength": float(filter_sharpen_strength_var.get()),
-                }
-            )
-            base.update(extra_filter_values)
-            return base
-
-        def _apply_filters_to_vars(d: Dict[str, Any]) -> None:
-            x = _normalize_filter_settings(d)
-            extra_filter_values.clear()
+        def _current_filters_from_vars() -> dict[str, Any]:
+            """Normalized current filter values (main thread only)."""
+            d = _current_filter_store()
+            out = _normalize_filter_settings(d)
             for k, v in d.items():
-                if isinstance(k, str) and is_filter_popup_extra_key(k):
-                    extra_filter_values[k] = v
-            filter_cardinal_rotation_90_var.set(bool(x["cardinal_rotation_90"]))
-            filter_enable_rotation_var.set(bool(x["enable_rotation"]))
-            filter_enable_blur_var.set(bool(x["enable_blur"]))
-            filter_enable_grain_var.set(bool(x["enable_grain"]))
-            filter_enable_brightness_var.set(bool(x["enable_brightness"]))
-            filter_enable_contrast_var.set(bool(x["enable_contrast"]))
-            filter_rotation_strength_var.set(float(x["rotation_strength"]))
-            filter_blur_strength_var.set(float(x["blur_strength"]))
-            filter_grain_strength_var.set(float(x["grain_strength"]))
-            filter_brightness_strength_var.set(float(x["brightness_strength"]))
-            filter_contrast_strength_var.set(float(x["contrast_strength"]))
-            # High priority new filters
-            filter_enable_perspective_var.set(bool(x["enable_perspective"]))
-            filter_perspective_strength_var.set(float(x["perspective_strength"]))
-            filter_enable_motion_blur_var.set(bool(x["enable_motion_blur"]))
-            filter_motion_blur_strength_var.set(float(x["motion_blur_strength"]))
-            filter_enable_saturation_var.set(bool(x["enable_saturation"]))
-            filter_saturation_factor_var.set(float(x["saturation_factor"]))
-            filter_enable_hue_shift_var.set(bool(x["enable_hue_shift"]))
-            filter_hue_shift_deg_var.set(float(x["hue_shift_deg"]))
-            filter_enable_shadow_var.set(bool(x["enable_shadow"]))
-            filter_shadow_strength_var.set(float(x["shadow_strength"]))
-            filter_enable_reflection_var.set(bool(x["enable_reflection"]))
-            filter_reflection_strength_var.set(float(x["reflection_strength"]))
-            # Medium/Low priority new filters
-            filter_enable_vignetting_var.set(bool(x["enable_vignetting"]))
-            filter_vignetting_strength_var.set(float(x["vignetting_strength"]))
-            filter_enable_chromatic_aberration_var.set(bool(x["enable_chromatic_aberration"]))
-            filter_chromatic_strength_var.set(float(x["chromatic_strength"]))
-            filter_enable_jpeg_compression_var.set(bool(x["enable_jpeg_compression"]))
-            filter_jpeg_quality_var.set(float(x["jpeg_quality"]))
-            filter_enable_color_temperature_var.set(bool(x["enable_color_temperature"]))
-            filter_color_temperature_kelvin_var.set(float(x["color_temperature_kelvin"]))
-            filter_enable_lens_distortion_var.set(bool(x["enable_lens_distortion"]))
-            filter_distortion_k1_var.set(float(x["distortion_k1"]))
-            filter_enable_dust_var.set(bool(x["enable_dust"]))
-            filter_dust_density_var.set(float(x["dust_density"]))
-            filter_enable_sharpen_var.set(bool(x["enable_sharpen"]))
-            filter_sharpen_strength_var.set(float(x["sharpen_strength"]))
+                out.setdefault(k, v)
+            return out
 
-        def _persist_filters(active_name: Optional[str] = None) -> None:
+        def _apply_filters_to_vars(d: dict[str, Any]) -> None:
+            filter_values.clear()
+            filter_values.update(_filter_settings_to_profile_store(d))
+            cardinal_rotation_90_var.set(parse_bool_like(filter_values.get("cardinal_rotation_90", True), default=True))
+
+        def _persist_filters(active_name: str | None = None) -> None:
             nonlocal shared_active_profile
-            cur = _current_filters_from_vars()
+            cur = _current_filter_store()
             if active_name:
                 shared_active_profile = active_name
-            shared_profiles[shared_active_profile] = _filter_settings_to_profile_store(cur)
+            shared_profiles[shared_active_profile] = _filter_settings_to_profile_store(
+                cur,
+                shared_profiles.get(shared_active_profile),
+            )
             _save_shared_filter_profiles(
                 settings_file,
                 shared_profiles,
@@ -1173,7 +870,9 @@ def _open_tk_viewer(
 
         def _open_filter_popup() -> None:
             """Open shared image filter popup."""
-            def on_close(updated_profiles: Dict[str, Dict[str, Any]], updated_active: str) -> None:
+            from gui.components.filter_popup import open_filter_popup
+
+            def on_close(updated_profiles: dict[str, dict[str, Any]], updated_active: str) -> None:
                 nonlocal shared_active_profile, shared_profiles
                 shared_profiles = updated_profiles
                 shared_active_profile = updated_active
@@ -1182,7 +881,7 @@ def _open_tk_viewer(
                     settings_file,
                     shared_profiles,
                     shared_active_profile,
-                    _current_filters_from_vars(),
+                    _current_filter_store(),
                 )
 
             def show_messagebox(msg_type: str, title: str, message: str) -> None:
@@ -1193,7 +892,7 @@ def _open_tk_viewer(
                 else:
                     messagebox.showinfo(title, message, parent=root)
 
-            def ask_string(title: str, prompt: str, initial: str = "") -> Optional[str]:
+            def ask_string(title: str, prompt: str, initial: str = "") -> str | None:
                 from tkinter import simpledialog
                 return simpledialog.askstring(title, prompt, initialvalue=initial, parent=root)
 
@@ -1211,7 +910,7 @@ def _open_tk_viewer(
                 profiles=shared_profiles,
                 active_profile=shared_active_profile,
                 on_close=on_close,
-                get_current_values=lambda: _filter_settings_to_profile_store(_current_filters_from_vars()),
+                get_current_values=lambda: _filter_settings_to_profile_store(_current_filter_store()),
                 set_current_values=_apply_filters_to_vars,
                 float_or_default=float_or_default,
                 show_messagebox=show_messagebox,
@@ -1220,13 +919,130 @@ def _open_tk_viewer(
                 sim_root=str(sim_root),
             )
 
-        cardinal_rotation_90_var = filter_cardinal_rotation_90_var
         cardinal_rotation_90_check = ttk.Checkbutton(controls, text="90° Rotation", variable=cardinal_rotation_90_var)
         cardinal_rotation_90_check.pack(side="left", padx=(0, 15))
         ttk.Button(controls, text="Image Filters", command=_open_filter_popup).pack(side="left", padx=(0, 15))
 
         status_label = ttk.Label(controls, text="Ready", foreground="#060")
         status_label.pack(side="left", padx=(10, 10))
+
+        # Worker threads never touch Tk: they post callables here, and the main
+        # thread runs them from a root.after poll loop.
+        ui_queue: queue.Queue = queue.Queue()
+
+        def _post_ui(fn) -> None:
+            ui_queue.put(fn)
+
+        def _poll_ui_queue() -> None:
+            while True:
+                try:
+                    fn = ui_queue.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    fn()
+                except Exception as exc:
+                    print(f"[viewer] UI update failed: {exc}")
+            root.after(100, _poll_ui_queue)
+
+        root.after(100, _poll_ui_queue)
+
+        def _snapshot_render_inputs() -> dict[str, Any]:
+            """Read every Tk-backed render input on the main thread."""
+            try:
+                seed_base = int(seed_var.get())
+            except ValueError:
+                seed_base = int(render_settings.get("seed_base", 2026))
+            image_filters = _current_filters_from_vars()
+            return {
+                "seed_base": seed_base,
+                "use_variable_seeds": bool(variable_seeds_var.get()),
+                "mode": str(backend_var.get()),
+                "image_filters": image_filters,
+                "enable_cardinal_rotation_90": bool(image_filters.get("cardinal_rotation_90", True)),
+            }
+
+        def _render_profile_backend(
+            pid: str,
+            prof: dict[str, Any],
+            backend: str,
+            defect_types: list[str],
+            run_id: int | None,
+            snap: dict[str, Any],
+            jobs_path: Path,
+        ) -> list[PreviewRec]:
+            """Render one profile/backend in a worker thread (no Tk access)."""
+            roi_override = render_settings.get("roi_override")
+            cfg, _cfg_src = _load_preview_config_for_backend(
+                forced_cfg=render_settings.get("forced_cfg"),
+                sim_root=sim_root,
+                configs_dir=configs_dir,
+                profile_id=pid,
+                backend=backend,
+            )
+            if backend == BACKEND_3D:
+                settings = _apply_3d_settings_overrides(
+                    _settings_from_config(cfg),
+                    roi_override=roi_override,
+                    blender_override=str(render_settings.get("blender", "") or ""),
+                    samples_override=int(render_settings.get("samples", 0) or 0),
+                    device_override=str(render_settings.get("device", "") or ""),
+                )
+                return _render_3d_previews(
+                    sim_root=sim_root,
+                    profile_id=pid,
+                    profile=prof,
+                    settings=settings,
+                    out_root=out_root,
+                    seed_base=int(snap["seed_base"]),
+                    defect_types=defect_types,
+                    run_id=run_id,
+                    rotation_jitter_range=_get_rotation_jitter_range(cfg),
+                    image_filters=snap["image_filters"],
+                    enable_cardinal_rotation_90=snap["enable_cardinal_rotation_90"],
+                    jobs_path=jobs_path,
+                )
+            return _render_2d_previews(
+                profile_id=pid,
+                profile=prof,
+                cfg=cfg,
+                out_root=out_root,
+                seed_base=int(snap["seed_base"]),
+                defect_types=defect_types,
+                run_id=run_id,
+                roi_override=roi_override,
+                image_filters=snap["image_filters"],
+                enable_cardinal_rotation_90=snap["enable_cardinal_rotation_90"],
+            )
+
+        def _finish_render(
+            new_previews: list[PreviewRec],
+            rendered_pairs: set[tuple[str, str]],
+            message: str,
+            error: str | None = None,
+        ) -> None:
+            """Main thread: merge results, rewrite index.html, refresh the grid."""
+            if rendered_pairs:
+                # Replace only (profile, backend) pairs that were actually rendered.
+                state.previews = [rec for rec in state.previews if (rec[0], rec[1]) not in rendered_pairs]
+                state.previews.extend(new_previews)
+                _write_index_html(out_root, state.previews)
+                _refresh_images()
+            if error is None:
+                status_label.config(text=message, foreground="#060")
+            else:
+                status_label.config(text=error, foreground="#b00")
+            state.is_rendering = False
+            render_btn.config(state="normal")
+            render_all_btn.config(state="normal")
+
+        def _begin_render(status_text: str) -> dict[str, Any]:
+            state.is_rendering = True
+            render_btn.config(state="disabled")
+            render_all_btn.config(state="disabled")
+            status_label.config(text=status_text, foreground="#c60")
+            _persist_filters(shared_active_profile)
+            return _snapshot_render_inputs()
 
         def _start_render():
             if state.is_rendering:
@@ -1237,12 +1053,12 @@ def _open_tk_viewer(
                 status_label.config(text="No profile selected", foreground="#b00")
                 return
 
-            state.is_rendering = True
-            render_btn.config(state="disabled")
-            status_label.config(text="Rendering...", foreground="#c60")
-            _persist_filters(shared_active_profile)
+            snap = _begin_render("Rendering...")
 
             def _render_thread():
+                new_previews: list[PreviewRec] = []
+                rendered_pairs: set[tuple[str, str]] = set()
+                error: str | None = None
                 try:
                     # Always reload profile from disk so edits are picked up without restart.
                     selected_prof = load_profile(selected_pid, profiles_dir)
@@ -1250,30 +1066,10 @@ def _open_tk_viewer(
                     if not selected_backends:
                         raise RuntimeError(f"Profile {selected_pid!r} has no supported backends")
 
-                    # Extract render settings from the passed config and UI controls
-                    forced_cfg = render_settings.get("forced_cfg")
-
-                    # Get seed from UI
-                    try:
-                        seed_base = int(seed_var.get())
-                    except ValueError:
-                        seed_base = render_settings.get("seed_base", 2026)
-
-                    use_variable_seeds = variable_seeds_var.get()
-
-                    states_override = render_settings.get("states", "")
-                    blender_override = render_settings.get("blender", "")
-                    samples_override = render_settings.get("samples", 0)
-                    device_override = render_settings.get("device", "")
-                    roi_override = render_settings.get("roi_override")
-
-                    # Get defect types
-                    defect_types = _parse_csv_list(states_override) or list(selected_prof.get("defect_set") or [])
-                    if not defect_types:
-                        defect_types = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+                    defect_types = _resolve_defect_types(selected_prof, render_settings.get("states", ""))
 
                     # Determine which backend(s) to render in this run
-                    mode = backend_var.get()
+                    mode = snap["mode"]
                     if mode == "both":
                         backends_to_render = [b for b in [BACKEND_2D, BACKEND_3D] if b in selected_backends]
                     else:
@@ -1281,132 +1077,23 @@ def _open_tk_viewer(
                     if not backends_to_render:
                         raise RuntimeError(f"Profile {selected_pid!r} does not support backend={mode!r}")
 
-                    run_id = int(time.time() * 1000000) if use_variable_seeds else None
-                    all_new_previews: List[PreviewRec] = []
-
+                    run_id = int(time.time() * 1000000) if snap["use_variable_seeds"] else None
                     for backend in backends_to_render:
-                        cfg = _load_preview_config_for_backend(
-                            forced_cfg=forced_cfg,
-                            sim_root=sim_root,
-                            configs_dir=configs_dir,
-                            profile_id=selected_pid,
-                            backend=backend,
+                        new_previews.extend(
+                            _render_profile_backend(
+                                selected_pid,
+                                selected_prof,
+                                backend,
+                                defect_types,
+                                run_id,
+                                snap,
+                                out_root / "blender_jobs_previews.jsonl",
+                            )
                         )
-
-                        if backend == BACKEND_3D:
-                            settings = _settings_from_config(cfg)
-                            settings = _apply_3d_settings_overrides(
-                                settings,
-                                roi_override=roi_override,
-                                blender_override=str(blender_override),
-                                samples_override=int(samples_override or 0),
-                                device_override=str(device_override),
-                            )
-
-                            jobs, new_previews = _build_preview_jobs(
-                                profile_id=selected_pid,
-                                profile=selected_prof,
-                                settings=settings,
-                                out_root=out_root,
-                                seed_base=int(seed_base),
-                                defect_types=defect_types,
-                                run_id=run_id,
-                                backend=backend,
-                                rotation_jitter_range=_get_rotation_jitter_range(cfg),
-                                enable_cardinal_rotation_90=bool(_current_filters_from_vars().get("cardinal_rotation_90", True)),
-                                image_filters=_current_filters_from_vars(),
-                            )
-
-                            jobs_path = out_root / "blender_jobs_previews.jsonl"
-                            write_jobs_jsonl(jobs_path, jobs)
-                            render_blender_batch(
-                                sim_root=sim_root,
-                                jobs_path=jobs_path,
-                                output_root=out_root,
-                                blender_executable=settings.blender_executable,
-                                cycles_samples=settings.cycles_samples,
-                                device=settings.device,
-                            )
-                            _postprocess_rendered_previews(out_root, jobs)
-                            all_new_previews.extend(new_previews)
-                        else:
-                            # 2D OpenCV render
-                            import cv2  # type: ignore
-                            from simple_sim.generators.opencv_2d import render_roi  # type: ignore
-
-                            roi = cfg["roi"]
-                            w = int(roi["width_px"])
-                            h = int(roi["height_px"])
-                            mpp = float(roi["mm_per_px"])
-                            if roi_override is not None:
-                                w, h, mpp = int(roi_override[0]), int(roi_override[1]), float(roi_override[2])
-
-                            roi_cfg = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
-
-                            render_cfg = dict(cfg["render"])
-                            # schema v2: allow render.component_color to come from profile.
-                            if "component_color" not in render_cfg and "render" in selected_prof:
-                                render_cfg["component_color"] = selected_prof["render"]["component_color_bgr"]
-
-                            footprint = str((selected_prof.get("component") or {}).get("footprint", "chip_2pad"))
-                            geometry_ranges = selected_prof.get("geometry_ranges") or {}
-                            tolerances = selected_prof.get("tolerances")
-                            rotation_jitter_range = _get_rotation_jitter_range(cfg)
-
-                            profile_dir = _sanitize_dir_name(selected_pid)
-                            for defect_type in defect_types:
-                                if run_id is not None:
-                                    seed_str = f"{int(seed_base)}|{selected_pid}|{backend}|{str(defect_type)}|{int(run_id)}"
-                                else:
-                                    seed_str = f"{int(seed_base)}|{selected_pid}|{backend}|{str(defect_type)}"
-                                hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
-                                seed = int(hh[:12], 16)
-                                rng = np.random.default_rng(seed)
-                                augment = _sample_preview_augment(
-                                    rng,
-                                    rotation_jitter_range=rotation_jitter_range,
-                                    enable_cardinal_rotation_90=bool(_current_filters_from_vars().get("cardinal_rotation_90", True)),
-                                )
-                                augment = _apply_filter_overrides_to_augment(augment, _current_filters_from_vars())
-
-                                nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
-                                defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
-                                img = render_roi(
-                                    nominal=nominal,
-                                    defect_params=defect,
-                                    augment=augment,
-                                    roi_size=(int(w), int(h)),
-                                    config=render_cfg,
-                                    tolerances=tolerances,
-                                    rng=rng,
-                                    footprint=footprint,
-                                )
-
-                                rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
-                                out_path = (out_root / rel_path).resolve()
-                                out_path.parent.mkdir(parents=True, exist_ok=True)
-                                ok = cv2.imwrite(str(out_path), img)
-                                if not ok:
-                                    raise RuntimeError(f"Failed to write image: {out_path}")
-                                all_new_previews.append((selected_pid, backend, str(defect_type), rel_path))
-
-                    # Update state with new previews (replace old ones for this profile+backend(s))
-                    rendered_b = set(backends_to_render)
-                    state.previews = [rec for rec in state.previews if not (rec[0] == selected_pid and rec[1] in rendered_b)]
-                    state.previews.extend(all_new_previews)
-
-                    # Update index.html
-                    _write_index_html(out_root, state.previews)
-
-                    # Refresh UI
-                    root.after(0, lambda: _refresh_images())
-                    root.after(0, lambda: status_label.config(text="Render complete", foreground="#060"))
-
+                        rendered_pairs.add((selected_pid, backend))
                 except Exception as exc:
-                    root.after(0, lambda: status_label.config(text=f"Error: {exc}", foreground="#b00"))
-                finally:
-                    state.is_rendering = False
-                    root.after(0, lambda: render_btn.config(state="normal"))
+                    error = f"Error: {exc}"
+                _post_ui(lambda: _finish_render(new_previews, rendered_pairs, "Render complete", error))
 
             thread = threading.Thread(target=_render_thread, daemon=True)
             thread.start()
@@ -1420,34 +1107,15 @@ def _open_tk_viewer(
                 status_label.config(text="No profiles available", foreground="#b00")
                 return
 
-            state.is_rendering = True
-            render_btn.config(state="disabled")
-            render_all_btn.config(state="disabled")
-            status_label.config(text=f"Rendering all {len(all_profiles)} profiles...", foreground="#c60")
-            _persist_filters(shared_active_profile)
+            total = len(all_profiles)
+            snap = _begin_render(f"Rendering all {total} profiles...")
 
             def _render_all_thread():
+                new_previews: list[PreviewRec] = []
+                rendered_pairs: set[tuple[str, str]] = set()
+                error: str | None = None
                 try:
-                    # Extract render settings
-                    forced_cfg = render_settings.get("forced_cfg")
-
-                    # Get seed from UI
-                    try:
-                        seed_base = int(seed_var.get())
-                    except ValueError:
-                        seed_base = render_settings.get("seed_base", 2026)
-
-                    use_variable_seeds = variable_seeds_var.get()
-
-                    states_override = render_settings.get("states", "")
-                    blender_override = render_settings.get("blender", "")
-                    samples_override = render_settings.get("samples", 0)
-                    device_override = render_settings.get("device", "")
-                    roi_override = render_settings.get("roi_override")
-
-                    mode = backend_var.get()
-                    all_new_previews: List[PreviewRec] = []
-
+                    mode = snap["mode"]
                     for idx, (pid, _prof_cached, _backends_cached) in enumerate(all_profiles, 1):
                         # Always reload profile from disk so edits are picked up without restart.
                         prof = load_profile(pid, profiles_dir)
@@ -1457,139 +1125,30 @@ def _open_tk_viewer(
                         if mode != "both" and mode not in backends:
                             continue
 
-                        root.after(0, lambda i=idx, p=pid: status_label.config(
-                            text=f"Rendering {i}/{len(all_profiles)}: {p}", foreground="#c60"))
+                        _post_ui(lambda i=idx, p=pid: status_label.config(
+                            text=f"Rendering {i}/{total}: {p}", foreground="#c60"))
 
-                        defect_types = _parse_csv_list(states_override) or list(prof.get("defect_set") or [])
-                        if not defect_types:
-                            defect_types = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
-
-                        run_id = int(time.time() * 1000000) if use_variable_seeds else None
-
+                        defect_types = _resolve_defect_types(prof, render_settings.get("states", ""))
+                        run_id = int(time.time() * 1000000) if snap["use_variable_seeds"] else None
                         backends_to_render = [b for b in [BACKEND_2D, BACKEND_3D] if b in backends] if mode == "both" else [mode]
 
                         for backend in backends_to_render:
-                            cfg = _load_preview_config_for_backend(
-                                forced_cfg=forced_cfg,
-                                sim_root=sim_root,
-                                configs_dir=configs_dir,
-                                profile_id=pid,
-                                backend=backend,
+                            new_previews.extend(
+                                _render_profile_backend(
+                                    pid,
+                                    prof,
+                                    backend,
+                                    defect_types,
+                                    run_id,
+                                    snap,
+                                    out_root / f"blender_jobs_previews_{_sanitize_dir_name(pid)}.jsonl",
+                                )
                             )
-
-                            if backend == BACKEND_3D:
-                                settings = _settings_from_config(cfg)
-                                settings = _apply_3d_settings_overrides(
-                                    settings,
-                                    roi_override=roi_override,
-                                    blender_override=str(blender_override),
-                                    samples_override=int(samples_override or 0),
-                                    device_override=str(device_override),
-                                )
-
-                                jobs, new_previews = _build_preview_jobs(
-                                    profile_id=pid,
-                                    profile=prof,
-                                    settings=settings,
-                                    out_root=out_root,
-                                    seed_base=int(seed_base),
-                                    defect_types=defect_types,
-                                    run_id=run_id,
-                                    backend=backend,
-                                    rotation_jitter_range=_get_rotation_jitter_range(cfg),
-                                    enable_cardinal_rotation_90=bool(_current_filters_from_vars().get("cardinal_rotation_90", True)),
-                                    image_filters=_current_filters_from_vars(),
-                                )
-
-                                jobs_path = out_root / f"blender_jobs_previews_{_sanitize_dir_name(pid)}.jsonl"
-                                write_jobs_jsonl(jobs_path, jobs)
-                                render_blender_batch(
-                                    sim_root=sim_root,
-                                    jobs_path=jobs_path,
-                                    output_root=out_root,
-                                    blender_executable=settings.blender_executable,
-                                    cycles_samples=settings.cycles_samples,
-                                    device=settings.device,
-                                )
-                                _postprocess_rendered_previews(out_root, jobs)
-                                all_new_previews.extend(new_previews)
-                            else:
-                                import cv2  # type: ignore
-                                from simple_sim.generators.opencv_2d import render_roi  # type: ignore
-
-                                roi = cfg["roi"]
-                                w = int(roi["width_px"])
-                                h = int(roi["height_px"])
-                                mpp = float(roi["mm_per_px"])
-                                if roi_override is not None:
-                                    w, h, mpp = int(roi_override[0]), int(roi_override[1]), float(roi_override[2])
-
-                                roi_cfg = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
-
-                                render_cfg = dict(cfg["render"])
-                                if "component_color" not in render_cfg and "render" in prof:
-                                    render_cfg["component_color"] = prof["render"]["component_color_bgr"]
-
-                                footprint = str((prof.get("component") or {}).get("footprint", "chip_2pad"))
-                                geometry_ranges = prof.get("geometry_ranges") or {}
-                                tolerances = prof.get("tolerances")
-                                rotation_jitter_range = _get_rotation_jitter_range(cfg)
-
-                                profile_dir = _sanitize_dir_name(pid)
-                                for defect_type in defect_types:
-                                    if run_id is not None:
-                                        seed_str = f"{int(seed_base)}|{pid}|{backend}|{str(defect_type)}|{int(run_id)}"
-                                    else:
-                                        seed_str = f"{int(seed_base)}|{pid}|{backend}|{str(defect_type)}"
-                                    hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
-                                    seed = int(hh[:12], 16)
-                                    rng = np.random.default_rng(seed)
-                                    augment = _sample_preview_augment(
-                                        rng,
-                                        rotation_jitter_range=rotation_jitter_range,
-                                        enable_cardinal_rotation_90=bool(_current_filters_from_vars().get("cardinal_rotation_90", True)),
-                                    )
-                                    augment = _apply_filter_overrides_to_augment(augment, _current_filters_from_vars())
-                                    nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
-                                    defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
-                                    img = render_roi(
-                                        nominal=nominal,
-                                        defect_params=defect,
-                                        augment=augment,
-                                        roi_size=(int(w), int(h)),
-                                        config=render_cfg,
-                                        tolerances=tolerances,
-                                        rng=rng,
-                                        footprint=footprint,
-                                    )
-                                    rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
-                                    out_path = (out_root / rel_path).resolve()
-                                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                                    ok = cv2.imwrite(str(out_path), img)
-                                    if not ok:
-                                        raise RuntimeError(f"Failed to write image: {out_path}")
-                                    all_new_previews.append((pid, backend, str(defect_type), rel_path))
-
-                    # Update state with all new previews
-                    # Remove old previews for all rendered profiles
-                    rendered_pids = {pid for pid, _prof, _b in all_profiles}
-                    # Remove old previews for all rendered profiles (keep others)
-                    state.previews = [rec for rec in state.previews if rec[0] not in rendered_pids]
-                    state.previews.extend(all_new_previews)
-
-                    # Update index.html
-                    _write_index_html(out_root, state.previews)
-
-                    # Refresh UI
-                    root.after(0, lambda: _refresh_images())
-                    root.after(0, lambda: status_label.config(text=f"Rendered all {len(all_profiles)} profiles", foreground="#060"))
-
+                            rendered_pairs.add((pid, backend))
                 except Exception as exc:
-                    root.after(0, lambda: status_label.config(text=f"Error: {exc}", foreground="#b00"))
-                finally:
-                    state.is_rendering = False
-                    root.after(0, lambda: render_btn.config(state="normal"))
-                    root.after(0, lambda: render_all_btn.config(state="normal"))
+                    error = f"Error: {exc}"
+                n_rendered = len({p for p, _b in rendered_pairs})
+                _post_ui(lambda: _finish_render(new_previews, rendered_pairs, f"Rendered {n_rendered} profiles", error))
 
             thread = threading.Thread(target=_render_all_thread, daemon=True)
             thread.start()
@@ -1643,8 +1202,8 @@ def _open_tk_viewer(
     pad = 10
     cols = 4
 
-    photo_refs: List[Any] = []
-    zoom_photo_refs: List[Any] = []
+    photo_refs: list[Any] = []
+    zoom_photo_refs: list[Any] = []
 
     def _open_zoom_popup(path: Path, title: str) -> None:
         try:
@@ -1691,7 +1250,7 @@ def _open_tk_viewer(
         if not items:
             msg = "No images found yet. Click 'Render' to generate previews."
             ttk.Label(inner, text=msg, foreground="#b00").grid(row=0, column=0, pady=16)
-            root.title(f"Simple-Sim Debug Previews (0 images)")
+            root.title("Simple-Sim Debug Previews (0 images)")
             return
 
         root.title(f"Simple-Sim Debug Previews ({len(items)} images)")
@@ -1736,17 +1295,17 @@ def _open_tk_viewer(
 def _build_preview_jobs(
     *,
     profile_id: str,
-    profile: Dict[str, Any],
+    profile: dict[str, Any],
     settings: RenderSettings,
     out_root: Path,
     seed_base: int,
     defect_types: Sequence[str],
-    run_id: Optional[int] = None,
+    run_id: int | None = None,
     backend: str = BACKEND_3D,
-    rotation_jitter_range: Tuple[float, float] = (0.0, 0.0),
+    rotation_jitter_range: tuple[float, float] = (0.0, 0.0),
     enable_cardinal_rotation_90: bool = True,
-    image_filters: Optional[Dict[str, Any]] = None,
-) -> Tuple[List[Dict[str, Any]], List[PreviewRec]]:
+    image_filters: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[PreviewRec]]:
     """Return (jobs, preview_records). preview_records is for index.html.
 
     If run_id is provided, it will be included in seed generation to create
@@ -1764,11 +1323,10 @@ def _build_preview_jobs(
         "mm_per_px": float(settings.mm_per_px),
     }
 
-    jobs: List[Dict[str, Any]] = []
-    previews: List[PreviewRec] = []
+    jobs: list[dict[str, Any]] = []
+    previews: list[PreviewRec] = []
 
-    profile_dir = _sanitize_dir_name(profile_id)
-    for i, defect_type in enumerate(defect_types):
+    for defect_type in defect_types:
         # Include run_id to vary seeds across reruns (like real 3D pipeline)
         if run_id is not None:
             seed_str = f"{int(seed_base)}|{profile_id}|{str(defect_type)}|{int(run_id)}"
@@ -1778,7 +1336,7 @@ def _build_preview_jobs(
         seed = int(h[:12], 16)
         rng = np.random.default_rng(seed)
 
-        nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
+        nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
         defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
         augment = _sample_preview_augment(
             rng,
@@ -1787,7 +1345,7 @@ def _build_preview_jobs(
         )
         augment = _apply_filter_overrides_to_augment(augment, image_filters)
 
-        rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
+        rel_path = _preview_rel_path(profile_id, backend, str(defect_type))
         job = {
             "image_path": rel_path,
             "seed": int(seed),
@@ -1855,17 +1413,17 @@ def main() -> None:
         raise SystemExit(f"No profiles found under: {profiles_dir}")
 
     # Load settings: either one config for all, or auto match per profile/backend.
-    forced_cfg: Optional[Dict[str, Any]] = None
-    forced_backend: Optional[str] = None
+    forced_cfg: dict[str, Any] | None = None
+    forced_backend: str | None = None
     if args.config:
         forced_cfg = load_config(sim_root / args.config)
         validate_config(forced_cfg)
         forced_backend = str((forced_cfg.get("render") or {}).get("backend", ""))
 
     # Optional ROI override parsing
-    roi_override: Optional[Tuple[int, int, float]] = None
+    roi_override: tuple[int, int, float] | None = None
     if args.roi:
-        m = re.match(r"^\\s*(\\d+)x(\\d+)@([0-9]*\\.?[0-9]+)\\s*$", str(args.roi))
+        m = re.match(r"^\s*(\d+)x(\d+)@([0-9]*\.?[0-9]+)\s*$", str(args.roi))
         if not m:
             raise SystemExit("Invalid --roi. Expected WIDTHxHEIGHT@MM_PER_PX, e.g. 256x256@0.01")
         roi_override = (int(m.group(1)), int(m.group(2)), float(m.group(3)))
@@ -1909,7 +1467,7 @@ def main() -> None:
         raise SystemExit(f"No profiles match backend={backend_mode!r} under: {profiles_dir}")
 
     # Determine selected profile ids
-    selected_ids: List[str] = []
+    selected_ids: list[str] = []
     if args.all:
         selected_ids = [pid for pid, _prof, _b in discovered]
     else:
@@ -1979,19 +1537,19 @@ def main() -> None:
             return
         raise SystemExit("No profiles selected and no new/incomplete profiles found.")
 
-    pid_to_entry: Dict[str, Tuple[str, Dict[str, Any], set[str]]] = {pid: (pid, prof, b) for pid, prof, b in discovered_all}
+    pid_to_entry: dict[str, tuple[str, dict[str, Any], set[str]]] = {pid: (pid, prof, b) for pid, prof, b in discovered_all}
     missing = [pid for pid in selected_ids if pid not in pid_to_entry]
     if missing:
         raise SystemExit(f"Unknown profiles: {missing}")
 
-    selected_entries: List[Tuple[str, Dict[str, Any], set[str]]] = []
+    selected_entries: list[tuple[str, dict[str, Any], set[str]]] = []
     for pid in selected_ids:
         _pid, prof, b = pid_to_entry[pid]
         selected_entries.append((pid, prof, b))
 
-    previews_for_index: List[PreviewRec] = []
-    all_jobs: List[Dict[str, Any]] = []
-    per_profile_settings: List[RenderSettings] = []
+    previews_for_index: list[PreviewRec] = []
+    all_jobs: list[dict[str, Any]] = []
+    per_profile_settings: list[RenderSettings] = []
 
     # Translate legacy flags into --view behavior if explicitly set.
     if args.open_browser is True:
@@ -2001,10 +1559,13 @@ def main() -> None:
 
     out_root.mkdir(parents=True, exist_ok=True)
 
+    enable_cardinal_rotation_90 = (
+        not bool(args.disable_cardinal_rotation_90)
+        and bool(shared_filter_settings.get("cardinal_rotation_90", True))
+    )
+
     for pid, prof, backends in selected_entries:
-        defect_types = _parse_csv_list(args.states) or list(prof.get("defect_set") or [])
-        if not defect_types:
-            defect_types = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+        defect_types = _resolve_defect_types(prof, args.states)
 
         run_id = int(time.time() * 1000000) if args.variable_seeds else None
         if backend_mode == "both":
@@ -2015,34 +1576,19 @@ def main() -> None:
             raise SystemExit(f"Profile {pid!r} does not support backend={backend_mode!r}")
 
         for backend in backends_to_render:
-            if forced_cfg is not None:
-                cfg = forced_cfg
-                cfg_src = f"(forced) {args.config}"
-                cfg_backend = str((cfg.get("render") or {}).get("backend", ""))
-                if backend != "both" and cfg_backend != backend:
-                    raise SystemExit(f"--config backend={cfg_backend!r} does not match requested backend={backend!r}")
-            else:
-                matches = _find_matching_run_configs(configs_dir, profile_id=pid, backend=backend)
-                if matches:
-                    cfg = load_config(matches[0])
-                    try:
-                        rel = str(matches[0].relative_to(sim_root))
-                    except Exception:
-                        rel = str(matches[0])
-                    cfg_src = f"(auto) {rel}"
-                else:
-                    fallback = "configs/run_0001.yaml" if backend == BACKEND_2D else "configs/run_0001_3d.yaml"
-                    cfg = load_config(sim_root / fallback)
-                    cfg_src = f"(fallback) {fallback}"
-                validate_config(cfg)
+            # A forced --config applies to its own backend; with --backend=both the
+            # other backend is auto-matched per profile.
+            cfg, cfg_src = _load_preview_config_for_backend(
+                forced_cfg=forced_cfg,
+                sim_root=sim_root,
+                configs_dir=configs_dir,
+                profile_id=pid,
+                backend=backend,
+                forced_label=str(args.config),
+            )
 
             if backend == BACKEND_2D:
-                roi = cfg["roi"]
-                w = int(roi["width_px"])
-                h = int(roi["height_px"])
-                mpp = float(roi["mm_per_px"])
-                if roi_override is not None:
-                    w, h, mpp = int(roi_override[0]), int(roi_override[1]), float(roi_override[2])
+                w, h, mpp = _resolve_2d_roi(cfg, roi_override)
 
                 print(f"\n[preview] Profile:  {pid}")
                 print(f"[preview] Backend:  {backend}")
@@ -2050,104 +1596,44 @@ def main() -> None:
                 print(f"[preview] ROI:       {w}x{h} @ {mpp} mm/px")
                 print(f"[preview] States:    {defect_types}")
 
-                profile_dir = _sanitize_dir_name(pid)
                 for defect_type in defect_types:
-                    rel_path = f"previews/{profile_dir}/{backend}/{str(defect_type)}.png"
-                    previews_for_index.append((pid, backend, str(defect_type), rel_path))
+                    previews_for_index.append((pid, backend, str(defect_type), _preview_rel_path(pid, backend, str(defect_type))))
 
                 if args.dry_run:
                     continue
 
-                import cv2  # type: ignore
-                from simple_sim.generators.opencv_2d import render_roi  # type: ignore
-
-                roi_cfg = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
-                render_cfg = dict(cfg["render"])
-                if "component_color" not in render_cfg and "render" in prof:
-                    render_cfg["component_color"] = prof["render"]["component_color_bgr"]
-                footprint = str((prof.get("component") or {}).get("footprint", "chip_2pad"))
-                geometry_ranges = prof.get("geometry_ranges") or {}
-                tolerances = prof.get("tolerances")
-                rotation_jitter_range = _get_rotation_jitter_range(cfg)
-
-                out_root.mkdir(parents=True, exist_ok=True)
-                for defect_type in defect_types:
-                    if run_id is not None:
-                        seed_str = f"{int(args.seed)}|{pid}|{backend}|{str(defect_type)}|{int(run_id)}"
-                    else:
-                        seed_str = f"{int(args.seed)}|{pid}|{backend}|{str(defect_type)}"
-                    hh = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
-                    seed = int(hh[:12], 16)
-                    rng = np.random.default_rng(seed)
-                    augment = _sample_preview_augment(
-                        rng,
-                        rotation_jitter_range=rotation_jitter_range,
-                        enable_cardinal_rotation_90=(not bool(args.disable_cardinal_rotation_90) and bool(shared_filter_settings.get("cardinal_rotation_90", True))),
+                try:
+                    _render_2d_previews(
+                        profile_id=pid,
+                        profile=prof,
+                        cfg=cfg,
+                        out_root=out_root,
+                        seed_base=int(args.seed),
+                        defect_types=defect_types,
+                        run_id=run_id,
+                        roi_override=roi_override,
+                        image_filters=shared_filter_settings,
+                        enable_cardinal_rotation_90=enable_cardinal_rotation_90,
                     )
-                    augment = _apply_filter_overrides_to_augment(augment, shared_filter_settings)
-                    nominal = _sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
-                    defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
-                    img = render_roi(
-                        nominal=nominal,
-                        defect_params=defect,
-                        augment=augment,
-                        roi_size=(int(w), int(h)),
-                        config=render_cfg,
-                        tolerances=tolerances,
-                        rng=rng,
-                        footprint=footprint,
-                    )
-                    out_path = (out_root / f"previews/{profile_dir}/{backend}/{str(defect_type)}.png").resolve()
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    ok = cv2.imwrite(str(out_path), img)
-                    if not ok:
-                        raise SystemExit(f"Failed to write image: {out_path}")
+                except OSError as exc:
+                    raise SystemExit(str(exc)) from exc
             else:
-                settings = _settings_from_config(cfg)
-                if roi_override is not None:
-                    w, h, mpp = roi_override
-                    settings = RenderSettings(
-                        roi_width_px=int(w),
-                        roi_height_px=int(h),
-                        mm_per_px=float(mpp),
-                        blender_executable=settings.blender_executable,
-                        cycles_samples=settings.cycles_samples,
-                        device=settings.device,
-                    )
-
-                if args.blender:
-                    settings = RenderSettings(
-                        roi_width_px=settings.roi_width_px,
-                        roi_height_px=settings.roi_height_px,
-                        mm_per_px=settings.mm_per_px,
-                        blender_executable=str(args.blender),
-                        cycles_samples=settings.cycles_samples,
-                        device=settings.device,
-                    )
-                if args.samples and int(args.samples) > 0:
-                    settings = RenderSettings(
-                        roi_width_px=settings.roi_width_px,
-                        roi_height_px=settings.roi_height_px,
-                        mm_per_px=settings.mm_per_px,
-                        blender_executable=settings.blender_executable,
-                        cycles_samples=int(args.samples),
-                        device=settings.device,
-                    )
-                if args.device:
-                    settings = RenderSettings(
-                        roi_width_px=settings.roi_width_px,
-                        roi_height_px=settings.roi_height_px,
-                        mm_per_px=settings.mm_per_px,
-                        blender_executable=settings.blender_executable,
-                        cycles_samples=settings.cycles_samples,
-                        device=str(args.device),
-                    )
+                settings = _apply_3d_settings_overrides(
+                    _settings_from_config(cfg),
+                    roi_override=roi_override,
+                    blender_override=str(args.blender or ""),
+                    samples_override=int(args.samples or 0),
+                    device_override=str(args.device or ""),
+                )
 
                 print(f"\n[preview] Profile:  {pid}")
                 print(f"[preview] Backend:  {backend}")
                 print(f"[preview] Config:    {cfg_src}")
                 print(f"[preview] ROI:       {settings.roi_width_px}x{settings.roi_height_px} @ {settings.mm_per_px} mm/px")
-                print(f"[preview] Blender:   {settings.blender_executable} (samples={settings.cycles_samples}, device={settings.device})")
+                print(
+                    f"[preview] Blender:   {settings.blender_executable} "
+                    f"(samples={settings.cycles_samples}, device={settings.device}, engine={settings.engine})"
+                )
                 print(f"[preview] States:    {defect_types}")
 
                 per_profile_settings.append(settings)
@@ -2161,7 +1647,7 @@ def main() -> None:
                     run_id=run_id,
                     backend=backend,
                     rotation_jitter_range=_get_rotation_jitter_range(cfg),
-                    enable_cardinal_rotation_90=(not bool(args.disable_cardinal_rotation_90) and bool(shared_filter_settings.get("cardinal_rotation_90", True))),
+                    enable_cardinal_rotation_90=enable_cardinal_rotation_90,
                     image_filters=shared_filter_settings,
                 )
                 all_jobs.extend(jobs)
@@ -2176,7 +1662,7 @@ def main() -> None:
         "forced_cfg": forced_cfg,
         "seed_base": int(args.seed),
         "states": args.states,
-        "enable_cardinal_rotation_90": (not bool(args.disable_cardinal_rotation_90) and bool(shared_filter_settings.get("cardinal_rotation_90", True))),
+        "enable_cardinal_rotation_90": enable_cardinal_rotation_90,
         "blender": args.blender,
         "samples": args.samples,
         "device": args.device,
@@ -2210,6 +1696,7 @@ def main() -> None:
         exes = sorted({s.blender_executable for s in per_profile_settings} or {"blender"})
         devices = sorted({s.device for s in per_profile_settings} or {"CPU"})
         samples_list = sorted({int(s.cycles_samples) for s in per_profile_settings} or {64})
+        engines = sorted({s.engine for s in per_profile_settings} or {"BLENDER_EEVEE"})
 
         if len(exes) > 1 and not args.blender:
             print(f"\n[warn] Multiple blender executables across auto configs: {exes} (using: {exes[-1]})")
@@ -2217,10 +1704,13 @@ def main() -> None:
             print(f"[warn] Multiple devices across auto configs: {devices} (using: {devices[-1]})")
         if len(samples_list) > 1 and not args.samples:
             print(f"[warn] Multiple sample counts across auto configs: {samples_list} (using max: {max(samples_list)})")
+        if len(engines) > 1:
+            print(f"[warn] Multiple render engines across auto configs: {engines} (using: {engines[-1]})")
 
         blender_executable = str(args.blender or exes[-1])
         device = str(args.device or devices[-1])
         cycles_samples = int(args.samples or max(samples_list))
+        engine = str(engines[-1])
 
         print(f"\n[render] Running Blender batch for {len(all_jobs)} previews...")
         render_blender_batch(
@@ -2230,6 +1720,7 @@ def main() -> None:
             blender_executable=blender_executable,
             cycles_samples=cycles_samples,
             device=device,
+            engine=engine,
         )
         _postprocess_rendered_previews(out_root, all_jobs)
 

@@ -22,13 +22,11 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import ConcatDataset, DataLoader
-from torchvision import models
 from tqdm import tqdm
 
 import sys
@@ -38,8 +36,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
-from simple_sim.manifest import read_dataset_manifest
+from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
+from simple_sim.models import load_checkpoint_model
 
 
 @dataclass
@@ -47,75 +46,9 @@ class RunInfo:
     dataset_dir: Path
     split: str
     total_samples: int
-    split_sizes: Dict[str, int]
-    class_distribution: Dict[str, int]
-    class_list: List[str]
-
-
-def load_checkpoint_model(model_path: Path, device: torch.device) -> Tuple[torch.nn.Module, List[str], Dict[str, Any]]:
-    # Always load to CPU first to avoid accidentally loading a large ensemble onto GPU.
-    checkpoint = torch.load(model_path, map_location="cpu")
-
-    # Ensemble checkpoint: average logits from multiple sub-models.
-    if isinstance(checkpoint, dict) and checkpoint.get("format") == "simple_sim_ensemble_v1":
-        class_names = list(checkpoint.get("class_names") or [])
-        num_classes = len(class_names)
-        items = checkpoint.get("models") or []
-        if not class_names or not isinstance(items, list) or not items:
-            raise ValueError(f"Invalid ensemble checkpoint (missing class_names/models): {model_path}")
-
-        sub_models: List[torch.nn.Module] = []
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            ckpt = it.get("checkpoint") or {}
-            if not isinstance(ckpt, dict):
-                continue
-            cn = ckpt.get("class_names")
-            if list(cn or []) != class_names:
-                raise ValueError(
-                    "Ensemble class_names mismatch between sub-models. "
-                    "All merged models must share the same defect class list."
-                )
-            m = models.resnet18(weights=None)
-            num_features = m.fc.in_features
-            m.fc = nn.Linear(num_features, num_classes)
-            m.load_state_dict(ckpt["model_state_dict"])
-            m = m.to(device)
-            m.eval()
-            sub_models.append(m)
-
-        if not sub_models:
-            raise ValueError(f"Invalid ensemble checkpoint (no valid sub-models): {model_path}")
-
-        class EnsembleModel(nn.Module):
-            def __init__(self, parts: List[nn.Module]) -> None:
-                super().__init__()
-                self.parts = nn.ModuleList(parts)
-
-            def forward(self, x: torch.Tensor) -> torch.Tensor:
-                # Average logits; softmax is applied by the caller.
-                out = None
-                for m in self.parts:
-                    y = m(x)
-                    out = y if out is None else (out + y)
-                assert out is not None
-                return out / float(len(self.parts))
-
-        model = EnsembleModel(sub_models).to(device)
-        model.eval()
-        return model, class_names, checkpoint
-
-    # Standard single-checkpoint model.
-    class_names = checkpoint["class_names"]
-    num_classes = len(class_names)
-    model = models.resnet18(weights=None)
-    num_features = model.fc.in_features
-    model.fc = nn.Linear(num_features, num_classes)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
-    model.eval()
-    return model, class_names, checkpoint
+    split_sizes: dict[str, int]
+    class_distribution: dict[str, int]
+    class_list: list[str]
 
 
 def dataset_info(data_dir: Path) -> RunInfo:
@@ -123,15 +56,16 @@ def dataset_info(data_dir: Path) -> RunInfo:
     meta_rows = read_jsonl(data_dir / "meta.jsonl", MetaRow)
     label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
 
-    split_sizes: Dict[str, int] = {}
+    split_sizes: dict[str, int] = {}
     for s in ["train", "val", "test"]:
         p = data_dir / "splits" / f"{s}.txt"
         if p.exists():
-            split_sizes[s] = sum(1 for _ in p.open("r", encoding="utf-8") if _.strip())
+            with p.open("r", encoding="utf-8") as fh:
+                split_sizes[s] = sum(1 for line in fh if line.strip())
         else:
             split_sizes[s] = 0
 
-    class_dist: Dict[str, int] = {}
+    class_dist: dict[str, int] = {}
     for r in label_rows:
         class_dist[r.class_name] = class_dist.get(r.class_name, 0) + 1
 
@@ -146,7 +80,7 @@ def dataset_info(data_dir: Path) -> RunInfo:
     )
 
 
-def build_dataset(data_dir: Path, split: str, class_names: List[str], return_id: bool = True):
+def build_dataset(data_dir: Path, split: str, class_names: list[str], return_id: bool = True):
     if split in ("train", "val", "test"):
         return ROIDataset(data_dir, split, class_names, return_id=return_id)
     if split == "all":
@@ -176,8 +110,8 @@ def _unique_path(p: Path) -> Path:
     return parent / f"{stem}_{time.time_ns()}{suf}"
 
 
-def load_previous_reports(search_dirs: List[Path], model_stem: str) -> List[Dict[str, Any]]:
-    reports: List[Dict[str, Any]] = []
+def load_previous_reports(search_dirs: list[Path], model_stem: str) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
     for d in search_dirs:
         if not d.exists():
             continue
@@ -196,9 +130,9 @@ def load_previous_reports(search_dirs: List[Path], model_stem: str) -> List[Dict
     return reports
 
 
-def load_all_reports(search_dirs: List[Path]) -> List[Dict[str, Any]]:
+def load_all_reports(search_dirs: list[Path]) -> list[dict[str, Any]]:
     """Load any eval/batch reports from the given directories."""
-    reports: List[Dict[str, Any]] = []
+    reports: list[dict[str, Any]] = []
     seen_paths = set()
     for d in search_dirs:
         if not d.exists():
@@ -222,7 +156,7 @@ def load_all_reports(search_dirs: List[Path]) -> List[Dict[str, Any]]:
     return reports
 
 
-def metric_value(report: Dict[str, Any], key: str, critical_class: Optional[str]) -> Optional[float]:
+def metric_value(report: dict[str, Any], key: str, critical_class: str | None) -> float | None:
     """Extract a comparable scalar value from a report."""
     try:
         metrics = report["metrics"]
@@ -254,7 +188,7 @@ def parse_iso_ts(s: str) -> float:
         return 0.0
 
 
-def _basename(p: Optional[str]) -> str:
+def _basename(p: str | None) -> str:
     if not p:
         return "-"
     try:
@@ -263,7 +197,7 @@ def _basename(p: Optional[str]) -> str:
         return str(p)
 
 
-def best_report(reports: List[Dict[str, Any]], key: str) -> Optional[Dict[str, Any]]:
+def best_report(reports: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
     best = None
     best_v = None
     for r in reports:
@@ -310,13 +244,13 @@ def main() -> None:
 
     # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
     effective_model_path = requested_model_path
-    dataset_profile_id: Optional[str] = None
+    dataset_profile_id: str | None = None
     if requested_model_path.exists() and requested_model_path.is_dir():
         manifest_path = data_dir / "dataset_manifest.json"
         if not manifest_path.exists():
             raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
         manifest = read_dataset_manifest(manifest_path)
-        dataset_profile_id = manifest["component_profile"]["profile_id"]
+        dataset_profile_id, _ = resolve_dataset_profile(manifest)
         resolved = bundle_checkpoint_path(requested_model_path, dataset_profile_id, kind="best")
         if not resolved.exists():
             # Help users diagnose what's actually inside the bundle dir.
@@ -349,7 +283,7 @@ def main() -> None:
 
     # --- GT profile mapping (from v2 labels, if available) ---
     # We build this regardless of --profile-model so reports/preds can still carry GT profile metadata.
-    gt_profile_map: Dict[str, str] = {}  # sample id -> GT profile_id
+    gt_profile_map: dict[str, str] = {}  # sample id -> GT profile_id
     try:
         label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
         for lr in label_rows:
@@ -360,9 +294,9 @@ def main() -> None:
         gt_profile_map = {}
 
     # --- Profile classifier (optional two-stage) ---
-    profile_model_path: Optional[Path] = None
+    profile_model_path: Path | None = None
     profile_model = None
-    profile_class_names: List[str] = []
+    profile_class_names: list[str] = []
     if args.profile_model:
         profile_model_path = Path(args.profile_model)
         if not profile_model_path.exists():
@@ -385,13 +319,13 @@ def main() -> None:
         msg = str(exc).lower()
         return ("out of memory" in msg) and ("cuda" in msg or "cudnn" in msg)
 
-    def _run_predict_once(curr_device: torch.device, curr_model: torch.nn.Module, curr_profile_model: Optional[torch.nn.Module], curr_batch_size: int):
+    def _run_predict_once(curr_device: torch.device, curr_model: torch.nn.Module, curr_profile_model: torch.nn.Module | None, curr_batch_size: int):
         loader = DataLoader(ds, batch_size=curr_batch_size, shuffle=False, num_workers=num_workers)
-        y_true_local: List[int] = []
-        y_pred_local: List[int] = []
-        profile_gt_local: List[str] = []
-        profile_pred_local: List[str] = []
-        preds_rows_local: List[Dict[str, Any]] = []
+        y_true_local: list[int] = []
+        y_pred_local: list[int] = []
+        profile_gt_local: list[str] = []
+        profile_pred_local: list[str] = []
+        preds_rows_local: list[dict[str, Any]] = []
 
         t0_local = time.perf_counter()
         ema_ips_local = None
@@ -400,6 +334,12 @@ def main() -> None:
         progress = tqdm(loader, desc=f"Predict({args.split})")
         for batch in progress:
             images, labels, sample_ids, image_paths = batch
+            if args.max_samples is not None:
+                # Truncate the last batch so exactly --max-samples samples are evaluated.
+                remaining = int(args.max_samples) - seen_local
+                if remaining < int(images.shape[0]):
+                    images, labels = images[:remaining], labels[:remaining]
+                    sample_ids, image_paths = sample_ids[:remaining], image_paths[:remaining]
 
             bt0 = time.perf_counter()
             images = images.to(curr_device)
@@ -429,6 +369,18 @@ def main() -> None:
             y_true_local.extend(labels.detach().cpu().numpy().tolist())
             y_pred_local.extend(pred_idx.detach().cpu().numpy().tolist())
             seen_local += bs
+
+            # Profile metrics are collected independently of --save-preds.
+            if curr_profile_model is not None or ckpt_profile_id:
+                for i in range(bs):
+                    gt_prof = str(gt_profile_map.get(str(sample_ids[i]), "") or "")
+                    if not gt_prof:
+                        continue
+                    if curr_profile_model is not None and profile_pred_idx_np is not None:
+                        profile_pred_local.append(profile_class_names[int(profile_pred_idx_np[i])])
+                    else:
+                        profile_pred_local.append(ckpt_profile_id)
+                    profile_gt_local.append(gt_prof)
 
             if args.save_preds:
                 topk = min(args.topk, len(class_names))
@@ -466,19 +418,12 @@ def main() -> None:
                         row["gt_profile"] = gt_prof
                         row["profile_correct"] = bool(pred_prof == gt_prof) if gt_prof else None
                         row["profile_confidence"] = prof_conf
-
-                        if gt_prof:
-                            profile_gt_local.append(gt_prof)
-                            profile_pred_local.append(pred_prof)
                     elif ckpt_profile_id:
                         gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
                         row["pred_profile"] = ckpt_profile_id
                         row["gt_profile"] = gt_prof
                         row["profile_correct"] = bool(ckpt_profile_id == gt_prof) if gt_prof else None
                         row["profile_confidence"] = 1.0
-                        if gt_prof:
-                            profile_gt_local.append(gt_prof)
-                            profile_pred_local.append(ckpt_profile_id)
 
                     preds_rows_local.append(row)
 
@@ -529,7 +474,7 @@ def main() -> None:
     print(format_metrics(metrics, class_names))
 
     # Profile metrics (when profile preds were available and GT labels were available)
-    profile_metrics: Optional[Dict[str, Any]] = None
+    profile_metrics: dict[str, Any] | None = None
     if profile_gt_labels:
         # Build index arrays for profile metrics
         all_profile_names = sorted(set(profile_gt_labels) | set(profile_pred_labels))

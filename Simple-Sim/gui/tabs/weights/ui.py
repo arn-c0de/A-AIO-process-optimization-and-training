@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk, messagebox
-from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
-import os
+from tkinter import ttk
+from typing import TYPE_CHECKING
 
-from gui.utils.tooltip import ToolTip
+from gui.utils.formatting import fmt_bytes
 
 if TYPE_CHECKING:
     from .tab import WeightsTab
@@ -45,9 +43,9 @@ class WeightsUI:
         self.combo_a: ttk.Combobox
         self.combo_b: ttk.Combobox
 
-        self._models_menu: Optional[tk.Menu] = None
-        self._reports_menu: Optional[tk.Menu] = None
-        self._groups_menu: Optional[tk.Menu] = None
+        self._models_menu: tk.Menu | None = None
+        self._reports_menu: tk.Menu | None = None
+        self._groups_menu: tk.Menu | None = None
 
     def build_ui(self) -> None:
         top = ttk.Frame(self.frame)
@@ -309,16 +307,7 @@ class WeightsUI:
         self.txt.pack(fill="both", expand=True, pady=(6, 0))
         self.txt.configure(state="disabled")
 
-    def fmt_bytes(self, n: int) -> str:
-        units = ["B", "KB", "MB", "GB", "TB"]
-        v = float(max(0, n))
-        u = 0
-        while v >= 1024.0 and u < len(units) - 1:
-            v /= 1024.0
-            u += 1
-        if u == 0:
-            return f"{int(v)} {units[u]}"
-        return f"{v:.1f} {units[u]}"
+    fmt_bytes = staticmethod(fmt_bytes)
 
     def append_log(self, s: str) -> None:
         self.txt.configure(state="normal")
@@ -326,7 +315,7 @@ class WeightsUI:
         self.txt.see("end")
         self.txt.configure(state="disabled")
 
-    def populate_models_tree(self, models: List[Tuple[str, str, str, str, str, str, str]], group_iids: Dict[str, str], groups_to_open: set) -> None:
+    def populate_models_tree(self, models: list[tuple[str, str, str, str, str, str, str]], group_iids: dict[str, str], groups_to_open: set) -> None:
         self.tree.delete(*self.tree.get_children())
         for group, group_iid in group_iids.items():
             self.tree.insert(
@@ -348,11 +337,11 @@ class WeightsUI:
                 tags=("model_entry",),
             )
     
-    def set_compare_combobox_values(self, values: List[str]) -> None:
+    def set_compare_combobox_values(self, values: list[str]) -> None:
         self.combo_a.configure(values=values)
         self.combo_b.configure(values=values)
         
-    def populate_reports_tree(self, reports_data: List[Tuple[str, ...]]) -> None:
+    def populate_reports_tree(self, reports_data: list[tuple[str, ...]]) -> None:
         self.tree_reports.delete(*self.tree_reports.get_children())
         for r_values in reports_data:
             self.tree_reports.insert("", "end", iid=r_values[0], values=r_values[1:])

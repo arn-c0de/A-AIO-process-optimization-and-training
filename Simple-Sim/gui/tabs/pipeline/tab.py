@@ -7,25 +7,18 @@ import os
 import queue
 import threading
 import time
-import subprocess
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any
 import shutil
-from datetime import datetime
-import re
 import shlex
 import tempfile
 
-import torch
-from PIL import Image, ImageTk
-import cv2
 import yaml
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.tooltip import ToolTip
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.components.filter_popup import open_filter_popup
 from gui.components.precise_popup import open_precise_popup
@@ -41,8 +34,6 @@ from gui.utils.filter_profile_store import (
 
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
-from simple_sim.schema import write_jsonl
-from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
 
 from .ui import PipelineUI
 from .logic import PipelineLogic
@@ -170,11 +161,12 @@ class PipelineControlTab(BaseTab):
         super().__init__(parent, sim_root, state)
 
         self.log_q: queue.Queue[str] = queue.Queue()
-        self.event_q: queue.Queue[Dict[str, Any]] = queue.Queue()
+        self.event_q: queue.Queue[dict[str, Any]] = queue.Queue()
         self.event_log_path = self.sim_root / "outputs" / "live" / "events.jsonl"
 
         self.ui = PipelineUI(self, self.frame)
         self.logic = PipelineLogic(sim_root, self.log_q, self.event_q, self.event_log_path)
+        self.logic.ui_call = lambda fn: self.frame.after(0, fn)
 
         self._thumb_refs = []  # keep PhotoImage references
         self._recent_imgs: list[str] = []
@@ -189,7 +181,7 @@ class PipelineControlTab(BaseTab):
         self._last_profile_id: str = "chip_0603_resistor@1"
         self._suspend_profile_event: bool = False
 
-        self._precise_settings: Dict[str, Any] = {
+        self._precise_settings: dict[str, Any] = {
             "total": 100,
             "per_class": False,
             "class_names": ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
@@ -213,11 +205,14 @@ class PipelineControlTab(BaseTab):
 
         self._model_paths: list[Path] = []
         self._all_model_combo_values: list[str] = []
-        self._model_profile_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
+        self._model_profile_cache: dict[str, tuple[str | None, str | None]] = {}
+        self._model_meta_gen: int = 0  # bumps per _refresh_models so stale background loads are dropped
+        self._compat_after_id: str | None = None
+        self._compat_loading: set[str] = set()
 
         self._profile_paths: list[Path] = []
         self._dataset_milestones: dict[str, int] = {}
-        self._filter_popup_extras: Dict[str, Any] = {}
+        self._filter_popup_extras: dict[str, Any] = {}
         self._dataset_catalog = DatasetCatalog(sim_root, state.settings_store)
         self._ui_built: bool = False
         
@@ -235,7 +230,7 @@ class PipelineControlTab(BaseTab):
         self._load_persisted_settings()
         self._wire_settings_autosave()
         self._apply_profile_model_lock()
-        self.ui.var_model.trace("w", lambda *args: self._check_profile_compatibility())
+        self.ui.var_model.trace("w", lambda *args: self._schedule_profile_compat_check())
         self._tick_ui()
 
     def _ensure_initial_placeholder_dataset(self) -> None:
@@ -255,7 +250,7 @@ class PipelineControlTab(BaseTab):
         if not cfg_info:
             cfg_info = self.logic.config_for_profile(profile_id, want_backend=None)
 
-        cfg_path: Optional[Path] = Path(cfg_info["path"]) if cfg_info and cfg_info.get("path") else None
+        cfg_path: Path | None = Path(cfg_info["path"]) if cfg_info and cfg_info.get("path") else None
         if cfg_path is None or not cfg_path.exists():
             fallback = self.sim_root / "configs" / "run_0001.yaml"
             if fallback.exists():
@@ -273,7 +268,7 @@ class PipelineControlTab(BaseTab):
         except Exception as exc:
             _LOG.warning("Failed to create initial placeholder dataset: %s", exc)
 
-    def _store(self) -> Optional[SettingsStore]:
+    def _store(self) -> SettingsStore | None:
         return self.state.settings_store
 
     def _append_log(self, text: str) -> None:
@@ -297,7 +292,7 @@ class PipelineControlTab(BaseTab):
         profile_ids: list[str],
         multi_enabled: bool,
         multi_mode: str,
-        image_filters: Dict[str, Any],
+        image_filters: dict[str, Any],
     ) -> bool:
         task_label = {
             "full": "Full Pipeline",
@@ -315,12 +310,6 @@ class PipelineControlTab(BaseTab):
         realism_profile = str(image_filters.get("realism_profile_id", "profile_industrial_cam"))
 
         filter_toggles = [k for k, v in image_filters.items() if isinstance(k, str) and k.startswith("enable_") and k != "enable" and bool(v)]
-        filter_summary = (
-            f"Mode: {filter_mode}\n"
-            f"Enabled: {'yes' if bool(image_filters.get('enable', True)) else 'no'}\n"
-            f"Realism active: {'yes' if (filter_mode == 'realism' and realism_enabled) else 'no'}\n"
-            f"Enabled toggles: {len(filter_toggles)}"
-        )
         filter_details = (
             f"filter_mode={filter_mode}\n"
             f"enable={bool(image_filters.get('enable', True))}\n"
@@ -454,7 +443,7 @@ class PipelineControlTab(BaseTab):
             "Proceed?",
         )
 
-    def _ask_multi_dataset_train_strategy(self, dss: list[Path]) -> Optional[str]:
+    def _ask_multi_dataset_train_strategy(self, dss: list[Path]) -> str | None:
         msg = (
             f"{len(dss)} datasets selected.\n\n"
             "Yes: Merge and keep merged dataset\n"
@@ -527,7 +516,7 @@ class PipelineControlTab(BaseTab):
         except Exception:
             return float(default)
 
-    def _current_filter_settings_dict(self) -> Dict[str, Any]:
+    def _current_filter_settings_dict(self) -> dict[str, Any]:
         data = {
             # Existing filters
             "cardinal_rotation_90": bool(self.ui.var_filter_cardinal_rotation_90.get()),
@@ -573,10 +562,9 @@ class PipelineControlTab(BaseTab):
         data.update(self._filter_popup_extras)
         return data
 
-    def _apply_filter_settings_dict(self, data: Dict[str, Any]) -> None:
+    def _apply_filter_settings_dict(self, data: dict[str, Any]) -> None:
         if not isinstance(data, dict):
             return
-        extras: Dict[str, Any] = {}
         self._filter_popup_extras = extract_filter_popup_extras(data)
         # Existing filters
         self.ui.var_filter_cardinal_rotation_90.set(bool(data.get("cardinal_rotation_90", True)))
@@ -619,11 +607,11 @@ class PipelineControlTab(BaseTab):
         self.ui.var_filter_enable_sharpen.set(bool(data.get("enable_sharpen", False)))
         self.ui.var_filter_sharpen_strength.set(str(data.get("sharpen_strength", "1.00")))
 
-    def _load_filter_profiles(self) -> tuple[Dict[str, Dict[str, Any]], str]:
+    def _load_filter_profiles(self) -> tuple[dict[str, dict[str, Any]], str]:
         st = self._store()
-        profiles: Dict[str, Dict[str, Any]] = {}
+        profiles: dict[str, dict[str, Any]] = {}
         active = "Default"
-        current_live: Dict[str, Any] = {}
+        current_live: dict[str, Any] = {}
         if st is not None:
             raw_profiles = str(st.get("pipeline.filter_profiles_json", "") or "").strip()
             raw_active = str(st.get("pipeline.filter_profile_active", "") or "").strip()
@@ -688,7 +676,7 @@ class PipelineControlTab(BaseTab):
             active = sorted(profiles.keys())[0]
         return profiles, active
 
-    def _save_filter_profiles(self, profiles: Dict[str, Dict[str, Any]], active: str) -> None:
+    def _save_filter_profiles(self, profiles: dict[str, dict[str, Any]], active: str) -> None:
         st = self._store()
         if st is None:
             return
@@ -696,12 +684,12 @@ class PipelineControlTab(BaseTab):
         st.set("pipeline.filter_profile_active", str(active))
         st.schedule_save(self.frame)
 
-    def _image_filters_payload(self) -> Dict[str, Any]:
+    def _image_filters_payload(self) -> dict[str, Any]:
         bool_payload: dict[str, bool] = {}
         for key, attr_name in _FILTER_BOOL_PAYLOAD_ATTRS:
             bool_payload[key] = bool(getattr(self.ui, attr_name).get())
 
-        payload: Dict[str, Any] = {"enable": any(bool_payload.values())}
+        payload: dict[str, Any] = {"enable": any(bool_payload.values())}
         payload.update(bool_payload)
 
         for key, attr_name, default in _FILTER_FLOAT_PAYLOAD_ATTRS:
@@ -754,7 +742,7 @@ class PipelineControlTab(BaseTab):
         )
         self._refresh_precise_classes()
 
-        def on_apply(updated: Dict[str, Any]) -> None:
+        def on_apply(updated: dict[str, Any]) -> None:
             self._precise_settings.update(updated)
             self._save_precise_settings()
 
@@ -765,7 +753,7 @@ class PipelineControlTab(BaseTab):
             get_class_names_func=self._get_precise_class_names_from_config,
         )
 
-    def _get_precise_class_names_from_config(self) -> List[str]:
+    def _get_precise_class_names_from_config(self) -> list[str]:
         cfg_str = self.ui.var_config.get().strip()
         if cfg_str:
             cfg_path = (self.sim_root / cfg_str) if not Path(cfg_str).is_absolute() else Path(cfg_str)
@@ -805,21 +793,21 @@ class PipelineControlTab(BaseTab):
             st.set("pipeline.precise_settings_json", json.dumps(self._precise_settings, ensure_ascii=True))
             st.schedule_save(self.frame)
 
-    def _get_precise_counts(self) -> Optional[Dict[str, Any]]:
+    def _get_precise_counts(self) -> dict[str, Any] | None:
         """Return sample-count overrides for precise mode, or None on validation error."""
         s = self._precise_settings
-        multi_profiles: List[str] = s.get("multi_profiles") or []
+        multi_profiles: list[str] = s.get("multi_profiles") or []
         per_class = bool(s.get("per_class", False))
 
         if multi_profiles:
-            per_profile: Dict[str, Any] = {}
+            per_profile: dict[str, Any] = {}
             if per_class:
                 for pid in multi_profiles:
-                    cls_dict: Dict[str, Any] = (s.get("multi_classes") or {}).get(pid) or {}
+                    cls_dict: dict[str, Any] = (s.get("multi_classes") or {}).get(pid) or {}
                     if not cls_dict:
                         self.ui.show_messagebox("error", "Error", f"Precise mode: no class entries for '{pid}'.\nOpen Precise Settings and click ↻.")
                         return None
-                    counts: Dict[str, int] = {}
+                    counts: dict[str, int] = {}
                     for cls, val in cls_dict.items():
                         try:
                             n = int(val)
@@ -842,11 +830,11 @@ class PipelineControlTab(BaseTab):
 
         # Single profile
         if per_class:
-            classes: Dict[str, Any] = s.get("classes") or {}
+            classes: dict[str, Any] = s.get("classes") or {}
             if not classes:
                 self.ui.show_messagebox("error", "Error", "Precise mode: no class entries.\nOpen Precise Settings and click ↻.")
                 return None
-            counts2: Dict[str, int] = {}
+            counts2: dict[str, int] = {}
             for cls, val in classes.items():
                 try:
                     n = int(val)
@@ -865,10 +853,10 @@ class PipelineControlTab(BaseTab):
                 return None
             return {"_total": total}
 
-    def _write_precise_config(self, cfg_path: Path, counts: Dict[str, Any]) -> Path:
+    def _write_precise_config(self, cfg_path: Path, counts: dict[str, Any]) -> Path:
         """Write a temp config YAML with the classes section overridden by counts."""
         data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-        existing_classes: Dict[str, int] = {str(k): int(v) for k, v in (data.get("classes") or {}).items()}
+        existing_classes: dict[str, int] = {str(k): int(v) for k, v in (data.get("classes") or {}).items()}
         if "_total" in counts:
             total = int(counts["_total"])
             new_classes = {cls: total for cls in existing_classes} if existing_classes else {}
@@ -888,7 +876,7 @@ class PipelineControlTab(BaseTab):
         """Open shared image filter popup."""
         profiles, active_profile = self._load_filter_profiles()
 
-        def on_close(updated_profiles: Dict[str, Dict[str, Any]], updated_active: str) -> None:
+        def on_close(updated_profiles: dict[str, dict[str, Any]], updated_active: str) -> None:
             self._save_filter_profiles(updated_profiles, updated_active)
 
         open_filter_popup(
@@ -920,7 +908,7 @@ class PipelineControlTab(BaseTab):
         self.ui.set_profile_model_combo_state("disabled" if locked else "readonly")
 
     def _build_profile_model(self) -> None:
-        if self.logic.is_process_running():
+        if self.logic.is_busy():
             self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first.")
             return
 
@@ -932,7 +920,7 @@ class PipelineControlTab(BaseTab):
         out_model = self.sim_root / "outputs" / "models" / ("profile_classifier_v1.pt" if preset == "full" else "profile_classifier_quick.pt")
 
         if not cfg.exists():
-            self.ui.show_messagebox("error", "Missing config", f"Config not found:\\n{cfg}")
+            self.ui.show_messagebox("error", "Missing config", f"Config not found:\n{cfg}")
             return
         
         tag = time.strftime("%Y%m%d_%H%M%S")
@@ -946,7 +934,7 @@ class PipelineControlTab(BaseTab):
         self.ui.var_profile_model_lock.set(True)
         self._apply_profile_model_lock()
         
-        def run_simple_cmd_callback(cmd_args: List[str], extra_env: Optional[Dict[str, str]] = None) -> None:
+        def run_simple_cmd_callback(cmd_args: list[str], extra_env: dict[str, str] | None = None) -> None:
             self._run_simple_cmd(cmd_args, extra_env)
 
         self.logic.build_profile_model(preset, str(cfg), str(out_ds), str(out_model), self._append_log, run_simple_cmd_callback)
@@ -972,7 +960,7 @@ class PipelineControlTab(BaseTab):
         profile_ids: list[str],
         render_backend: str,
         out_dir: str,
-    ) -> Optional[tuple[list[dict[str, str]], str, Any, str]]:
+    ) -> tuple[list[dict[str, str]], str, Any, str] | None:
         run_specs: list[dict[str, str]] = []
         effective_task = task
         run_complete_callback = None
@@ -1003,7 +991,7 @@ class PipelineControlTab(BaseTab):
                     cfg_data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
                 except Exception:
                     cfg_data = {}
-                backend = str(((cfg_data.get("render") or {}).get("backend") or "opencv_2d")).strip() or "opencv_2d"
+                backend = str((cfg_data.get("render") or {}).get("backend") or "opencv_2d").strip() or "opencv_2d"
                 resolved_configs.append((pid, cfg_path, run_id, backend))
                 backends_used.add(backend)
 
@@ -1011,12 +999,12 @@ class PipelineControlTab(BaseTab):
                 cfg_str = self.ui.var_config.get().strip()
                 cfg_path = (self.sim_root / cfg_str) if cfg_str and not Path(cfg_str).is_absolute() else Path(cfg_str) if cfg_str else None
                 if not cfg_path or not cfg_path.exists():
-                    self.ui.show_messagebox("error", "Error", f"Config file not found:\\n{cfg_str}")
+                    self.ui.show_messagebox("error", "Error", f"Config file not found:\n{cfg_str}")
                     return None
                 try:
                     base_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
                 except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to read config:\\n{cfg_path}\\n\\n{e}")
+                    self.ui.show_messagebox("error", "Error", f"Failed to read config:\n{cfg_path}\n\n{e}")
                     return None
 
                 run_block = dict(base_cfg.get("run") or {})
@@ -1036,7 +1024,7 @@ class PipelineControlTab(BaseTab):
                         yaml.safe_dump(base_cfg, tf, sort_keys=False)
                         tmp_cfg_path = Path(tf.name)
                 except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\\n\\n{e}")
+                    self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\n\n{e}")
                     return None
 
                 run_specs.append({
@@ -1074,7 +1062,7 @@ class PipelineControlTab(BaseTab):
                 try:
                     tmp_root.mkdir(parents=True, exist_ok=False)
                 except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to create temporary mixed-generation directory:\\n{tmp_root}\\n\\n{e}")
+                    self.ui.show_messagebox("error", "Error", f"Failed to create temporary mixed-generation directory:\n{tmp_root}\n\n{e}")
                     return None
 
                 self._append_log(f"[mixed] Cross-backend profiles detected ({', '.join(sorted(backends_used))}). Generating per profile and auto-merging.\n")
@@ -1096,7 +1084,7 @@ class PipelineControlTab(BaseTab):
                         src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
                         merge_sources = list(src_dirs)
                         merge_target = final_out
-                        tmp_target: Optional[Path] = None
+                        tmp_target: Path | None = None
 
                         if replace_existing_final_out and final_out.exists():
                             if dataset_mode == "extend":
@@ -1122,15 +1110,19 @@ class PipelineControlTab(BaseTab):
                     except Exception as e:
                         log_callback(f"[mixed] merge failed: {e}\n")
                         ok = False
-                    try:
-                        for p in src_dirs:
-                            if p.exists():
-                                shutil.rmtree(p, ignore_errors=True)
-                        if tmp_root.exists():
-                            shutil.rmtree(tmp_root, ignore_errors=True)
-                        log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
-                    except Exception as e:
-                        log_callback(f"[mixed] temp cleanup warning: {e}\n")
+                    if not ok:
+                        # Keep freshly generated samples so a failed merge can be retried manually.
+                        log_callback(f"[mixed] temp generation data kept after failed merge: {tmp_root}\n")
+                    else:
+                        try:
+                            for p in src_dirs:
+                                if p.exists():
+                                    shutil.rmtree(p, ignore_errors=True)
+                            if tmp_root.exists():
+                                shutil.rmtree(tmp_root, ignore_errors=True)
+                            log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
+                        except Exception as e:
+                            log_callback(f"[mixed] temp cleanup warning: {e}\n")
                     return ok
 
                 run_complete_callback = _merge_after_run
@@ -1140,7 +1132,7 @@ class PipelineControlTab(BaseTab):
             for pid in profile_ids:
                 cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
                 if not cfg_info:
-                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\\n{pid}\\n\\nPick or create a config with run.component_profile={pid}.")
+                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\n{pid}\n\nPick or create a config with run.component_profile={pid}.")
                     return None
                 cfg_path = Path(cfg_info["path"])
                 cfg_rel = self._rel_to_sim_root(cfg_path)
@@ -1169,11 +1161,11 @@ class PipelineControlTab(BaseTab):
 
         return run_specs, effective_task, run_complete_callback, out_dir
 
-    def _apply_precise_counts_to_run_specs(self, run_specs: list[dict[str, str]]) -> Optional[list[dict[str, str]]]:
+    def _apply_precise_counts_to_run_specs(self, run_specs: list[dict[str, str]]) -> list[dict[str, str]] | None:
         precise_counts = self._get_precise_counts()
         if precise_counts is None:
             return None
-        per_profile_map: Optional[Dict[str, Any]] = precise_counts.get("_per_profile") if isinstance(precise_counts, dict) else None
+        per_profile_map: dict[str, Any] | None = precise_counts.get("_per_profile") if isinstance(precise_counts, dict) else None
         patched_specs: list[dict[str, str]] = []
         for spec in run_specs:
             cfg_rel = spec["config"]
@@ -1192,20 +1184,20 @@ class PipelineControlTab(BaseTab):
         return patched_specs
     
     def _start_pipeline(self, *, task: str) -> None:
-        if self.logic.is_process_running(): return
+        if self.logic.is_busy(): return
         
         run_mode, dataset_mode = self.ui.var_run_mode.get(), self.ui.var_dataset_mode.get()
         out_dir = ""
         if dataset_mode == "extend":
             if not (selected_ds := self._selected_dataset_dir()):
-                self.ui.show_messagebox("error", "Error", "No dataset selected to extend.\\n\\nSelect a dataset or use 'Create New' mode.")
+                self.ui.show_messagebox("error", "Error", "No dataset selected to extend.\n\nSelect a dataset or use 'Create New' mode.")
                 return
             try:
-                if str((self.sim_root / "outputs" / "sim_data" / "versions").resolve()).startswith(str(selected_ds.resolve()) + os.sep):
-                    self.ui.show_messagebox("error", "Error", "Cannot extend/overwrite a dataset snapshot under outputs/sim_data/versions.\\n\\nSelect a dataset under outputs/sim_data/runs instead.")
+                if str(selected_ds.resolve()).startswith(str((self.sim_root / "outputs" / "sim_data" / "versions").resolve()) + os.sep):
+                    self.ui.show_messagebox("error", "Error", "Cannot extend/overwrite a dataset snapshot under outputs/sim_data/versions.\n\nSelect a dataset under outputs/sim_data/runs instead.")
                     return
             except Exception: pass
-            if not self.ui.ask_yes_no("Extend dataset?", f"Extend Existing will APPEND new samples into the selected dataset folder.\\n\\nDataset:\\n{selected_ds}\\n\\nContinue?"): return
+            if not self.ui.ask_yes_no("Extend dataset?", f"Extend Existing will APPEND new samples into the selected dataset folder.\n\nDataset:\n{selected_ds}\n\nContinue?"): return
             out_dir = str(selected_ds)
             self._append_log(f"\n=== Extending selected dataset: {out_dir} ===\n")
         else:
@@ -1234,7 +1226,7 @@ class PipelineControlTab(BaseTab):
         if multi_enabled:
             profile_ids = self._profiles_multi_list(available=self._profiles_multi_available_values())
             if not profile_ids:
-                self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\\n\\nClick Pick and select at least 1 profile.")
+                self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\n\nClick Pick and select at least 1 profile.")
                 return
         else:
             if p := self.ui.var_profile.get().strip(): profile_ids = [p]
@@ -1329,10 +1321,14 @@ class PipelineControlTab(BaseTab):
     def stop_pipeline(self) -> None:
         self.logic.stop_pipeline()
 
-    def _run_simple_cmd(self, args: list[str], extra_env: Optional[Dict[str, str]] = None) -> None:
-        if self.logic.is_process_running():
+    def _run_simple_cmd(self, args: list[str], extra_env: dict[str, str] | None = None, *, cleanup_dir: Path | None = None) -> bool:
+        # cleanup_dir (or a pending logic._temp_merge_cleanup_dir) is removed when this process exits with rc=0.
+        cleanup_dir = cleanup_dir or self.logic._temp_merge_cleanup_dir
+        self.logic._temp_merge_cleanup_dir = None
+        if self.logic.is_busy():
             self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first.")
-            return
+            if cleanup_dir is not None: self.logic.cleanup_temp_merge_dir(cleanup_dir, 0, self._append_log)
+            return False
 
         self.ui.set_run_buttons_state(True)
         self.logic.stop_evt.clear()
@@ -1343,16 +1339,23 @@ class PipelineControlTab(BaseTab):
         env["PYTHONUNBUFFERED"] = "1"
         if extra_env: env.update(extra_env)
 
-        cmd = ["bash", "-lc", " ".join(args)]
+        # A single element is a pre-built shell command line; multiple elements are argv and get quoted
+        # so dataset/model paths containing spaces survive bash -lc.
+        shell_cmd = args[0] if len(args) == 1 else shlex.join(args)
+        cmd = ["bash", "-lc", shell_cmd]
 
-        self.logic.proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env, start_new_session=True)
-        p = self.logic.proc
-        
-        threading.Thread(target=self.logic._read_process_output_thread, args=(p, self._append_log), daemon=True).start()
-        threading.Thread(target=self.logic._tail_events_thread, args=(self._handle_event,), daemon=True).start()
+        def on_exit(rc: int | None) -> None:  # reader thread; logging goes through log_q
+            if cleanup_dir is not None: self.logic.cleanup_temp_merge_dir(cleanup_dir, rc, self._append_log)
+
+        try: self.logic.launch_process(cmd, env, self._append_log, self._handle_event, on_exit=on_exit)
+        except Exception as e:
+            self._append_log(f"\nError starting command: {e}\n"); self.ui.set_run_buttons_state(False)
+            if cleanup_dir is not None: self.logic.cleanup_temp_merge_dir(cleanup_dir, 0, self._append_log)
+            return False
         self.ui.var_phase.set("running cmd")
+        return True
 
-    def _handle_event(self, evt: Dict[str, Any]) -> None:
+    def _handle_event(self, evt: dict[str, Any]) -> None:
         # Event tailing runs in a worker thread; marshal to the Tk thread.
         if threading.current_thread() is not threading.main_thread():
             self.event_q.put(evt)
@@ -1445,7 +1448,7 @@ class PipelineControlTab(BaseTab):
         except queue.Empty:
             pass
         
-        if not self.logic.is_process_running():
+        if not self.logic.is_busy():
             if self.ui.btn_start["state"] == "disabled" or self.ui.btn_start_generate["state"] == "disabled": self.ui.set_run_buttons_state(False)
 
         self._maybe_refresh_thumbnails()
@@ -1501,7 +1504,7 @@ class PipelineControlTab(BaseTab):
         manifest_path = ds / "dataset_manifest.json"
         if manifest_path.exists():
             try:
-                with open(manifest_path, "r", encoding="utf-8") as f: manifest = json.load(f)
+                with open(manifest_path, encoding="utf-8") as f: manifest = json.load(f)
                 stats = manifest.get("dataset_stats", {})
                 splits = stats.get("splits", {})
                 self._set_dataset_samples_from_manifest(ds, stats.get("total_samples"), splits.get("train"), splits.get("val"), splits.get("test"))
@@ -1512,7 +1515,7 @@ class PipelineControlTab(BaseTab):
 
         self._start_dataset_size_calc(ds)
 
-    def _set_dataset_samples_from_manifest(self, ds: Path, total: Optional[int], train: Optional[int], val: Optional[int], test: Optional[int]) -> None:
+    def _set_dataset_samples_from_manifest(self, ds: Path, total: int | None, train: int | None, val: int | None, test: int | None) -> None:
         if total is None: return self._set_dataset_samples_info("Samples: manifest missing", "")
         parts = [f"Samples: {total}"]
         if train is not None and val is not None and test is not None: parts.append(f"(t{train}/v{val}/s{test})")
@@ -1570,7 +1573,7 @@ class PipelineControlTab(BaseTab):
 
     def _refresh_datasets(self) -> None:
         self._dataset_catalog.reload()
-        sim_data, runs, versions = self.sim_root / "outputs" / "sim_data", self.sim_root / "outputs" / "sim_data" / "runs", self.sim_root / "outputs" / "sim_data" / "versions"
+        runs, versions = self.sim_root / "outputs" / "sim_data" / "runs", self.sim_root / "outputs" / "sim_data" / "versions"
         runs.mkdir(parents=True, exist_ok=True); versions.mkdir(parents=True, exist_ok=True)
 
         cand: list[Path] = [p for p in runs.iterdir() if p.is_dir()]
@@ -1682,7 +1685,7 @@ class PipelineControlTab(BaseTab):
     def _encode_dataset_paths_json(self, paths: list[Path]) -> str:
         return json.dumps([str(p.resolve().relative_to(self.sim_root.resolve())) if not p.is_absolute() else str(p) for p in paths])
 
-    def _dataset_label_for_path(self, p: Path) -> Optional[str]:
+    def _dataset_label_for_path(self, p: Path) -> str | None:
         rp = p.resolve()
         for label, pp in self._dataset_by_label.items():
             if pp.resolve() == rp: return label
@@ -1715,12 +1718,34 @@ class PipelineControlTab(BaseTab):
     def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
         return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
+    @staticmethod
+    def _profile_from_meta(meta: dict[str, Any] | None) -> tuple[str | None, str | None]:
+        comp = (meta or {}).get("component_profile")
+        return (comp.get("profile_id"), comp.get("profile_hash")) if isinstance(comp, dict) else (None, None)
+
     def _refresh_models(self) -> None:
         paths = self.logic.get_all_model_paths()
         self._model_paths = paths
         self._model_profile_cache.clear()
+        self._model_meta_gen += 1
+        gen, uncached = self._model_meta_gen, []
         for p in self._model_paths:
-            self._model_profile_cache[str(p.resolve())] = self.logic.load_model_profile(p)
+            key = str(p.resolve())
+            if p.is_dir(): self._model_profile_cache[key] = ("multi", None); continue
+            if (meta := self.logic.cached_checkpoint_meta(p)) is None: uncached.append(p); continue
+            self._model_profile_cache[key] = self._profile_from_meta(meta)
+
+        if uncached:
+            # torch.load of every checkpoint is slow: do it off the Tk thread and re-filter when done.
+            def worker() -> None:
+                res = {str(p.resolve()): self._profile_from_meta(self.logic.read_checkpoint_meta(p)) for p in uncached}
+                def apply() -> None:
+                    if gen != self._model_meta_gen: return
+                    self._model_profile_cache.update(res)
+                    self._update_model_dropdown_for_dataset(); self._schedule_profile_compat_check()
+                try: self.frame.after(0, apply)
+                except Exception: pass
+            threading.Thread(target=worker, daemon=True).start()
 
         values = [str(p.resolve().relative_to(self.sim_root.resolve())) if p.is_relative_to(self.sim_root) else str(p) for p in paths]
         self._all_model_combo_values = values
@@ -1752,7 +1777,7 @@ class PipelineControlTab(BaseTab):
         
         self.ui.set_model_combo_values(values)
         if values:
-            if (current := self.ui.var_model.get().strip()) not in values: self.ui.var_model.set(values[0])
+            if self.ui.var_model.get().strip() not in values: self.ui.var_model.set(values[0])
         else: self.ui.var_model.set("")
 
     def _add_new_model(self) -> None:
@@ -1797,7 +1822,7 @@ class PipelineControlTab(BaseTab):
             return sorted(all_profiles)
         return list(self.ui.profile_combo["values"] or [])
 
-    def _profiles_multi_list(self, *, available: Optional[list[str]] = None) -> list[str]:
+    def _profiles_multi_list(self, *, available: list[str] | None = None) -> list[str]:
         available_set = set(available or list(self.ui.profile_combo["values"] or []))
         raw = (self.ui.var_profiles_multi_json.get().strip() or "[]")
         items: list[str] = []
@@ -1858,13 +1883,13 @@ class PipelineControlTab(BaseTab):
         try: self._refresh_precise_classes()
         except Exception: pass
 
-    def _on_render_backend_changed(self, _event: Optional[object] = None) -> None:
+    def _on_render_backend_changed(self, _event: object | None = None) -> None:
         try:
             self._refresh_profiles()
             if pid := self.ui.var_profile.get().strip(): self._autoselect_config_for_profile(pid, prefer_quiet=True)
         except Exception: pass
 
-    def _on_profile_selected(self, _event: Optional[object] = None) -> None:
+    def _on_profile_selected(self, _event: object | None = None) -> None:
         if self._suspend_profile_event: self._suspend_profile_event = False; return
         if not (profile_id := self.ui.var_profile.get().strip()): return
 
@@ -1875,7 +1900,7 @@ class PipelineControlTab(BaseTab):
         # Keep profile selection passive and only update state.
         self._last_profile_id = profile_id
 
-    def _find_dataset_for_profile(self, profile_id: str) -> Optional[Path]:
+    def _find_dataset_for_profile(self, profile_id: str) -> Path | None:
         runs_root = self.sim_root / "outputs" / "sim_data" / "runs"
         if not runs_root.exists(): return None
         for ds in sorted(runs_root.iterdir()):
@@ -1897,8 +1922,8 @@ class PipelineControlTab(BaseTab):
         self._suspend_profile_event = True
         self.ui.var_profile.set(self._last_profile_id or "chip_0603_resistor@1")
 
-    def _prepare_dataset_for_profile(self, profile_id: str, cfg_info: Optional[Dict[str, Any]]) -> None:
-        cfg_path: Optional[Path] = None
+    def _prepare_dataset_for_profile(self, profile_id: str, cfg_info: dict[str, Any] | None) -> None:
+        cfg_path: Path | None = None
         if cfg_info:
             cfg_path = cfg_info["path"]
             self.ui.var_config.set(str(cfg_path))
@@ -1915,9 +1940,9 @@ class PipelineControlTab(BaseTab):
         self._append_log(f"[profile] prepared dataset for profile {profile_id}\n")
         
         if cfg_info:
-            self.ui.show_messagebox("info", "Ready", f"Config '{cfg_path.name}' assigned.\\nOut directory: {self.ui.var_out.get()}\\nRun the pipeline to generate the matching dataset for this profile.")
+            self.ui.show_messagebox("info", "Ready", f"Config '{cfg_path.name}' assigned.\nOut directory: {self.ui.var_out.get()}\nRun the pipeline to generate the matching dataset for this profile.")
         else:
-            self.ui.show_messagebox("info", "Ready", "No config automatically detected for this profile.\\nPick or create a config that sets `run.component_profile` to " f"'{profile_id}', then run the pipeline to create the dataset.")
+            self.ui.show_messagebox("info", "Ready", "No config automatically detected for this profile.\nPick or create a config that sets `run.component_profile` to " f"'{profile_id}', then run the pipeline to create the dataset.")
 
         config_candidate = cfg_path if cfg_path else Path(self.ui.var_config.get())
         out_dir = Path(self.ui.var_out.get())
@@ -1961,21 +1986,32 @@ class PipelineControlTab(BaseTab):
 
         profiles_dir = self.sim_root / "configs" / "profiles"
         profile_path = profiles_dir / f"{profile_id}.yaml"
-        if not profile_path.exists(): self.ui.show_messagebox("error", "Error", f"Profile file not found:\\n{profile_path}"); return
+        if not profile_path.exists(): self.ui.show_messagebox("error", "Error", f"Profile file not found:\n{profile_path}"); return
 
         try:
-            with open(profile_path, 'r') as f: profile_data = yaml.safe_load(f)
+            with open(profile_path) as f: profile_data = yaml.safe_load(f)
             dialog = tk.Toplevel(self.frame); dialog.title(f"Profile Info: {profile_id}"); dialog.geometry("600x500")
             text_frame = ttk.Frame(dialog); text_frame.pack(fill="both", expand=True, padx=10, pady=10)
             scrollbar = ttk.Scrollbar(text_frame); scrollbar.pack(side="right", fill="y")
             text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10)); text.pack(side="left", fill="both", expand=True)
             scrollbar.config(command=text.yview)
 
-            info_text = f"Profile ID: {profile_id}\\nPath: {profile_path}\\n\\n" + "="*60 + "\\n\\n" + yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
+            info_text = f"Profile ID: {profile_id}\nPath: {profile_path}\n\n" + "="*60 + "\n\n" + yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
             text.insert("1.0", info_text); text.config(state="disabled")
             ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
 
-        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load profile:\\n{str(e)}")
+        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load profile:\n{str(e)}")
+
+    def _schedule_profile_compat_check(self, delay_ms: int = 300) -> None:
+        # Debounce: var_model is written repeatedly while typing/refreshing; check only after edits settle.
+        if self._compat_after_id is not None:
+            try: self.frame.after_cancel(self._compat_after_id)
+            except Exception: pass
+        self._compat_after_id = self.frame.after(delay_ms, self._run_scheduled_profile_compat_check)
+
+    def _run_scheduled_profile_compat_check(self) -> None:
+        self._compat_after_id = None
+        self._check_profile_compatibility()
 
     def _check_profile_compatibility(self) -> None:
         try:
@@ -1983,7 +2019,7 @@ class PipelineControlTab(BaseTab):
             manifest_path = ds / "dataset_manifest.json"
             if not manifest_path.exists(): self.ui.var_profile_compat.set(""); return
 
-            with open(manifest_path, 'r') as f: manifest = json.load(f)
+            with open(manifest_path) as f: manifest = json.load(f)
             mver = int(manifest.get('manifest_version', 1) or 1)
             ds_profile_id = (manifest.get('component_profile', {}).get('profile_id') if mver == 1 else "multi")
             ds_profile_hash = (manifest.get('component_profile', {}).get('profile_hash') if mver == 1 else "multi")
@@ -1999,8 +2035,21 @@ class PipelineControlTab(BaseTab):
                     self.ui.var_profile_compat.set(f"⚠ Multi-model: no weights for {ds_profile_id}"); self.ui.lbl_profile_compat.configure(foreground="orange"); return
                 model_path = cand
 
-            checkpoint = torch.load(model_path, map_location='cpu')
-            if not (model_profile := checkpoint.get('component_profile')):
+            if (meta := self.logic.cached_checkpoint_meta(model_path)) is None:
+                # Uncached: load metadata in the background, then re-run this check on the Tk thread.
+                self.ui.var_profile_compat.set("… checking model profile"); self.ui.lbl_profile_compat.configure(foreground="gray")
+                if (key := str(model_path.resolve())) not in self._compat_loading:
+                    self._compat_loading.add(key)
+                    def worker() -> None:
+                        try: self.logic.read_checkpoint_meta(model_path)
+                        finally:
+                            def done() -> None: self._compat_loading.discard(key); self._schedule_profile_compat_check(0)
+                            try: self.frame.after(0, done)
+                            except Exception: pass
+                    threading.Thread(target=worker, daemon=True).start()
+                return
+            if meta.get("error"): self.ui.var_profile_compat.set(""); return
+            if not (model_profile := meta.get('component_profile')):
                 self.ui.var_profile_compat.set("⚠ Model has no profile (legacy)"); self.ui.lbl_profile_compat.configure(foreground="orange"); return
 
             model_profile_id, model_profile_hash = model_profile.get('profile_id'), model_profile.get('profile_hash')
@@ -2010,7 +2059,7 @@ class PipelineControlTab(BaseTab):
             elif model_profile_id != ds_profile_id:
                 self.ui.var_profile_compat.set(f"✗ INCOMPATIBLE: Model={model_profile_id}, Dataset={ds_profile_id}"); self.ui.lbl_profile_compat.configure(foreground="red")
             elif model_profile_hash != ds_profile_hash:
-                self.ui.var_profile_compat.set(f"⚠ Profile hash mismatch (same ID, different version)"); self.ui.lbl_profile_compat.configure(foreground="orange")
+                self.ui.var_profile_compat.set("⚠ Profile hash mismatch (same ID, different version)"); self.ui.lbl_profile_compat.configure(foreground="orange")
             else:
                 self.ui.var_profile_compat.set(f"✓ Compatible: {ds_profile_id}"); self.ui.lbl_profile_compat.configure(foreground="green")
 
@@ -2019,10 +2068,10 @@ class PipelineControlTab(BaseTab):
     def _show_dataset_profile_info(self) -> None:
         if not (ds := self._selected_dataset_dir()): self.ui.show_messagebox("info", "Dataset Profile", "No dataset selected"); return
         manifest_path = ds / "dataset_manifest.json"
-        if not manifest_path.exists(): self.ui.show_messagebox("error", "No Manifest", f"Dataset has no manifest (legacy dataset).\\n\\nUse the backfill tool to add a manifest:\\n  .venv/bin/python tools/backfill_manifest.py --data {ds}"); return
+        if not manifest_path.exists(): self.ui.show_messagebox("error", "No Manifest", f"Dataset has no manifest (legacy dataset).\n\nUse the backfill tool to add a manifest:\n  .venv/bin/python tools/backfill_manifest.py --data {ds}"); return
 
         try:
-            with open(manifest_path, 'r') as f: manifest = json.load(f)
+            with open(manifest_path) as f: manifest = json.load(f)
             profile_id, profile_hash, profile_path_str = manifest.get('component_profile', {}).get('profile_id', 'unknown'), manifest.get('component_profile', {}).get('profile_hash', ''), manifest.get('component_profile', {}).get('profile_path', '')
             profiles_dir = self.sim_root / "configs" / "profiles"
             profile_path = profiles_dir / f"{profile_id}.yaml"
@@ -2033,13 +2082,13 @@ class PipelineControlTab(BaseTab):
             text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10)); text.pack(side="left", fill="both", expand=True)
             scrollbar.config(command=text.yview)
 
-            info_text = f"Dataset: {ds.name}\\nProfile ID: {profile_id}\\nProfile Hash: {profile_hash}\\nProfile Path: {profile_path_str}\\n\\n" + "="*60 + "\\nMANIFEST METADATA\\n" + "="*60 + "\\n\\n" + json.dumps(manifest, indent=2)
-            if profile_path.exists(): info_text += "\\n\\n" + "="*60 + "\\nPROFILE DETAILS\\n" + "="*60 + "\\n\\n" + yaml.dump(yaml.safe_load(profile_path.read_text(encoding="utf-8")), default_flow_style=False, sort_keys=False)
-            else: info_text += f"\\n\\n⚠ Profile file not found at: {profile_path}"
+            info_text = f"Dataset: {ds.name}\nProfile ID: {profile_id}\nProfile Hash: {profile_hash}\nProfile Path: {profile_path_str}\n\n" + "="*60 + "\nMANIFEST METADATA\n" + "="*60 + "\n\n" + json.dumps(manifest, indent=2)
+            if profile_path.exists(): info_text += "\n\n" + "="*60 + "\nPROFILE DETAILS\n" + "="*60 + "\n\n" + yaml.dump(yaml.safe_load(profile_path.read_text(encoding="utf-8")), default_flow_style=False, sort_keys=False)
+            else: info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
             text.insert("1.0", info_text); text.config(state="disabled")
             ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
 
-        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load dataset profile info:\\n{str(e)}")
+        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load dataset profile info:\n{str(e)}")
 
     def _apply_name_to_out_and_model(self) -> None:
         base = self.logic.slugify_name(self.ui.var_name.get())
@@ -2049,10 +2098,10 @@ class PipelineControlTab(BaseTab):
         self._refresh_models()
         self._append_log(f"[naming] out={out_rel} model={model_rel}\n")
 
-    def _selected_dataset_dir(self) -> Optional[Path]:
+    def _selected_dataset_dir(self) -> Path | None:
         dss = self._selected_dataset_dirs(); return dss[0] if dss else None
 
-    def _selected_dataset_dir_single(self) -> Optional[Path]:
+    def _selected_dataset_dir_single(self) -> Path | None:
         label = self.ui.var_dataset.get().strip(); return self._dataset_by_label.get(label)
 
     def _selected_dataset_dirs(self) -> list[Path]:
@@ -2066,7 +2115,7 @@ class PipelineControlTab(BaseTab):
             return
         self._refresh_datasets()
 
-    def _on_dataset_selected(self, _evt: Optional[object] = None) -> None:
+    def _on_dataset_selected(self, _evt: object | None = None) -> None:
         ds = self._selected_dataset_dir()
         if not ds: self.ui.var_dataset_profile.set("Profile: -"); self.ui.var_ds_samples.set("Samples: -"); return
         
@@ -2086,7 +2135,7 @@ class PipelineControlTab(BaseTab):
 
         try:
             if (manifest_path := ds / "dataset_manifest.json").exists():
-                with open(manifest_path, 'r') as f: manifest = json.load(f)
+                with open(manifest_path) as f: manifest = json.load(f)
                 profile_id = manifest.get('component_profile', {}).get('profile_id', 'unknown')
                 profile_hash = manifest.get('component_profile', {}).get('profile_hash', '')
                 stats = manifest.get("dataset_stats", {}); total_samples = stats.get("total_samples")
@@ -2098,10 +2147,10 @@ class PipelineControlTab(BaseTab):
                 self.ui.var_dataset_profile.set("Profile: ⚠ No manifest (legacy dataset)")
                 self._set_dataset_samples_info("Samples: legacy dataset", "black")
         except Exception as e:
-            self.ui.var_dataset_profile.set(f"Profile: ⚠ Error loading manifest"); self._set_dataset_samples_info("Samples: error", "")
+            self.ui.var_dataset_profile.set("Profile: ⚠ Error loading manifest"); self._set_dataset_samples_info("Samples: error", "")
             _LOG.warning("Failed to load dataset manifest: %s", e)
 
-        self._check_profile_compatibility(); self._apply_dataset_settings(ds)
+        self._schedule_profile_compat_check(); self._apply_dataset_settings(ds)
 
         if (img_dir := ds / "images").exists():
             for p in sorted(img_dir.glob("*.png"))[-12:]: self._recent_imgs.append(str(p))
@@ -2121,8 +2170,8 @@ class PipelineControlTab(BaseTab):
 
     def _delete_dataset(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
-        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before deleting datasets."); return
-        if not self.ui.ask_yes_no("Delete dataset", f"Delete dataset folder?\\n\\n{ds}"): return
+        if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before deleting datasets."); return
+        if not self.ui.ask_yes_no("Delete dataset", f"Delete dataset folder?\n\n{ds}"): return
         try: shutil.rmtree(ds); self._append_log(f"\n[deleted dataset {ds}]\n")
         except Exception as e: self.ui.show_messagebox("error", "Delete failed", str(e))
         self._refresh_datasets()
@@ -2132,7 +2181,7 @@ class PipelineControlTab(BaseTab):
         if not ds:
             self.ui.show_messagebox("info", "Delete images", "No dataset selected.")
             return
-        if self.logic.is_process_running():
+        if self.logic.is_busy():
             self.ui.show_messagebox("warning", "Busy", "Stop the running process before editing datasets.")
             return
 
@@ -2165,7 +2214,7 @@ class PipelineControlTab(BaseTab):
         if not src_ds:
             self.ui.show_messagebox("info", "Move images", "No source dataset selected.")
             return
-        if self.logic.is_process_running():
+        if self.logic.is_busy():
             self.ui.show_messagebox("warning", "Busy", "Stop the running process before editing datasets.")
             return
 
@@ -2199,7 +2248,7 @@ class PipelineControlTab(BaseTab):
         except Exception as exc:
             self.ui.show_messagebox("error", "Move images failed", str(exc))
 
-    def _open_sample_selector(self, dataset_dir: Path, *, title: str, action_text: str) -> List[str]:
+    def _open_sample_selector(self, dataset_dir: Path, *, title: str, action_text: str) -> list[str]:
         try:
             samples = list_dataset_samples(dataset_dir)
         except Exception as exc:
@@ -2217,7 +2266,7 @@ class PipelineControlTab(BaseTab):
         dialog.grab_set()
         dialog.minsize(860, 420)
 
-        selected_ids: List[str] = []
+        selected_ids: list[str] = []
 
         frm = ttk.Frame(dialog, padding=10)
         frm.pack(fill="both", expand=True)
@@ -2255,7 +2304,7 @@ class PipelineControlTab(BaseTab):
         dialog.wait_window()
         return selected_ids
 
-    def _open_target_dataset_selector(self, source_dataset: Path) -> Optional[Path]:
+    def _open_target_dataset_selector(self, source_dataset: Path) -> Path | None:
         targets = [p for p in self._dataset_dirs if p.resolve() != source_dataset.resolve()]
         if not targets:
             self.ui.show_messagebox("info", "Move images", "No target dataset available.")
@@ -2301,7 +2350,7 @@ class PipelineControlTab(BaseTab):
         return f"{sample.sample_id} | class={sample.class_name} | split={sample.split} | image={Path(sample.image_path).name}"
 
     def _create_new_dataset(self) -> None:
-        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before creating datasets."); return
+        if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before creating datasets."); return
 
         initial = self.logic.slugify_name(self.ui.var_name.get())
         if not (new_name := self.ui.ask_string("Create dataset", "New dataset folder name (will be created under outputs/sim_data/runs):", initialvalue=initial)): return
@@ -2309,9 +2358,9 @@ class PipelineControlTab(BaseTab):
 
         out_dir = (self.sim_root / "outputs" / "sim_data" / "runs" / new_name).resolve()
         if out_dir.exists():
-            if self.ui.ask_yes_no("Dataset exists", f"Dataset already exists:\\n\\n{out_dir}\\n\\nSelect it?"): self._select_dataset(out_dir); return
+            if self.ui.ask_yes_no("Dataset exists", f"Dataset already exists:\n\n{out_dir}\n\nSelect it?"): self._select_dataset(out_dir); return
 
-        if not (config_candidate := Path(self.ui.var_config.get())).exists(): self.ui.show_messagebox("error", "Missing config", f"Config not found:\\n\\n{config_candidate}\\n\\nPick a valid Config first, then retry."); return
+        if not (config_candidate := Path(self.ui.var_config.get())).exists(): self.ui.show_messagebox("error", "Missing config", f"Config not found:\n\n{config_candidate}\n\nPick a valid Config first, then retry."); return
         if not (profile_id := self.ui.var_profile.get().strip()): self.ui.show_messagebox("error", "Missing profile", "No profile selected."); return
 
         try:
@@ -2325,14 +2374,15 @@ class PipelineControlTab(BaseTab):
 
     def _snapshot_dataset_selected(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
-        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before snapshotting datasets."); return
+        if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before snapshotting datasets."); return
 
-        sim_data, versions_root = self.sim_root / "outputs" / "sim_data", self.sim_root / "outputs" / "sim_data" / "versions"
+        versions_root = self.sim_root / "outputs" / "sim_data" / "versions"
         versions_root.mkdir(parents=True, exist_ok=True)
-        group, tag, dst = ds.name, time.strftime("%Y%m%d_%H%M%S"), versions_root / group / f"{group}_{tag}"
+        group, tag = ds.name, time.strftime("%Y%m%d_%H%M%S")
+        dst = versions_root / group / f"{group}_{tag}"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists(): self.ui.show_messagebox("error", "Error", f"Snapshot destination already exists:\\n{dst}"); return
-        if not self.ui.ask_yes_no("Snapshot dataset", f"Create snapshot?\\n\\nFrom:\\n{ds}\\n\\nTo:\\n{dst}"): return
+        if dst.exists(): self.ui.show_messagebox("error", "Error", f"Snapshot destination already exists:\n{dst}"); return
+        if not self.ui.ask_yes_no("Snapshot dataset", f"Create snapshot?\n\nFrom:\n{ds}\n\nTo:\n{dst}"): return
         self._append_log(f"\n[snapshot dataset] {ds} -> {dst}\n")
 
         def link_or_copy_file(src: Path, dstp: Path) -> None:
@@ -2342,17 +2392,17 @@ class PipelineControlTab(BaseTab):
 
         def worker() -> None:
             try:
-                for dirpath, dirnames, filenames in os.walk(ds):
+                for dirpath, _dirnames, filenames in os.walk(ds):
                     rel = Path(dirpath).relative_to(ds)
                     for fn in filenames: link_or_copy_file(Path(dirpath) / fn, dst / rel / fn)
                 self.log_q.put(f"[snapshot dataset] done: {dst}\n")
-            except Exception as e: self.log_q.put(f"[snapshot dataset] failed: {e}\n"); shutil.rmtree(dst)
+            except Exception as e: self.log_q.put(f"[snapshot dataset] failed: {e}\n"); shutil.rmtree(dst, ignore_errors=True)
             finally: self.frame.after(0, self._refresh_datasets)
         threading.Thread(target=worker, daemon=True).start()
 
     def _rename_dataset_selected(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
-        if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before renaming datasets."); return
+        if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before renaming datasets."); return
 
         sim_data = (self.sim_root / "outputs" / "sim_data").resolve()
         runs = (sim_data / "runs").resolve()
@@ -2361,17 +2411,17 @@ class PipelineControlTab(BaseTab):
         kind, old_name, parent = "", rp.name, rp.parent
         if str(rp).startswith(str(runs) + os.sep): kind = "run"
         elif str(rp).startswith(str(versions) + os.sep): kind = "snapshot"
-        else: self.ui.show_messagebox("error", "Error", f"Can only rename datasets under:\\n{runs}\\n{versions}\\n\\nSelected:\\n{ds}"); return
+        else: self.ui.show_messagebox("error", "Error", f"Can only rename datasets under:\n{runs}\n{versions}\n\nSelected:\n{ds}"); return
 
         if not (new_name := self.ui.ask_string("Rename dataset", f"New folder name for this {kind} dataset:", initialvalue=old_name)): return
         if not (new_name := new_name.strip()) or "/" in new_name or "\\" in new_name: self.ui.show_messagebox("error", "Error", "Name must not contain path separators."); return
         
         dst = parent / new_name
-        if dst.exists(): self.ui.show_messagebox("error", "Error", f"Target already exists:\\n{dst}"); return
-        if not self.ui.ask_yes_no("Rename dataset", f"Rename?\\n\\nFrom:\\n{rp}\\n\\nTo:\\n{dst}"): return
+        if dst.exists(): self.ui.show_messagebox("error", "Error", f"Target already exists:\n{dst}"); return
+        if not self.ui.ask_yes_no("Rename dataset", f"Rename?\n\nFrom:\n{rp}\n\nTo:\n{dst}"): return
 
         try: rp.rename(dst)
-        except Exception as e: self.ui.show_messagebox("error", "Error", f"Rename failed:\\n{e}"); return
+        except Exception as e: self.ui.show_messagebox("error", "Error", f"Rename failed:\n{e}"); return
 
         self.state.dataset_dir = dst; self._refresh_datasets()
         try:
@@ -2431,7 +2481,7 @@ class PipelineControlTab(BaseTab):
         if len(dss) > 1:
             if not (strat := self._ask_multi_dataset_train_strategy(dss)): return
             if strat in ("merge_keep", "merge_temp"):
-                if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first."); return
+                if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first."); return
                 
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 name = ""
@@ -2442,7 +2492,7 @@ class PipelineControlTab(BaseTab):
                 else: name = f"__tmp_merge_{ts}"
                 
                 out_ds = (self.sim_root / "outputs" / "sim_data" / "runs" / name).resolve()
-                if out_ds.exists(): self.ui.show_messagebox("error", "Error", f"Merge output already exists:\\n{out_ds}"); return
+                if out_ds.exists(): self.ui.show_messagebox("error", "Error", f"Merge output already exists:\n{out_ds}"); return
 
                 model_s = self.ui.var_model.get().strip()
                 model_out = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{name}.pt").resolve()
@@ -2452,6 +2502,7 @@ class PipelineControlTab(BaseTab):
                 for ds in dss: self._append_log(f"  - {ds}\n")
                 self._append_log("\n")
 
+                self.logic.loop_running = True; self.logic.stop_evt.clear()  # keep Busy guards closed until training starts
                 def worker() -> None:
                     try:
                         self.log_q.put(f"[merge] building merged dataset: {out_ds}\n")
@@ -2459,6 +2510,11 @@ class PipelineControlTab(BaseTab):
                         self.log_q.put(f"[merge] done: {out_ds}\n")
 
                         def kick_off_train() -> None:
+                            self.logic.loop_running = False
+                            if self.logic.stop_evt.is_set():
+                                self._append_log("[merge] stopped by user; training not started\n")
+                                if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
+                                self._refresh_datasets(); return
                             try:
                                 if strat == "merge_keep": self._select_dataset(out_ds)
                                 else: self._refresh_datasets()
@@ -2466,16 +2522,18 @@ class PipelineControlTab(BaseTab):
 
                             argv = ["./.venv/bin/python", "scripts/train.py", "--data", str(out_ds), "--out", str(model_out)]
                             cmd = " ".join(shlex.quote(x) for x in argv)
-                            if delete_after: self.logic._temp_merge_cleanup_dir = out_ds
-                            self._run_simple_cmd([cmd])
+                            self._run_simple_cmd([cmd], cleanup_dir=out_ds if delete_after else None)
 
                         self.frame.after(0, kick_off_train)
                     except Exception as e:
                         self.log_q.put(f"[merge] failed: {e}\n")
-                        if delete_after:
-                            try: shutil.rmtree(out_ds)
-                            except Exception: pass
-                threading.Thread(target=worker, daemon=True).start(); return
+                        if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
+                        def _merge_failed_ui() -> None: self.logic.loop_running = False
+                        self.frame.after(0, _merge_failed_ui)
+                self.ui.set_run_buttons_state(True)
+                try: threading.Thread(target=worker, daemon=True).start()
+                except Exception: self.logic.loop_running = False; raise
+                return
 
         model_s = self.ui.var_model.get().strip()
         model_out = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
@@ -2484,7 +2542,7 @@ class PipelineControlTab(BaseTab):
 
         allow_mixed_profiles = False
         if self.logic._datasets_require_bundle(dss, self.logic.get_dataset_profile_id) and not self.logic._is_model_bundle_target(model_out):
-            if not self.ui.ask_yes_no("Allow mixed-profile training into a single model?", "You selected datasets with different component profiles.\\n\\nRecommended: train into a multi-model bundle (.bundle) so each profile gets its own checkpoint.\\n\\nIf you continue anyway, the training will resume across different profiles by passing --allow-profile-mismatch (warm-start). This is not guaranteed to work and can degrade accuracy.\\n\\nContinue?"): return
+            if not self.ui.ask_yes_no("Allow mixed-profile training into a single model?", "You selected datasets with different component profiles.\n\nRecommended: train into a multi-model bundle (.bundle) so each profile gets its own checkpoint.\n\nIf you continue anyway, the training will resume across different profiles by passing --allow-profile-mismatch (warm-start). This is not guaranteed to work and can degrade accuracy.\n\nContinue?"): return
             allow_mixed_profiles = True
 
         extra_s = self.ui.var_continue_epochs.get().strip() or "10"
@@ -2520,12 +2578,12 @@ class PipelineControlTab(BaseTab):
         
         model_s = self.ui.var_model.get().strip()
         model_in = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
-        if not model_in.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found:\\n{model_in}\\n\\nRun Train first."); return
+        if not model_in.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found:\n{model_in}\n\nRun Train first."); return
         if len(dss) == 1: self._run_simple_cmd(["./.venv/bin/python", "scripts/eval.py", "--data", str(dss[0]), "--model", str(model_in)]); return
 
         allow_mixed_profiles = False
         if self.logic._datasets_require_bundle(dss, self.logic.get_dataset_profile_id) and not self.logic._is_model_bundle_target(model_in):
-            if not self.ui.ask_yes_no("Allow mixed-profile eval on a single model?", "You selected datasets with different component profiles.\\n\\nRecommended: evaluate a multi-model bundle (.bundle) so each dataset uses its matching checkpoint.\\n\\nIf you continue anyway, eval will pass --allow-profile-mismatch. Results may be meaningless.\\n\\nContinue?"): return
+            if not self.ui.ask_yes_no("Allow mixed-profile eval on a single model?", "You selected datasets with different component profiles.\n\nRecommended: evaluate a multi-model bundle (.bundle) so each dataset uses its matching checkpoint.\n\nIf you continue anyway, eval will pass --allow-profile-mismatch. Results may be meaningless.\n\nContinue?"): return
             allow_mixed_profiles = True
 
         parts: list[str] = []
@@ -2542,7 +2600,7 @@ class PipelineControlTab(BaseTab):
 
         model_s = self.ui.var_model.get().strip()
         model_path = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
-        if not model_path.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found to resume from:\\n{model_path}\\n\\nRun Train first."); return
+        if not model_path.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found to resume from:\n{model_path}\n\nRun Train first."); return
 
         extra_s = self.ui.var_continue_epochs.get().strip() or "10"
         try: extra = int(extra_s)
@@ -2554,7 +2612,7 @@ class PipelineControlTab(BaseTab):
 
         allow_mixed_profiles = False
         if len(dss) > 1 and self.logic._datasets_require_bundle(dss, self.logic.get_dataset_profile_id) and not self.logic._is_model_bundle_target(model_path):
-            if not self.ui.ask_yes_no("Allow mixed-profile resume into a single model?", "You selected datasets with different component profiles.\\n\\nRecommended: resume into a multi-model bundle (.bundle).\\n\\nIf you continue anyway, the resume will pass --allow-profile-mismatch. This is not guaranteed to work.\\n\\nContinue?"): return
+            if not self.ui.ask_yes_no("Allow mixed-profile resume into a single model?", "You selected datasets with different component profiles.\n\nRecommended: resume into a multi-model bundle (.bundle).\n\nIf you continue anyway, the resume will pass --allow-profile-mismatch. This is not guaranteed to work.\n\nContinue?"): return
             allow_mixed_profiles = True
 
         if len(dss) > 1 and self.logic._is_model_bundle_target(model_path):
@@ -2562,9 +2620,9 @@ class PipelineControlTab(BaseTab):
             for ds in dss:
                 if not (pid := self.logic.get_dataset_profile_id(ds)): missing.append(f"{ds} (missing profile metadata)"); continue
                 try:
-                    if not (ckpt := bundle_checkpoint_path(model_path, pid, kind="best")).exists(): missing.append(f"{pid} (no checkpoint in bundle)")
+                    if not bundle_checkpoint_path(model_path, pid, kind="best").exists(): missing.append(f"{pid} (no checkpoint in bundle)")
                 except Exception: missing.append(f"{pid} (bundle lookup failed)")
-            if missing: self.ui.show_messagebox("error", "Missing bundle checkpoints", "The selected model bundle does not have checkpoints for all selected datasets.\\n\\n" + "\\n".join(missing)); return
+            if missing: self.ui.show_messagebox("error", "Missing bundle checkpoints", "The selected model bundle does not have checkpoints for all selected datasets.\n\n" + "\n".join(missing)); return
 
         if len(dss) == 1:
             ds = dss[0]

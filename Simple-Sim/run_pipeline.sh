@@ -78,10 +78,7 @@ echo "STEP 2: Validating dataset"
 echo "============================================================"
 echo ""
 
-"${PYTHON}" tools/validate_dataset.py \
-    --data "$DATA_DIR"
-
-if [ $? -ne 0 ]; then
+if ! "${PYTHON}" tools/validate_dataset.py --data "$DATA_DIR"; then
     echo ""
     echo "Dataset validation failed"
     exit 1
@@ -97,14 +94,16 @@ echo "STEP 3: Dataset statistics"
 echo "============================================================"
 echo ""
 
-"${PYTHON}" -c "
+# DATA_DIR is passed via the environment so paths with quotes don't break the Python source.
+DATA_DIR="$DATA_DIR" "${PYTHON}" -c "
+import os
 import sys
 from pathlib import Path
 sys.path.insert(0, '.')
 from simple_sim.schema import read_jsonl, LabelRow
 from simple_sim.splits import read_split
 
-data_dir = Path('$DATA_DIR')
+data_dir = Path(os.environ['DATA_DIR'])
 label_rows = read_jsonl(data_dir / 'labels.jsonl', LabelRow)
 
 # Class distribution
@@ -163,7 +162,8 @@ echo ""
 echo "Generated files:"
 echo "  Dataset: $DATA_DIR"
 echo "  Model: $MODEL_PATH"
-REPORT_PATH="outputs/models/report_$(basename "${MODEL_PATH%.*}").json"
+# eval.py writes the report next to the model.
+REPORT_PATH="$(dirname "$MODEL_PATH")/report_$(basename "${MODEL_PATH%.*}").json"
 echo "  Report: $REPORT_PATH"
 echo ""
 echo "Next steps:"

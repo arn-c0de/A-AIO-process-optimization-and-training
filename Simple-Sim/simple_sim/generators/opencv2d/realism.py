@@ -10,7 +10,8 @@ Design goals:
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Sequence
+from typing import Any
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,7 @@ import numpy as np
 _HEAVY_GROUPS = {"G2", "G5", "G7"}
 _GROUPS: Sequence[str] = ("G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8")
 
-_PROFILE_PRESETS: Dict[str, Dict[str, float]] = {
+_PROFILE_PRESETS: dict[str, dict[str, float]] = {
     # Baseline from issue #19
     "profile_industrial_cam": {
         "k0": 0.60,
@@ -49,7 +50,7 @@ _PROFILE_PRESETS: Dict[str, Dict[str, float]] = {
         "G8": 0.12,
     },
 }
-_PRESET_CACHE: Dict[str, Dict[str, float]] | None = None
+_PRESET_CACHE: dict[str, dict[str, float]] | None = None
 _PRESET_CACHE_PATH: str | None = None
 
 
@@ -73,9 +74,9 @@ def _sample_k(rng: np.random.Generator, p0: float, p1: float, p2: float) -> int:
     return 2
 
 
-def _weighted_sample_no_replace(rng: np.random.Generator, candidates: Sequence[str], probs: Dict[str, float], k: int) -> List[str]:
+def _weighted_sample_no_replace(rng: np.random.Generator, candidates: Sequence[str], probs: dict[str, float], k: int) -> list[str]:
     pool = list(candidates)
-    out: List[str] = []
+    out: list[str] = []
     while pool and len(out) < k:
         weights = np.array([max(0.0, float(probs.get(g, 0.0))) for g in pool], dtype=float)
         s = float(weights.sum())
@@ -87,7 +88,7 @@ def _weighted_sample_no_replace(rng: np.random.Generator, candidates: Sequence[s
     return out
 
 
-def _choose_groups(rng: np.random.Generator, probs: Dict[str, float], k: int) -> List[str]:
+def _choose_groups(rng: np.random.Generator, probs: dict[str, float], k: int) -> list[str]:
     if k <= 0:
         return []
     gated = [g for g in _GROUPS if rng.random() < float(probs.get(g, 0.0))]
@@ -105,7 +106,7 @@ def _default_preset_path() -> Path:
     return Path(__file__).resolve().parents[3] / "configs" / "realism_profiles.yaml"
 
 
-def _normalize_yaml_preset(raw: Dict[str, Any], fallback: Dict[str, float]) -> Dict[str, float]:
+def _normalize_yaml_preset(raw: dict[str, Any], fallback: dict[str, float]) -> dict[str, float]:
     out = dict(fallback)
     try:
         out["k0"] = float(raw.get("k0", out["k0"]))
@@ -129,7 +130,7 @@ def _normalize_yaml_preset(raw: Dict[str, Any], fallback: Dict[str, float]) -> D
     return out
 
 
-def _load_profile_presets() -> Dict[str, Dict[str, float]]:
+def _load_profile_presets() -> dict[str, dict[str, float]]:
     global _PRESET_CACHE, _PRESET_CACHE_PATH
 
     cfg_path = str(os.environ.get("SIMPLE_SIM_REALISM_PRESETS_PATH", "")).strip()
@@ -164,7 +165,7 @@ def _load_profile_presets() -> Dict[str, Dict[str, float]]:
     return presets
 
 
-def _resolve_policy(filt: Dict[str, Any]) -> Dict[str, float]:
+def _resolve_policy(filt: dict[str, Any]) -> dict[str, float]:
     src_keys = set(filt.get("__source_keys", set()) or set())
     pid = str(filt.get("realism_profile_id", "profile_industrial_cam") or "profile_industrial_cam")
     presets = _load_profile_presets()
@@ -190,7 +191,7 @@ def _resolve_policy(filt: Dict[str, Any]) -> Dict[str, float]:
     return out
 
 
-def _apply_constraints(selected: List[str]) -> List[str]:
+def _apply_constraints(selected: list[str]) -> list[str]:
     out = list(selected)
     if "G5" in out and "G7" in out:
         out.remove("G7")
@@ -201,10 +202,15 @@ def _apply_constraints(selected: List[str]) -> List[str]:
     return out
 
 
-def apply_realism_groups(augment: Dict[str, float], filt: Dict[str, Any]) -> Dict[str, float]:
+def apply_realism_groups(
+    augment: dict[str, float],
+    filt: dict[str, Any],
+    rng: np.random.Generator | None = None,
+) -> dict[str, float]:
     """Apply correlated realism groups on top of sampled augment values."""
     aug = dict(augment or {})
-    rng = np.random.default_rng()
+    if rng is None:
+        rng = np.random.default_rng()
     constraints_enabled = bool(filt.get("realism_constraints_enabled", True))
     policy = _resolve_policy(filt)
 
@@ -213,7 +219,9 @@ def apply_realism_groups(augment: Dict[str, float], filt: Dict[str, Any]) -> Dic
     aug["noise_stddev"] = _tri_sample(rng, 1.0, 3.0, 6.0)
     aug["brightness_factor"] = _tri_sample(rng, 0.96, 1.00, 1.05)
     aug["contrast_factor"] = _tri_sample(rng, 0.96, 1.00, 1.06)
-    aug["rotation_deg"] = _tri_sample(rng, -4.0, 0.0, 4.0)
+    # Keep the cardinal 0/90/180/270 base orientation, only replace the small jitter.
+    base_orientation_deg = (90.0 * round(float(aug.get("rotation_deg", 0.0) or 0.0) / 90.0)) % 360.0
+    aug["rotation_deg"] = base_orientation_deg + _tri_sample(rng, -4.0, 0.0, 4.0)
     aug["perspective_strength"] = 0.0
     aug["motion_blur_strength"] = 0.0
     aug["vignetting_strength"] = 0.0
@@ -245,8 +253,6 @@ def apply_realism_groups(augment: Dict[str, float], filt: Dict[str, Any]) -> Dic
             aug["motion_blur_angle"] = float(rng.uniform(0.0, 360.0))
             aug["noise_stddev"] = float(max(aug.get("noise_stddev", 0.0), _tri_sample(rng, 2.0, 4.0, 8.0)))
             aug["brightness_factor"] *= _tri_sample(rng, 0.94, 0.98, 1.02)
-            if constraints_enabled and "G1" in selected:
-                aug["blur_sigma"] = float(min(aug.get("blur_sigma", 0.0), 1.0))
         elif g == "G3":
             # Geometry / mounting
             aug["perspective_strength"] = _tri_sample(rng, 0.2, 0.5, 1.0)
@@ -283,6 +289,10 @@ def apply_realism_groups(augment: Dict[str, float], filt: Dict[str, Any]) -> Dic
             aug["dust_size"] = _tri_sample(rng, 1.0, 2.0, 3.0)
             aug["contrast_factor"] *= _tri_sample(rng, 0.90, 0.97, 1.0)
 
+    # Cross-group clamps run after the loop so they do not depend on group order.
+    if constraints_enabled and "G1" in selected and "G2" in selected:
+        # Optics blur + motion blur together: cap optics blur.
+        aug["blur_sigma"] = float(min(aug.get("blur_sigma", 0.0), 1.0))
     if constraints_enabled and "G5" in selected:
         aug["jpeg_quality"] = 100
 

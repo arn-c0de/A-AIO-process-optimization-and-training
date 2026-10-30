@@ -1,15 +1,27 @@
-"""Reusable GUI components."""
+"""Reusable GUI components.
 
-from .image_cache import ImageCache
-from .overlay_renderer import draw_defect_overlay
-from .chart_widgets import create_confusion_matrix_widget, create_class_distribution_widget
-from .filter_popup import FilterPopup, open_filter_popup
+Exports are resolved lazily so tk-free helpers (e.g. ``overlay_renderer`` used
+by ``tools/update_sample_gallery.py``) import without tkinter.
+"""
 
-__all__ = [
-    'ImageCache',
-    'draw_defect_overlay',
-    'create_confusion_matrix_widget',
-    'create_class_distribution_widget',
-    'FilterPopup',
-    'open_filter_popup',
-]
+from importlib import import_module
+
+_EXPORTS = {
+    'ImageCache': '.image_cache',
+    'draw_defect_overlay': '.overlay_renderer',
+    'create_confusion_matrix_widget': '.chart_widgets',
+    'create_class_distribution_widget': '.chart_widgets',
+    'FilterPopup': '.filter_popup',
+    'open_filter_popup': '.filter_popup',
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name):
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value

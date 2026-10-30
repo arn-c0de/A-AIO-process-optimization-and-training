@@ -1,6 +1,5 @@
 """End-to-end pipeline integration test."""
 
-import pytest
 import tempfile
 import yaml
 from pathlib import Path

@@ -9,7 +9,7 @@ import dataclasses
 import json
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Any, Dict, List, Type, TypeVar
+from typing import Any, TypeVar
 from simple_sim.config import VALID_CLASSES
 
 T = TypeVar('T')
@@ -27,11 +27,11 @@ class MetaRow:
     image_path: str
     render_backend: str
     footprint: str
-    nominal: Dict[str, float]
-    defect: Dict[str, Any]
-    augment: Dict[str, float]
+    nominal: dict[str, float]
+    defect: dict[str, Any]
+    augment: dict[str, float]
     # Backend-specific info (camera pose, lighting, renderer version, etc.).
-    render_meta: Dict[str, Any] = field(default_factory=dict)
+    render_meta: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate required fields."""
@@ -102,7 +102,7 @@ class LabelRow:
             raise ValueError("schema_version=2 requires non-empty profile_id")
 
 
-def write_jsonl(path: Path, rows: List[Any]) -> None:
+def write_jsonl(path: Path, rows: list[Any]) -> None:
     """Write rows to JSONL file with atomic operation and validation.
 
     Args:
@@ -124,7 +124,7 @@ def write_jsonl(path: Path, rows: List[Any]) -> None:
     temp_path.replace(path)
 
 
-def read_jsonl(path: Path, schema_cls: Type[T]) -> List[T]:
+def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:
     """Read and validate JSONL file.
 
     Args:
@@ -139,7 +139,7 @@ def read_jsonl(path: Path, schema_cls: Type[T]) -> List[T]:
         raise FileNotFoundError(f"JSONL file not found: {path}")
 
     rows = []
-    with open(path, 'r') as f:
+    with open(path) as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -148,7 +148,7 @@ def read_jsonl(path: Path, schema_cls: Type[T]) -> List[T]:
             try:
                 data = json.loads(line)
             except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON at line {line_num}: {e}")
+                raise ValueError(f"Invalid JSON at line {line_num}: {e}") from e
 
             # Check for unknown fields using dataclass introspection
             if not dataclasses.is_dataclass(schema_cls):
@@ -170,7 +170,7 @@ def read_jsonl(path: Path, schema_cls: Type[T]) -> List[T]:
                 row = schema_cls(**data)
                 rows.append(row)
             except (TypeError, ValueError) as e:
-                raise ValueError(f"Schema validation failed at line {line_num}: {e}")
+                raise ValueError(f"Schema validation failed at line {line_num}: {e}") from e
 
     return rows
 
