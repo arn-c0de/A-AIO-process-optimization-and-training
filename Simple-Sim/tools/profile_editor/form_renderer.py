@@ -6,9 +6,10 @@ from collections.abc import Callable
 import tkinter as tk
 from tkinter import ttk
 
-from .state_store import flatten_leaf_paths
+from .state_store import flatten_leaf_paths, to_form_text
 
-FieldCallback = Callable[[str, tuple[str, ...], str], None]
+# Returns False if the text was rejected (keeps the entry marked as pending).
+FieldCallback = Callable[[str, tuple[str, ...], str], bool | None]
 
 
 class FormRenderer(ttk.Frame):
@@ -19,6 +20,8 @@ class FormRenderer(ttk.Frame):
         self.target = target
         self._on_field_commit = on_field_commit
         self._entries: dict[tuple[str, ...], ttk.Entry] = {}
+        # Last committed text per field; FocusOut only commits when the text changed.
+        self._committed_text: dict[tuple[str, ...], str] = {}
         self._dark_mode = False
 
         self.canvas = tk.Canvas(self, highlightthickness=0)
@@ -43,6 +46,7 @@ class FormRenderer(ttk.Frame):
         for child in self.inner.winfo_children():
             child.destroy()
         self._entries.clear()
+        self._committed_text.clear()
 
         leaves = flatten_leaf_paths(data or {})
         if not leaves:
@@ -69,7 +73,9 @@ class FormRenderer(ttk.Frame):
             ttk.Label(self.inner, text=label).grid(row=row, column=0, sticky="w", padx=(8, 6), pady=2)
             entry = ttk.Entry(self.inner)
             entry.configure(style="Dark.TEntry" if self._dark_mode else "Light.TEntry")
-            entry.insert(0, self._to_form_text(value))
+            text = to_form_text(value)
+            entry.insert(0, text)
+            self._committed_text[path] = text
             entry.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=2)
             entry.bind("<Return>", lambda _e, p=path, w=entry: self._commit_entry(p, w))
             entry.bind("<FocusOut>", lambda _e, p=path, w=entry: self._commit_entry(p, w))
@@ -79,7 +85,11 @@ class FormRenderer(ttk.Frame):
         self.inner.columnconfigure(1, weight=1)
 
     def _commit_entry(self, path: tuple[str, ...], widget: ttk.Entry) -> None:
-        self._on_field_commit(self.target, path, widget.get())
+        text = widget.get()
+        if self._committed_text.get(path) == text:
+            return
+        if self._on_field_commit(self.target, path, text) is not False:
+            self._committed_text[path] = text
 
     def apply_theme(self, *, dark: bool) -> None:
         self._dark_mode = dark
@@ -91,15 +101,3 @@ class FormRenderer(ttk.Frame):
                 entry.configure(style=entry_style)
             except Exception:
                 pass
-
-    @staticmethod
-    def _to_form_text(value: Any) -> str:
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if value is None:
-            return "null"
-        if isinstance(value, (int, float)):
-            return str(value)
-        if isinstance(value, str):
-            return value
-        return str(value)
