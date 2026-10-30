@@ -33,8 +33,10 @@ def compute_metrics(
         y_true, y_pred, labels=range(len(class_names)), zero_division=0
     )
 
-    # Macro-averaged F1
-    macro_f1 = f1.mean()
+    # Macro-averaged F1 over classes actually present in y_true; classes with
+    # support 0 would contribute F1=0 and skew model selection.
+    present = support > 0
+    macro_f1 = f1[present].mean() if present.any() else 0.0
 
     # Confusion matrix
     cm = sklearn_confusion_matrix(y_true, y_pred, labels=range(len(class_names)))
@@ -71,6 +73,49 @@ def compute_metrics(
         'confusion_matrix': cm.tolist(),
         'critical_fn_rates': critical_fn_rates
     }
+
+
+def check_success_criteria(
+    val_accuracy: float,
+    metrics: Dict[str, Any],
+    entity: str = "class",
+    ascii_only: bool = False,
+) -> bool:
+    """Print the standard SUCCESS CRITERIA CHECK block and return overall pass.
+
+    Classes with zero support are ignored by the 0%-recall check.
+
+    Args:
+        val_accuracy: Best validation accuracy from the checkpoint
+        metrics: Test metrics dictionary from compute_metrics
+        entity: Noun used in the recall check label ("class" / "profile")
+        ascii_only: Print plain PASS/FAIL without check-mark glyphs
+    """
+    print("\n" + "=" * 60)
+    print("SUCCESS CRITERIA CHECK")
+    print("=" * 60)
+
+    supported = [m for m in metrics['per_class'].values() if m.get('support', 1) > 0]
+    checks = [
+        ("Val accuracy > 70%", val_accuracy > 0.70),
+        ("Test accuracy > 70%", metrics['accuracy'] > 0.70),
+        (f"No {entity} with 0% recall", all(m['recall'] > 0 for m in supported)),
+    ]
+
+    ok_mark, fail_mark = ("", "") if ascii_only else ("✓ ", "✗ ")
+    all_passed = True
+    for check_name, passed in checks:
+        status = f"{ok_mark}PASS" if passed else f"{fail_mark}FAIL"
+        print(f"{status}: {check_name}")
+        all_passed = all_passed and passed
+
+    if all_passed:
+        print(f"\n{ok_mark}ALL CHECKS PASSED")
+    else:
+        print(f"\n{fail_mark}SOME CHECKS FAILED")
+
+    print("=" * 60)
+    return all_passed
 
 
 def format_metrics(metrics: Dict[str, Any], class_names: List[str]) -> str:

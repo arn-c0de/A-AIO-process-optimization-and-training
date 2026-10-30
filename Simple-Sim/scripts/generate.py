@@ -237,6 +237,7 @@ def _render_blender_records(
     exe = str(blender_cfg.get("executable", "blender"))
     samples = int(blender_cfg.get("samples", 64))
     device = str(blender_cfg.get("device", "CPU"))
+    engine = str(blender_cfg.get("engine", "BLENDER_EEVEE"))
 
     jobs = _build_blender_jobs(
         records,
@@ -256,6 +257,7 @@ def _render_blender_records(
         blender_executable=exe,
         cycles_samples=samples,
         device=device,
+        engine=engine,
     )
     _postprocess_blender_images(records, output_root)
 

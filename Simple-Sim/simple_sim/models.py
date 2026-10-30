@@ -61,7 +61,7 @@ def load_checkpoint_model(
     Returns ``(model, class_names, checkpoint)`` with the model in eval mode on ``device``.
     """
     # Always load to CPU first to avoid accidentally loading a large ensemble onto GPU.
-    checkpoint = torch.load(model_path, map_location="cpu")
+    checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
 
     if isinstance(checkpoint, dict) and checkpoint.get("format") == ENSEMBLE_FORMAT:
         class_names = list(checkpoint.get("class_names") or [])

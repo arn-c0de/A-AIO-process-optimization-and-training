@@ -71,3 +71,23 @@ def parse_sample_id(sample_id: str) -> tuple:
         raise ValueError(f"Invalid index in sample ID: {sample_id}")
 
     return run_id, domain, split, index
+
+
+def resolve_train_seed(config: dict) -> int:
+    """Return the training seed: train.seed if set, else run.seed, else 0."""
+    train_seed = (config.get('train') or {}).get('seed')
+    if train_seed is not None:
+        return int(train_seed)
+    return int((config.get('run') or {}).get('seed', 0) or 0)
+
+
+def seed_everything(seed: int) -> None:
+    """Seed Python, NumPy and PyTorch (CPU + CUDA) global RNGs."""
+    import random
+
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed % (2**32))
+    torch.manual_seed(seed)

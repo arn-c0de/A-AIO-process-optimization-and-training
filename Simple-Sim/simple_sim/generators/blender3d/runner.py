@@ -15,6 +15,7 @@ def render_blender_batch(
     blender_executable: str,
     cycles_samples: int,
     device: str = "CPU",
+    engine: str = "BLENDER_EEVEE",
     extra_env: Optional[Dict[str, str]] = None,
 ) -> None:
     sim_root = Path(sim_root)
@@ -44,6 +45,8 @@ def render_blender_batch(
         str(int(cycles_samples)),
         "--device",
         str(device),
+        "--engine",
+        str(engine),
     ]
 
     env = None

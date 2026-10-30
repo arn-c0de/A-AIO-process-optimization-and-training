@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import ProfileDataset
-from simple_sim.metrics import format_metrics
+from simple_sim.metrics import check_success_criteria, format_metrics
 from simple_sim.models import build_resnet18
 from scripts.eval import evaluate
 
@@ -40,7 +40,7 @@ def main():
 
     # Load checkpoint
     print("\nLoading model checkpoint...")
-    checkpoint = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
     if checkpoint.get('checkpoint_type') != 'profile_classifier':
         print(f"WARNING: checkpoint_type is '{checkpoint.get('checkpoint_type')}', expected 'profile_classifier'")
@@ -103,27 +103,7 @@ def main():
     print(f"\nReport saved to: {report_path}")
 
     # Success criteria
-    print("\n" + "=" * 60)
-    print("SUCCESS CRITERIA CHECK")
-    print("=" * 60)
-
-    checks = []
-    checks.append(("Val accuracy > 70%", checkpoint['val_accuracy'] > 0.70))
-    checks.append(("Test accuracy > 70%", metrics['accuracy'] > 0.70))
-    checks.append(("No profile with 0% recall", all(m['recall'] > 0 for m in metrics['per_class'].values())))
-
-    all_passed = True
-    for check_name, passed in checks:
-        status = "PASS" if passed else "FAIL"
-        print(f"{status}: {check_name}")
-        all_passed = all_passed and passed
-
-    if all_passed:
-        print("\nALL CHECKS PASSED")
-    else:
-        print("\nSOME CHECKS FAILED")
-
-    print("=" * 60)
+    check_success_criteria(checkpoint['val_accuracy'], metrics, entity="profile", ascii_only=True)
 
 
 if __name__ == '__main__':

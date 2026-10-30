@@ -143,7 +143,7 @@ def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone):
     max_rot = max(min_rot, _MISALIGNED_ROT_SCALE * min_rot)
 
     if rng.random() < 0.5:
-        # Misalignment via shift
+        # Misalignment via shift; rotation stays inside tolerance (pure shift)
         sx = rng.uniform(-max_shift, max_shift)
         sy = rng.uniform(-max_shift, max_shift)
         magnitude = np.sqrt(sx**2 + sy**2)
@@ -151,6 +151,11 @@ def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone):
             scale = min_shift / (magnitude + _EPS)
             sx *= scale
             sy *= scale
+        if ok_rotation_deg is not None:
+            rot_bound = max(0.0, _OK_SAFETY_MARGIN * ok_rotation_deg)
+        else:
+            rot_bound = _DEFAULT_OK_ROT_DEG
+        rot = rng.uniform(-rot_bound, rot_bound)
     else:
         # Misalignment via rotation; shift stays inside tolerance
         if ok_shift_px is not None:
@@ -159,10 +164,9 @@ def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone):
             shift_bound = _DEFAULT_OK_SHIFT_PX
         sx = rng.uniform(-shift_bound, shift_bound)
         sy = rng.uniform(-shift_bound, shift_bound)
-
-    rot = rng.uniform(-max_rot, max_rot)
-    if abs(rot) < min_rot:
-        rot = min_rot if rot >= 0 else -min_rot
+        rot = rng.uniform(-max_rot, max_rot)
+        if abs(rot) < min_rot:
+            rot = min_rot if rot >= 0 else -min_rot
 
     return sx, sy, rot, 0.0
 

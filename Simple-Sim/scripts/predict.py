@@ -16,13 +16,13 @@ from typing import Optional
 import cv2
 import numpy as np
 import torch
-from torchvision import transforms
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
-from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
+from simple_sim.data_loader import preprocess_bgr
+from simple_sim.manifest import check_checkpoint_profile, read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
 from simple_sim.models import load_checkpoint_model
 
@@ -35,12 +35,7 @@ def load_image_bgr(image_path: Path) -> np.ndarray:
 
 
 def preprocess(img_bgr: np.ndarray) -> torch.Tensor:
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    tfm = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    return tfm(img_rgb)
+    return preprocess_bgr(img_bgr)
 
 
 def maybe_get_ground_truth(data_dir: Optional[Path], sample_id: Optional[str]):
@@ -126,23 +121,11 @@ def main():
             manifest = read_dataset_manifest(manifest_path)
             dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
 
-            ckpt_profile = checkpoint.get('component_profile')
-            if ckpt_profile:
-                ckpt_profile_id = ckpt_profile.get('profile_id')
-                ckpt_profile_hash = ckpt_profile.get('profile_hash')
-
-                # HARD FAIL: Profile ID mismatch
-                if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
-                    raise ValueError(
-                        f"Component profile mismatch:\n"
-                        f"  Model trained on: {ckpt_profile_id}\n"
-                        f"  Dataset profile:  {dataset_profile_id}\n"
-                        f"Cannot predict on different component type."
-                    )
-
-                # WARNING: Profile hash mismatch
-                if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
-                    print("WARNING: Profile hash mismatch")
+            # HARD FAIL on profile ID mismatch (no override flag here).
+            check_checkpoint_profile(
+                checkpoint, dataset_profile_id, dataset_profile_hash,
+                action="predict on",
+            )
 
     img_bgr = load_image_bgr(image_path)
     x = preprocess(img_bgr).unsqueeze(0).to(device)

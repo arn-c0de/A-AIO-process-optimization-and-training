@@ -46,7 +46,9 @@ def render_roi(
     draw_substrate(img, config)
     draw_pads(img, nominal, tuple(config["copper_color"]), footprint=footprint)
     draw_solder(img, nominal, footprint=footprint)
-    draw_component(img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances)
+    draw_component(
+        img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances, footprint=footprint
+    )
 
     img = apply_blur(img, augment.get("blur_sigma", 0.0))
     img = apply_noise(img, augment.get("noise_stddev", 0.0), rng)

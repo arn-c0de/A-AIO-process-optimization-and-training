@@ -252,8 +252,6 @@ def apply_realism_groups(
             aug["motion_blur_angle"] = float(rng.uniform(0.0, 360.0))
             aug["noise_stddev"] = float(max(aug.get("noise_stddev", 0.0), _tri_sample(rng, 2.0, 4.0, 8.0)))
             aug["brightness_factor"] *= _tri_sample(rng, 0.94, 0.98, 1.02)
-            if constraints_enabled and "G1" in selected:
-                aug["blur_sigma"] = float(min(aug.get("blur_sigma", 0.0), 1.0))
         elif g == "G3":
             # Geometry / mounting
             aug["perspective_strength"] = _tri_sample(rng, 0.2, 0.5, 1.0)
@@ -290,6 +288,10 @@ def apply_realism_groups(
             aug["dust_size"] = _tri_sample(rng, 1.0, 2.0, 3.0)
             aug["contrast_factor"] *= _tri_sample(rng, 0.90, 0.97, 1.0)
 
+    # Cross-group clamps run after the loop so they do not depend on group order.
+    if constraints_enabled and "G1" in selected and "G2" in selected:
+        # Optics blur + motion blur together: cap optics blur.
+        aug["blur_sigma"] = float(min(aug.get("blur_sigma", 0.0), 1.0))
     if constraints_enabled and "G5" in selected:
         aug["jpeg_quality"] = 100
 
