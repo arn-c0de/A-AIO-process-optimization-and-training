@@ -12,6 +12,7 @@ import cv2
 
 from gui.utils.tooltip import ToolTip
 from simple_sim.schema import MetaRow
+from gui.utils.formatting import fmt_bytes
 
 
 class PipelineUI:
@@ -419,12 +420,7 @@ class PipelineUI:
     def update_stats_bar(self, cpu_pct: Optional[float], ram_info: Optional[Tuple[float, int, int]], gpu_pct: Optional[float]):
         return
 
-    def fmt_bytes(self, n: int) -> str:
-        if n < 0: return "0 B"
-        units = ["B", "KB", "MB", "GB", "TB"]
-        v, u = float(n), 0
-        while v >= 1024.0 and u < len(units) - 1: v, u = v / 1024.0, u + 1
-        return f"{int(v)} {units[u]}" if u == 0 else f"{v:.1f} {units[u]}"
+    fmt_bytes = staticmethod(fmt_bytes)
 
     def refresh_thumbnails(self, recent_imgs: List[str], dataset_dir: Optional[Path], label_dict: Dict[str, str], image_to_sample: Dict[str, str], meta_by_sample: Dict[str, MetaRow], meta_by_image_rel: Dict[str, MetaRow], draw_defect_overlay_func: Callable[..., Any]) -> None:
         self._thumb_refs.clear()
@@ -488,7 +484,7 @@ class PipelineUI:
     def show_messagebox(self, type: str, title: str, message: str) -> None:
         if type == "error":
             try:
-                msg_log = str(message).replace("\\n", "\n")
+                msg_log = str(message)
                 self.tab._append_log(f"[popup error] {title}\n{msg_log}\n")
             except Exception:
                 pass

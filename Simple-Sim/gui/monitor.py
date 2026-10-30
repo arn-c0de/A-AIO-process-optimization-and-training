@@ -42,6 +42,7 @@ from gui.state import UiState
 from gui.tabs import BaseTab
 from gui.tabs.core.registry import TabRegistry
 from gui.utils.settings_store import SettingsStore
+from gui.utils.system_stats import SystemStatsSampler
 
 
 class MonitorAppTabbed:
@@ -65,8 +66,7 @@ class MonitorAppTabbed:
         self._tab_order: list[str] = []
         self.current_tab: str = ""
         self._perf_tick_id: Optional[str] = None
-        self._cpu_prev_total: Optional[int] = None
-        self._cpu_prev_idle: Optional[int] = None
+        self._stats = SystemStatsSampler()
 
         self._build_ui()
 
@@ -155,65 +155,10 @@ class MonitorAppTabbed:
         # Force update to ensure UI is rendered
         self.root.update_idletasks()
 
-    def _read_cpu_percent(self) -> Optional[float]:
-        try:
-            with open("/proc/stat", "r", encoding="utf-8") as f:
-                line = f.readline().strip()
-            parts = line.split()
-            if not parts or parts[0] != "cpu" or len(parts) < 5:
-                return None
-            nums = [int(x) for x in parts[1:]]
-            total = sum(nums)
-            idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
-            if self._cpu_prev_total is None or self._cpu_prev_idle is None:
-                self._cpu_prev_total, self._cpu_prev_idle = total, idle
-                return None
-            dt = total - self._cpu_prev_total
-            di = idle - self._cpu_prev_idle
-            self._cpu_prev_total, self._cpu_prev_idle = total, idle
-            return 100.0 * (1.0 - (di / dt)) if dt > 0 else None
-        except Exception:
-            return None
-
-    def _read_ram_percent(self) -> Optional[Tuple[float, int, int]]:
-        try:
-            total_kb, avail_kb = None, None
-            with open("/proc/meminfo", "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("MemTotal:"):
-                        total_kb = int(line.split()[1])
-                    elif line.startswith("MemAvailable:"):
-                        avail_kb = int(line.split()[1])
-                    if total_kb is not None and avail_kb is not None:
-                        break
-            if total_kb is None or avail_kb is None or total_kb <= 0:
-                return None
-            used_kb = total_kb - avail_kb
-            return 100.0 * (used_kb / total_kb), used_kb * 1024, total_kb * 1024
-        except Exception:
-            return None
-
-    def _read_gpu_percent(self) -> Optional[float]:
-        try:
-            proc = subprocess.run(
-                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=0.5,
-                check=False,
-            )
-            out = (proc.stdout or "").strip()
-            if not out:
-                return None
-            return float(out.splitlines()[0].strip())
-        except Exception:
-            return None
-
     def _tick_global_performance(self) -> None:
-        cpu_pct = self._read_cpu_percent()
-        ram_info = self._read_ram_percent()
-        gpu_pct = self._read_gpu_percent()
+        cpu_pct = self._stats.cpu_percent()
+        ram_info = self._stats.ram_info()
+        gpu_pct = self._stats.gpu_percent()
 
         if cpu_pct is not None:
             self.var_cpu.set(f"CPU: {cpu_pct:3.0f}%")

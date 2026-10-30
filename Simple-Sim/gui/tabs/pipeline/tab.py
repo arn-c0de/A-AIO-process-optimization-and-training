@@ -932,7 +932,7 @@ class PipelineControlTab(BaseTab):
         out_model = self.sim_root / "outputs" / "models" / ("profile_classifier_v1.pt" if preset == "full" else "profile_classifier_quick.pt")
 
         if not cfg.exists():
-            self.ui.show_messagebox("error", "Missing config", f"Config not found:\\n{cfg}")
+            self.ui.show_messagebox("error", "Missing config", f"Config not found:\n{cfg}")
             return
         
         tag = time.strftime("%Y%m%d_%H%M%S")
@@ -1011,12 +1011,12 @@ class PipelineControlTab(BaseTab):
                 cfg_str = self.ui.var_config.get().strip()
                 cfg_path = (self.sim_root / cfg_str) if cfg_str and not Path(cfg_str).is_absolute() else Path(cfg_str) if cfg_str else None
                 if not cfg_path or not cfg_path.exists():
-                    self.ui.show_messagebox("error", "Error", f"Config file not found:\\n{cfg_str}")
+                    self.ui.show_messagebox("error", "Error", f"Config file not found:\n{cfg_str}")
                     return None
                 try:
                     base_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
                 except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to read config:\\n{cfg_path}\\n\\n{e}")
+                    self.ui.show_messagebox("error", "Error", f"Failed to read config:\n{cfg_path}\n\n{e}")
                     return None
 
                 run_block = dict(base_cfg.get("run") or {})
@@ -1036,7 +1036,7 @@ class PipelineControlTab(BaseTab):
                         yaml.safe_dump(base_cfg, tf, sort_keys=False)
                         tmp_cfg_path = Path(tf.name)
                 except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\\n\\n{e}")
+                    self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\n\n{e}")
                     return None
 
                 run_specs.append({
@@ -1074,7 +1074,7 @@ class PipelineControlTab(BaseTab):
                 try:
                     tmp_root.mkdir(parents=True, exist_ok=False)
                 except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to create temporary mixed-generation directory:\\n{tmp_root}\\n\\n{e}")
+                    self.ui.show_messagebox("error", "Error", f"Failed to create temporary mixed-generation directory:\n{tmp_root}\n\n{e}")
                     return None
 
                 self._append_log(f"[mixed] Cross-backend profiles detected ({', '.join(sorted(backends_used))}). Generating per profile and auto-merging.\n")
@@ -1122,15 +1122,19 @@ class PipelineControlTab(BaseTab):
                     except Exception as e:
                         log_callback(f"[mixed] merge failed: {e}\n")
                         ok = False
-                    try:
-                        for p in src_dirs:
-                            if p.exists():
-                                shutil.rmtree(p, ignore_errors=True)
-                        if tmp_root.exists():
-                            shutil.rmtree(tmp_root, ignore_errors=True)
-                        log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
-                    except Exception as e:
-                        log_callback(f"[mixed] temp cleanup warning: {e}\n")
+                    if not ok:
+                        # Keep freshly generated samples so a failed merge can be retried manually.
+                        log_callback(f"[mixed] temp generation data kept after failed merge: {tmp_root}\n")
+                    else:
+                        try:
+                            for p in src_dirs:
+                                if p.exists():
+                                    shutil.rmtree(p, ignore_errors=True)
+                            if tmp_root.exists():
+                                shutil.rmtree(tmp_root, ignore_errors=True)
+                            log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
+                        except Exception as e:
+                            log_callback(f"[mixed] temp cleanup warning: {e}\n")
                     return ok
 
                 run_complete_callback = _merge_after_run
@@ -1140,7 +1144,7 @@ class PipelineControlTab(BaseTab):
             for pid in profile_ids:
                 cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
                 if not cfg_info:
-                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\\n{pid}\\n\\nPick or create a config with run.component_profile={pid}.")
+                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\n{pid}\n\nPick or create a config with run.component_profile={pid}.")
                     return None
                 cfg_path = Path(cfg_info["path"])
                 cfg_rel = self._rel_to_sim_root(cfg_path)
@@ -1198,14 +1202,14 @@ class PipelineControlTab(BaseTab):
         out_dir = ""
         if dataset_mode == "extend":
             if not (selected_ds := self._selected_dataset_dir()):
-                self.ui.show_messagebox("error", "Error", "No dataset selected to extend.\\n\\nSelect a dataset or use 'Create New' mode.")
+                self.ui.show_messagebox("error", "Error", "No dataset selected to extend.\n\nSelect a dataset or use 'Create New' mode.")
                 return
             try:
-                if str((self.sim_root / "outputs" / "sim_data" / "versions").resolve()).startswith(str(selected_ds.resolve()) + os.sep):
-                    self.ui.show_messagebox("error", "Error", "Cannot extend/overwrite a dataset snapshot under outputs/sim_data/versions.\\n\\nSelect a dataset under outputs/sim_data/runs instead.")
+                if str(selected_ds.resolve()).startswith(str((self.sim_root / "outputs" / "sim_data" / "versions").resolve()) + os.sep):
+                    self.ui.show_messagebox("error", "Error", "Cannot extend/overwrite a dataset snapshot under outputs/sim_data/versions.\n\nSelect a dataset under outputs/sim_data/runs instead.")
                     return
             except Exception: pass
-            if not self.ui.ask_yes_no("Extend dataset?", f"Extend Existing will APPEND new samples into the selected dataset folder.\\n\\nDataset:\\n{selected_ds}\\n\\nContinue?"): return
+            if not self.ui.ask_yes_no("Extend dataset?", f"Extend Existing will APPEND new samples into the selected dataset folder.\n\nDataset:\n{selected_ds}\n\nContinue?"): return
             out_dir = str(selected_ds)
             self._append_log(f"\n=== Extending selected dataset: {out_dir} ===\n")
         else:
@@ -1234,7 +1238,7 @@ class PipelineControlTab(BaseTab):
         if multi_enabled:
             profile_ids = self._profiles_multi_list(available=self._profiles_multi_available_values())
             if not profile_ids:
-                self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\\n\\nClick Pick and select at least 1 profile.")
+                self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\n\nClick Pick and select at least 1 profile.")
                 return
         else:
             if p := self.ui.var_profile.get().strip(): profile_ids = [p]
@@ -1343,7 +1347,10 @@ class PipelineControlTab(BaseTab):
         env["PYTHONUNBUFFERED"] = "1"
         if extra_env: env.update(extra_env)
 
-        cmd = ["bash", "-lc", " ".join(args)]
+        # A single element is a pre-built shell command line; multiple elements are argv and get quoted
+        # so dataset/model paths containing spaces survive bash -lc.
+        shell_cmd = args[0] if len(args) == 1 else shlex.join(args)
+        cmd = ["bash", "-lc", shell_cmd]
 
         self.logic.proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env, start_new_session=True)
         p = self.logic.proc
@@ -1915,9 +1922,9 @@ class PipelineControlTab(BaseTab):
         self._append_log(f"[profile] prepared dataset for profile {profile_id}\n")
         
         if cfg_info:
-            self.ui.show_messagebox("info", "Ready", f"Config '{cfg_path.name}' assigned.\\nOut directory: {self.ui.var_out.get()}\\nRun the pipeline to generate the matching dataset for this profile.")
+            self.ui.show_messagebox("info", "Ready", f"Config '{cfg_path.name}' assigned.\nOut directory: {self.ui.var_out.get()}\nRun the pipeline to generate the matching dataset for this profile.")
         else:
-            self.ui.show_messagebox("info", "Ready", "No config automatically detected for this profile.\\nPick or create a config that sets `run.component_profile` to " f"'{profile_id}', then run the pipeline to create the dataset.")
+            self.ui.show_messagebox("info", "Ready", "No config automatically detected for this profile.\nPick or create a config that sets `run.component_profile` to " f"'{profile_id}', then run the pipeline to create the dataset.")
 
         config_candidate = cfg_path if cfg_path else Path(self.ui.var_config.get())
         out_dir = Path(self.ui.var_out.get())
@@ -1961,7 +1968,7 @@ class PipelineControlTab(BaseTab):
 
         profiles_dir = self.sim_root / "configs" / "profiles"
         profile_path = profiles_dir / f"{profile_id}.yaml"
-        if not profile_path.exists(): self.ui.show_messagebox("error", "Error", f"Profile file not found:\\n{profile_path}"); return
+        if not profile_path.exists(): self.ui.show_messagebox("error", "Error", f"Profile file not found:\n{profile_path}"); return
 
         try:
             with open(profile_path, 'r') as f: profile_data = yaml.safe_load(f)
@@ -1971,11 +1978,11 @@ class PipelineControlTab(BaseTab):
             text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10)); text.pack(side="left", fill="both", expand=True)
             scrollbar.config(command=text.yview)
 
-            info_text = f"Profile ID: {profile_id}\\nPath: {profile_path}\\n\\n" + "="*60 + "\\n\\n" + yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
+            info_text = f"Profile ID: {profile_id}\nPath: {profile_path}\n\n" + "="*60 + "\n\n" + yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
             text.insert("1.0", info_text); text.config(state="disabled")
             ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
 
-        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load profile:\\n{str(e)}")
+        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load profile:\n{str(e)}")
 
     def _check_profile_compatibility(self) -> None:
         try:
@@ -2019,7 +2026,7 @@ class PipelineControlTab(BaseTab):
     def _show_dataset_profile_info(self) -> None:
         if not (ds := self._selected_dataset_dir()): self.ui.show_messagebox("info", "Dataset Profile", "No dataset selected"); return
         manifest_path = ds / "dataset_manifest.json"
-        if not manifest_path.exists(): self.ui.show_messagebox("error", "No Manifest", f"Dataset has no manifest (legacy dataset).\\n\\nUse the backfill tool to add a manifest:\\n  .venv/bin/python tools/backfill_manifest.py --data {ds}"); return
+        if not manifest_path.exists(): self.ui.show_messagebox("error", "No Manifest", f"Dataset has no manifest (legacy dataset).\n\nUse the backfill tool to add a manifest:\n  .venv/bin/python tools/backfill_manifest.py --data {ds}"); return
 
         try:
             with open(manifest_path, 'r') as f: manifest = json.load(f)
@@ -2033,13 +2040,13 @@ class PipelineControlTab(BaseTab):
             text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10)); text.pack(side="left", fill="both", expand=True)
             scrollbar.config(command=text.yview)
 
-            info_text = f"Dataset: {ds.name}\\nProfile ID: {profile_id}\\nProfile Hash: {profile_hash}\\nProfile Path: {profile_path_str}\\n\\n" + "="*60 + "\\nMANIFEST METADATA\\n" + "="*60 + "\\n\\n" + json.dumps(manifest, indent=2)
-            if profile_path.exists(): info_text += "\\n\\n" + "="*60 + "\\nPROFILE DETAILS\\n" + "="*60 + "\\n\\n" + yaml.dump(yaml.safe_load(profile_path.read_text(encoding="utf-8")), default_flow_style=False, sort_keys=False)
-            else: info_text += f"\\n\\n⚠ Profile file not found at: {profile_path}"
+            info_text = f"Dataset: {ds.name}\nProfile ID: {profile_id}\nProfile Hash: {profile_hash}\nProfile Path: {profile_path_str}\n\n" + "="*60 + "\nMANIFEST METADATA\n" + "="*60 + "\n\n" + json.dumps(manifest, indent=2)
+            if profile_path.exists(): info_text += "\n\n" + "="*60 + "\nPROFILE DETAILS\n" + "="*60 + "\n\n" + yaml.dump(yaml.safe_load(profile_path.read_text(encoding="utf-8")), default_flow_style=False, sort_keys=False)
+            else: info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
             text.insert("1.0", info_text); text.config(state="disabled")
             ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
 
-        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load dataset profile info:\\n{str(e)}")
+        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load dataset profile info:\n{str(e)}")
 
     def _apply_name_to_out_and_model(self) -> None:
         base = self.logic.slugify_name(self.ui.var_name.get())
@@ -2122,7 +2129,7 @@ class PipelineControlTab(BaseTab):
     def _delete_dataset(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
         if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before deleting datasets."); return
-        if not self.ui.ask_yes_no("Delete dataset", f"Delete dataset folder?\\n\\n{ds}"): return
+        if not self.ui.ask_yes_no("Delete dataset", f"Delete dataset folder?\n\n{ds}"): return
         try: shutil.rmtree(ds); self._append_log(f"\n[deleted dataset {ds}]\n")
         except Exception as e: self.ui.show_messagebox("error", "Delete failed", str(e))
         self._refresh_datasets()
@@ -2309,9 +2316,9 @@ class PipelineControlTab(BaseTab):
 
         out_dir = (self.sim_root / "outputs" / "sim_data" / "runs" / new_name).resolve()
         if out_dir.exists():
-            if self.ui.ask_yes_no("Dataset exists", f"Dataset already exists:\\n\\n{out_dir}\\n\\nSelect it?"): self._select_dataset(out_dir); return
+            if self.ui.ask_yes_no("Dataset exists", f"Dataset already exists:\n\n{out_dir}\n\nSelect it?"): self._select_dataset(out_dir); return
 
-        if not (config_candidate := Path(self.ui.var_config.get())).exists(): self.ui.show_messagebox("error", "Missing config", f"Config not found:\\n\\n{config_candidate}\\n\\nPick a valid Config first, then retry."); return
+        if not (config_candidate := Path(self.ui.var_config.get())).exists(): self.ui.show_messagebox("error", "Missing config", f"Config not found:\n\n{config_candidate}\n\nPick a valid Config first, then retry."); return
         if not (profile_id := self.ui.var_profile.get().strip()): self.ui.show_messagebox("error", "Missing profile", "No profile selected."); return
 
         try:
@@ -2327,12 +2334,13 @@ class PipelineControlTab(BaseTab):
         if not (ds := self._selected_dataset_dir()): return
         if self.logic.is_process_running(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before snapshotting datasets."); return
 
-        sim_data, versions_root = self.sim_root / "outputs" / "sim_data", self.sim_root / "outputs" / "sim_data" / "versions"
+        versions_root = self.sim_root / "outputs" / "sim_data" / "versions"
         versions_root.mkdir(parents=True, exist_ok=True)
-        group, tag, dst = ds.name, time.strftime("%Y%m%d_%H%M%S"), versions_root / group / f"{group}_{tag}"
+        group, tag = ds.name, time.strftime("%Y%m%d_%H%M%S")
+        dst = versions_root / group / f"{group}_{tag}"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists(): self.ui.show_messagebox("error", "Error", f"Snapshot destination already exists:\\n{dst}"); return
-        if not self.ui.ask_yes_no("Snapshot dataset", f"Create snapshot?\\n\\nFrom:\\n{ds}\\n\\nTo:\\n{dst}"): return
+        if dst.exists(): self.ui.show_messagebox("error", "Error", f"Snapshot destination already exists:\n{dst}"); return
+        if not self.ui.ask_yes_no("Snapshot dataset", f"Create snapshot?\n\nFrom:\n{ds}\n\nTo:\n{dst}"): return
         self._append_log(f"\n[snapshot dataset] {ds} -> {dst}\n")
 
         def link_or_copy_file(src: Path, dstp: Path) -> None:
@@ -2361,17 +2369,17 @@ class PipelineControlTab(BaseTab):
         kind, old_name, parent = "", rp.name, rp.parent
         if str(rp).startswith(str(runs) + os.sep): kind = "run"
         elif str(rp).startswith(str(versions) + os.sep): kind = "snapshot"
-        else: self.ui.show_messagebox("error", "Error", f"Can only rename datasets under:\\n{runs}\\n{versions}\\n\\nSelected:\\n{ds}"); return
+        else: self.ui.show_messagebox("error", "Error", f"Can only rename datasets under:\n{runs}\n{versions}\n\nSelected:\n{ds}"); return
 
         if not (new_name := self.ui.ask_string("Rename dataset", f"New folder name for this {kind} dataset:", initialvalue=old_name)): return
         if not (new_name := new_name.strip()) or "/" in new_name or "\\" in new_name: self.ui.show_messagebox("error", "Error", "Name must not contain path separators."); return
         
         dst = parent / new_name
-        if dst.exists(): self.ui.show_messagebox("error", "Error", f"Target already exists:\\n{dst}"); return
-        if not self.ui.ask_yes_no("Rename dataset", f"Rename?\\n\\nFrom:\\n{rp}\\n\\nTo:\\n{dst}"): return
+        if dst.exists(): self.ui.show_messagebox("error", "Error", f"Target already exists:\n{dst}"); return
+        if not self.ui.ask_yes_no("Rename dataset", f"Rename?\n\nFrom:\n{rp}\n\nTo:\n{dst}"): return
 
         try: rp.rename(dst)
-        except Exception as e: self.ui.show_messagebox("error", "Error", f"Rename failed:\\n{e}"); return
+        except Exception as e: self.ui.show_messagebox("error", "Error", f"Rename failed:\n{e}"); return
 
         self.state.dataset_dir = dst; self._refresh_datasets()
         try:
@@ -2442,7 +2450,7 @@ class PipelineControlTab(BaseTab):
                 else: name = f"__tmp_merge_{ts}"
                 
                 out_ds = (self.sim_root / "outputs" / "sim_data" / "runs" / name).resolve()
-                if out_ds.exists(): self.ui.show_messagebox("error", "Error", f"Merge output already exists:\\n{out_ds}"); return
+                if out_ds.exists(): self.ui.show_messagebox("error", "Error", f"Merge output already exists:\n{out_ds}"); return
 
                 model_s = self.ui.var_model.get().strip()
                 model_out = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{name}.pt").resolve()
@@ -2484,7 +2492,7 @@ class PipelineControlTab(BaseTab):
 
         allow_mixed_profiles = False
         if self.logic._datasets_require_bundle(dss, self.logic.get_dataset_profile_id) and not self.logic._is_model_bundle_target(model_out):
-            if not self.ui.ask_yes_no("Allow mixed-profile training into a single model?", "You selected datasets with different component profiles.\\n\\nRecommended: train into a multi-model bundle (.bundle) so each profile gets its own checkpoint.\\n\\nIf you continue anyway, the training will resume across different profiles by passing --allow-profile-mismatch (warm-start). This is not guaranteed to work and can degrade accuracy.\\n\\nContinue?"): return
+            if not self.ui.ask_yes_no("Allow mixed-profile training into a single model?", "You selected datasets with different component profiles.\n\nRecommended: train into a multi-model bundle (.bundle) so each profile gets its own checkpoint.\n\nIf you continue anyway, the training will resume across different profiles by passing --allow-profile-mismatch (warm-start). This is not guaranteed to work and can degrade accuracy.\n\nContinue?"): return
             allow_mixed_profiles = True
 
         extra_s = self.ui.var_continue_epochs.get().strip() or "10"
@@ -2520,12 +2528,12 @@ class PipelineControlTab(BaseTab):
         
         model_s = self.ui.var_model.get().strip()
         model_in = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
-        if not model_in.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found:\\n{model_in}\\n\\nRun Train first."); return
+        if not model_in.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found:\n{model_in}\n\nRun Train first."); return
         if len(dss) == 1: self._run_simple_cmd(["./.venv/bin/python", "scripts/eval.py", "--data", str(dss[0]), "--model", str(model_in)]); return
 
         allow_mixed_profiles = False
         if self.logic._datasets_require_bundle(dss, self.logic.get_dataset_profile_id) and not self.logic._is_model_bundle_target(model_in):
-            if not self.ui.ask_yes_no("Allow mixed-profile eval on a single model?", "You selected datasets with different component profiles.\\n\\nRecommended: evaluate a multi-model bundle (.bundle) so each dataset uses its matching checkpoint.\\n\\nIf you continue anyway, eval will pass --allow-profile-mismatch. Results may be meaningless.\\n\\nContinue?"): return
+            if not self.ui.ask_yes_no("Allow mixed-profile eval on a single model?", "You selected datasets with different component profiles.\n\nRecommended: evaluate a multi-model bundle (.bundle) so each dataset uses its matching checkpoint.\n\nIf you continue anyway, eval will pass --allow-profile-mismatch. Results may be meaningless.\n\nContinue?"): return
             allow_mixed_profiles = True
 
         parts: list[str] = []
@@ -2542,7 +2550,7 @@ class PipelineControlTab(BaseTab):
 
         model_s = self.ui.var_model.get().strip()
         model_path = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
-        if not model_path.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found to resume from:\\n{model_path}\\n\\nRun Train first."); return
+        if not model_path.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found to resume from:\n{model_path}\n\nRun Train first."); return
 
         extra_s = self.ui.var_continue_epochs.get().strip() or "10"
         try: extra = int(extra_s)
@@ -2554,7 +2562,7 @@ class PipelineControlTab(BaseTab):
 
         allow_mixed_profiles = False
         if len(dss) > 1 and self.logic._datasets_require_bundle(dss, self.logic.get_dataset_profile_id) and not self.logic._is_model_bundle_target(model_path):
-            if not self.ui.ask_yes_no("Allow mixed-profile resume into a single model?", "You selected datasets with different component profiles.\\n\\nRecommended: resume into a multi-model bundle (.bundle).\\n\\nIf you continue anyway, the resume will pass --allow-profile-mismatch. This is not guaranteed to work.\\n\\nContinue?"): return
+            if not self.ui.ask_yes_no("Allow mixed-profile resume into a single model?", "You selected datasets with different component profiles.\n\nRecommended: resume into a multi-model bundle (.bundle).\n\nIf you continue anyway, the resume will pass --allow-profile-mismatch. This is not guaranteed to work.\n\nContinue?"): return
             allow_mixed_profiles = True
 
         if len(dss) > 1 and self.logic._is_model_bundle_target(model_path):
@@ -2564,7 +2572,7 @@ class PipelineControlTab(BaseTab):
                 try:
                     if not (ckpt := bundle_checkpoint_path(model_path, pid, kind="best")).exists(): missing.append(f"{pid} (no checkpoint in bundle)")
                 except Exception: missing.append(f"{pid} (bundle lookup failed)")
-            if missing: self.ui.show_messagebox("error", "Missing bundle checkpoints", "The selected model bundle does not have checkpoints for all selected datasets.\\n\\n" + "\\n".join(missing)); return
+            if missing: self.ui.show_messagebox("error", "Missing bundle checkpoints", "The selected model bundle does not have checkpoints for all selected datasets.\n\n" + "\n".join(missing)); return
 
         if len(dss) == 1:
             ds = dss[0]

@@ -288,15 +288,15 @@ class AnalysisUI:
         self.info_text.configure(state="normal")
         self.info_text.delete("1.0", "end")
         
-        info = f"Sample ID: {meta_row.id}\\nGround Truth (effective): {ground_truth}\\n"
+        info = f"Sample ID: {meta_row.id}\nGround Truth (effective): {ground_truth}\n"
         if original_label and original_label != ground_truth:
-            info += f"Ground Truth (original): {original_label}\\n"
+            info += f"Ground Truth (original): {original_label}\n"
         if prediction:
             predicted, confidence, _ = prediction
             status = "✓ CORRECT" if predicted == ground_truth else "✗ WRONG"
-            info += f"Predicted: {predicted} ({confidence:.1%}) {status}\\n"
+            info += f"Predicted: {predicted} ({confidence:.1%}) {status}\n"
         else:
-            info += "Predicted: (no model loaded)\\n"
+            info += "Predicted: (no model loaded)\n"
         if feedback:
             verdict = str(feedback.get("verdict") or "")
             corrected = str(feedback.get("corrected_class") or "").strip()
@@ -307,11 +307,11 @@ class AnalysisUI:
                 info += f" -> {corrected}"
             if ts:
                 info += f" @ {ts}"
-            info += "\\n"
+            info += "\n"
             if note:
-                info += f"Feedback note: {note}\\n"
+                info += f"Feedback note: {note}\n"
         
-        info += f"\\nDefect Parameters:\\n"
+        info += f"\nDefect Parameters:\n"
         for key, value in meta_row.defect.items():
             if isinstance(value, float):
                 info += f"  {key}: {value:.2f}\n"

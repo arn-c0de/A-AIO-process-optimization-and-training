@@ -264,7 +264,7 @@ class PredictionsTab(BaseTab):
         model_s = self.ui.var_model.get().strip()
         model_path = self.logic.resolve_model_path(model_s)
         if not model_path.exists():
-            messagebox.showerror("Error", f"Model not found:\\n{model_path}")
+            messagebox.showerror("Error", f"Model not found:\n{model_path}")
             return
 
         dataset_dirs = self._selected_dataset_paths()
@@ -277,13 +277,13 @@ class PredictionsTab(BaseTab):
         if profile_model_s:
             pm_path = self.logic.resolve_model_path(profile_model_s)
             if not pm_path.exists():
-                messagebox.showerror("Error", f"Profile model not found:\\n{pm_path}")
+                messagebox.showerror("Error", f"Profile model not found:\n{pm_path}")
                 return
         
         self.ui.var_status.set("status: running...")
         self.ui.var_report_path.set("report: -")
         self.ui.var_preds_path.set("preds: -")
-        self.ui.set_metrics_text("Running batch prediction...\\n")
+        self.ui.set_metrics_text("Running batch prediction...\n")
         self.ui.clear_confusion_matrix()
         self._pred_rows = []
         self._pred_row_by_id = {}
@@ -304,7 +304,8 @@ class PredictionsTab(BaseTab):
             bool(self.ui.chk_save_preds.get()),
             bool(self.ui.chk_auto_train_bundle.get()),
             pm_path,
-            self._on_prediction_complete,
+            # Called from the worker thread: hop onto the Tk main loop before touching widgets.
+            lambda *res: self.frame.after(0, self._on_prediction_complete, *res),
         )
 
     def _on_prediction_complete(self, last_report_path, last_preds_path, last_dataset_dir, multi_results, multi_result_by_key, was_stopped):
@@ -341,7 +342,7 @@ class PredictionsTab(BaseTab):
 
         def is_version(p: Path) -> bool:
             try:
-                return str(p.resolve()).startswith(str(self.sim_root / "outputs" / "sim_data" / "versions").resolve() + os.sep)
+                return str(p.resolve()).startswith(str((self.sim_root / "outputs" / "sim_data" / "versions").resolve()) + os.sep)
             except Exception: return False
 
         def sort_key(p: Path) -> tuple:
@@ -446,13 +447,13 @@ class PredictionsTab(BaseTab):
 
         lines = [f"Report: {report_path.name}", f"Model:  {Path(obj.get('model_path', '-')).name}", f"Split:  {obj.get('split', '-')}", f"Seen:   {obj.get('seen_samples', '-')}"]
         if "img_per_s" in obj: lines.append(f"Speed:  {obj.get('img_per_s', 0.0):.1f} img/s")
-        if "accuracy" in metrics: lines.append(f"\\nAccuracy: {metrics.get('accuracy', 0.0):.4f}")
+        if "accuracy" in metrics: lines.append(f"\nAccuracy: {metrics.get('accuracy', 0.0):.4f}")
         if "macro_f1" in metrics: lines.append(f"Macro F1:  {metrics.get('macro_f1', 0.0):.4f}")
         if cfn := metrics.get("critical_fn_rates"):
-            lines.append("\\nCritical FN rates:")
+            lines.append("\nCritical FN rates:")
             lines.extend([f"  {k}: {v:.4f}" for k, v in sorted(cfn.items())])
         
-        self.ui.set_metrics_text("\\n".join(lines) + "\\n")
+        self.ui.set_metrics_text("\n".join(lines) + "\n")
         self.ui.render_confusion_matrix(cm, class_names) if cm and class_names else self.ui.clear_confusion_matrix()
 
     def _load_preds(self, preds_path: Path) -> None:
@@ -465,7 +466,7 @@ class PredictionsTab(BaseTab):
         try:
             self.logic.enrich_rows_with_gt_profile(rows, self._active_data_dir())
         except Exception as e:
-            self.ui.append_log(f"[warn] failed to enrich rows with GT profile: {e}\\n")
+            self.ui.append_log(f"[warn] failed to enrich rows with GT profile: {e}\n")
         
         self._pred_rows = rows
         self._pred_row_by_id = {str(r.get("id")): r for r in rows if r.get("id")}
@@ -483,13 +484,13 @@ class PredictionsTab(BaseTab):
         if not image_rel: return
         image_path = data_dir / str(image_rel)
         if not image_path.exists():
-            messagebox.showerror("Error", f"Image not found:\\n{image_path}")
+            messagebox.showerror("Error", f"Image not found:\n{image_path}")
             return
         
         try:
             self.ui.display_image(str(image_path), row)
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to display image:\\n{e}")
+            messagebox.showerror("Error", f"Failed to display image:\n{e}")
 
     def _on_tree_ds_select(self, _evt: Optional[object] = None) -> None:
         sel = self.ui.tree_ds.selection()

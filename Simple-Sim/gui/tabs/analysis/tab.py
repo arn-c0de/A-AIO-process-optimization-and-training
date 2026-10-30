@@ -203,7 +203,7 @@ class AnalysisTab(BaseTab):
             self._update_dataset_stats_label()
             self._update_feedback_panel()
         except Exception as e:
-            messagebox.showerror("Load Error", f"Failed to load dataset:\\n{e}")
+            messagebox.showerror("Load Error", f"Failed to load dataset:\n{e}")
 
     def _sorted_class_values(self, classes: set[str]) -> list[str]:
         priority = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
@@ -364,11 +364,11 @@ class AnalysisTab(BaseTab):
                 mode = "with feedback" if use_feedback else "baseline"
                 messagebox.showinfo(
                     "Success",
-                    f"Analysis complete ({mode})!\\n\\nAccuracy: {results['summary']['accuracy']:.1%}"
-                    f"\\nResults saved to:\\n{self.state.dataset_dir / 'analysis_results.json'}",
+                    f"Analysis complete ({mode})!\n\nAccuracy: {results['summary']['accuracy']:.1%}"
+                    f"\nResults saved to:\n{self.state.dataset_dir / 'analysis_results.json'}",
                 )
             except Exception as e:
-                messagebox.showerror("Error", f"Analysis failed:\\n{e}")
+                messagebox.showerror("Error", f"Analysis failed:\n{e}")
 
         threading.Thread(target=analyze, daemon=True).start()
 
@@ -424,7 +424,7 @@ class AnalysisTab(BaseTab):
             self._filter_images(display_first=False)
             self._display_image(self.current_sample_id)
         except Exception as exc:
-            messagebox.showerror("Feedback", f"Failed to save feedback:\\n{exc}")
+            messagebox.showerror("Feedback", f"Failed to save feedback:\n{exc}")
 
     def _update_feedback_panel(self) -> None:
         if not self.current_sample_id:

@@ -36,8 +36,6 @@ class PipelineLogic:
         self.stop_evt = threading.Event()
         self._temp_merge_cleanup_dir: Optional[Path] = None
 
-        self._cpu_prev_total: Optional[int] = None
-        self._cpu_prev_idle: Optional[int] = None
         self._last_snap_sig: Optional[tuple[int, int]] = None  # (mtime_ns, size)
         
         self._profile_config_cache: Dict[str, Dict[str, Any]] = {}
@@ -145,7 +143,7 @@ class PipelineLogic:
                         log_callback(f"[post-run] failed: {e}\n")
                         success = False
 
-                if not success and run_count > 1: log_callback(f"\n⚠ Run {self.current_run_iteration} failed, but continuing...\n")
+                if not success and run_count != 1: log_callback(f"\n⚠ Run {self.current_run_iteration} failed, but continuing...\n")
 
                 ui_update_callback()
 
@@ -169,6 +167,8 @@ class PipelineLogic:
         env = os.environ.copy()
         env["WHEELHOUSE"] = "wheelhouse"
         env["EVENT_LOG"] = str(eventlog)
+        # generate.py/validate_dataset.py read SIMPLE_SIM_EVENT_LOG directly (generate-only modes skip run_pipeline.sh's bridge).
+        env["SIMPLE_SIM_EVENT_LOG"] = str(eventlog)
         env["CONFIG"] = cfg
         env["DATA_DIR"] = out_dir
         env["MODEL_PATH"] = model_path
@@ -386,46 +386,6 @@ class PipelineLogic:
             for p in snaps[snap_keep:]: p.unlink()
         except Exception: pass
 
-    def _read_cpu_percent(self) -> Optional[float]:
-        try:
-            with open("/proc/stat", "r", encoding="utf-8") as f: line = f.readline().strip()
-            parts = line.split()
-            if not parts or parts[0] != "cpu" or len(parts) < 5: return None
-            nums = [int(x) for x in parts[1:]]
-            total, idle = sum(nums), nums[3] + (nums[4] if len(nums) > 4 else 0)
-            if self._cpu_prev_total is None or self._cpu_prev_idle is None:
-                self._cpu_prev_total, self._cpu_prev_idle = total, idle
-                return None
-            dt, di = total - self._cpu_prev_total, idle - self._cpu_prev_idle
-            self._cpu_prev_total, self._cpu_prev_idle = total, idle
-            return 100.0 * (1.0 - (di / dt)) if dt > 0 else None
-        except Exception: return None
-
-    def _read_ram_percent(self) -> Optional[tuple[float, int, int]]:
-        try:
-            total_kb, avail_kb = None, None
-            with open("/proc/meminfo", "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("MemTotal:"): total_kb = int(line.split()[1])
-                    elif line.startswith("MemAvailable:"): avail_kb = int(line.split()[1])
-                    if total_kb is not None and avail_kb is not None: break
-            if total_kb is None or avail_kb is None or total_kb <= 0: return None
-            used_kb = total_kb - avail_kb
-            return 100.0 * (used_kb / total_kb), used_kb * 1024, total_kb * 1024
-        except Exception: return None
-
-    def _read_gpu_percent(self) -> Optional[float]:
-        try:
-            proc = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=0.5, check=False)
-            out = (proc.stdout or "").strip()
-            if not out: return None
-            return float(out.splitlines()[0].strip())
-        except Exception: return None
-
-    def get_system_stats(self) -> Tuple[Optional[float], Optional[Tuple[float, int, int]], Optional[float]]:
-        return self._read_cpu_percent(), self._read_ram_percent(), self._read_gpu_percent()
-
     def _compute_dir_size_bytes(self, root: Path) -> int:
         total = 0
         try:
@@ -505,7 +465,7 @@ class PipelineLogic:
             out_ds = self.sim_root / "outputs" / "sim_data" / "runs" / "run_profile_cls_quick"
             out_model = self.sim_root / "outputs" / "models" / "profile_classifier_quick.pt"
 
-        if not cfg.exists(): raise FileNotFoundError(f"Config not found:\\n{cfg}")
+        if not cfg.exists(): raise FileNotFoundError(f"Config not found:\n{cfg}")
         
         tag = time.strftime("%Y%m%d_%H%M%S")
         if out_ds.exists(): out_ds = out_ds.parent / f"{out_ds.name}_{tag}"
@@ -695,7 +655,7 @@ class PipelineLogic:
             classes = cfg.get("classes") or {}
             class_keys = tuple(sorted((classes.keys() if isinstance(classes, dict) else [])))
             if class_keys != class_keys0:
-                raise ValueError(f"Cannot merge datasets with different class sets.\\n  first: {class_keys0}\\n  {ds.name}: {class_keys}")
+                raise ValueError(f"Cannot merge datasets with different class sets.\n  first: {class_keys0}\n  {ds.name}: {class_keys}")
             roi = cfg.get("roi") or {}
             w, h = int(roi.get("width_px") or 0), int(roi.get("height_px") or 0)
             if w > 0:

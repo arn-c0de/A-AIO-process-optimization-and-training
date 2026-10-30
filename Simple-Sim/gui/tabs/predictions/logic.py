@@ -20,8 +20,6 @@ class PredictionsLogic:
         self.log_q = log_q
         self.proc: Optional[subprocess.Popen[str]] = None
         self.stop_evt = threading.Event()
-        self._cpu_prev_total: Optional[int] = None
-        self._cpu_prev_idle: Optional[int] = None
 
     def get_datasets(self) -> List[Path]:
         sim_data = self.sim_root / "outputs" / "sim_data"
@@ -62,64 +60,6 @@ class PredictionsLogic:
             except Exception:
                 pass
 
-    def _read_cpu_percent(self) -> Optional[float]:
-        try:
-            with open("/proc/stat", "r", encoding="utf-8") as f:
-                line = f.readline().strip()
-            parts = line.split()
-            if not parts or parts[0] != "cpu" or len(parts) < 5:
-                return None
-            nums = [int(x) for x in parts[1:]]
-            total = sum(nums)
-            idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
-            if self._cpu_prev_total is None or self._cpu_prev_idle is None:
-                self._cpu_prev_total, self._cpu_prev_idle = total, idle
-                return None
-            dt = total - self._cpu_prev_total
-            di = idle - self._cpu_prev_idle
-            self._cpu_prev_total, self._cpu_prev_idle = total, idle
-            return 100.0 * (1.0 - (di / dt)) if dt > 0 else None
-        except Exception:
-            return None
-
-    def _read_ram_percent(self) -> Optional[tuple[float, int, int]]:
-        try:
-            total_kb, avail_kb = None, None
-            with open("/proc/meminfo", "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("MemTotal:"):
-                        total_kb = int(line.split()[1])
-                    elif line.startswith("MemAvailable:"):
-                        avail_kb = int(line.split()[1])
-                    if total_kb is not None and avail_kb is not None:
-                        break
-            if total_kb is None or avail_kb is None or total_kb <= 0:
-                return None
-            used_kb = total_kb - avail_kb
-            return 100.0 * (used_kb / total_kb), used_kb * 1024, total_kb * 1024
-        except Exception:
-            return None
-
-    def _read_gpu_percent(self) -> Optional[float]:
-        try:
-            proc = subprocess.run(
-                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=0.5,
-                check=False,
-            )
-            out = (proc.stdout or "").strip()
-            if not out:
-                return None
-            return float(out.splitlines()[0].strip())
-        except Exception:
-            return None
-
-    def get_system_stats(self) -> Tuple[Optional[float], Optional[Tuple[float, int, int]], Optional[float]]:
-        return self._read_cpu_percent(), self._read_ram_percent(), self._read_gpu_percent()
-
     def resolve_dataset_path(self, s: str) -> Path:
         p = Path(s)
         if p.is_absolute():
@@ -154,23 +94,23 @@ class PredictionsLogic:
                         break
 
                     if not (data_dir / "meta.jsonl").exists() or not (data_dir / "labels.jsonl").exists():
-                        self.log_q.put(f"[error] dataset missing meta.jsonl/labels.jsonl: {data_dir}\\n")
+                        self.log_q.put(f"[error] dataset missing meta.jsonl/labels.jsonl: {data_dir}\n")
                         continue
 
                     model_arg_path = model_path
                     if model_path.exists() and model_path.is_dir():
                         manifest_path = data_dir / "dataset_manifest.json"
                         if not manifest_path.exists():
-                            self.log_q.put(f"[error] dataset manifest missing: {manifest_path}\\n")
+                            self.log_q.put(f"[error] dataset manifest missing: {manifest_path}\n")
                             continue
                         try:
                             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                             profile_id = str((manifest.get("component_profile") or {}).get("profile_id") or "").strip()
                         except Exception as e:
-                            self.log_q.put(f"[error] failed to read dataset manifest: {manifest_path} ({e})\\n")
+                            self.log_q.put(f"[error] failed to read dataset manifest: {manifest_path} ({e})\n")
                             continue
                         if not profile_id:
-                            self.log_q.put(f"[error] dataset manifest missing component_profile.profile_id: {manifest_path}\\n")
+                            self.log_q.put(f"[error] dataset manifest missing component_profile.profile_id: {manifest_path}\n")
                             continue
                         expected = bundle_checkpoint_path(model_path, profile_id, kind="best")
                         if not expected.exists():
@@ -179,10 +119,11 @@ class PredictionsLogic:
                                 cmd_train: List[str] = [str(py), "scripts/train.py", "--data", str(data_dir), "--out", str(model_path)]
                                 if device != "auto":
                                     cmd_train.extend(["--device", device])
-                                self.log_q.put(f"[bundle] missing '{profile_id}.pt' -> training into bundle...\\n")
-                                self.log_q.put("[cmd] " + " ".join(cmd_train) + "\\n")
+                                self.log_q.put(f"[bundle] missing '{profile_id}.pt' -> training into bundle...\n")
+                                self.log_q.put("[cmd] " + " ".join(cmd_train) + "\n")
                                 try:
-                                    proc = subprocess.Popen(
+                                    # Track as self.proc so Stop can terminate the training run.
+                                    proc = self.proc = subprocess.Popen(
                                         cmd_train,
                                         cwd=str(self.sim_root),
                                         stdout=subprocess.PIPE,
@@ -193,23 +134,24 @@ class PredictionsLogic:
                                     assert proc.stdout is not None
                                     for line in proc.stdout:
                                         if self.stop_evt.is_set():
+                                            proc.terminate()
                                             break
                                         self.log_q.put(line)
                                     rc = proc.wait()
                                     if self.stop_evt.is_set():
-                                        self.log_q.put("\\n[stopped]\\n")
+                                        self.log_q.put("\n[stopped]\n")
                                         break
                                     if rc != 0:
-                                        self.log_q.put(f"\\n[error] train.py exited with code {rc}\\n")
+                                        self.log_q.put(f"\n[error] train.py exited with code {rc}\n")
                                         continue
                                 except Exception as e:
-                                    self.log_q.put(f"\\n[error] failed to run train.py: {e}\\n")
+                                    self.log_q.put(f"\n[error] failed to run train.py: {e}\n")
                                     continue
                                 if not expected.exists():
-                                    self.log_q.put(f"[error] bundle still missing checkpoint for profile '{profile_id}'\\n")
+                                    self.log_q.put(f"[error] bundle still missing checkpoint for profile '{profile_id}'\n")
                                     continue
                             else:
-                                self.log_q.put(f"[error] multi-model bundle missing checkpoint for profile '{profile_id}'\\n")
+                                self.log_q.put(f"[error] multi-model bundle missing checkpoint for profile '{profile_id}'\n")
                                 continue
                         model_arg_path = expected
 
@@ -226,8 +168,8 @@ class PredictionsLogic:
                     if profile_model_path is not None:
                         cmd.extend(["--profile-model", str(profile_model_path)])
 
-                    self.log_q.put(f"\\n[dataset {idx}/{len(dataset_dirs)}] {data_dir}\\n")
-                    self.log_q.put("[cmd] " + " ".join(cmd) + "\\n")
+                    self.log_q.put(f"\n[dataset {idx}/{len(dataset_dirs)}] {data_dir}\n")
+                    self.log_q.put("[cmd] " + " ".join(cmd) + "\n")
 
                     report_path: Optional[Path] = None
                     preds_path: Optional[Path] = None
@@ -257,10 +199,10 @@ class PredictionsLogic:
                     
                     rc = self.proc.wait()
                     if self.stop_evt.is_set():
-                        self.log_q.put("\\n[stopped]\\n")
+                        self.log_q.put("\n[stopped]\n")
                         break
                     if rc != 0:
-                        self.log_q.put(f"\\n[error] predict.sh exited with code {rc}\\n")
+                        self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
                         continue
                     
                     try:
@@ -286,7 +228,7 @@ class PredictionsLogic:
                     last_preds_path = preds_path
                     last_dataset_dir = data_dir
             except Exception as e:
-                self.log_q.put(f"\\n[error] Failed to run predictions: {e}\\n")
+                self.log_q.put(f"\n[error] Failed to run predictions: {e}\n")
             finally:
                 on_complete(last_report_path, last_preds_path, last_dataset_dir, multi_results, multi_result_by_key, self.stop_evt.is_set())
 
@@ -297,7 +239,7 @@ class PredictionsLogic:
             obj = json.loads(report_path.read_text(encoding="utf-8"))
             return obj, None
         except Exception as e:
-            return None, f"Failed to load report:\\n{e}"
+            return None, f"Failed to load report:\n{e}"
 
     def load_preds(self, preds_path: Path) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
         rows: List[Dict[str, Any]] = []
@@ -310,7 +252,7 @@ class PredictionsLogic:
                     rows.append(json.loads(line))
             return rows, None
         except Exception as e:
-            return None, f"Failed to load predictions:\\n{e}"
+            return None, f"Failed to load predictions:\n{e}"
 
     def enrich_rows_with_gt_profile(self, rows: List[Dict[str, Any]], active_dataset_dir: Optional[Path]) -> None:
         gt_profile_map = self._load_gt_profile_map_from_labels(active_dataset_dir)

@@ -39,7 +39,7 @@ class ValidationTab(BaseTab):
 
         def is_version(p: Path) -> bool:
             try:
-                return str(p.resolve()).startswith(str(self.sim_root / "outputs" / "sim_data" / "versions").resolve() + os.sep)
+                return str(p.resolve()).startswith(str((self.sim_root / "outputs" / "sim_data" / "versions").resolve()) + os.sep)
             except Exception: return False
 
         cand.sort(key=lambda p: (1, -p.stat().st_mtime, p.name) if is_version(p) else (0, p.name))
@@ -93,7 +93,7 @@ class ValidationTab(BaseTab):
         if not self.state.dataset_dir:
             messagebox.showinfo("Info", "No dataset selected")
             return
-        self.ui.set_results_text("Running validation suite...\\n\\nThis may take a while for large datasets.")
+        self.ui.set_results_text("Running validation suite...\n\nThis may take a while for large datasets.")
 
         def validate():
             try:
@@ -103,8 +103,8 @@ class ValidationTab(BaseTab):
                 self.frame.after(0, lambda: self.ui.display_results(results))
                 self.frame.after(0, self._refresh_flag_tree)
             except Exception as e:
-                messagebox.showerror("Error", f"Validation failed:\\n{e}")
-                self.ui.set_results_text(f"Validation failed:\\n{e}")
+                messagebox.showerror("Error", f"Validation failed:\n{e}")
+                self.ui.set_results_text(f"Validation failed:\n{e}")
 
         threading.Thread(target=validate, daemon=True).start()
 
@@ -136,6 +136,6 @@ class ValidationTab(BaseTab):
             return
         try:
             path = self.logic.export_report(self.validation_results, self.state.dataset_dir)
-            messagebox.showinfo("Success", f"Report exported to:\\n{path}")
+            messagebox.showinfo("Success", f"Report exported to:\n{path}")
         except Exception as e:
-            messagebox.showerror("Error", f"Export failed:\\n{e}")
+            messagebox.showerror("Error", f"Export failed:\n{e}")

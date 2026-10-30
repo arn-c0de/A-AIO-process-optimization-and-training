@@ -3,8 +3,10 @@
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 from datetime import datetime
+from gui.utils.formatting import fmt_bytes
 
 if TYPE_CHECKING:
     from .tab import MergeTab
@@ -240,13 +242,4 @@ class MergeUI:
 
             self.bundle_tree.insert("", "end", iid=str(bd), values=(profiles, created))
 
-    def fmt_bytes(self, n: int) -> str:
-        units = ["B", "KB", "MB", "GB", "TB"]
-        v = float(max(0, n))
-        u = 0
-        while v >= 1024.0 and u < len(units) - 1:
-            v /= 1024.0
-            u += 1
-        if u == 0:
-            return f"{int(v)} {units[u]}"
-        return f"{v:.1f} {units[u]}"
+    fmt_bytes = staticmethod(fmt_bytes)

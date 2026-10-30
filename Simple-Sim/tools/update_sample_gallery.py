@@ -270,8 +270,8 @@ def main() -> None:
 
     print(f"Found {len(profiles)} profile(s)")
 
-    # Clean previous gallery
-    if gallery_dir.exists():
+    # Clean previous gallery (never on --dry-run, which must not touch existing images)
+    if gallery_dir.exists() and not args.dry_run:
         shutil.rmtree(gallery_dir)
     gallery_dir.mkdir(parents=True, exist_ok=True)
 
@@ -282,7 +282,7 @@ def main() -> None:
     roi_override: Optional[Tuple[int, int, float]] = None
     if args.roi:
         import re
-        m = re.match(r"^\\s*(\\d+)x(\\d+)@([0-9]*\\.?[0-9]+)\\s*$", str(args.roi))
+        m = re.match(r"^\s*(\d+)x(\d+)@([0-9]*\.?[0-9]+)\s*$", str(args.roi))
         if not m:
             raise SystemExit(f"Invalid --roi format: {args.roi!r} (expected WIDTHxHEIGHT@MM_PER_PX)")
         roi_override = (int(m.group(1)), int(m.group(2)), float(m.group(3)))

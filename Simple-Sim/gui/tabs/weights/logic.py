@@ -349,12 +349,12 @@ class WeightsLogic:
             if not expected.exists():
                 avail = sorted([p.name for p in model_path.glob("*.pt")])[:12]
                 raise FileNotFoundError(
-                    f"Multi-model bundle has no checkpoint for profile '{profile_id}':\\n"
-                    f"  bundle: {model_path}\\n"
-                    f"  expected: {expected}\\n"
-                    f"  available: {', '.join(avail) if avail else '(none)'}\\n\\n"
-                    f"Train this dataset into the same bundle to add it:\\n"
-                    f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {model_path}\\n"
+                    f"Multi-model bundle has no checkpoint for profile '{profile_id}':\n"
+                    f"  bundle: {model_path}\n"
+                    f"  expected: {expected}\n"
+                    f"  available: {', '.join(avail) if avail else '(none)'}\n\n"
+                    f"Train this dataset into the same bundle to add it:\n"
+                    f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {model_path}\n"
                 )
             model_path = expected
 
@@ -404,32 +404,37 @@ class WeightsLogic:
         try:
             cmd, out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
         except Exception as e:
-            self.log_q.put(f"[error] {e}\\n")
+            self.log_q.put(f"[error] {e}\n")
             return None
 
-        self.stop_evt.clear()
-        self.log_q.put(f"\\n$ {' '.join(cmd)}\\n")
-        self.log_q.put(f"[run] {label}\\n")
+        # stop_evt is cleared once by the caller (compare run); clearing it here would swallow a Stop between runs.
+        if self.stop_evt.is_set(): return None
+        self.log_q.put(f"\n$ {' '.join(cmd)}\n")
+        self.log_q.put(f"[run] {label}\n")
         report_path: Optional[Path] = None
         try:
-            proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            # Track as self.proc so stop_prediction() can terminate it and the "already running" guard sees it.
+            proc = self.proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
             assert proc.stdout is not None
             class_mismatch = False
             for line in proc.stdout:
-                if self.stop_evt.is_set(): break
+                if self.stop_evt.is_set():
+                    # Terminate before wait(): otherwise the child can block on a full stdout pipe.
+                    proc.terminate()
+                    break
                 if "do not match dataset classes" in line: class_mismatch = True
                 self.log_q.put(line)
                 if "Report saved to:" in line: report_path = Path(line.split("Report saved to:", 1)[-1].strip())
             rc = proc.wait()
             if self.stop_evt.is_set():
-                self.log_q.put("\\n[stopped]\\n")
+                self.log_q.put("\n[stopped]\n")
                 return None
             if rc != 0:
-                if class_mismatch: self.log_q.put(f"[skip] incompatible model/dataset (class mismatch)\\n")
-                else: self.log_q.put(f"\\n[error] predict.sh exited with code {rc}\\n")
+                if class_mismatch: self.log_q.put(f"[skip] incompatible model/dataset (class mismatch)\n")
+                else: self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
                 return None
         except Exception as e:
-            self.log_q.put(f"\\n[error] Failed to run predict.sh: {e}\\n")
+            self.log_q.put(f"\n[error] Failed to run predict.sh: {e}\n")
             return None
 
         if report_path is None:
@@ -442,7 +447,7 @@ class WeightsLogic:
         try: return json.loads(report_path.read_text(encoding="utf-8"))
         except Exception: return None
 
-    _RE_SNAP_RUN = re.compile(r"_run(?P<run>\d+)(?:_|\\.|$)")
+    _RE_SNAP_RUN = re.compile(r"_run(?P<run>\d+)(?:_|\.|$)")
 
     def runs_for_model(self, p: Path) -> str:
         meta = self._read_model_meta(p)
@@ -538,8 +543,8 @@ class WeightsLogic:
         if acc_a is not None and acc_b is not None: lines.append(f"  accuracy (wavg): A={acc_a:.4f}  B={acc_b:.4f}  delta(B-A)={acc_b-acc_a:+.4f}")
         if f1_a is not None and f1_b is not None: lines.append(f"  macro_f1 (wavg):  A={f1_a:.4f}  B={f1_b:.4f}  delta(B-A)={f1_b-f1_a:+.4f}")
         lines.append(f"  winner: {winner}")
-        lines.append(f"  A: {model_a.name}\\n  B: {model_b.name}\\n")
-        return "\\n".join(lines)
+        lines.append(f"  A: {model_a.name}\n  B: {model_b.name}\n")
+        return "\n".join(lines)
 
     def compare_summary(self, ra: Dict[str, Any], rb: Dict[str, Any], model_a: Path, model_b: Path, split: str) -> str:
         def fmetric(r: Dict[str, Any], k: str) -> Optional[float]:
@@ -562,8 +567,8 @@ class WeightsLogic:
         if acc_a is not None and acc_b is not None: lines.append(f"  accuracy: A={acc_a:.4f}  B={acc_b:.4f}  delta(B-A)={acc_b-acc_a:+.4f}")
         if f1_a is not None and f1_b is not None: lines.append(f"  macro_f1:  A={f1_a:.4f}  B={f1_b:.4f}  delta(B-A)={f1_b-f1_a:+.4f}")
         if cfn_a is not None and cfn_b is not None: lines.append(f"  MISALIGNED FN rate: A={cfn_a:.4f}  B={cfn_b:.4f}  delta(B-A)={cfn_b-cfn_a:+.4f}")
-        lines.append(f"  winner: {winner}\\n")
-        return "\\n".join(lines)
+        lines.append(f"  winner: {winner}\n")
+        return "\n".join(lines)
 
     def get_cmp_datasets(self) -> List[Path]:
         runs, versions = self.sim_root / "outputs" / "sim_data" / "runs", self.sim_root / "outputs" / "sim_data" / "versions"
