@@ -7,6 +7,7 @@ import torch
 import json
 import numpy as np
 
+from gui.utils.dataset_catalog import list_dataset_dirs, sim_data_roots
 from gui.utils.model_inference import load_model, ModelWrapper
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from simple_sim.manifest import hash_file
@@ -19,20 +20,10 @@ class AnalysisLogic:
         self.model: Optional[ModelWrapper] = None
 
     def sim_data_roots(self) -> Tuple[Path, Path]:
-        sim_data = self.sim_root / "outputs" / "sim_data"
-        runs = sim_data / "runs"
-        versions = sim_data / "versions"
-        runs.mkdir(parents=True, exist_ok=True)
-        versions.mkdir(parents=True, exist_ok=True)
-        return runs, versions
+        return sim_data_roots(self.sim_root)
 
     def get_datasets(self) -> List[Path]:
-        runs, versions = self.sim_data_roots()
-        
-        cand: list[Path] = []
-        cand.extend([p for p in runs.iterdir() if p.is_dir()])
-        cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
-        return cand
+        return list_dataset_dirs(self.sim_root)
 
     def load_dataset(self, dataset_dir: Path) -> Tuple[Dict[str, MetaRow], Dict[str, str], Dict[str, str], List[str]]:
         meta_rows = read_jsonl(dataset_dir / "meta.jsonl", MetaRow)
@@ -98,7 +89,7 @@ class AnalysisLogic:
 
     def _checkpoint_manifest_hash(self, path: Path) -> Optional[str]:
         try:
-            checkpoint = torch.load(path, map_location="cpu")
+            checkpoint = torch.load(path, map_location="cpu", weights_only=False)
             return checkpoint.get("dataset_manifest_hash")
         except Exception as exc:
             print(f"Failed to read checkpoint metadata {path}: {exc}")

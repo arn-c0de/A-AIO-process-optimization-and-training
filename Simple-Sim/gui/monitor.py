@@ -119,6 +119,11 @@ class MonitorAppTabbed:
 
         def on_close() -> None:
             try:
+                self._close_tabs()
+                try:
+                    self._stats.stop()
+                except Exception:
+                    pass
                 if self._perf_tick_id is not None:
                     try:
                         self.root.after_cancel(self._perf_tick_id)
@@ -153,6 +158,33 @@ class MonitorAppTabbed:
 
         # Force update to ensure UI is rendered
         self.root.update_idletasks()
+
+    def _close_tabs(self) -> None:
+        """Give every instantiated tab a chance to stop its background work.
+
+        Tabs that override ``BaseTab.on_close`` handle this themselves. For tabs
+        that don't (e.g. the pipeline tab), fall back to a stop method on their
+        ``logic`` object so subprocesses started with ``start_new_session=True``
+        don't outlive the window.
+        """
+        for tab in self.tabs.values():
+            try:
+                tab.on_close()
+            except Exception:
+                pass
+            if type(tab).on_close is not BaseTab.on_close:
+                continue
+            logic = getattr(tab, "logic", None)
+            if logic is None:
+                continue
+            for name in ("stop_pipeline", "stop"):
+                stop = getattr(logic, name, None)
+                if callable(stop):
+                    try:
+                        stop()
+                    except Exception:
+                        pass
+                    break
 
     def _tick_global_performance(self) -> None:
         cpu_pct = self._stats.cpu_percent()
@@ -209,7 +241,7 @@ def main() -> None:
     """Main entry point for tabbed monitor."""
     sim_root = Path(__file__).resolve().parent.parent
     root = tk.Tk()
-    app = MonitorAppTabbed(root, sim_root=sim_root)
+    MonitorAppTabbed(root, sim_root=sim_root)
     root.mainloop()
 
 

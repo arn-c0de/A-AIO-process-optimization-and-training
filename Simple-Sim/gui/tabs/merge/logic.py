@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
+from gui.utils.paths import model_root
 from simple_sim.model_bundle import (
     bundle_checkpoint_path,
     upsert_bundle_meta,
@@ -22,7 +23,7 @@ class MergeLogic:
         self.sim_root = sim_root
 
     def _model_root(self) -> Path:
-        return self.sim_root / "outputs" / "models"
+        return model_root(self.sim_root)
 
     def _rel(self, p: Path) -> str:
         try:
@@ -177,15 +178,13 @@ class MergeLogic:
         shutil.rmtree(bundle_path)
 
     def do_merge_ensemble(self, out_path: Path, selected_weights: Dict[str, Path], log_q: queue.Queue):
-        import torch
-
         items: List[Dict[str, Any]] = []
         class_names: Optional[List[str]] = None
         profiles: List[str] = []
 
         for profile_id, src_path in sorted(selected_weights.items()):
             log_q.put(f"[ensemble] loading {profile_id}: {src_path}\n")
-            ckpt = torch.load(src_path, map_location="cpu")
+            ckpt = torch.load(src_path, map_location="cpu", weights_only=False)
             cn = list(ckpt.get("class_names") or [])
             if not cn: raise ValueError(f"Checkpoint missing class_names: {src_path}")
             if class_names is None: class_names = cn

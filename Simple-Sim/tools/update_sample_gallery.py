@@ -229,6 +229,19 @@ def _overlay_in_place(path: Path, defect: Dict[str, Any], nominal: Dict[str, Any
     if not ok:
         raise RuntimeError(f"Failed to write overlay image: {path}")
 
+def _collect_existing_entries(
+    profile_gallery: Path, profile_id: str, render_backend: str, project_root: Path
+) -> List[Tuple[str, str, str, str, str]]:
+    """Gallery entries for images already on disk (used for skipped backends)."""
+    if not profile_gallery.is_dir():
+        return []
+    out: List[Tuple[str, str, str, str, str]] = []
+    for img in sorted(profile_gallery.glob("*.png")):
+        rel = img.relative_to(project_root)
+        out.append((profile_id, profile_id, img.stem, str(rel), render_backend))
+    return out
+
+
 import re
 def generate_slug(text: str) -> str:
     s = text.lower().strip()
@@ -269,8 +282,11 @@ def main() -> None:
 
     print(f"Found {len(profiles)} profile(s)")
 
-    # Clean previous gallery (never on --dry-run, which must not touch existing images)
-    if gallery_dir.exists() and not args.dry_run:
+    # Clean previous gallery (never on --dry-run, which must not touch existing images).
+    # With --skip-2d/--skip-3d only the profile dirs that are regenerated are cleared
+    # (per profile below), so images of the skipped backend survive.
+    partial_run = bool(args.skip_2d or args.skip_3d)
+    if gallery_dir.exists() and not args.dry_run and not partial_run:
         shutil.rmtree(gallery_dir)
     gallery_dir.mkdir(parents=True, exist_ok=True)
 
@@ -302,6 +318,18 @@ def main() -> None:
         print(f"\nProcessing profile: {profile_id} [{render_backend}]")
 
         profile_gallery = gallery_dir / profile_id
+
+        skipped = (render_backend == "opencv_2d" and args.skip_2d) or (render_backend == "blender_3d" and args.skip_3d)
+        if skipped:
+            flag = "--skip-2d" if render_backend == "opencv_2d" else "--skip-3d"
+            kept = _collect_existing_entries(profile_gallery, profile_id, render_backend, project_root)
+            entries.extend(kept)
+            print(f"  [skip] {'2D' if render_backend == 'opencv_2d' else '3D'} generation disabled via {flag}"
+                  f" (keeping {len(kept)} existing image(s))")
+            continue
+
+        if render_backend in ("opencv_2d", "blender_3d") and partial_run and not args.dry_run and profile_gallery.exists():
+            shutil.rmtree(profile_gallery)
         profile_gallery.mkdir(parents=True, exist_ok=True)
 
         # Resolve render settings from a matching run_*.yaml if available.
@@ -334,9 +362,6 @@ def main() -> None:
         defect_types = _profile_defect_set(profile_data)
 
         if render_backend == "opencv_2d":
-            if args.skip_2d:
-                print("  [skip] 2D generation disabled via --skip-2d")
-                continue
             for class_name in defect_types:
                 dst = profile_gallery / f"{class_name}.png"
                 if not args.dry_run:
@@ -353,10 +378,6 @@ def main() -> None:
                 print(f"  {class_name:12} [{render_backend}]: -> {rel}" + ("" if cfg_path is None else f" (cfg: {cfg_path.name})"))
 
         elif render_backend == "blender_3d":
-            if args.skip_3d:
-                print("  [skip] 3D generation disabled via --skip-3d")
-                continue
-
             blender_cfg = (cfg.get("render") or {}).get("blender") or {}
             this_exe = str(args.blender or blender_cfg.get("executable", "blender"))
             this_samples = int(args.samples or blender_cfg.get("samples", 64))

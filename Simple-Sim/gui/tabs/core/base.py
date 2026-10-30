@@ -70,6 +70,14 @@ class BaseTab:
         """
         pass
 
+    def on_close(self) -> None:
+        """Called once when the main window is closing (before ``root.destroy()``).
+
+        Subclasses that start subprocesses or other long-running work should
+        override this to stop it; the default does nothing.
+        """
+        pass
+
     def build_performance_widgets(
         self,
         parent: ttk.Frame,

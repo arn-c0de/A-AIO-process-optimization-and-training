@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import json
 from datetime import datetime
 
+from gui.utils.dataset_catalog import list_dataset_dirs
 from gui.utils.validation_suite import run_validation_suite
 from gui.utils.flag_manager import FlagManager
 
@@ -20,16 +21,7 @@ class ValidationLogic:
         self.flag_manager = FlagManager(dataset_dir)
 
     def get_datasets(self) -> List[Path]:
-        sim_data = self.sim_root / "outputs" / "sim_data"
-        runs = sim_data / "runs"
-        versions = sim_data / "versions"
-        runs.mkdir(parents=True, exist_ok=True)
-        versions.mkdir(parents=True, exist_ok=True)
-        
-        cand: list[Path] = []
-        cand.extend([p for p in runs.iterdir() if p.is_dir()])
-        cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
-        return cand
+        return list_dataset_dirs(self.sim_root)
 
     def run_validation(self, dataset_dir: Path, checks: Dict[str, bool]) -> Dict[str, Any]:
         results = run_validation_suite(

@@ -13,6 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from gui.utils.dataset_catalog import dataset_display_name, sorted_dataset_dirs
+from gui.utils.paths import model_root
+from gui.utils.process import run_streaming, terminate_process
 from simple_sim.model_bundle import bundle_checkpoint_path
 import torch
 import yaml
@@ -26,7 +29,7 @@ class WeightsLogic:
         self.stop_evt = threading.Event()
 
     def _model_root(self) -> Path:
-        return self.sim_root / "outputs" / "models"
+        return model_root(self.sim_root)
 
     def get_models(self) -> List[Path]:
         root = self._model_root()
@@ -149,18 +152,7 @@ class WeightsLogic:
 
         def worker() -> None:
             try:
-                proc = subprocess.Popen(
-                    cmd,
-                    cwd=str(self.sim_root),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    self.log_q.put(line)
-                rc = proc.wait()
+                rc = run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q)
                 if rc != 0:
                     self.log_q.put(f"\n[error] arena_report.py exited with code {rc}\n")
             except Exception as e:
@@ -280,7 +272,7 @@ class WeightsLogic:
 
     def show_model_profile_info(self, p: Path) -> Tuple[str, Optional[str]]:
         try:
-            checkpoint = torch.load(p, map_location='cpu')
+            checkpoint = torch.load(p, map_location="cpu", weights_only=False)
             profile_data = checkpoint.get('component_profile')
 
             if not profile_data:
@@ -332,8 +324,10 @@ class WeightsLogic:
 
     def stop_prediction(self) -> None:
         self.stop_evt.set()
-        if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
+        terminate_process(self.proc)
+
+    def _set_proc(self, proc: subprocess.Popen[str]) -> None:
+        self.proc = proc
 
     def _predict_cmd(self, model_path: Path, data_dir: Path, split: str, device: str, max_samples_s: str, save_preds: bool) -> Tuple[List[str], Path]:
         if model_path.exists() and model_path.is_dir():
@@ -376,21 +370,21 @@ class WeightsLogic:
 
         def worker() -> None:
             report_path: Optional[Path] = None
+            out_dir: Optional[Path] = None
+
+            def on_line(line: str) -> None:
+                nonlocal report_path
+                if "Report saved to:" in line: report_path = Path(line.split("Report saved to:", 1)[-1].strip())
+
             try:
                 cmd, out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
                 self.log_q.put(f"\n$ {' '.join(cmd)}\n")
-                self.proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-                assert self.proc.stdout is not None
-                for line in self.proc.stdout:
-                    if self.stop_evt.is_set(): break
-                    self.log_q.put(line)
-                    if "Report saved to:" in line: report_path = Path(line.split("Report saved to:", 1)[-1].strip())
-                rc = self.proc.wait()
+                rc = run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q, stop_evt=self.stop_evt, on_line=on_line, on_start=self._set_proc)
                 if self.stop_evt.is_set(): self.log_q.put("\n[stopped]\n")
                 elif rc != 0: self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
             except Exception as e: self.log_q.put(f"\n[error] Failed to run predict.sh: {e}\n")
             finally:
-                if report_path is None:
+                if report_path is None and out_dir is not None:
                     try:
                         cand = sorted(out_dir.glob("batch_report_*.json"), key=lambda p: p.stat().st_mtime)
                         report_path = cand[-1] if cand else None
@@ -411,20 +405,17 @@ class WeightsLogic:
         self.log_q.put(f"\n$ {' '.join(cmd)}\n")
         self.log_q.put(f"[run] {label}\n")
         report_path: Optional[Path] = None
+        class_mismatch = False
+
+        def on_line(line: str) -> None:
+            nonlocal report_path, class_mismatch
+            if "do not match dataset classes" in line: class_mismatch = True
+            if "Report saved to:" in line: report_path = Path(line.split("Report saved to:", 1)[-1].strip())
+
         try:
-            # Track as self.proc so stop_prediction() can terminate it and the "already running" guard sees it.
-            proc = self.proc = subprocess.Popen(cmd, cwd=str(self.sim_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-            assert proc.stdout is not None
-            class_mismatch = False
-            for line in proc.stdout:
-                if self.stop_evt.is_set():
-                    # Terminate before wait(): otherwise the child can block on a full stdout pipe.
-                    proc.terminate()
-                    break
-                if "do not match dataset classes" in line: class_mismatch = True
-                self.log_q.put(line)
-                if "Report saved to:" in line: report_path = Path(line.split("Report saved to:", 1)[-1].strip())
-            rc = proc.wait()
+            # Track as self.proc (via on_start) so stop_prediction() can terminate it and the "already running" guard sees it.
+            # run_streaming terminates the child before wait() on stop, so it cannot block on a full stdout pipe.
+            rc = run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q, stop_evt=self.stop_evt, on_line=on_line, on_start=self._set_proc)
             if self.stop_evt.is_set():
                 self.log_q.put("\n[stopped]\n")
                 return None
@@ -570,24 +561,10 @@ class WeightsLogic:
         return "\n".join(lines)
 
     def get_cmp_datasets(self) -> List[Path]:
-        runs, versions = self.sim_root / "outputs" / "sim_data" / "runs", self.sim_root / "outputs" / "sim_data" / "versions"
-        runs.mkdir(parents=True, exist_ok=True)
-        versions.mkdir(parents=True, exist_ok=True)
-        cand: List[Path] = [p for p in runs.iterdir() if p.is_dir()]
-        cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
-        cand.sort(key=lambda p: (1, -p.stat().st_mtime, p.name) if str(p.resolve()).startswith(str(versions.resolve()) + os.sep) else (0, p.name))
-        return cand
+        return sorted_dataset_dirs(self.sim_root)
 
     def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
-        try:
-            rp = p.resolve()
-            if str(rp).startswith(str(runs.resolve()) + os.sep):
-                return rp.name
-            if str(rp).startswith(str(versions.resolve()) + os.sep):
-                return f"{rp.parent.name}:{rp.name}"
-        except Exception:
-            pass
-        return p.name
+        return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
     def describe_dataset_samples(self, ds: Path) -> str:
         try:
@@ -646,7 +623,7 @@ class WeightsLogic:
                 if not candidates:
                     return []
                 p = candidates[0]
-            ckpt = torch.load(p, map_location="cpu")
+            ckpt = torch.load(p, map_location="cpu", weights_only=False)
             classes = ckpt.get("class_names")
             if isinstance(classes, list):
                 return [str(c) for c in classes]

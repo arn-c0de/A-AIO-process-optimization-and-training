@@ -11,9 +11,9 @@ from datetime import datetime
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.settings_store import SettingsStore
+from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 from gui.utils.dataset_ops import delete_samples, move_samples
-from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, dataset_display_name
+from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, dataset_display_name, dataset_sort_key
 from gui.utils.feedback_manager import (
     FeedbackManager,
     VERDICT_THUMBS_DOWN,
@@ -85,18 +85,8 @@ class AnalysisTab(BaseTab):
                 self.ui.var_dataset.set(v)
                 self._on_dataset_selected()
             except Exception: pass
-        for key, var in [
-            ("analysis.search", self.ui.var_search),
-            ("analysis.class", self.ui.var_filter),
-            ("analysis.run", self.ui.var_run),
-            ("analysis.domain", self.ui.var_domain),
-            ("analysis.split", self.ui.var_split),
-            ("analysis.profile", self.ui.var_profile),
-            ("analysis.sort", self.ui.var_sort),
-        ]:
-            if vv := st.get(key):
-                try: var.set(vv)
-                except Exception: pass
+        # Empty strings keep the widget defaults (filters persisted as "" mean "unset").
+        restore_persisted_vars(st, self._persisted_var_bindings()[1:], skip_empty_strings=True)
         if vv := st.get("analysis.profile_multi"):
             try:
                 self._selected_profiles = {p for p in str(vv).split(",") if p.strip()}
@@ -105,20 +95,21 @@ class AnalysisTab(BaseTab):
         self._update_profile_multi_label()
         self._filter_images(display_first=False)
 
+    def _persisted_var_bindings(self) -> list:
+        # First entry (dataset selection) is restored separately because it triggers a dataset load.
+        return [
+            ("analysis.dataset_selection", self.ui.var_dataset),
+            ("analysis.search", self.ui.var_search),
+            ("analysis.class", self.ui.var_filter),
+            ("analysis.run", self.ui.var_run),
+            ("analysis.domain", self.ui.var_domain),
+            ("analysis.split", self.ui.var_split),
+            ("analysis.profile", self.ui.var_profile),
+            ("analysis.sort", self.ui.var_sort),
+        ]
+
     def _wire_settings_autosave(self) -> None:
-        st = self._store()
-        if st is None: return
-        for var, key in [
-            (self.ui.var_dataset, "analysis.dataset_selection"),
-            (self.ui.var_search, "analysis.search"),
-            (self.ui.var_filter, "analysis.class"),
-            (self.ui.var_run, "analysis.run"),
-            (self.ui.var_domain, "analysis.domain"),
-            (self.ui.var_split, "analysis.split"),
-            (self.ui.var_profile, "analysis.profile"),
-            (self.ui.var_sort, "analysis.sort"),
-        ]:
-            var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
+        wire_vars_autosave(self._store(), self._persisted_var_bindings(), self.frame)
 
     def _display_for_dataset(self, p: Path) -> str:
         runs, versions = self.logic.sim_data_roots()
@@ -127,7 +118,7 @@ class AnalysisTab(BaseTab):
     def _refresh_datasets(self) -> None:
         self._dataset_catalog.reload()
         cand = self.logic.get_datasets()
-        cand.sort(key=lambda p: (1, -p.stat().st_mtime, p.name) if "versions" in str(p) else (0, p.name, -p.stat().st_mtime))
+        cand.sort(key=lambda p: dataset_sort_key(self.sim_root, p))
         self._dataset_catalog.prune_unknown(cand)
         self._dataset_catalog.save(self.frame)
         cand = [p for p in cand if not self._dataset_catalog.is_archived(p)]
@@ -349,26 +340,33 @@ class AnalysisTab(BaseTab):
             messagebox.showinfo("Info", "No model loaded. Train a model first.")
             return
 
+        # Snapshot state on the main thread; dialogs are shown back on the main thread via after().
+        dataset_dir = self.state.dataset_dir
+        sample_ids = list(self.sample_ids)
+        meta_dict = dict(self.meta_dict)
+        label_dict = dict(self.label_dict)
+        effective = dict(self.effective_label_dict) if use_feedback else None
+        feedback_summary = self.feedback_manager.summary() if (use_feedback and self.feedback_manager) else None
+        mode = "with feedback" if use_feedback else "baseline"
+
         def analyze():
             try:
-                effective = self.effective_label_dict if use_feedback else None
-                feedback_summary = self.feedback_manager.summary() if (use_feedback and self.feedback_manager) else None
                 results = self.logic.analyze_dataset(
-                    self.state.dataset_dir,
-                    self.sample_ids,
-                    self.meta_dict,
-                    self.label_dict,
+                    dataset_dir,
+                    sample_ids,
+                    meta_dict,
+                    label_dict,
                     effective_label_dict=effective,
                     feedback_summary=feedback_summary,
                 )
-                mode = "with feedback" if use_feedback else "baseline"
-                messagebox.showinfo(
-                    "Success",
+                msg = (
                     f"Analysis complete ({mode})!\n\nAccuracy: {results['summary']['accuracy']:.1%}"
-                    f"\nResults saved to:\n{self.state.dataset_dir / 'analysis_results.json'}",
+                    f"\nResults saved to:\n{dataset_dir / 'analysis_results.json'}"
                 )
+                self.frame.after(0, lambda: messagebox.showinfo("Success", msg))
             except Exception as e:
-                messagebox.showerror("Error", f"Analysis failed:\n{e}")
+                err = f"Analysis failed:\n{e}"
+                self.frame.after(0, lambda: messagebox.showerror("Error", err))
 
         threading.Thread(target=analyze, daemon=True).start()
 

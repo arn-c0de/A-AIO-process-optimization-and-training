@@ -88,8 +88,9 @@ class BoardDetectionTab(BaseTab):
             image_path=Path(image_path),
             device=self.ui._device_var.get(),
             min_profile_confidence=min_conf,
-            on_complete=self._on_predict_complete,
-            on_error=self.ui.show_error,
+            # Callbacks run on the worker thread: marshal UI updates onto the Tk main loop.
+            on_complete=lambda result: self.frame.after(0, self._on_predict_complete, result),
+            on_error=lambda msg: self.frame.after(0, self.ui.show_error, msg),
         )
 
     def _on_predict_complete(self, result: TwoStageResult) -> None:

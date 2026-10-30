@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import threading
@@ -33,6 +34,11 @@ class BlenderLivePreviewWorker:
         self._thread.start()
 
     def submit(self, req: RenderRequest) -> None:
+        # Snapshot the dicts: callers pass live store data that the UI thread keeps mutating.
+        req = RenderRequest(
+            profile_data=copy.deepcopy(req.profile_data),
+            run_data=copy.deepcopy(req.run_data),
+        )
         with self._cv:
             self._pending = req
             self._cv.notify()
@@ -77,7 +83,6 @@ class BlenderLivePreviewWorker:
         if not isinstance(profile_data.get("render_3d"), dict):
             raise ValueError("profile.render_3d missing")
 
-        profile_id = str((profile_data.get("profile") or {}).get("profile_id") or "profile").strip() or "profile"
         footprint = str((profile_data.get("component") or {}).get("footprint") or "chip_2pad").strip() or "chip_2pad"
         nominal_dims = ((profile_data.get("component") or {}).get("nominal_dims_mm") or {})
         geometry_ranges = profile_data.get("geometry_ranges") or {}
