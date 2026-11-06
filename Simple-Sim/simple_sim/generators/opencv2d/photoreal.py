@@ -14,6 +14,8 @@ molded SOT/SOIC/QFN bodies with laser markings and metallic gull-wing leads.
 
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -41,6 +43,8 @@ _END_CAP = np.array((168, 171, 174), dtype=np.float32)
 _RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
 _REFDES_PREFIX = {"resistor": "R", "capacitor": "C", "sot": "Q", "soic": "U", "qfn": "U"}
 _MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
+_FONTS = (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX)
+_TEXTURE_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 def _family(footprint: str, component_type: str) -> str:
@@ -91,9 +95,8 @@ def _smooth_noise(shape: tuple[int, int], cell: float, rng: np.random.Generator)
 
 
 def _text_layer(shape: tuple[int, int], text: str, center: tuple[float, float], height_px: float,
-                angle_deg: float, thickness: int) -> np.ndarray:
+                angle_deg: float, thickness: int, font: int = cv2.FONT_HERSHEY_SIMPLEX) -> np.ndarray:
     """Anti-aliased text mask (0..1) rotated by *angle_deg* around *center*."""
-    font = cv2.FONT_HERSHEY_SIMPLEX
     scale = max(0.15, height_px / 22.0)
     (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
     canvas = np.zeros((th * 3, tw + th * 2), dtype=np.uint8)
@@ -107,6 +110,31 @@ def _text_layer(shape: tuple[int, int], text: str, center: tuple[float, float], 
 
 
 # --------------------------------------------------------------------------- substrate
+
+@lru_cache(maxsize=8)
+def texture_files(texture_dir: str) -> tuple[Path, ...]:
+    """Sorted image files in *texture_dir* (sorted so a seed always picks the same file)."""
+    return tuple(sorted(p for p in Path(texture_dir).iterdir() if p.suffix.lower() in _TEXTURE_EXT))
+
+
+def _texture_substrate(h: int, w: int, texture_dir: str, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    """Random crop of a real photo of empty board area, randomly flipped/rotated, scaled to (h, w)."""
+    files = texture_files(texture_dir)
+    path = files[int(rng.integers(len(files)))]
+    tex = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if tex is None:
+        raise OSError(f"Failed to read substrate texture: {path}")
+    tex = np.rot90(tex, int(rng.integers(4)))
+    if rng.random() < 0.5:
+        tex = tex[:, ::-1]
+    th, tw = tex.shape[:2]
+    rh, rw = h // SS, w // SS  # ROI size at camera resolution
+    if th >= rh and tw >= rw:  # same scale as the camera: crop a ROI-sized patch
+        y, x = int(rng.integers(th - rh + 1)), int(rng.integers(tw - rw + 1))
+        tex = tex[y:y + rh, x:x + rw]
+    img = cv2.resize(np.ascontiguousarray(tex), (w, h), interpolation=cv2.INTER_CUBIC).astype(np.float32)
+    return img, np.median(img.reshape(-1, 3), axis=0)
+
 
 def _substrate(h: int, w: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     base = np.array(_MASK_PALETTE[int(rng.integers(len(_MASK_PALETTE)))], dtype=np.float32)
@@ -247,8 +275,12 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
             hmap = np.where(covered, 1.0, t ** 1.8) * rim * amp  # concave fillet rising to the terminal
             spec_power, spec_gain = 60.0, 0.85
         else:
-            u, v = (xx / (pw - 1)) * 2 - 1, (yy / (ph - 1)) * 2 - 1
-            dome = np.clip(1.0 - (np.abs(u) ** 3 + np.abs(v) ** 3) * 0.85, 0, 1)  # reflowed paste, no part
+            # Reflowed paste, no part. Big (thermal) pads are printed through a window-pane stencil,
+            # so the solder pulls into separate flat islands with bare finish in between.
+            big = min(pw, ph) >= 60 * SS
+            nx, ny = (max(2, round(pw / (32 * SS))), max(2, round(ph / (32 * SS)))) if big else (1, 1)
+            u, v = ((xx / pw * nx) % 1.0) * 2 - 1, ((yy / ph * ny) % 1.0) * 2 - 1
+            dome = np.clip(1.0 - (np.abs(u) ** 3 + np.abs(v) ** 3) * (0.85 if nx * ny == 1 else 1.2), 0, 1)
             hmap = dome * rim * min(amp * 0.35, 4.0 * SS)
             spec_power, spec_gain = 40.0, 0.5
         hmap = hmap * (1.0 + lumps[y0:y1, x0:x1])
@@ -335,13 +367,20 @@ def _marking(img: np.ndarray, family: str, center: tuple[float, float], length: 
     layer = np.zeros((h, w), dtype=np.float32)
     a = np.radians(angle_deg)
     perp = np.array([-np.sin(a), np.cos(a)], dtype=np.float32)
+    along = np.array([np.cos(a), np.sin(a)], dtype=np.float32)
+    font = _FONTS[int(rng.integers(len(_FONTS)))]
     for i, text in enumerate(lines):
         off = (i - (len(lines) - 1) / 2.0) * text_h * 1.6
-        pos = np.array(center, dtype=np.float32) + perp * off
-        layer = np.maximum(layer, _text_layer((h, w), text, (float(pos[0]), float(pos[1])), text_h, angle_deg, max(1, SS)))
+        # Lines are left-aligned on real parts, so their centres wander a little.
+        pos = np.array(center, dtype=np.float32) + perp * off + along * float(rng.uniform(-0.15, 0.15)) * text_h
+        layer = np.maximum(layer, _text_layer((h, w), text, (float(pos[0]), float(pos[1])), text_h, angle_deg,
+                                              max(1, SS), font))
     color = np.array((225, 225, 220), dtype=np.float32) if family == "resistor" else np.array((190, 190, 188), dtype=np.float32)
     layer = cv2.GaussianBlur(layer, (0, 0), 0.4 * SS)
-    _blend(img, color, layer * (0.9 if family == "resistor" else 0.55))
+    # Printed ink (resistors) is blotchy, laser marking (ICs) is a grainy, partly etched matte surface.
+    grain = _smooth_noise((h, w), SS, rng)
+    texture = 0.85 + 0.15 * grain if family == "resistor" else 0.8 + 0.2 * grain
+    _blend(img, color, np.clip(layer * texture * (0.9 if family == "resistor" else float(rng.uniform(0.4, 0.65))), 0, 1))
 
 
 def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length: float, width: float, angle_deg: float,
@@ -484,8 +523,12 @@ def render_photoreal_base(
     ys = [p["y"] for p in pads] + [p["y"] + p["h"] for p in pads] + [int(rect[:, 1].min()), int(rect[:, 1].max())]
     keepout = (min(xs), min(ys), max(xs), max(ys))
 
-    img, base = _substrate(h, w, rng)
-    _traces_and_vias(img, base, pads, keepout, rng)
+    texture_dir = config.get("texture_dir")
+    if texture_dir:
+        img, base = _texture_substrate(h, w, str(texture_dir), rng)  # real board already has its own copper
+    else:
+        img, base = _substrate(h, w, rng)
+        _traces_and_vias(img, base, pads, keepout, rng)
     _silkscreen(img, keepout, family, rng)
 
     body_mask = np.zeros((h, w), dtype=np.uint8)

@@ -295,6 +295,15 @@ def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
     if render.get('style', 'photoreal') not in RENDER_STYLES:
         raise ValueError(f"render.style must be one of {sorted(RENDER_STYLES)}")
 
+    texture_dir = render.get('texture_dir')
+    if texture_dir is not None:
+        from simple_sim.generators.opencv2d.photoreal import texture_files
+
+        if not isinstance(texture_dir, str) or not Path(texture_dir).is_dir():
+            raise ValueError(f"render.texture_dir must be an existing directory: {texture_dir!r}")
+        if not texture_files(texture_dir):
+            raise ValueError(f"render.texture_dir contains no images: {texture_dir!r}")
+
 
 def _validate_render_3d(render: dict[str, Any]) -> None:
     blender = render.get('blender')

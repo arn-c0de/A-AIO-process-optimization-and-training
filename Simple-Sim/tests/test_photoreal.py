@@ -66,3 +66,26 @@ def test_qfn_footprint_has_pad_rows_and_thermal_pad():
     pads = _compute_pad_positions("qfn_32", nominal, (256, 256))
     assert len(pads) == 33
     assert pads[-1]["w"] == pads[-1]["h"] == round(168 * 0.6)
+
+
+def test_texture_dir_replaces_substrate(tmp_path):
+    import cv2
+
+    tex = np.full((300, 400, 3), (200, 40, 160), dtype=np.uint8)  # magenta: impossible for the procedural mask
+    cv2.imwrite(str(tmp_path / "board.png"), tex)
+    (tmp_path / "notes.txt").write_text("ignored")
+    img = _render("chip_2pad", "MISSING", texture_dir=str(tmp_path))
+    corner = img[:10, :10].reshape(-1, 3).mean(axis=0)
+    assert corner[0] > 150 and corner[1] < 90 and corner[2] > 120
+
+
+def test_texture_dir_is_validated(tmp_path):
+    from simple_sim.config import _validate_render_2d
+
+    render = {"backend": "opencv_2d", "substrate_color": [40, 90, 40], "copper_color": [60, 120, 180],
+              "solder_mask_alpha": 0.3}
+    _validate_render_2d(render, 2)
+    with pytest.raises(ValueError, match="existing directory"):
+        _validate_render_2d({**render, "texture_dir": str(tmp_path / "nope")}, 2)
+    with pytest.raises(ValueError, match="no images"):
+        _validate_render_2d({**render, "texture_dir": str(tmp_path)}, 2)
