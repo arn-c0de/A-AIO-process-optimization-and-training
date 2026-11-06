@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
-from simple_sim.config import load_config, merge_profile_render, validate_config
+from simple_sim.config import DEFAULT_COMPONENT_PROFILE, load_config, merge_profile_render, validate_config
 from simple_sim.dataset_store import atomic_dataset_dir, write_dataset, write_dataset_files, write_image
 from simple_sim.generation.blender import blender_settings, render_blender_records
 from simple_sim.generation.common import (
@@ -225,7 +225,7 @@ def generate_dataset(
     classes = config["classes"]
     backend = config.get("render", {}).get("backend", "opencv_2d")
 
-    profile_id = config["run"].get("component_profile", "chip_0603_resistor@1")
+    profile_id = config["run"].get("component_profile", DEFAULT_COMPONENT_PROFILE)
     profiles_dir = root / "configs" / "profiles"
     profile = load_profile(profile_id, profiles_dir)
     profile_path = profiles_dir / f"{profile_id}.yaml"

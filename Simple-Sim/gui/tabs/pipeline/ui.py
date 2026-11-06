@@ -11,6 +11,7 @@ from PIL import Image, ImageTk
 import cv2
 
 from gui.utils.tooltip import ToolTip
+from simple_sim.config import DEFAULT_COMPONENT_PROFILE
 from simple_sim.schema import MetaRow
 from gui.utils.formatting import fmt_bytes
 
@@ -66,7 +67,7 @@ class PipelineUI:
         self.var_profile_model_lock: tk.BooleanVar = tk.BooleanVar(value=False)
         self.var_profile_build_preset: tk.StringVar = tk.StringVar(value="quick")
         self.combo_profile_model: ttk.Combobox
-        self.var_profile: tk.StringVar = tk.StringVar(value="chip_0603_resistor@1")
+        self.var_profile: tk.StringVar = tk.StringVar(value=DEFAULT_COMPONENT_PROFILE)
         self.profile_combo: ttk.Combobox
         self.var_render_backend: tk.StringVar = tk.StringVar(value="opencv_2d")
         self.render_combo: ttk.Combobox

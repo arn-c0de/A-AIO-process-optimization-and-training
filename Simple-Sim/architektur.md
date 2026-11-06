@@ -36,6 +36,7 @@ Simple-Sim/
 - configs/
   - profiles/
     - chip_0603_resistor@1.yaml
+    - chip_0603_resistor@2.yaml
     - chip_0603_resistor_3d@2.yaml
     - qfn32_ic@1.yaml
     - qfn32_ic_3d@2.yaml
@@ -160,6 +161,7 @@ Simple-Sim/
   - pipeline-dashboard-simple-sim-v1.0.png
   - samples/
     - chip_0603_resistor@1/
+    - chip_0603_resistor@2/
     - chip_0603_resistor_3d@2/
     - qfn32_ic@1/
     - qfn32_ic_3d@2/

@@ -8,7 +8,7 @@ run:
   schema_version: 2
   mode: "profile_classifier"
   component_profiles:
-    - "chip_0603_resistor@1"
+    - "chip_0603_resistor@2"
     - "qfn32_ic@1"
     - "sot23_transistor@1"
 

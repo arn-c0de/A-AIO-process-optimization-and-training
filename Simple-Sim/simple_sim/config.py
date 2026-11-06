@@ -10,6 +10,7 @@ import yaml
 from simple_sim.config_schema import parse_config_typed
 
 RENDER_STYLES = {"photoreal", "flat"}
+DEFAULT_COMPONENT_PROFILE = "chip_0603_resistor@2"
 
 
 def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
