@@ -1,18 +1,19 @@
 """Analysis Tab"""
 
 from __future__ import annotations
-import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from pathlib import Path
 import threading
 from collections import Counter
 from datetime import datetime
 
+from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 from gui.utils.dataset_ops import delete_samples, move_samples
 from gui.utils.dataset_catalog import DatasetCatalog, catalog_labels
+from gui.widgets import ScrolledTree
 from gui.utils.feedback_manager import (
     FeedbackManager,
     VERDICT_THUMBS_DOWN,
@@ -169,7 +170,7 @@ class AnalysisTab(BaseTab):
             self._update_dataset_stats_label()
             self._update_feedback_panel()
         except Exception as e:
-            messagebox.showerror("Load Error", f"Failed to load dataset:\n{e}")
+            dialogs.show_error(self.frame, "Load Error", e, hint=f"Failed to load dataset {self.state.dataset_dir}.")
 
     def _sorted_class_values(self, classes: set[str]) -> list[str]:
         priority = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
@@ -282,7 +283,7 @@ class AnalysisTab(BaseTab):
                                   original_label=original_label, feedback=feedback)
             self._update_feedback_panel()
         except Exception as e:
-            messagebox.showerror("Display Error", str(e))
+            dialogs.show_error(self.frame, "Display Error", e)
 
     def _select_sample_id(self, sample_id: str, display: bool = True):
         if not (item := self.visible_sample_item_by_id.get(sample_id)): return
@@ -311,8 +312,8 @@ class AnalysisTab(BaseTab):
         self._run_analysis(use_feedback=True)
 
     def _run_analysis(self, use_feedback: bool) -> None:
-        if not self.state.dataset_dir or not self.logic.model:
-            messagebox.showinfo("Info", "No model loaded. Train a model first.")
+        if not dialogs.require(self.state.dataset_dir and self.logic.model, self.frame,
+                               "No model loaded. Train a model first.", title="No Model"):
             return
 
         # Snapshot state on the main thread; dialogs are shown back on the main thread via after().
@@ -324,26 +325,44 @@ class AnalysisTab(BaseTab):
         feedback_summary = self.feedback_manager.summary() if (use_feedback and self.feedback_manager) else None
         mode = "with feedback" if use_feedback else "baseline"
 
-        def analyze():
-            try:
-                results = self.logic.analyze_dataset(
-                    dataset_dir,
-                    sample_ids,
-                    meta_dict,
-                    label_dict,
-                    effective_label_dict=effective,
-                    feedback_summary=feedback_summary,
-                )
-                msg = (
-                    f"Analysis complete ({mode})!\n\nAccuracy: {results['summary']['accuracy']:.1%}"
-                    f"\nResults saved to:\n{dataset_dir / 'analysis_results.json'}"
-                )
-                self.frame.after(0, lambda: messagebox.showinfo("Success", msg))
-            except Exception as e:
-                err = f"Analysis failed:\n{e}"
-                self.frame.after(0, lambda: messagebox.showerror("Error", err))
+        def analyze(_handle: object = None) -> dict:
+            return self.logic.analyze_dataset(
+                dataset_dir,
+                sample_ids,
+                meta_dict,
+                label_dict,
+                effective_label_dict=effective,
+                feedback_summary=feedback_summary,
+            )
 
-        threading.Thread(target=analyze, daemon=True).start()
+        def on_done(results: dict) -> None:
+            acc = results["summary"]["accuracy"]
+            out = dataset_dir / "analysis_results.json"
+            ctx = getattr(self.state, "ctx", None)
+            if ctx is not None:
+                ctx.status(f"Analysis complete ({mode}): accuracy {acc:.1%}, saved to {out}", "success")
+            else:
+                dialogs.show_info(self.frame, "Analysis Complete",
+                                  f"Analysis complete ({mode})!\n\nAccuracy: {acc:.1%}\nResults saved to:\n{out}")
+
+        def on_error(exc: BaseException) -> None:
+            dialogs.show_error(self.frame, "Analysis Failed", exc)
+
+        ctx = getattr(self.state, "ctx", None)
+        tasks = getattr(ctx, "tasks", None) if ctx is not None else None
+        if tasks is not None:
+            tasks.run(analyze, name=f"Analyze dataset ({mode})", on_done=on_done, on_error=on_error)
+            return
+
+        def worker() -> None:
+            try:
+                results = analyze()
+            except Exception as e:
+                self.frame.after(0, lambda err=e: on_error(err))
+                return
+            self.frame.after(0, lambda: on_done(results))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _reload_feedback(self) -> None:
         if not self.state.dataset_dir:
@@ -371,14 +390,14 @@ class AnalysisTab(BaseTab):
         self._save_feedback(verdict=VERDICT_THUMBS_DOWN, corrected_class=corrected_class, note=note)
 
     def _save_feedback(self, verdict: str, corrected_class: str = "", note: str = "") -> None:
-        if not self.current_sample_id:
-            messagebox.showinfo("Feedback", "No sample selected.")
+        if not dialogs.require(self.current_sample_id, self.frame, "Select a sample first."):
             return
         if not self.feedback_manager:
-            messagebox.showerror("Feedback", "Feedback manager not available.")
+            dialogs.show_error(self.frame, "Feedback", "Feedback manager not available.",
+                               hint="Select a dataset first.")
             return
-        if verdict == VERDICT_THUMBS_DOWN and not corrected_class:
-            messagebox.showinfo("Feedback", "Select the correct class for thumbs down.")
+        if not dialogs.require(verdict != VERDICT_THUMBS_DOWN or corrected_class, self.frame,
+                               "Select the correct class for thumbs down."):
             return
 
         try:
@@ -397,7 +416,7 @@ class AnalysisTab(BaseTab):
             self._filter_images(display_first=False)
             self._display_image(self.current_sample_id)
         except Exception as exc:
-            messagebox.showerror("Feedback", f"Failed to save feedback:\n{exc}")
+            dialogs.show_error(self.frame, "Feedback", exc, hint="Failed to save feedback.")
 
     def _update_feedback_panel(self) -> None:
         if not self.current_sample_id:
@@ -432,41 +451,27 @@ class AnalysisTab(BaseTab):
         self._filter_images(display_first=True)
 
     def _open_profile_multi_select(self) -> None:
-        if not self._profile_options:
-            messagebox.showinfo("Profile Filter", "No profiles available in current dataset.")
+        if not dialogs.require(self._profile_options, self.frame, "No profiles available in current dataset.",
+                               title="Profile Filter"):
             return
-        dlg = tk.Toplevel(self.frame.winfo_toplevel())
-        dlg.title("Select Multiple Profiles")
-        dlg.transient(self.frame.winfo_toplevel())
-        dlg.grab_set()
-        frm = ttk.Frame(dlg, padding=10)
-        frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text="Select one or more profiles:").pack(anchor="w")
-        lb = tk.Listbox(frm, selectmode="multiple", exportselection=False, height=min(14, max(5, len(self._profile_options))))
-        lb.pack(fill="both", expand=True, pady=(6, 8))
-        for p in self._profile_options:
-            lb.insert("end", p)
-        for i, p in enumerate(self._profile_options):
-            if p in self._selected_profiles:
-                lb.selection_set(i)
-
-        def _apply() -> None:
-            picked = {self._profile_options[int(i)] for i in lb.curselection()}
-            self._selected_profiles = picked
-            self.ui.var_profile.set("All")
-            self._update_profile_multi_label()
-            st = self._store()
-            if st is not None:
-                st.set("analysis.profile_multi", ",".join(sorted(self._selected_profiles)))
-                st.schedule_save(self.frame)
-            dlg.destroy()
-            self._filter_images(display_first=True)
-
-        btns = ttk.Frame(frm)
-        btns.pack(fill="x")
-        ttk.Button(btns, text="Clear", command=lambda: [lb.selection_clear(0, "end")]).pack(side="left")
-        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side="right")
-        ttk.Button(btns, text="Apply", command=_apply).pack(side="right", padx=(0, 8))
+        picked = dialogs.pick_from_list(
+            self.frame,
+            "Select Multiple Profiles",
+            self._profile_options,
+            multi=True,
+            selected=sorted(self._selected_profiles),
+            prompt="Show only samples of the selected profiles. Select none to turn the multi filter off.",
+        )
+        if picked is None:
+            return
+        self._selected_profiles = set(picked)
+        self.ui.var_profile.set("All")
+        self._update_profile_multi_label()
+        st = self._store()
+        if st is not None:
+            st.set("analysis.profile_multi", ",".join(sorted(self._selected_profiles)))
+            st.schedule_save(self.frame)
+        self._filter_images(display_first=True)
 
     def _update_profile_multi_label(self) -> None:
         if not self._selected_profiles:
@@ -510,53 +515,39 @@ class AnalysisTab(BaseTab):
         if not sid:
             return
         if sid not in self.meta_dict:
-            messagebox.showinfo("Feedback History", f"Sample not found in current dataset:\n{sid}")
+            dialogs.show_info(self.frame, "Feedback History", f"Sample not found in current dataset:\n{sid}")
             return
         self._set_search("")
         self._filter_images(display_first=False)
         self._select_sample_id(sid, display=True)
 
     def _open_feedback_history(self) -> None:
-        if not self.feedback_manager:
-            messagebox.showinfo("Feedback History", "No dataset selected.")
+        if not dialogs.require(self.feedback_manager, self.frame, "Select a dataset first.",
+                               title="Feedback History"):
             return
         entries = self.feedback_manager.history(limit=500)
         if not entries:
-            messagebox.showinfo("Feedback History", "No feedback entries yet.")
+            dialogs.show_info(self.frame, "Feedback History", "No feedback entries yet.")
             return
 
-        dlg = tk.Toplevel(self.frame.winfo_toplevel())
-        dlg.title("Feedback History")
-        dlg.transient(self.frame.winfo_toplevel())
-        dlg.geometry("860x360")
-        frm = ttk.Frame(dlg, padding=10)
-        frm.pack(fill="both", expand=True)
-
-        tree = ttk.Treeview(frm, columns=("Time", "Sample", "Action", "To", "Note"), show="headings")
-        tree.heading("Time", text="Time")
-        tree.heading("Sample", text="Sample")
-        tree.heading("Action", text="Action")
-        tree.heading("To", text="To")
-        tree.heading("Note", text="Note")
-        tree.column("Time", width=140, anchor="w")
-        tree.column("Sample", width=300, anchor="w")
-        tree.column("Action", width=80, anchor="center")
-        tree.column("To", width=120, anchor="center")
-        tree.column("Note", width=180, anchor="w")
-        scroll = ttk.Scrollbar(frm, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scroll.set)
-        tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
+        # Non-modal: the user can keep browsing while the history is open.
+        dlg = dialogs.Dialog(self.frame, "Feedback History")
+        view = ScrolledTree(
+            dlg.body,
+            [("Time", "Time", 140, "w"), ("Sample", "Sample", 300, "w"), ("Action", "Action", 80, "center"),
+             ("To", "To", 120, "center"), ("Note", "Note", 180, "w")],
+        )
+        tree = view.tree
 
         for idx, entry in enumerate(entries):
             ts = str(entry.get("timestamp") or "")
             ts_short = ts.replace("T", " ")[:19] if ts else "-"
             sid = str(entry.get("id") or "")
             verdict = str(entry.get("verdict") or "")
-            action = "👍" if verdict == VERDICT_THUMBS_UP else "👎"
+            action = "Correct" if verdict == VERDICT_THUMBS_UP else "Wrong"
             corrected = str(entry.get("corrected_class") or "").strip() or "-"
             note = str(entry.get("note") or "").strip()
-            tree.insert("", "end", iid=f"h::{idx}", values=(ts_short, sid, action, corrected, note))
+            view.insert((ts_short, sid, action, corrected, note), iid=f"h::{idx}")
 
         def _open_selected(_event: object | None = None) -> None:
             sel = tree.selection()
@@ -569,7 +560,7 @@ class AnalysisTab(BaseTab):
             if not sid:
                 return
             if sid not in self.meta_dict:
-                messagebox.showinfo("Feedback History", f"Sample not found in current dataset:\n{sid}")
+                dialogs.show_info(dlg, "Feedback History", f"Sample not found in current dataset:\n{sid}")
                 return
             self._set_search("")
             self._filter_images(display_first=False)
@@ -577,10 +568,10 @@ class AnalysisTab(BaseTab):
             dlg.destroy()
 
         tree.bind("<Double-1>", _open_selected)
-        btns = ttk.Frame(dlg, padding=(10, 0, 10, 10))
-        btns.pack(fill="x")
-        ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="right")
-        ttk.Button(btns, text="Open Selected", command=_open_selected).pack(side="right", padx=(0, 8))
+        bar = dlg.buttons([("Open Selected", _open_selected, "Accent.TButton"), ("Close", dlg.cancel, None)])
+        # buttons() packs at the bottom; the table fills the rest.
+        view.pack(fill="both", expand=True, before=bar)
+        dlg.geometry("860x360")
 
     def _selected_sample_ids(self) -> list[str]:
         selected: list[str] = []
@@ -611,12 +602,14 @@ class AnalysisTab(BaseTab):
         if not self.state.dataset_dir:
             return
         sample_ids = self._selected_sample_ids()
-        if not sample_ids:
-            messagebox.showinfo("Info", "No sample selected.")
+        if not dialogs.require(sample_ids, self.frame, "Select a sample first."):
             return
-        if not messagebox.askyesno(
-            "Delete image",
-            f"Delete {len(sample_ids)} sample(s) from dataset '{self.state.dataset_dir.name}'?",
+        if not dialogs.confirm(
+            self.frame,
+            "Delete Images",
+            f"Delete {len(sample_ids)} sample(s) (image files and labels) from dataset "
+            f"'{self.state.dataset_dir.name}'? This cannot be undone.",
+            danger=True,
         ):
             return
 
@@ -630,59 +623,48 @@ class AnalysisTab(BaseTab):
             except Exception:
                 pass
         except Exception as exc:
-            messagebox.showerror("Delete failed", str(exc))
+            dialogs.show_error(self.frame, "Delete Failed", exc)
 
     def _move_current_image(self) -> None:
         if not self.state.dataset_dir:
             return
         sample_ids = self._selected_sample_ids()
-        if not sample_ids:
-            messagebox.showinfo("Info", "No sample selected.")
+        if not dialogs.require(sample_ids, self.frame, "Select a sample first."):
             return
 
         source_ds = self.state.dataset_dir
         targets = [(display, path) for display, path in self._dataset_by_display.items() if path.resolve() != source_ds.resolve()]
         if not targets:
-            messagebox.showinfo("Move image", "No target dataset available.")
+            dialogs.show_info(self.frame, "Move Images", "No target dataset available.")
             return
 
-        dialog = tk.Toplevel(self.frame.winfo_toplevel())
-        dialog.title("Move Image")
-        dialog.transient(self.frame.winfo_toplevel())
-        dialog.grab_set()
-        frm = ttk.Frame(dialog, padding=10)
-        frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text=f"Select target dataset for {len(sample_ids)} selected sample(s):").pack(anchor="w")
-        lb = tk.Listbox(frm, height=min(12, max(5, len(targets))), exportselection=False)
-        lb.pack(fill="both", expand=True, pady=(6, 8))
-        for label, _ in targets:
-            lb.insert("end", label)
-        lb.selection_set(0)
-
-        def _confirm_move() -> None:
-            idxs = lb.curselection()
-            if not idxs:
-                return
-            target_display, target_dir = targets[int(idxs[0])]
-            if not messagebox.askyesno(
-                "Move image",
-                f"Move {len(sample_ids)} sample(s)\nfrom '{source_ds.name}'\nto '{target_display}'?",
-            ):
-                return
+        labels = [label for label, _ in targets]
+        picked = dialogs.pick_from_list(
+            self.frame,
+            "Move Images",
+            labels,
+            selected=labels[:1],
+            prompt=f"Select the target dataset for {len(sample_ids)} selected sample(s):",
+        )
+        if not picked:
+            return
+        target_display = picked[0]
+        target_dir = dict(targets)[target_display]
+        if not dialogs.confirm(
+            self.frame,
+            "Move Images",
+            f"Move {len(sample_ids)} sample(s)\nfrom '{source_ds.name}'\nto '{target_display}'?",
+            ok_text="Move",
+        ):
+            return
+        try:
+            move_samples(source_ds, target_dir, sample_ids, enforce_profile_match=True)
+            self._refresh_datasets()
+            self._load_dataset()
+            self._try_load_model()
             try:
-                move_samples(source_ds, target_dir, sample_ids, enforce_profile_match=True)
-                dialog.destroy()
-                self._refresh_datasets()
-                self._load_dataset()
-                self._try_load_model()
-                try:
-                    self.parent.event_generate("<<DatasetChanged>>", when="tail")
-                except Exception:
-                    pass
-            except Exception as exc:
-                messagebox.showerror("Move failed", str(exc))
-
-        btns = ttk.Frame(frm)
-        btns.pack(fill="x")
-        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
-        ttk.Button(btns, text="Move", command=_confirm_move).pack(side="right", padx=(0, 8))
+                self.parent.event_generate("<<DatasetChanged>>", when="tail")
+            except Exception:
+                pass
+        except Exception as exc:
+            dialogs.show_error(self.frame, "Move Failed", exc)

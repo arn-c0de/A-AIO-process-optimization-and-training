@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import tkinter as tk
-from collections import Counter
-from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import ttk
 
+from gui import dialogs
 from gui.state import UiState
 from gui.tabs.core.base import BaseTab
 from gui.utils.dataset_catalog import (
@@ -18,6 +16,11 @@ from gui.utils.dataset_catalog import (
     sim_data_roots,
     sorted_dataset_dirs,
 )
+
+from .logic import dataset_created_display, dataset_details_text
+from .ui import DatasetsUI
+
+_NEW_CATEGORY = "\x00new-category"  # sentinel item in the category picker
 
 
 class DatasetsTab(BaseTab):
@@ -29,61 +32,33 @@ class DatasetsTab(BaseTab):
         self._dataset_by_iid: dict[str, Path] = {}
         self.var_show_archived = tk.BooleanVar(value=True)
         self.var_category_filter = tk.StringVar(value="All")
+        self.ui = DatasetsUI(self, self.frame)
         self.tree: ttk.Treeview
+        self.combo_category_filter: ttk.Combobox
 
     def build_ui(self) -> None:
-        top = ttk.Frame(self.frame)
-        top.pack(fill="x", pady=(0, 8))
-
-        ttk.Button(top, text="Refresh", command=self.refresh).pack(side="left")
-        ttk.Button(top, text="Show Details", command=self._show_details_selected).pack(side="left", padx=(6, 0))
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=8)
-
-        ttk.Button(top, text="Set Category...", command=self._set_category_for_selected).pack(side="left")
-        ttk.Button(top, text="New Category...", command=self._new_category).pack(side="left", padx=(6, 0))
-        ttk.Button(top, text="Rename Category...", command=self._rename_category).pack(side="left", padx=(6, 0))
-        ttk.Button(top, text="Delete Category...", command=self._delete_category).pack(side="left", padx=(6, 0))
-
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=8)
-        ttk.Button(top, text="Archive", command=lambda: self._set_archive_for_selected(True)).pack(side="left")
-        ttk.Button(top, text="Unarchive", command=lambda: self._set_archive_for_selected(False)).pack(side="left", padx=(6, 0))
-
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=8)
-        ttk.Checkbutton(top, text="Show archived", variable=self.var_show_archived, command=self.refresh).pack(side="left")
-        ttk.Label(top, text="Category:").pack(side="left", padx=(8, 4))
-        self.combo_category_filter = ttk.Combobox(top, textvariable=self.var_category_filter, state="readonly", width=20)
-        self.combo_category_filter.pack(side="left")
-        self.combo_category_filter.bind("<<ComboboxSelected>>", lambda _e: self.refresh())
-
-        cols = ("dataset", "category", "created", "archived", "location")
-        self.tree = ttk.Treeview(self.frame, columns=cols, show="headings", selectmode="extended")
-        self.tree.pack(fill="both", expand=True)
-        self.tree.heading("dataset", text="Dataset")
-        self.tree.heading("category", text="Category")
-        self.tree.heading("created", text="Created")
-        self.tree.heading("archived", text="Archived")
-        self.tree.heading("location", text="Location")
-        self.tree.column("dataset", width=280, anchor="w")
-        self.tree.column("category", width=170, anchor="w")
-        self.tree.column("created", width=170, anchor="w")
-        self.tree.column("archived", width=90, anchor="center")
-        self.tree.column("location", width=360, anchor="w")
-        self.tree.bind("<Button-3>", self._on_right_click)
-        self.tree.bind("<Button-2>", self._on_right_click)
-
-        self._menu = tk.Menu(self.frame, tearoff=0)
-        self._menu.add_command(label="Show details", command=self._show_details_selected)
-        self._menu.add_separator()
-        self._menu.add_command(label="Set category...", command=self._set_category_for_selected)
-        self._menu.add_separator()
-        self._menu.add_command(label="Archive selected", command=lambda: self._set_archive_for_selected(True))
-        self._menu.add_command(label="Unarchive selected", command=lambda: self._set_archive_for_selected(False))
-        self._menu.add_separator()
-        self._menu.add_command(label="Refresh", command=self.refresh)
-
+        self.ui.build_ui()
+        self.ui.frame.pack(fill="both", expand=True)
+        self.tree = self.ui.tree
+        self.combo_category_filter = self.ui.combo_category_filter
+        self._menu = self.ui.menu
         self.refresh()
 
+    # ------------------------------------------------------------------ helpers
+    def _status(self, text: str, level: str = "success") -> bool:
+        """Non-blocking status message; returns False when no AppContext is available."""
+        ctx = getattr(self.state, "ctx", None)
+        if ctx is None:
+            return False
+        try:
+            ctx.status(text, level)
+            return True
+        except Exception:
+            return False
+
     def refresh(self) -> None:
+        if not hasattr(self, "tree"):
+            return
         self.catalog.reload()
         datasets = sorted_dataset_dirs(self.sim_root)
         self.catalog.prune_unknown(datasets)
@@ -92,7 +67,7 @@ class DatasetsTab(BaseTab):
         selected_keys = {self._path_key_for(self._dataset_by_iid[i]) for i in self.tree.selection() if i in self._dataset_by_iid}
 
         self._dataset_by_iid.clear()
-        self.tree.delete(*self.tree.get_children())
+        self.ui.list_view.clear()
 
         filter_values = ["All", DEFAULT_CATEGORY] + [c for c in self.catalog.all_categories() if c != DEFAULT_CATEGORY]
         self.combo_category_filter["values"] = filter_values
@@ -110,40 +85,35 @@ class DatasetsTab(BaseTab):
                 continue
             iid = f"ds::{idx}"
             self._dataset_by_iid[iid] = ds
-            self.tree.insert(
-                "",
-                "end",
-                iid=iid,
-                values=(
+            self.ui.list_view.insert(
+                (
                     dataset_display_name(ds, runs_root=runs, versions_root=versions),
                     cat,
                     self._dataset_created_display(ds),
                     "yes" if archived else "no",
                     str(ds),
                 ),
+                iid=iid,
+                tags=("muted",) if archived else (),
             )
 
         for iid, ds in self._dataset_by_iid.items():
             if self._path_key_for(ds) in selected_keys:
                 self.tree.selection_add(iid)
 
+        shown, total = len(self._dataset_by_iid), len(datasets)
+        self.ui.var_count.set(f"{shown} of {total} shown" if shown != total else f"{total} datasets")
+        if not datasets:
+            self.ui.set_empty_hint("No datasets found under outputs/sim_data. "
+                                   "Generate one in the Pipeline tab, then press Refresh.")
+        elif not shown:
+            self.ui.set_empty_hint("No dataset matches the current filter. "
+                                   "Choose Category 'All' or enable Show Archived.")
+        else:
+            self.ui.set_empty_hint("")
+
     def _dataset_created_display(self, ds: Path) -> str:
-        manifest_path = ds / "dataset_manifest.json"
-        if manifest_path.exists():
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                created = str(manifest.get("created_at") or "").strip()
-                if created:
-                    # Supports ISO "....Z" format from manifests.
-                    dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                    return dt.strftime("%Y-%m-%d %H:%M")
-            except Exception:
-                pass
-        try:
-            dt = datetime.fromtimestamp(ds.stat().st_mtime)
-            return dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return "-"
+        return dataset_created_display(ds)
 
     def _path_key_for(self, ds: Path) -> str:
         try:
@@ -154,14 +124,43 @@ class DatasetsTab(BaseTab):
     def _selected_dataset_paths(self) -> list[Path]:
         return [self._dataset_by_iid[iid] for iid in self.tree.selection() if iid in self._dataset_by_iid]
 
-    def _set_category_for_selected(self) -> None:
+    def _require_selection(self) -> list[Path]:
         paths = self._selected_dataset_paths()
+        dialogs.require(paths, self.frame, "Select one or more datasets in the list first.")
+        return paths
+
+    def _custom_categories(self) -> list[str]:
+        return [c for c in self.catalog.all_categories() if c != DEFAULT_CATEGORY]
+
+    def _pick_custom_category(self, title: str, prompt: str) -> str | None:
+        cats = self._custom_categories()
+        if not dialogs.require(cats, self.frame, "There are no custom categories yet. "
+                                                 "Create one with Categories > New Category…",
+                               title="No Categories"):
+            return None
+        current = self.var_category_filter.get().strip()
+        picked = dialogs.pick_from_list(self.frame, title, cats, prompt=prompt,
+                                        selected=[current] if current in cats else [])
+        return picked[0] if picked else None
+
+    def _ask_new_category_name(self) -> str | None:
+        name = dialogs.ask_string(self.frame, "New Category", "Category name:")
+        if name is None:
+            return None
+        name = name.strip()
+        if not name or name == DEFAULT_CATEGORY:
+            return None
+        return name
+
+    # ------------------------------------------------------------------ actions
+    def _set_category_for_selected(self) -> None:
+        paths = self._require_selection()
         if not paths:
-            messagebox.showinfo("Datasets", "No dataset selected.")
             return
         category = self._ask_category_with_list(
-            title="Set category",
+            title="Set Category",
             initial=self.catalog.category_for(paths[0]),
+            count=len(paths),
         )
         if category is None:
             return
@@ -170,65 +169,65 @@ class DatasetsTab(BaseTab):
         self.catalog.save(self.frame)
         self.refresh()
         self._notify_catalog_changed()
+        self._status(f"Category '{category}' set for {len(paths)} dataset(s).")
 
     def _new_category(self) -> None:
-        name = simpledialog.askstring("New category", "Category name:", parent=self.frame)
+        name = self._ask_new_category_name()
         if name is None:
             return
-        name = name.strip()
-        if not name:
+        if name in self.catalog.custom_categories:
+            self._status(f"Category '{name}' already exists.", "info")
             return
-        if name == DEFAULT_CATEGORY:
-            return
-        if name not in self.catalog.custom_categories:
-            self.catalog.custom_categories.append(name)
-            self.catalog.save(self.frame)
-            self.refresh()
-            self._notify_catalog_changed()
+        self.catalog.custom_categories.append(name)
+        self.catalog.save(self.frame)
+        self.refresh()
+        self._notify_catalog_changed()
+        self._status(f"Category '{name}' created.")
 
     def _rename_category(self) -> None:
-        current = self.var_category_filter.get().strip()
-        initial = "" if current in {"", "All", DEFAULT_CATEGORY} else current
-        old_name = simpledialog.askstring("Rename category", "Current category name:", initialvalue=initial, parent=self.frame)
+        old_name = self._pick_custom_category("Rename Category", "Category to rename:")
         if old_name is None:
             return
-        new_name = simpledialog.askstring("Rename category", "New category name:", initialvalue=old_name, parent=self.frame)
+        new_name = dialogs.ask_string(self.frame, "Rename Category", f"New name for '{old_name}':", initial=old_name)
         if new_name is None:
             return
         if self.catalog.rename_category(old_name, new_name):
+            if self.var_category_filter.get() == old_name:
+                self.var_category_filter.set(new_name.strip())
             self.catalog.save(self.frame)
             self.refresh()
             self._notify_catalog_changed()
+            self._status(f"Category '{old_name}' renamed to '{new_name.strip()}'.")
 
     def _delete_category(self) -> None:
-        current = self.var_category_filter.get().strip()
-        initial = "" if current in {"", "All", DEFAULT_CATEGORY} else current
-        name = simpledialog.askstring("Delete category", "Category to delete:", initialvalue=initial, parent=self.frame)
+        name = self._pick_custom_category("Delete Category", "Category to delete:")
         if name is None:
             return
-        name = name.strip()
-        if not name or name == DEFAULT_CATEGORY:
-            return
-        if not messagebox.askyesno(
-            "Delete category",
-            f"Delete category '{name}'?\nDatasets in this category will move to '{DEFAULT_CATEGORY}'.",
-            parent=self.frame,
+        n = sum(1 for v in self.catalog.category_assignments.values() if v == name)
+        if not dialogs.confirm(
+            self.frame,
+            "Delete Category",
+            f"Delete category '{name}'?\n\n{n} dataset(s) in it will move to '{DEFAULT_CATEGORY}'. "
+            "No dataset files are deleted.",
+            danger=True,
+            ok_text="Delete Category",
         ):
             return
         if self.catalog.delete_category(name):
             self.catalog.save(self.frame)
             self.refresh()
             self._notify_catalog_changed()
+            self._status(f"Category '{name}' deleted.")
 
     def _set_archive_for_selected(self, archived: bool) -> None:
-        paths = self._selected_dataset_paths()
+        paths = self._require_selection()
         if not paths:
-            messagebox.showinfo("Datasets", "No dataset selected.")
             return
         self.catalog.set_archived(paths, archived=archived)
         self.catalog.save(self.frame)
         self.refresh()
         self._notify_catalog_changed()
+        self._status(f"{'Archived' if archived else 'Unarchived'} {len(paths)} dataset(s).")
 
     def _notify_catalog_changed(self) -> None:
         try:
@@ -244,171 +243,37 @@ class DatasetsTab(BaseTab):
             self._menu.tk_popup(event.x_root, event.y_root)
 
     def _show_details_selected(self) -> None:
-        paths = self._selected_dataset_paths()
+        paths = self._require_selection()
         if not paths:
-            messagebox.showinfo("Datasets", "No dataset selected.")
             return
-        if len(paths) > 1:
-            messagebox.showinfo("Datasets", "Please select exactly one dataset.")
+        if not dialogs.require(len(paths) == 1, self.frame, "Select exactly one dataset to show its details."):
             return
 
         ds = paths[0]
         try:
             details = self._dataset_details_text(ds)
         except Exception as exc:
-            messagebox.showerror("Dataset Details", f"Failed to load details:\n{exc}")
+            dialogs.show_error(self.frame, "Dataset Details", exc, hint=f"Could not read {ds}.")
             return
-
-        dialog = tk.Toplevel(self.frame.winfo_toplevel())
-        dialog.title(f"Dataset Details: {ds.name}")
-        dialog.transient(self.frame.winfo_toplevel())
-        dialog.grab_set()
-        dialog.geometry("760x560")
-
-        frm = ttk.Frame(dialog, padding=10)
-        frm.pack(fill="both", expand=True)
-        txt = tk.Text(frm, wrap="word")
-        txt.pack(fill="both", expand=True)
-        txt.insert("1.0", details)
-        txt.configure(state="disabled")
-        ttk.Button(frm, text="Close", command=dialog.destroy).pack(anchor="e", pady=(8, 0))
+        dialogs.show_text(self.frame, f"Dataset Details: {ds.name}", details, size=(760, 560))
 
     def _dataset_details_text(self, ds: Path) -> str:
-        lines: list[str] = []
-        lines.append(f"Dataset: {ds.name}")
-        lines.append(f"Path: {ds}")
-        lines.append("")
+        return dataset_details_text(ds)
 
-        manifest = {}
-        manifest_path = ds / "dataset_manifest.json"
-        if manifest_path.exists():
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except Exception:
-                manifest = {}
-
-        total_samples = None
-        split_stats = {}
-        if isinstance(manifest, dict):
-            ds_stats = manifest.get("dataset_stats") or {}
-            if isinstance(ds_stats, dict):
-                total_samples = ds_stats.get("total_samples")
-                split_stats = ds_stats.get("splits") or {}
-
-        if total_samples is None:
-            labels_path = ds / "labels.jsonl"
-            if labels_path.exists():
-                try:
-                    with labels_path.open("r", encoding="utf-8") as fh: total_samples = sum(1 for line in fh if line.strip())
-                except Exception:
-                    total_samples = None
-
-        lines.append(f"Total samples: {total_samples if total_samples is not None else 'unknown'}")
-
-        if isinstance(split_stats, dict) and split_stats:
-            tr = int(split_stats.get("train", 0) or 0)
-            va = int(split_stats.get("val", 0) or 0)
-            te = int(split_stats.get("test", 0) or 0)
-            lines.append(f"Splits: train={tr}, val={va}, test={te}")
-        lines.append("")
-
-        profile_counts = Counter()
-        labels_path = ds / "labels.jsonl"
-        if labels_path.exists():
-            with labels_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except Exception:
-                        continue
-                    pid = str(row.get("profile_id") or "").strip()
-                    if not pid:
-                        pid = "unknown_or_legacy"
-                    profile_counts[pid] += 1
-
-        if not profile_counts:
-            comp = manifest.get("component_profile") if isinstance(manifest, dict) else None
-            if isinstance(comp, dict):
-                pid = str(comp.get("profile_id") or "").strip()
-                if pid:
-                    if isinstance(total_samples, int) and total_samples >= 0:
-                        profile_counts[pid] = total_samples
-                    else:
-                        profile_counts[pid] = 0
-            profiles = manifest.get("profiles") if isinstance(manifest, dict) else None
-            if isinstance(profiles, list):
-                for p in profiles:
-                    if isinstance(p, dict):
-                        pid = str(p.get("profile_id") or "").strip()
-                        if pid and pid not in profile_counts:
-                            profile_counts[pid] = 0
-
-        lines.append("Samples per profile:")
-        if profile_counts:
-            for pid, cnt in sorted(profile_counts.items(), key=lambda x: (-x[1], x[0])):
-                lines.append(f"- {pid}: {cnt}")
-        else:
-            lines.append("- (no profile data found)")
-
-        return "\n".join(lines)
-
-    def _ask_category_with_list(self, *, title: str, initial: str = "") -> str | None:
+    def _ask_category_with_list(self, *, title: str, initial: str = "", count: int = 1) -> str | None:
         categories = self.catalog.all_categories()
-        dialog = tk.Toplevel(self.frame.winfo_toplevel())
-        dialog.title(title)
-        dialog.transient(self.frame.winfo_toplevel())
-        dialog.grab_set()
-        dialog.minsize(440, 320)
-
-        chosen: list[str] = []
-        frm = ttk.Frame(dialog, padding=10)
-        frm.pack(fill="both", expand=True)
-
-        ttk.Label(frm, text="Available categories (click to use):").pack(anchor="w")
-        lb = tk.Listbox(frm, exportselection=False, height=min(12, max(5, len(categories))))
-        lb.pack(fill="both", expand=True, pady=(6, 8))
-        for cat in categories:
-            lb.insert("end", cat)
-
-        entry_var = tk.StringVar(value=initial)
-        ttk.Label(frm, text="Category name:").pack(anchor="w")
-        ent = ttk.Entry(frm, textvariable=entry_var)
-        ent.pack(fill="x", pady=(4, 8))
-
-        if initial:
-            try:
-                idx = categories.index(initial)
-                lb.selection_set(idx)
-                lb.see(idx)
-            except Exception:
-                pass
-
-        def _pick_selected(_evt=None) -> None:
-            idxs = lb.curselection()
-            if not idxs:
-                return
-            entry_var.set(str(lb.get(int(idxs[0]))))
-
-        lb.bind("<<ListboxSelect>>", _pick_selected)
-        lb.bind("<Double-Button-1>", lambda _e: _confirm())
-
-        btns = ttk.Frame(frm)
-        btns.pack(fill="x")
-        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
-
-        def _confirm() -> None:
-            value = entry_var.get().strip()
-            if not value:
-                messagebox.showinfo("Category", "Please enter or select a category.", parent=dialog)
-                return
-            chosen.append(value)
-            dialog.destroy()
-
-        ttk.Button(btns, text="Set", command=_confirm).pack(side="right", padx=(0, 8))
-
-        ent.focus_set()
-        dialog.wait_window()
-        return chosen[0] if chosen else None
+        items = list(categories) + [_NEW_CATEGORY]
+        labels = list(categories) + ["+ New Category…"]
+        picked = dialogs.pick_from_list(
+            self.frame,
+            title,
+            items,
+            labels=labels,
+            selected=[initial] if initial in categories else [],
+            prompt=f"Category for {count} selected dataset(s). Double-click to choose.",
+        )
+        if not picked:
+            return None
+        if picked[0] == _NEW_CATEGORY:
+            return self._ask_new_category_name()
+        return picked[0]

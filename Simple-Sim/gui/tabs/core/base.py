@@ -26,7 +26,7 @@ class BaseTab:
         self.initialized = False
 
         # Create main frame for this tab
-        self.frame = ttk.Frame(parent, padding=10)
+        self.frame = ttk.Frame(parent, padding=0)  # the page container already pads
 
     def build_ui(self) -> None:
         """Build the tab UI. Subclasses must implement this."""

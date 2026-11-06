@@ -51,6 +51,7 @@ from .preview_panel import (
 )
 from .ui_custom import add_filter_sections, build_filter_controls
 from .ui_realism import build_realism_controls, set_realism_defaults
+from gui.theme.style import font
 
 
 class FilterPopup:
@@ -114,7 +115,7 @@ class FilterPopup:
         self._build_filter_controls(right)
 
     def _build_profile_list(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="Filter Profiles", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        ttk.Label(parent, text="Filter Profiles", font=font("Heading")).pack(anchor="w")
 
         self.lb_profiles = tk.Listbox(parent, height=10, width=22, exportselection=False)
         self.lb_profiles.pack(fill="y", pady=(6, 6))
@@ -151,7 +152,7 @@ class FilterPopup:
         lf.pack(fill="both", expand=True)
 
         # Always-visible marker to confirm panel construction at runtime.
-        ttk.Label(lf, text="Preview Panel Active", foreground="#0a5").pack(anchor="w", pady=(0, 6))
+        ttk.Label(lf, text="Preview Panel Active", style="Success.TLabel").pack(anchor="w", pady=(0, 6))
 
         sel_row = ttk.Frame(lf)
         sel_row.pack(fill="x", pady=(0, 4))
@@ -174,7 +175,7 @@ class FilterPopup:
         ttk.Label(
             lf,
             textvariable=self._preview_status_var,
-            foreground="#555",
+            style="Muted.TLabel",
             wraplength=330,
             justify="left",
         ).pack(anchor="w", pady=(0, 6))
@@ -211,11 +212,11 @@ class FilterPopup:
     def _render_preview(self) -> None:
         render_preview(self)
 
-    def _do_render_2d_preview(self, profile_id: str, filter_vals: dict[str, Any]) -> None:
-        do_render_2d_preview(self, profile_id, filter_vals)
+    def _do_render_2d_preview(self, profile_id: str, filter_vals: dict[str, Any]) -> tuple[Any, str]:
+        return do_render_2d_preview(self, profile_id, filter_vals)
 
-    def _do_render_3d_preview(self, profile_id: str, filter_vals: dict[str, Any]) -> None:
-        do_render_3d_preview(self, profile_id, filter_vals)
+    def _do_render_3d_preview(self, profile_id: str, filter_vals: dict[str, Any]) -> tuple[Any, str]:
+        return do_render_3d_preview(self, profile_id, filter_vals)
 
     def _show_preview_image(self, img_bgr: Any, profile_id: str = "", backend: str = "2D") -> None:
         show_preview_image(self, img_bgr, profile_id, backend)

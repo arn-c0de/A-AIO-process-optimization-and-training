@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, filedialog
+from tkinter import ttk, simpledialog, filedialog
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
@@ -10,16 +10,44 @@ from collections.abc import Callable
 from PIL import Image, ImageTk
 import cv2
 
+from gui import dialogs
+from gui.theme.style import font
+from gui.theme.tokens import SPACE
 from gui.utils.tooltip import ToolTip
+from gui.widgets import (
+    CollapsibleSection,
+    FormGrid,
+    LogView,
+    PathPicker,
+    ScrollableFrame,
+    Section,
+    Toolbar,
+    icon_button,
+    keep_pane_visible,
+    menu_button,
+)
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE
 from simple_sim.schema import MetaRow
 from gui.utils.formatting import fmt_bytes
 
 
+# Legacy colour names returned by gui.utils.pipeline_helpers -> themed label styles.
+_COLOR_TO_STYLE = {
+    "green": "CardSuccess.TLabel",
+    "blue": "CardAccent.TLabel",
+    "orange": "CardWarning.TLabel",
+    "red": "CardDanger.TLabel",
+    "gray": "CardMuted.TLabel",
+    "grey": "CardMuted.TLabel",
+    "black": "Card.TLabel",
+    "": "Card.TLabel",
+}
+
+
 class PipelineUI:
     def __init__(self, tab: Any, parent: ttk.Frame):
         self.tab = tab
-        self.frame = ttk.Frame(parent, padding=10)
+        self.frame = ttk.Frame(parent, padding=0)
 
         # Stats bar state
         self.var_ds_size: tk.StringVar = tk.StringVar(value="DS: -")
@@ -149,268 +177,327 @@ class PipelineUI:
         self.btn_precise_settings: ttk.Button
 
     def build_ui(self) -> None:
-        top = ttk.Frame(self.frame)
-        top.pack(fill="x", pady=(0, 5))
+        store = getattr(self.tab.state, "settings_store", None)
+        sim_root = getattr(self.tab, "sim_root", None)
 
-        stats = ttk.Frame(top)
-        stats.pack(side="right", padx=(10, 0))
+        # ------------------------------------------------------------ action bar
+        actions = Toolbar(self.frame)
+        actions.pack(fill="x")
+        self.btn_start = actions.button("Start Pipeline", self.tab.start_pipeline,
+                                        style="Accent.TButton", help_key="pipeline.start")
+        self.btn_start_generate = actions.button("Generate Only", self.tab.start_pipeline_generate_only,
+                                                 help_key="pipeline.generate_only")
+        self.btn_stop = actions.button("Stop", self.tab.stop_pipeline, style="Danger.TButton",
+                                       help_key="pipeline.stop", state="disabled")
+        actions.separator()
+        self.btn_filters = actions.button("Image Filters…", self.tab._open_image_filters_popup,
+                                          help_key="pipeline.filters")
 
-        ds_frame = ttk.Frame(stats)
-        ds_frame.grid(row=0, column=0, sticky="ew")
-        ds_frame.columnconfigure(0, weight=1)
-        ds_frame.columnconfigure(1, weight=0)
+        stats = ttk.Frame(actions)
+        actions.add_right(stats)
+        icon_button(stats, "refresh", self.tab._refresh_dataset_stats, help_key="common.refresh").pack(
+            side="right", padx=(SPACE.S, 0))
+        self.lbl_ds_samples = ttk.Label(stats, textvariable=self.var_ds_samples, style="BodyBold.TLabel")
+        self.lbl_ds_samples.pack(side="right", padx=(SPACE.M, 0))
+        ttk.Label(stats, textvariable=self.var_ds_size, style="Muted.TLabel").pack(side="right")
+        ToolTip(self.lbl_ds_samples, help_key="pipeline.ds_stats")
 
-        ttk.Label(ds_frame, textvariable=self.var_ds_size).grid(row=0, column=0, sticky="w")
-        self.lbl_ds_samples = ttk.Label(ds_frame, textvariable=self.var_ds_samples)
-        self.lbl_ds_samples.grid(row=1, column=0, sticky="w", pady=(1, 0))
-        ttk.Button(ds_frame, text="↻", width=3, command=self.tab._refresh_dataset_stats).grid(
-            row=0, column=1, sticky="e", padx=(6, 0)
-        )
-
-        self.btn_start = ttk.Button(top, text="▶ Start Pipeline", command=self.tab.start_pipeline, width=15)
-        self.btn_start.pack(side="left")
-
-        self.btn_start_generate = ttk.Button(top, text="▶ Generate Only", command=self.tab.start_pipeline_generate_only, width=15)
-        self.btn_start_generate.pack(side="left", padx=(6, 0))
-        ToolTip(self.btn_start_generate, text_func=lambda: "Generate + validate dataset only (no training/eval)")
-
-        self.btn_stop = ttk.Button(top, text="⏹ Stop", command=self.tab.stop_pipeline, state="disabled", width=10)
-        self.btn_stop.pack(side="left", padx=(8, 0))
-        self.btn_filters = ttk.Button(top, text="Image Filters", command=self.tab._open_image_filters_popup, width=12)
-        self.btn_filters.pack(side="left", padx=(6, 0))
-        ToolTip(
-            self.btn_filters,
-            text_func=lambda: "Configure active image filters (90° rotation, grain, blur, brightness, contrast)",
-        )
-
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
-
-        ttk.Label(top, text="Run Mode:").pack(side="left", padx=(0, 6))
-        run_mode_frame = ttk.Frame(top)
-        run_mode_frame.pack(side="left")
-
-        ttk.Radiobutton(run_mode_frame, text="Single", variable=self.var_run_mode, value="single").pack(side="left")
-        ttk.Radiobutton(run_mode_frame, text="Multiple", variable=self.var_run_mode, value="multiple").pack(side="left", padx=(5, 0))
-        ttk.Radiobutton(run_mode_frame, text="Continuous", variable=self.var_run_mode, value="continuous").pack(side="left", padx=(5, 0))
-        ttk.Radiobutton(run_mode_frame, text="Precise", variable=self.var_run_mode, value="precise").pack(side="left", padx=(5, 0))
-
-        ttk.Label(top, text="Count:").pack(side="left", padx=(10, 6))
-        self.run_count_entry = ttk.Entry(top, textvariable=self.var_run_count, width=5)
-        self.run_count_entry.pack(side="left")
-
-        self.btn_precise_settings = ttk.Button(
-            top, text="Precise Settings...", width=16,
-            command=self.tab._open_precise_popup, state="disabled",
-        )
-        self.btn_precise_settings.pack(side="left", padx=(8, 0))
-        ToolTip(self.btn_precise_settings, text_func=lambda: "Configure exact sample counts per class / per profile")
-
-        def on_run_mode_change(*args):
-            mode = self.var_run_mode.get()
-            if mode == "multiple":
-                self.run_count_entry.configure(state="normal")
-            else:
-                self.run_count_entry.configure(state="disabled")
-            self.btn_precise_settings.configure(state="normal" if mode == "precise" else "disabled")
-        self.var_run_mode.trace("w", on_run_mode_change)
-        on_run_mode_change()
-
-        top_dataset_mode = ttk.Frame(self.frame)
-        top_dataset_mode.pack(fill="x", pady=(0, 5))
-        ttk.Label(top_dataset_mode, text="Dataset Mode:").pack(side="left", padx=(0, 6))
-        ttk.Radiobutton(top_dataset_mode, text="Create New", variable=self.var_dataset_mode, value="new").pack(side="left")
-        ttk.Radiobutton(top_dataset_mode, text="Extend Existing", variable=self.var_dataset_mode, value="extend").pack(side="left", padx=(5, 0))
-
-        top2 = ttk.Frame(self.frame)
-        top2.pack(fill="x", pady=(0, 5))
-
-        ttk.Label(top2, text="Config:").pack(side="left", padx=(0, 6))
-        ttk.Entry(top2, textvariable=self.var_config, width=24).pack(side="left")
-
-        ttk.Separator(top2, orient="vertical").pack(side="left", fill="y", padx=10)
-
-        ttk.Label(top2, text="Out:").pack(side="left", padx=(0, 6))
-        ttk.Entry(top2, textvariable=self.var_out, width=32).pack(side="left")
-
-        top2b = ttk.Frame(self.frame)
-        top2b.pack(fill="x", pady=(0, 5))
-
-        ttk.Label(top2b, text="Model:").pack(side="left", padx=(0, 6))
-        self.model_combo = ttk.Combobox(top2b, textvariable=self.var_model, state="readonly", width=36)
-        self.model_combo.pack(side="left")
-        ToolTip(self.model_combo, text_func=lambda: self.var_model.get())
-        ttk.Button(top2b, text="↻", width=3, command=self.tab._refresh_models).pack(side="left", padx=(6, 0))
-        ttk.Button(top2b, text="+", width=3, command=self.tab._add_new_model).pack(side="left", padx=(2, 0))
-
-        ttk.Separator(top2b, orient="vertical").pack(side="left", fill="y", padx=10)
-
-        ttk.Checkbutton(top2b, text="Auto-snap", variable=self.var_autosnap).pack(side="left")
-        ttk.Label(top2b, text="Every:").pack(side="left", padx=(8, 4))
-        ttk.Combobox(top2b, textvariable=self.var_snap_every, values=["1", "5", "10", "30", "50"], state="readonly", width=5).pack(
-            side="left"
-        )
-        ttk.Label(top2b, text="Keep:").pack(side="left", padx=(8, 4))
-        ttk.Entry(top2b, textvariable=self.var_snap_keep, width=4).pack(side="left")
-
-        top2a = ttk.Frame(self.frame)
-        top2a.pack(fill="x", pady=(0, 5))
-
-        ttk.Label(top2a, text="Name:").pack(side="left", padx=(0, 6))
-        ttk.Entry(top2a, textvariable=self.var_name, width=20).pack(side="left")
-        ttk.Checkbutton(top2a, text="Timestamp", variable=self.var_name_ts).pack(side="left", padx=(8, 0))
-        ttk.Checkbutton(top2a, text="Bundle", variable=self.var_model_bundle).pack(side="left", padx=(8, 0))
-        ttk.Button(top2a, text="Apply", command=self.tab._apply_name_to_out_and_model, width=8).pack(side="left", padx=(8, 0))
-
-        top3 = ttk.Frame(self.frame)
-        top3.pack(fill="x", pady=(0, 5))
-
-        ttk.Label(top3, text="Profile:").pack(side="left", padx=(0, 6))
-        self.profile_combo = ttk.Combobox(top3, textvariable=self.var_profile, state="readonly", width=16)
-        self.profile_combo.pack(side="left")
-        ToolTip(self.profile_combo, text_func=lambda: self.var_profile.get())
-        self.profile_combo.bind("<<ComboboxSelected>>", self.tab._on_profile_selected)
-        ttk.Button(top3, text="↻", width=3, command=self.tab._refresh_profiles).pack(side="left", padx=(6, 0))
-        ttk.Button(top3, text="ⓘ", width=3, command=self.tab._show_profile_info).pack(side="left", padx=(3, 0))
-
-        ttk.Separator(top3, orient="vertical").pack(side="left", fill="y", padx=10)
-
-        ttk.Label(top3, text="Render:").pack(side="left", padx=(0, 6))
-        self.render_combo = ttk.Combobox(
-            top3, textvariable=self.var_render_backend, values=["opencv_2d", "blender_3d"], state="readonly", width=10,
-        )
-        self.render_combo.pack(side="left")
-        ToolTip(self.render_combo, text_func=lambda: self.var_render_backend.get())
-        self.render_combo.bind("<<ComboboxSelected>>", self.tab._on_render_backend_changed)
-
-        ttk.Separator(top3, orient="vertical").pack(side="left", fill="y", padx=10)
-
-        ttk.Label(top3, text="Multi-Profile:").pack(side="left", padx=(0, 6))
-        ttk.Checkbutton(top3, text="Enable", variable=self.var_profiles_multi, command=self.tab._on_profiles_multi_toggle).pack(side="left", padx=(0, 0))
-        ttk.Label(top3, text="Mode:").pack(side="left", padx=(8, 4))
-        ttk.Combobox(top3, textvariable=self.var_profiles_multi_mode, values=["separate", "mixed"], state="readonly", width=9).pack(side="left")
-        self.btn_profiles_multi_pick = ttk.Button(top3, text="Select", width=6, command=self.tab._pick_profiles_multi, state="disabled")
-        self.btn_profiles_multi_pick.pack(side="left", padx=(6, 0))
-        ToolTip(self.btn_profiles_multi_pick, text_func=lambda: "Select multiple profiles to generate")
-        self.entry_profiles_multi = ttk.Entry(top3, textvariable=self.var_profiles_multi_summary, width=18, state="disabled")
-        self.entry_profiles_multi.pack(side="left", padx=(6, 0))
-
+        # ----------------------------------------------------------- status strip
         status = ttk.Frame(self.frame)
-        status.pack(fill="x", pady=(10, 0))
+        status.pack(fill="x", pady=(SPACE.M, 0))
+        for var in (self.var_phase, self.var_run_progress, self.var_epoch, self.var_ips):
+            ttk.Label(status, textvariable=var, style="Badge.TLabel").pack(side="left", padx=(0, SPACE.S))
+        ttk.Label(status, textvariable=self.var_last, style="Small.TLabel").pack(side="left", padx=(SPACE.S, 0))
 
-        ttk.Label(status, textvariable=self.var_phase).pack(side="left", padx=(0, 14))
-        ttk.Label(status, textvariable=self.var_run_progress).pack(side="left", padx=(0, 14))
-        ttk.Label(status, textvariable=self.var_epoch).pack(side="left", padx=(0, 14))
-        ttk.Label(status, textvariable=self.var_ips).pack(side="left", padx=(0, 14))
-        ttk.Label(status, textvariable=self.var_last).pack(side="left", padx=(0, 14))
-
+        # ---------------------------------------------------------------- panes
         main = ttk.Panedwindow(self.frame, orient="horizontal")
-        main.pack(fill="both", expand=True, pady=(10, 0))
+        main.pack(fill="both", expand=True, pady=(SPACE.M, 0))
 
-        left = ttk.Frame(main, padding=8)
-        main.add(left, weight=1)
-        ttk.Label(left, text="Datasets").pack(anchor="w")
+        settings_col = ScrollableFrame(main)
+        main.add(settings_col, weight=0)
+        keep_pane_visible(main, 0, settings_col.inner, min_width=320)
+        col = settings_col.inner
+        self._build_source_section(col, sim_root, store)
+        self._build_output_section(col, sim_root)
+        self._build_run_section(col)
+        self._build_model_section(col, store)
 
-        dsbar = ttk.Frame(left)
-        dsbar.pack(fill="x", pady=(6, 0))
+        right = ttk.Frame(main)
+        main.add(right, weight=1)
+        self._build_datasets_section(right, store)
 
-        ds_sel = ttk.Frame(dsbar)
-        ds_sel.pack(side="left", fill="x", expand=True)
+        work = ttk.Panedwindow(right, orient="horizontal")
+        work.pack(fill="both", expand=True, pady=(SPACE.M, 0))
 
-        self.dataset_combo = ttk.Combobox(ds_sel, textvariable=self.var_dataset, state="readonly", width=38)
-        self.dataset_combo.pack(side="left", fill="x", expand=True)
-        self.dataset_combo.bind("<<ComboboxSelected>>", self.tab._on_dataset_selected)
-        ToolTip(self.dataset_combo, text_func=self.tab._dataset_multi_tooltip_text)
-
-        self.dataset_multi_entry = ttk.Entry(ds_sel, textvariable=self.var_dataset_multi_summary, state="readonly", width=38)
-        ToolTip(self.dataset_multi_entry, text_func=self.tab._dataset_multi_tooltip_text)
-        self.btn_dataset_multi_pick = ttk.Button(ds_sel, text="Select...", command=self.tab._open_dataset_multi_picker)
-        self.chk_dataset_multi = ttk.Checkbutton(
-            dsbar, text="Multi", variable=self.var_dataset_multi, command=self.tab._on_dataset_multi_toggle
-        )
-        self.chk_dataset_multi.pack(side="left", padx=(8, 0))
-
-        ttk.Button(dsbar, text="Refresh", command=self.tab._refresh_datasets).pack(side="left", padx=(8, 0))
-        ttk.Button(dsbar, text="Snapshot", command=self.tab._snapshot_dataset_selected).pack(side="left", padx=(8, 0))
-        ttk.Button(dsbar, text="Rename", command=self.tab._rename_dataset_selected).pack(side="left", padx=(8, 0))
-        ttk.Button(dsbar, text="Delete", command=self.tab._delete_dataset).pack(side="left", padx=(8, 0))
-        ttk.Button(dsbar, text="Delete Images...", command=self.tab._delete_images_from_dataset).pack(side="left", padx=(8, 0))
-        ttk.Button(dsbar, text="Move Images...", command=self.tab._move_images_between_datasets).pack(side="left", padx=(8, 0))
-        ttk.Button(dsbar, text="Create New", command=self.tab._create_new_dataset).pack(side="left", padx=(8, 0))
-
-        dsbtns = ttk.Frame(left)
-        dsbtns.pack(fill="x", pady=(6, 0))
-        ttk.Button(dsbtns, text="Validate", command=self.tab._validate_selected).pack(side="left")
-        ttk.Button(dsbtns, text="Train", command=self.tab._train_selected).pack(side="left", padx=(8, 0))
-        ttk.Button(dsbtns, text="Eval", command=self.tab._eval_selected).pack(side="left", padx=(8, 0))
-
-        ttk.Separator(dsbtns, orient="vertical").pack(side="left", fill="y", padx=10)
-        ttk.Label(dsbtns, text="+epochs:").pack(side="left")
-        ttk.Entry(dsbtns, textvariable=self.var_continue_epochs, width=5).pack(side="left", padx=(6, 10))
-        ttk.Label(dsbtns, text="out:").pack(side="left")
-        ttk.Combobox(dsbtns, textvariable=self.var_continue_out_mode, values=["last", "best"], state="readonly", width=6).pack(
-            side="left", padx=(6, 10)
-        )
-        ttk.Button(dsbtns, text="Continue Train", command=self.tab._continue_train_selected).pack(side="left")
-
-        profmod = ttk.Frame(left)
-        profmod.pack(fill="x", pady=(6, 0))
-        ttk.Label(profmod, text="Profile model:").pack(side="left")
-        self.combo_profile_model = ttk.Combobox(profmod, textvariable=self.var_profile_model, state="readonly", width=42)
-        self.combo_profile_model.pack(side="left", padx=(6, 6), fill="x", expand=True)
-        ToolTip(self.combo_profile_model, text_func=lambda: self.var_profile_model.get())
-        ttk.Button(profmod, text="↻", width=3, command=self.tab._refresh_profile_models).pack(side="left", padx=(0, 6))
-
-        ttk.Checkbutton(profmod, text="Lock", variable=self.var_profile_model_lock, command=self.tab._apply_profile_model_lock).pack(side="left")
-
-        ttk.Separator(profmod, orient="vertical").pack(side="left", fill="y", padx=10)
-        ttk.Label(profmod, text="Build:").pack(side="left")
-        ttk.Combobox(profmod, textvariable=self.var_profile_build_preset, values=["quick", "full"], state="readonly", width=7).pack(
-            side="left", padx=(6, 6)
-        )
-        ttk.Button(profmod, text="Build Profile Model", command=self.tab._build_profile_model).pack(side="left")
-
-        dsprofile = ttk.Frame(left)
-        dsprofile.pack(fill="x", pady=(6, 0))
-        ttk.Label(dsprofile, textvariable=self.var_dataset_profile, font=("TkDefaultFont", 9)).pack(side="left")
-        ttk.Button(dsprofile, text="Profile Info", command=self.tab._show_dataset_profile_info).pack(side="left", padx=(10, 0))
-
-        self.lbl_profile_compat = ttk.Label(dsprofile, textvariable=self.var_profile_compat, font=("TkDefaultFont", 9, "bold"), foreground="orange")
-        self.lbl_profile_compat.pack(side="left", padx=(10, 0))
-
-        ttk.Label(left, text="Latest Images (4x3 grid)").pack(anchor="w", pady=(10, 0))
-
-        img_grid = ttk.Frame(left)
-        img_grid.pack(fill="both", expand=True, pady=(6, 0))
-
+        images = Section(work, "Latest Images")
+        work.add(images, weight=1)
+        img_grid = ttk.Frame(images, style="Card.TFrame")
+        img_grid.pack(fill="both", expand=True)
         rows, cols = 4, 3
         for r in range(rows):
+            img_grid.grid_rowconfigure(r, weight=1)
             for c in range(cols):
-                frm = ttk.Frame(img_grid, relief="groove", borderwidth=1)
-                frm.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
-                img_grid.grid_rowconfigure(r, weight=1)
                 img_grid.grid_columnconfigure(c, weight=1)
-
-                lbl = ttk.Label(frm, text="(no image)", anchor="center", compound="top")
-                lbl.pack(fill="both", expand=True)
+                lbl = ttk.Label(img_grid, text="(no image)", anchor="center", compound="top",
+                                style="CardMuted.TLabel", font=font("Small"))
+                lbl.grid(row=r, column=c, padx=SPACE.XS, pady=SPACE.XS, sticky="nsew")
                 self.img_labels.append(lbl)
 
-        right = ttk.Frame(main, padding=8)
-        main.add(right, weight=2)
-        ttk.Label(right, text="Live Logs").pack(anchor="w")
+        logs = Section(work, "Live Log")
+        work.add(logs, weight=2)
+        log_actions = logs.actions
+        self.log_view = LogView(logs, height=10)
+        self.log_view.pack(fill="both", expand=True)
+        self.txt = self.log_view.text
+        b_clear = ttk.Button(log_actions, text="Clear", style="Icon.TButton", command=self.log_view.clear)
+        b_clear.pack(side="right")
+        ToolTip(b_clear, help_key="common.clear_log")
+        b_copy = ttk.Button(log_actions, text="Copy", style="Icon.TButton", command=self.log_view.copy_all)
+        b_copy.pack(side="right", padx=(0, SPACE.S))
+        ToolTip(b_copy, help_key="common.copy_log")
 
-        self.txt = tk.Text(right, wrap="none", height=10)
-        self.txt.pack(fill="both", expand=True, pady=(6, 0))
-        self.txt.configure(state="disabled")
+    # ------------------------------------------------------------------ sections
+    def _build_source_section(self, parent: tk.Misc, sim_root: Path | None, store: Any) -> None:
+        sec = Section(parent, "Source", help_key="pipeline.source")
+        sec.pack(fill="x", pady=(0, SPACE.M))
+        form = FormGrid(sec, style="Card.TFrame")
+        form.pack(fill="x")
 
-        yscroll = ttk.Scrollbar(right, command=self.txt.yview)
-        yscroll.place(in_=self.txt, relx=1.0, rely=0, relheight=1.0, anchor="ne")
-        self.txt["yscrollcommand"] = yscroll.set
+        prof = form.inline()
+        self.profile_combo = ttk.Combobox(prof, textvariable=self.var_profile, state="readonly", width=22)
+        self.profile_combo.pack(side="left", fill="x", expand=True)
+        self.profile_combo.bind("<<ComboboxSelected>>", self.tab._on_profile_selected)
+        ToolTip(self.profile_combo, help_key="pipeline.profile", text_func=lambda: self.var_profile.get())
+        icon_button(prof, "refresh", self.tab._refresh_profiles, help_key="common.refresh").pack(side="left", padx=(SPACE.S, 0))
+        icon_button(prof, "info", self.tab._show_profile_info, help_key="pipeline.profile_info").pack(side="left", padx=(SPACE.XS, 0))
+        form.row("Profile", prof, help_key="pipeline.profile")
+
+        self.render_combo = ttk.Combobox(form, textvariable=self.var_render_backend,
+                                         values=["opencv_2d", "blender_3d"], state="readonly", width=14)
+        self.render_combo.bind("<<ComboboxSelected>>", self.tab._on_render_backend_changed)
+        form.row("Render", self.render_combo, help_key="pipeline.render", sticky="w")
+
+        form.row("Config", PathPicker(form, self.var_config, title="Select run config",
+                                      filetypes=[("YAML", "*.yaml *.yml"), ("All files", "*")],
+                                      relative_to=sim_root, width=22, style="Card.TFrame"),
+                 help_key="pipeline.config")
+
+        multi = CollapsibleSection(sec, "Multi-Profile", store=store, state_key="pipeline.ui.multi_open",
+                                   style="Card.TFrame", opened=bool(self.var_profiles_multi.get()))
+        multi.pack(fill="x", pady=(SPACE.S, 0))
+        mrow = ttk.Frame(multi.body, style="Card.TFrame")
+        mrow.pack(fill="x")
+        chk = ttk.Checkbutton(mrow, text="Enable", variable=self.var_profiles_multi, style="Card.TCheckbutton",
+                              command=self.tab._on_profiles_multi_toggle)
+        chk.pack(side="left")
+        ToolTip(chk, help_key="pipeline.multi_profile")
+        ttk.Label(mrow, text="Mode", style="CardMuted.TLabel").pack(side="left", padx=(SPACE.L, SPACE.S))
+        mode = ttk.Combobox(mrow, textvariable=self.var_profiles_multi_mode, values=["separate", "mixed"],
+                            state="readonly", width=9)
+        mode.pack(side="left")
+        ToolTip(mode, help_key="pipeline.multi_mode")
+        mrow2 = ttk.Frame(multi.body, style="Card.TFrame")
+        mrow2.pack(fill="x", pady=(SPACE.S, 0))
+        self.btn_profiles_multi_pick = ttk.Button(mrow2, text="Select…", command=self.tab._pick_profiles_multi,
+                                                  state="disabled")
+        self.btn_profiles_multi_pick.pack(side="left")
+        ToolTip(self.btn_profiles_multi_pick, help_key="pipeline.multi_pick")
+        self.entry_profiles_multi = ttk.Entry(mrow2, textvariable=self.var_profiles_multi_summary, state="disabled")
+        self.entry_profiles_multi.pack(side="left", fill="x", expand=True, padx=(SPACE.S, 0))
+
+    def _build_output_section(self, parent: tk.Misc, sim_root: Path | None) -> None:
+        sec = Section(parent, "Output", help_key="pipeline.output")
+        sec.pack(fill="x", pady=(0, SPACE.M))
+        form = FormGrid(sec, style="Card.TFrame")
+        form.pack(fill="x")
+
+        mode = form.inline()
+        r1 = ttk.Radiobutton(mode, text="Create New", variable=self.var_dataset_mode, value="new", style="Card.TRadiobutton")
+        r1.pack(side="left")
+        r2 = ttk.Radiobutton(mode, text="Extend Existing", variable=self.var_dataset_mode, value="extend",
+                             style="Card.TRadiobutton")
+        r2.pack(side="left", padx=(SPACE.M, 0))
+        for w in (r1, r2):
+            ToolTip(w, help_key="pipeline.dataset_mode")
+        form.row("Dataset", mode, help_key="pipeline.dataset_mode", sticky="w")
+
+        form.row("Output", PathPicker(form, self.var_out, mode="dir", title="Select dataset output folder",
+                                      relative_to=sim_root, width=22, style="Card.TFrame"),
+                 help_key="pipeline.out")
+        form.row("Name", ttk.Entry(form, textvariable=self.var_name, width=22), help_key="pipeline.name")
+
+        opts = form.inline()
+        c1 = ttk.Checkbutton(opts, text="Timestamp", variable=self.var_name_ts, style="Card.TCheckbutton")
+        c1.pack(side="left")
+        ToolTip(c1, help_key="pipeline.name_ts")
+        c2 = ttk.Checkbutton(opts, text="Bundle", variable=self.var_model_bundle, style="Card.TCheckbutton")
+        c2.pack(side="left", padx=(SPACE.M, 0))
+        ToolTip(c2, help_key="pipeline.bundle")
+        apply_btn = ttk.Button(opts, text="Apply Name", command=self.tab._apply_name_to_out_and_model)
+        apply_btn.pack(side="right")
+        ToolTip(apply_btn, help_key="pipeline.apply_name")
+        form.row("", opts)
+
+    def _build_run_section(self, parent: tk.Misc) -> None:
+        sec = Section(parent, "Run", help_key="pipeline.run")
+        sec.pack(fill="x", pady=(0, SPACE.M))
+        form = FormGrid(sec, style="Card.TFrame")
+        form.pack(fill="x")
+
+        modes = form.inline()
+        for i, (text, value) in enumerate((("Single", "single"), ("Multiple", "multiple"),
+                                           ("Continuous", "continuous"), ("Precise", "precise"))):
+            rb = ttk.Radiobutton(modes, text=text, variable=self.var_run_mode, value=value, style="Card.TRadiobutton")
+            rb.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, SPACE.L), pady=(0, SPACE.XS))
+            ToolTip(rb, help_key="pipeline.run_mode")
+        form.row("Mode", modes, help_key="pipeline.run_mode", sticky="w")
+
+        cnt = form.inline()
+        self.run_count_entry = ttk.Spinbox(cnt, textvariable=self.var_run_count, from_=1, to=10000, width=6)
+        self.run_count_entry.pack(side="left")
+        self.btn_precise_settings = ttk.Button(cnt, text="Precise Settings…", command=self.tab._open_precise_popup,
+                                               state="disabled")
+        self.btn_precise_settings.pack(side="right")
+        ToolTip(self.btn_precise_settings, help_key="pipeline.precise")
+        form.row("Count", cnt, help_key="pipeline.run_count")
+
+        def on_run_mode_change(*_args: Any) -> None:
+            mode = self.var_run_mode.get()
+            self.run_count_entry.configure(state="normal" if mode == "multiple" else "disabled")
+            self.btn_precise_settings.configure(state="normal" if mode == "precise" else "disabled")
+
+        self.var_run_mode.trace_add("write", on_run_mode_change)
+        on_run_mode_change()
+
+    def _build_model_section(self, parent: tk.Misc, store: Any) -> None:
+        sec = Section(parent, "Model", help_key="pipeline.model")
+        sec.pack(fill="x", pady=(0, SPACE.M))
+        form = FormGrid(sec, style="Card.TFrame")
+        form.pack(fill="x")
+        mrow = form.inline()
+        self.model_combo = ttk.Combobox(mrow, textvariable=self.var_model, state="readonly", width=22)
+        self.model_combo.pack(side="left", fill="x", expand=True)
+        ToolTip(self.model_combo, help_key="pipeline.model", text_func=lambda: self.var_model.get())
+        icon_button(mrow, "refresh", self.tab._refresh_models, help_key="common.refresh").pack(side="left", padx=(SPACE.S, 0))
+        icon_button(mrow, "add", self.tab._add_new_model, help_key="pipeline.model_add").pack(side="left", padx=(SPACE.XS, 0))
+        form.row("Checkpoint", mrow, help_key="pipeline.model")
+
+        snap = CollapsibleSection(sec, "Auto-Snapshot", store=store, state_key="pipeline.ui.snap_open",
+                                  style="Card.TFrame")
+        snap.pack(fill="x", pady=(SPACE.S, 0))
+        srow = ttk.Frame(snap.body, style="Card.TFrame")
+        srow.pack(fill="x")
+        c = ttk.Checkbutton(srow, text="Enable", variable=self.var_autosnap, style="Card.TCheckbutton")
+        c.pack(side="left")
+        ToolTip(c, help_key="pipeline.autosnap")
+        ttk.Label(srow, text="Every", style="CardMuted.TLabel").pack(side="left", padx=(SPACE.L, SPACE.S))
+        every = ttk.Combobox(srow, textvariable=self.var_snap_every, values=["1", "5", "10", "30", "50"],
+                             state="readonly", width=4)
+        every.pack(side="left")
+        ToolTip(every, help_key="pipeline.snap_every")
+        ttk.Label(srow, text="runs, keep", style="CardMuted.TLabel").pack(side="left", padx=(SPACE.S, SPACE.S))
+        keep = ttk.Spinbox(srow, textvariable=self.var_snap_keep, from_=1, to=999, width=4)
+        keep.pack(side="left")
+        ToolTip(keep, help_key="pipeline.snap_keep")
+
+    def _build_datasets_section(self, parent: tk.Misc, store: Any) -> None:
+        sec = Section(parent, "Datasets", help_key="pipeline.datasets")
+        sec.pack(fill="x")
+
+        sel = ttk.Frame(sec, style="Card.TFrame")
+        sel.pack(fill="x")
+        self._ds_sel = ttk.Frame(sel, style="Card.TFrame")
+        self._ds_sel.pack(side="left", fill="x", expand=True)
+        self.dataset_combo = ttk.Combobox(self._ds_sel, textvariable=self.var_dataset, state="readonly", width=38)
+        self.dataset_combo.pack(side="left", fill="x", expand=True)
+        self.dataset_combo.bind("<<ComboboxSelected>>", self.tab._on_dataset_selected)
+        ToolTip(self.dataset_combo, help_key="common.dataset", text_func=self.tab._dataset_multi_tooltip_text)
+        self.dataset_multi_entry = ttk.Entry(self._ds_sel, textvariable=self.var_dataset_multi_summary,
+                                             state="readonly", width=38)
+        ToolTip(self.dataset_multi_entry, text_func=self.tab._dataset_multi_tooltip_text)
+        self.btn_dataset_multi_pick = ttk.Button(self._ds_sel, text="Select…",
+                                                 command=self.tab._open_dataset_multi_picker)
+        ToolTip(self.btn_dataset_multi_pick, help_key="pipeline.dataset_multi_pick")
+        self.chk_dataset_multi = ttk.Checkbutton(sel, text="Multi", variable=self.var_dataset_multi,
+                                                 command=self.tab._on_dataset_multi_toggle, style="Card.TCheckbutton")
+        self.chk_dataset_multi.pack(side="left", padx=(SPACE.M, 0))
+        ToolTip(self.chk_dataset_multi, help_key="pipeline.dataset_multi")
+        icon_button(sel, "refresh", self.tab._refresh_datasets, help_key="common.refresh").pack(side="left", padx=(SPACE.S, 0))
+
+        bar = Toolbar(sec, style="Card.TFrame")
+        bar.pack(fill="x", pady=(SPACE.M, 0))
+        bar.button("Validate", self.tab._validate_selected, help_key="pipeline.validate")
+        bar.button("Train", self.tab._train_selected, help_key="pipeline.train")
+        bar.button("Evaluate", self.tab._eval_selected, help_key="pipeline.eval")
+        bar.add_right(menu_button(bar, "Manage", [
+            ("Snapshot", self.tab._snapshot_dataset_selected),
+            ("Rename…", self.tab._rename_dataset_selected),
+            ("Create New…", self.tab._create_new_dataset),
+            None,
+            ("Delete Images…", self.tab._delete_images_from_dataset),
+            ("Move Images…", self.tab._move_images_between_datasets),
+            None,
+            ("Delete Dataset…", self.tab._delete_dataset),
+        ], help_key="pipeline.datasets_manage"))
+
+        info = ttk.Frame(sec, style="Card.TFrame")
+        info.pack(fill="x", pady=(SPACE.M, 0))
+        ttk.Label(info, textvariable=self.var_dataset_profile, style="CardMuted.TLabel").pack(side="left")
+        b = ttk.Button(info, text="Profile Info…", command=self.tab._show_dataset_profile_info)
+        b.pack(side="left", padx=(SPACE.M, 0))
+        ToolTip(b, help_key="pipeline.dataset_profile_info")
+        self.lbl_profile_compat = ttk.Label(info, textvariable=self.var_profile_compat, style="CardWarning.TLabel")
+        self.lbl_profile_compat.pack(side="left", padx=(SPACE.M, 0))
+        ToolTip(self.lbl_profile_compat, help_key="pipeline.profile_compat")
+
+        cont = CollapsibleSection(sec, "Continue Training", store=store, state_key="pipeline.ui.continue_open",
+                                  style="Card.TFrame")
+        cont.pack(fill="x", pady=(SPACE.S, 0))
+        crow = ttk.Frame(cont.body, style="Card.TFrame")
+        crow.pack(fill="x")
+        ttk.Label(crow, text="+Epochs", style="CardMuted.TLabel").pack(side="left", padx=(0, SPACE.S))
+        ep = ttk.Spinbox(crow, textvariable=self.var_continue_epochs, from_=0, to=10000, width=5)
+        ep.pack(side="left")
+        ToolTip(ep, help_key="pipeline.continue_epochs")
+        ttk.Label(crow, text="From", style="CardMuted.TLabel").pack(side="left", padx=(SPACE.L, SPACE.S))
+        frm = ttk.Combobox(crow, textvariable=self.var_continue_out_mode, values=["last", "best"], state="readonly", width=6)
+        frm.pack(side="left")
+        ToolTip(frm, help_key="pipeline.continue_out")
+        btn = ttk.Button(crow, text="Continue Training", command=self.tab._continue_train_selected)
+        btn.pack(side="left", padx=(SPACE.L, 0))
+        ToolTip(btn, help_key="pipeline.continue_train")
+
+        pm = CollapsibleSection(sec, "Profile Model", store=store, state_key="pipeline.ui.profile_model_open",
+                                style="Card.TFrame")
+        pm.pack(fill="x")
+        prow = ttk.Frame(pm.body, style="Card.TFrame")
+        prow.pack(fill="x")
+        self.combo_profile_model = ttk.Combobox(prow, textvariable=self.var_profile_model, state="readonly", width=36)
+        self.combo_profile_model.pack(side="left", fill="x", expand=True)
+        ToolTip(self.combo_profile_model, help_key="pipeline.profile_model", text_func=lambda: self.var_profile_model.get())
+        icon_button(prow, "refresh", self.tab._refresh_profile_models, help_key="common.refresh").pack(
+            side="left", padx=(SPACE.S, 0))
+        lock = ttk.Checkbutton(prow, text="Lock", variable=self.var_profile_model_lock,
+                               command=self.tab._apply_profile_model_lock, style="Card.TCheckbutton")
+        lock.pack(side="left", padx=(SPACE.M, 0))
+        ToolTip(lock, help_key="pipeline.profile_model_lock")
+        prow2 = ttk.Frame(pm.body, style="Card.TFrame")
+        prow2.pack(fill="x", pady=(SPACE.S, 0))
+        ttk.Label(prow2, text="Preset", style="CardMuted.TLabel").pack(side="left", padx=(0, SPACE.S))
+        pre = ttk.Combobox(prow2, textvariable=self.var_profile_build_preset, values=["quick", "full"],
+                           state="readonly", width=7)
+        pre.pack(side="left")
+        ToolTip(pre, help_key="pipeline.build_preset")
+        bb = ttk.Button(prow2, text="Build Profile Model", command=self.tab._build_profile_model)
+        bb.pack(side="left", padx=(SPACE.M, 0))
+        ToolTip(bb, help_key="pipeline.build_profile_model")
 
     def append_log(self, s: str) -> None:
-        self.txt.configure(state="normal")
-        self.txt.insert("end", s)
-        self.txt.see("end")
-        self.txt.configure(state="disabled")
+        self.log_view.append(s)
+
+    def set_compat_color(self, color: str) -> None:
+        """Map legacy colour names from the helpers to theme styles."""
+        self.lbl_profile_compat.configure(style=_COLOR_TO_STYLE.get(str(color).lower(), "CardMuted.TLabel"))
 
     def set_run_buttons_state(self, running: bool) -> None:
         self.btn_start.configure(state="disabled" if running else "normal")
@@ -460,7 +547,8 @@ class PipelineUI:
 
     def set_dataset_samples_info(self, text: str, color: str) -> None:
         self.var_ds_samples.set(text)
-        self.lbl_ds_samples.configure(foreground=color)
+        style = _COLOR_TO_STYLE.get(str(color).lower(), "Card.TLabel").replace("Card", "", 1) or "TLabel"
+        self.lbl_ds_samples.configure(style="BodyBold.TLabel" if style in ("TLabel", ".TLabel") else style)
 
     def set_profile_model_combo_values(self, values: list[str]) -> None:
         self.combo_profile_model["values"] = values
@@ -482,16 +570,17 @@ class PipelineUI:
     def show_messagebox(self, type: str, title: str, message: str) -> None:
         if type == "error":
             try:
-                msg_log = str(message)
-                self.tab._append_log(f"[popup error] {title}\n{msg_log}\n")
+                self.tab._append_log(f"[popup error] {title}\n{message}\n")
             except Exception:
                 pass
-            messagebox.showerror(title, message)
-        elif type == "warning": messagebox.showwarning(title, message)
-        else: messagebox.showinfo(title, message)
-    
+            dialogs.show_error(self.frame, title, str(message))
+        elif type == "warning":
+            dialogs.show_warning(self.frame, title, message)
+        else:
+            dialogs.show_info(self.frame, title, message)
+
     def ask_yes_no(self, title: str, message: str) -> bool:
-        return messagebox.askyesno(title, message)
+        return dialogs.confirm(self.frame, title, message)
 
     def ask_string(self, title: str, prompt: str, initialvalue: str = "") -> str | None:
         return simpledialog.askstring(title, prompt, initialvalue=initialvalue, parent=self.frame)

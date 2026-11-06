@@ -13,9 +13,14 @@ from typing import Any
 import cv2
 import numpy as np
 
-from simple_sim.generators.opencv2d.photoreal import camera_model, camera_settings, render_board, sample_camera_pose
+from simple_sim.parallel import imap_ordered
+from simple_sim.generators.opencv2d.photoreal import (MASK_GLOSS_PROBABILITY, REWORK_PROBABILITY, camera_model, camera_settings,
+                                                     render_board, sample_camera_pose)
 
 BOARD_SCALE = 2  # baked board covers at least 2x the ROI, so global rotations never reveal its edge
+# Supersampling above the default 2 is capped so the supersampled bake stays <= this many px per side
+# (a 1024 px ROI at 4x would bake 8192^2 px: ~20 s per image for no visible gain in a 2048 px texture).
+BAKE_MAX_SUPERSAMPLED_PX = 4096
 
 
 def profile_job_fields(profile: dict[str, Any]) -> dict[str, Any]:
@@ -24,34 +29,66 @@ def profile_job_fields(profile: dict[str, Any]) -> dict[str, Any]:
             "tolerances": profile.get("tolerances")}
 
 
-def prepare_jobs(jobs: list[dict[str, Any]], work_dir: Path) -> list[dict[str, Any]]:
-    """Bake one board texture per job into *work_dir* and add the ``board`` scene description.
+def bake_fields(render_cfg: dict[str, Any], roi: dict[str, Any] | None = None, **overrides: Any) -> dict[str, Any]:
+    """Job fields of the board bake from a run config's ``render`` (and ``roi``) section.
+
+    ``texture_dir``, ``camera``, ``rework_artifacts``, ``mask_gloss``, ``supersampling``, ``board``
+    and ``mm_per_px``; *overrides* replace any of them (e.g. a preview's camera or supersampling).
+    """
+    fields = {"texture_dir": render_cfg.get("texture_dir"), "camera": render_cfg.get("camera"),
+              "rework_artifacts": render_cfg.get("rework_artifacts", REWORK_PROBABILITY),
+              "mask_gloss": render_cfg.get("mask_gloss", MASK_GLOSS_PROBABILITY),
+              "supersampling": render_cfg.get("supersampling"), "board": render_cfg.get("board"),
+              "mm_per_px": render_cfg.get("mm_per_px", (roi or {}).get("mm_per_px"))}
+    return {**fields, **overrides}
+
+
+def bake_supersampling(requested: int, board_px: int) -> int:
+    """Supersampling for a *board_px* wide bake: *requested*, but above 2 only within the pixel budget."""
+    requested = int(requested)
+    if requested <= 2:
+        return requested
+    return max(2, min(requested, BAKE_MAX_SUPERSAMPLED_PX // max(1, int(board_px))))
+
+
+def prepare_job(job: dict[str, Any], work_dir: Path, index: int) -> dict[str, Any]:
+    """Bake the board texture of one job to ``work_dir/board_<index>.png``; return the job with ``board``.
 
     The camera view (``render.camera``: tilt, zoom) is sampled here, so Blender can place its camera
-    and the baked board is large enough for a zoomed-out, oblique, rotated view.
+    and the baked board is large enough for a zoomed-out, oblique, rotated view. Deterministic per
+    job seed and thread-safe, so jobs can be baked in parallel or ahead of the Blender run.
     """
+    w, h = int(job["roi_width_px"]), int(job["roi_height_px"])
+    config = {"component_type": job.get("component_type", ""), "texture_dir": job.get("texture_dir"),
+              "rework_artifacts": job.get("rework_artifacts", REWORK_PROBABILITY),
+              "mask_gloss": job.get("mask_gloss", MASK_GLOSS_PROBABILITY),
+              "supersampling": job.get("supersampling") or 2, "board": job.get("board")}
+    if job.get("mm_per_px"):
+        config["mm_per_px"] = float(job["mm_per_px"])
+    seed = int(job.get("seed", 0))
+    pose = sample_camera_pose(camera_settings(job.get("camera")), np.random.default_rng([seed, 2]))
+    scale = max(float(BOARD_SCALE), 1.5 * pose["zoom"] / max(np.cos(np.radians(pose["tilt"])), 0.5))
+    config["supersampling"] = bake_supersampling(config["supersampling"], int(np.ceil(max(w, h) * scale)))
+    texture, scene = render_board(job["nominal"], job["defect"], config, job.get("tolerances"),
+                                  np.random.default_rng(seed), str(job.get("footprint", "chip_2pad")),
+                                  (int(np.ceil(w * scale)), int(np.ceil(h * scale))), crowd=scale * scale)
     work_dir.mkdir(parents=True, exist_ok=True)
-    prepared = []
-    for i, job in enumerate(jobs):
-        w, h = int(job["roi_width_px"]), int(job["roi_height_px"])
-        config = {"component_type": job.get("component_type", ""), "texture_dir": job.get("texture_dir"),
-                  "rework_artifacts": job.get("rework_artifacts", 0.3)}
-        seed = int(job.get("seed", 0))
-        pose = sample_camera_pose(camera_settings(job.get("camera")), np.random.default_rng([seed, 2]))
-        scale = max(float(BOARD_SCALE), 1.5 * pose["zoom"] / max(np.cos(np.radians(pose["tilt"])), 0.5))
-        texture, scene = render_board(job["nominal"], job["defect"], config, job.get("tolerances"),
-                                      np.random.default_rng(seed), str(job.get("footprint", "chip_2pad")),
-                                      (int(np.ceil(w * scale)), int(np.ceil(h * scale))), crowd=scale * scale)
-        path = (work_dir / f"board_{i:06d}.png").resolve()
-        if not cv2.imwrite(str(path), texture):
-            raise OSError(f"Failed to write board texture: {path}")
-        prepared.append({**job, "board": {"texture": str(path), "scale": scale, "pose": pose, **scene}})
-    return prepared
+    path = (work_dir / f"board_{index:06d}.png").resolve()
+    if not cv2.imwrite(str(path), texture):
+        raise OSError(f"Failed to write board texture: {path}")
+    return {**job, "board": {"texture": str(path), "scale": scale, "pose": pose, **scene}}
 
 
-def apply_camera(jobs: list[dict[str, Any]], output_root: Path) -> None:
-    """Run every rendered image through the same camera model as the 2D backend (seeded per job)."""
-    for job in jobs:
+def prepare_jobs(jobs: list[dict[str, Any]], work_dir: Path, *, workers: int | None = None) -> list[dict[str, Any]]:
+    """Bake one board texture per job into *work_dir* (in parallel threads) and add the ``board`` scene."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return list(imap_ordered(lambda item: prepare_job(item[1], work_dir, item[0]), list(enumerate(jobs)), workers=workers))
+
+
+def apply_camera(jobs: list[dict[str, Any]], output_root: Path, *, workers: int | None = None) -> None:
+    """Run every rendered image through the same camera model as the 2D backend (seeded per job, in parallel)."""
+
+    def one(job: dict[str, Any]) -> None:
         path = output_root / str(job["image_path"])
         img = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if img is None:
@@ -60,3 +97,6 @@ def apply_camera(jobs: list[dict[str, Any]], output_root: Path) -> None:
         pose = (job.get("board") or {}).get("pose")
         if not cv2.imwrite(str(path), camera_model(img, rng, job.get("camera"), pose)):
             raise OSError(f"Failed to write camera-processed image: {path}")
+
+    for _ in imap_ordered(one, jobs, workers=workers):
+        pass

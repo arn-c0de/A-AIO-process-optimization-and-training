@@ -5,109 +5,129 @@ import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING
 
+from gui.theme.tokens import SPACE
+from gui.utils.tooltip import ToolTip
+from gui.widgets import LogView, ScrolledTree, Section, Toolbar
+
 if TYPE_CHECKING:
     from .tab import ValidationTab
+
+
+# (check id, label, help key) - ids are the keys ValidationLogic.run_validation expects.
+VALIDATION_CHECKS = [
+    ("schema", "Schema Validation", "validation.check_schema"),
+    ("outliers", "Image Outliers", "validation.check_outliers"),
+    ("duplicates", "Duplicate Detection", "validation.check_duplicates"),
+    ("edge_cases", "Edge Cases", "validation.check_edge_cases"),
+]
+
+_RESULTS_PLACEHOLDER = "No results yet. Choose the checks on the left and press Run Validation."
 
 
 class ValidationUI:
     def __init__(self, tab: ValidationTab, parent: ttk.Frame):
         self.tab = tab
-        self.frame = ttk.Frame(parent, padding=10)
+        self.frame = ttk.Frame(parent, padding=0)
         self.check_vars: dict[str, tk.BooleanVar] = {}
         self.results_text: tk.Text
+        self.results_view: LogView
         self.flag_tree: ttk.Treeview
+        self.flag_view: ScrolledTree
+        self.lbl_flags_empty: ttk.Label
+        self.var_flag_count = tk.StringVar(value="")
         self.var_dataset: tk.StringVar
         self.dataset_combo: ttk.Combobox
+        self.btn_run: ttk.Button
 
     def build_ui(self) -> None:
-        top = ttk.Frame(self.frame)
-        top.pack(fill="x", pady=(0, 10))
+        tab = self.tab
 
-        ttk.Label(top, text="Dataset:").pack(side="left")
+        # --- Dataset selection + primary action.
+        top = Toolbar(self.frame)
+        top.pack(fill="x", pady=(0, SPACE.M))
+        top.add(ttk.Label(top, text="Dataset", style="Field.TLabel"))
         self.var_dataset = tk.StringVar()
         self.dataset_combo = ttk.Combobox(top, textvariable=self.var_dataset, state="readonly", width=55)
-        self.dataset_combo.pack(side="left", padx=(5, 8))
-        self.dataset_combo.bind("<<ComboboxSelected>>", lambda _e: self.tab._on_dataset_selected())
-        ttk.Button(top, text="Refresh", command=self.tab._refresh_datasets).pack(side="left", padx=(0, 12))
-
-        ttk.Button(top, text="Run Validation Suite", command=self.tab._run_validation).pack(side="left", padx=15)
+        self.dataset_combo.bind("<<ComboboxSelected>>", lambda _e: tab._on_dataset_selected())
+        ToolTip(self.dataset_combo, help_key="validation.dataset")
+        top.add(self.dataset_combo)
+        top.icon("refresh", tab._refresh_datasets, help_key="validation.refresh")
+        top.separator()
+        self.btn_run = top.button("Run Validation", tab._run_validation, help_key="validation.run",
+                                  style="Accent.TButton")
 
         main = ttk.Panedwindow(self.frame, orient="horizontal")
         main.pack(fill="both", expand=True)
 
-        left = ttk.Frame(main, padding=5)
+        # --- Left: which checks to run, export.
+        left = ttk.Frame(main, padding=(0, 0, SPACE.M, 0))
         main.add(left, weight=1)
-
-        ttk.Label(left, text="Validation Tests").pack(anchor="w")
-
-        tests_frame = ttk.Frame(left)
-        tests_frame.pack(fill="x", pady=(5, 10))
-
-        tests = [
-            ("schema", "Schema Validation"),
-            ("outliers", "Image Outliers"),
-            ("duplicates", "Duplicate Detection"),
-            ("edge_cases", "Edge Cases")
-        ]
-
-        for test_id, test_name in tests:
+        checks = Section(left, "Checks", help_key="validation.checks")
+        checks.pack(fill="x")
+        for test_id, test_name, help_key in VALIDATION_CHECKS:
             var = tk.BooleanVar(value=True)
             self.check_vars[test_id] = var
-            ttk.Checkbutton(tests_frame, text=test_name, variable=var).pack(anchor="w", pady=2)
+            cb = ttk.Checkbutton(checks, text=test_name, variable=var, style="Card.TCheckbutton")
+            cb.pack(anchor="w", pady=SPACE.XS)
+            ToolTip(cb, help_key=help_key)
+        ttk.Separator(checks, orient="horizontal").pack(fill="x", pady=SPACE.M)
+        btn_export = ttk.Button(checks, text="Export Report", command=tab._export_report)
+        btn_export.pack(fill="x")
+        ToolTip(btn_export, help_key="validation.export")
 
-        ttk.Separator(left, orient="horizontal").pack(fill="x", pady=10)
-        ttk.Button(left, text="Export Report", command=self.tab._export_report).pack(fill="x", pady=5)
-
-        right = ttk.Frame(main, padding=5)
+        # --- Right: results text + flagged samples.
+        right = ttk.Panedwindow(main, orient="vertical")
         main.add(right, weight=3)
 
-        results_label = ttk.Label(right, text="Validation Results")
-        results_label.pack(anchor="w")
+        res = Section(right, "Results")
+        right.add(res, weight=1)
+        self.results_view = LogView(res, height=12, wrap="word")
+        self.results_view.pack(fill="both", expand=True)
+        self.results_text = self.results_view.text
+        self.set_results_text(_RESULTS_PLACEHOLDER)
 
-        results_frame = ttk.Frame(right, relief="sunken", borderwidth=1)
-        results_frame.pack(fill="both", expand=True, pady=(5, 10))
+        flags = Section(right, "Flagged Samples", help_key="validation.flags")
+        right.add(flags, weight=1)
+        ttk.Label(flags.actions, textvariable=self.var_flag_count, style="CardMuted.TLabel").pack(side="right")
+        self.lbl_flags_empty = ttk.Label(
+            flags, style="CardMuted.TLabel", wraplength=560, justify="left",
+            text="No flagged samples. Image Outliers, Duplicate Detection and Edge Cases add flags here.")
+        self.flag_view = ScrolledTree(
+            flags, [("Flag", "Flag", 100, "w"), ("Reason", "Reason", 300, "w")],
+            show_tree=True, tree_heading="Sample ID", tree_width=200, height=10,
+        )
+        self.flag_view.pack(fill="both", expand=True)
+        self.flag_tree = self.flag_view.tree
 
-        self.results_text = tk.Text(results_frame, height=12, wrap="word")
-        results_scroll = ttk.Scrollbar(results_frame, orient="vertical", command=self.results_text.yview)
-        self.results_text.configure(yscrollcommand=results_scroll.set)
-        self.results_text.pack(side="left", fill="both", expand=True)
-        results_scroll.pack(side="right", fill="y")
-        self.results_text.configure(state="disabled")
+        flag_btns = Toolbar(flags, style="Card.TFrame")
+        flag_btns.pack(fill="x", pady=(SPACE.S, 0))
+        flag_btns.button("Remove Flag", tab._remove_flag, help_key="validation.remove_flag")
+        flag_btns.button("Clear All Flags…", tab._clear_all_flags, help_key="validation.clear_flags",
+                         style="Danger.TButton")
+        self.refresh_flag_tree([])
 
-        flags_label = ttk.Label(right, text="Flagged Samples")
-        flags_label.pack(anchor="w", pady=(10, 0))
-
-        flags_frame = ttk.Frame(right)
-        flags_frame.pack(fill="both", expand=True, pady=(5, 0))
-
-        self.flag_tree = ttk.Treeview(flags_frame, columns=("Flag", "Reason"), show="tree headings", height=10)
-        self.flag_tree.heading("#0", text="Sample ID")
-        self.flag_tree.column("#0", width=200)
-        self.flag_tree.heading("Flag", text="Flag")
-        self.flag_tree.column("Flag", width=100)
-        self.flag_tree.heading("Reason", text="Reason")
-        self.flag_tree.column("Reason", width=300)
-        flag_scroll = ttk.Scrollbar(flags_frame, orient="vertical", command=self.flag_tree.yview)
-        self.flag_tree.configure(yscrollcommand=flag_scroll.set)
-        self.flag_tree.pack(side="left", fill="both", expand=True)
-        flag_scroll.pack(side="right", fill="y")
-
-        flag_btns = ttk.Frame(right)
-        flag_btns.pack(fill="x", pady=(5, 0))
-        ttk.Button(flag_btns, text="Remove Flag", command=self.tab._remove_flag).pack(side="left", padx=2)
-        ttk.Button(flag_btns, text="Clear All Flags", command=self.tab._clear_all_flags).pack(side="left", padx=2)
-    
     def set_results_text(self, text: str) -> None:
-        self.results_text.configure(state="normal")
-        self.results_text.delete("1.0", "end")
-        self.results_text.insert("1.0", text)
-        self.results_text.configure(state="disabled")
-        
+        self.results_view.clear()
+        self.results_view.append(text)
+
+    def set_running(self, running: bool) -> None:
+        try:
+            self.btn_run.configure(state="disabled" if running else "normal")
+        except Exception:
+            pass
+
     def refresh_flag_tree(self, flagged_samples: list) -> None:
-        self.flag_tree.delete(*self.flag_tree.get_children())
+        self.flag_view.clear()
+        n = 0
         for sample_id, flags in flagged_samples:
             for flag_dict in flags:
-                self.flag_tree.insert("", "end", text=sample_id, values=(flag_dict['flag'], flag_dict['reason']))
+                self.flag_view.insert((flag_dict['flag'], flag_dict['reason']), text=sample_id)
+                n += 1
+        self.var_flag_count.set(f"{n} flag(s)" if n else "")
+        if n:
+            self.lbl_flags_empty.pack_forget()
+        elif not self.lbl_flags_empty.winfo_manager():
+            self.lbl_flags_empty.pack(fill="x", pady=(0, SPACE.S), before=self.flag_view)
 
     def display_results(self, results: dict) -> None:
         output = "=" * 60 + "\nVALIDATION RESULTS\n" + "=" * 60 + "\n\n"

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import queue
+import sys
 import threading
+from collections.abc import Callable
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
@@ -84,7 +87,7 @@ def build_preview_panel(popup: Any, parent: ttk.Frame) -> None:
     ttk.Button(btn_row, text="Render Preview", command=popup._render_preview).pack(side="left")
 
     popup._preview_status_var = tk.StringVar(value="")
-    ttk.Label(lf, textvariable=popup._preview_status_var, foreground="#555", wraplength=310, justify="left"
+    ttk.Label(lf, textvariable=popup._preview_status_var, style="Muted.TLabel", wraplength=310, justify="left"
               ).pack(anchor="w", pady=(0, 6))
 
     popup._preview_img_label = ttk.Label(lf, text="No preview yet", anchor="center")
@@ -180,6 +183,36 @@ def get_preview_filter_values(popup: Any) -> dict[str, Any]:
     return result
 
 
+def _run_in_background(popup: Any, work: Callable[[], Any], on_ok: Callable[[Any], None],
+                       on_error: Callable[[str], None], busy_attr: str) -> None:
+    """Run *work* in a thread; deliver its result on the Tk thread (polled, no Tk calls from the worker)."""
+    results: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+    def target() -> None:
+        try:
+            results.put(("ok", work()))
+        except Exception as exc:  # noqa: BLE001 - shown in the popup
+            results.put(("error", f"{type(exc).__name__}: {exc}"))
+
+    def poll() -> None:
+        try:
+            if not popup.top.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        try:
+            kind, value = results.get_nowait()
+        except queue.Empty:
+            popup.top.after(50, poll)
+            return
+        setattr(popup, busy_attr, False)
+        (on_ok if kind == "ok" else on_error)(value)
+
+    setattr(popup, busy_attr, True)
+    threading.Thread(target=target, daemon=True).start()
+    popup.top.after(50, poll)
+
+
 def render_preview(popup: Any) -> None:
     """Start a background render with the current filter settings."""
     if popup._preview_is_rendering:
@@ -191,271 +224,61 @@ def render_preview(popup: Any) -> None:
         return
 
     is_3d_only = pid in popup._preview_profiles_3d and pid not in popup._preview_profiles_2d
-
-    popup._preview_is_rendering = True
-    popup._preview_status_var.set("Rendering…")
-
+    backend = "3D" if is_3d_only else "2D"
+    popup._preview_status_var.set(f"Rendering ({backend})…")
     filter_vals = get_preview_filter_values(popup)
-    if is_3d_only:
-        threading.Thread(target=popup._do_render_3d_preview, args=(pid, filter_vals), daemon=True).start()
-    else:
-        threading.Thread(target=popup._do_render_2d_preview, args=(pid, filter_vals), daemon=True).start()
+    work = (lambda: do_render_3d_preview(popup, pid, filter_vals)) if is_3d_only else (
+        lambda: do_render_2d_preview(popup, pid, filter_vals))
+    _run_in_background(
+        popup, work,
+        lambda res: show_preview_image(popup, res[0], pid, backend=backend, source=res[1]),
+        lambda err: popup._preview_status_var.set(f"Render error: {err}"),
+        "_preview_is_rendering",
+    )
 
 
-def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> None:
-    """Background thread: render a 2D preview and schedule UI update."""
-    try:
-        import sys
-        import numpy as np  # type: ignore
+def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> tuple[Any, str]:
+    """2D preview render (call from a worker thread). Returns ``(BGR image, config source)``."""
+    from .preview_render import render_filter_preview_2d
 
-        sim_root = Path(popup._sim_root)  # type: ignore[arg-type]
-        if str(sim_root) not in sys.path:
-            sys.path.insert(0, str(sim_root))
-
-        from simple_sim.profile_hash import load_profile  # type: ignore
-        from simple_sim.config import merge_profile_render  # type: ignore
-        from simple_sim.generators.opencv_2d import (  # type: ignore
-            render_roi,
-            apply_image_filter_overrides,
-            sample_nominal_geometry,
-        )
-
-        profiles_dir = sim_root / "configs" / "profiles"
-        profile = load_profile(profile_id, profiles_dir)
-
-        footprint: str = (profile.get("component") or {}).get("footprint", "chip_2pad")
-        geometry_ranges = profile.get("geometry_ranges")
-        tolerances = profile.get("tolerances")
-        render_cfg = merge_profile_render(
-            {"substrate_color": [40, 90, 40], "copper_color": [60, 120, 180], "component_color": [20, 20, 20]}, profile
-        )
-
-        rng = np.random.default_rng(42)
-        nominal = sample_nominal_geometry({}, rng, geometry_ranges)
-        defect_params: dict[str, Any] = {
-            "type": "OK",
-            "shift_x": 0.0,
-            "shift_y": 0.0,
-            "rotation_deg": 0.0,
-            "tilt_deg": 0.0,
-        }
-
-        base_aug: dict[str, Any] = {
-            "blur_sigma": 1.0,
-            "noise_stddev": 8.0,
-            "brightness_factor": 1.1,
-            "contrast_factor": 1.1,
-            "rotation_deg": 15.0,
-        }
-        augment = apply_image_filter_overrides(base_aug, filter_vals)
-
-        roi_sizes: dict[str, tuple] = {
-            "soic_16": (600, 600),
-            "qfn32": (320, 320),
-            "sot23": (256, 256),
-        }
-        roi_size: tuple = roi_sizes.get(footprint, (256, 256))
-
-        img_bgr = render_roi(
-            nominal, defect_params, augment,
-            roi_size, render_cfg, tolerances, rng,
-            footprint=footprint,
-        )
-
-        popup.top.after(0, lambda img=img_bgr: popup._show_preview_image(img, profile_id))
-
-    except Exception as exc:
-        err = str(exc)
-        popup.top.after(0, lambda e=err: popup._preview_status_var.set(f"Render error: {e}"))
-    finally:
-        popup.top.after(0, lambda: setattr(popup, "_preview_is_rendering", False))
+    return render_filter_preview_2d(_sim_root(popup), profile_id, filter_vals)
 
 
-def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> None:
-    """Background thread: render a 3D preview via Blender and schedule UI update."""
-    try:
-        import sys
-        import numpy as np  # type: ignore
+def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any],
+                         out_subdir: str = "filter_preview_3d") -> tuple[Any, str]:
+    """3D (Blender) preview render (call from a worker thread). Returns ``(BGR image, config source)``."""
+    from .preview_render import render_filter_preview_3d
 
-        sim_root = Path(popup._sim_root)  # type: ignore[arg-type]
-        if str(sim_root) not in sys.path:
-            sys.path.insert(0, str(sim_root))
-
-        from simple_sim.profile_hash import load_profile  # type: ignore
-        from simple_sim.config import load_config  # type: ignore
-        from simple_sim.defects import sample_defect_params  # type: ignore
-        from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # type: ignore
-        from simple_sim.generators.opencv_2d import (  # type: ignore
-            apply_image_filter_overrides,
-            sample_nominal_geometry,
-        )
-
-        profiles_dir = sim_root / "configs" / "profiles"
-        profile = load_profile(profile_id, profiles_dir)
-
-        blender_executable = "blender"
-        cycles_samples = 32
-        device = "CPU"
-        engine = "BLENDER_EEVEE"
-        roi_width_px = 320
-        roi_height_px = 320
-        mm_per_px = 0.02
-
-        configs_dir = sim_root / "configs"
-        for cfg_path in sorted(configs_dir.glob("*.yaml")):
-            try:
-                cfg = load_config(cfg_path)
-            except Exception:
-                continue
-            if str((cfg.get("render") or {}).get("backend", "")) != "blender_3d":
-                continue
-            run = cfg.get("run") or {}
-            if str(run.get("component_profile", "")) != str(profile_id):
-                continue
-            roi = cfg.get("roi") or {}
-            roi_width_px = int(roi.get("width_px", roi_width_px))
-            roi_height_px = int(roi.get("height_px", roi_height_px))
-            mm_per_px = float(roi.get("mm_per_px", mm_per_px))
-            blender_cfg = (cfg.get("render") or {}).get("blender") or {}
-            blender_executable = str(blender_cfg.get("executable", blender_executable))
-            cycles_samples = min(32, int(blender_cfg.get("samples", cycles_samples)))
-            device = str(blender_cfg.get("device", device))
-            engine = str(blender_cfg.get("engine", engine))
-            break
-
-        geometry_ranges = profile.get("geometry_ranges") or {}
-        tolerances = profile.get("tolerances") or {}
-        component_height_mm = float(((profile.get("component") or {}).get("nominal_dims_mm") or {}).get("height", 0.45) or 0.45)
-        render_3d = profile.get("render_3d") or {}
-        footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
-
-        rng = np.random.default_rng(42)
-        nominal = sample_nominal_geometry({}, rng, geometry_ranges)
-        defect = sample_defect_params("OK", rng, tolerances=tolerances)
-
-        base_augment: dict[str, Any] = {
-            "blur_sigma": 1.0,
-            "noise_stddev": 8.0,
-            "brightness_factor": 1.1,
-            "contrast_factor": 1.1,
-            "rotation_deg": 15.0,
-        }
-        augment = apply_image_filter_overrides(base_augment, filter_vals)
-
-        out_root = sim_root / "outputs" / "filter_preview_3d"
-        out_root.mkdir(parents=True, exist_ok=True)
-
-        rel_path = f"preview_{profile_id}.png"
-        job = {
-            "image_path": rel_path,
-            "seed": 42,
-            "mm_per_px": mm_per_px,
-            "roi_width_px": roi_width_px,
-            "roi_height_px": roi_height_px,
-            "footprint": footprint,
-            "component_height_mm": component_height_mm,
-            "nominal": nominal,
-            "defect": defect,
-            "augment": augment,
-            "render_3d": render_3d,
-            **profile_job_fields(profile),
-        }
-
-        jobs_path = out_root / f"jobs_{profile_id}.jsonl"
-        write_jobs_jsonl(jobs_path, [job])
-
-        render_blender_batch(
-            sim_root=sim_root,
-            jobs_path=jobs_path,
-            output_root=out_root,
-            blender_executable=blender_executable,
-            cycles_samples=cycles_samples,
-            device=device,
-            engine=engine,
-        )
-
-        import cv2  # type: ignore
-        out_img_path = out_root / rel_path
-        if not out_img_path.exists():
-            raise RuntimeError(f"Blender did not write output: {out_img_path}")
-
-        img_bgr = cv2.imread(str(out_img_path), cv2.IMREAD_COLOR)
-        if img_bgr is None:
-            raise RuntimeError(f"Failed to read rendered image: {out_img_path}")
-
-        from simple_sim.generators.opencv_2d import (  # type: ignore
-            apply_blur,
-            apply_noise,
-            apply_brightness,
-            apply_contrast,
-            apply_saturation,
-            apply_hue_shift,
-            apply_color_temperature,
-            apply_vignetting,
-            apply_chromatic_aberration,
-            apply_lens_distortion,
-            apply_motion_blur,
-            apply_sharpen,
-            apply_shadow,
-            apply_reflection,
-            apply_dust_particles,
-            apply_jpeg_compression,
-            apply_perspective_transform,
-        )
-
-        rng_post = np.random.default_rng(42)
-        img_bgr = apply_blur(img_bgr, float(augment.get("blur_sigma", 0.0) or 0.0))
-        img_bgr = apply_noise(img_bgr, float(augment.get("noise_stddev", 0.0) or 0.0), rng_post)
-        img_bgr = apply_brightness(img_bgr, float(augment.get("brightness_factor", 1.0) or 1.0))
-        img_bgr = apply_contrast(img_bgr, float(augment.get("contrast_factor", 1.0) or 1.0))
-        img_bgr = apply_saturation(img_bgr, float(augment.get("saturation_factor", 1.0) or 1.0))
-        img_bgr = apply_hue_shift(img_bgr, float(augment.get("hue_shift_deg", 0.0) or 0.0))
-        img_bgr = apply_color_temperature(img_bgr, int(augment.get("color_temperature_kelvin", 5500) or 5500))
-        img_bgr = apply_vignetting(img_bgr, float(augment.get("vignetting_strength", 0.0) or 0.0))
-        img_bgr = apply_chromatic_aberration(img_bgr, float(augment.get("chromatic_strength", 0.0) or 0.0))
-        img_bgr = apply_lens_distortion(img_bgr, float(augment.get("distortion_k1", 0.0) or 0.0), float(augment.get("distortion_k2", 0.0) or 0.0))
-        img_bgr = apply_motion_blur(img_bgr, float(augment.get("motion_blur_strength", 0.0) or 0.0), float(augment.get("motion_blur_angle", 0.0) or 0.0))
-        img_bgr = apply_sharpen(img_bgr, float(augment.get("sharpen_strength", 0.0) or 0.0))
-        img_bgr = apply_shadow(img_bgr, float(augment.get("shadow_strength", 0.0) or 0.0), float(augment.get("shadow_size", 0.2) or 0.2), rng_post)
-        img_bgr = apply_reflection(img_bgr, float(augment.get("reflection_strength", 0.0) or 0.0), float(augment.get("reflection_size", 0.15) or 0.15), rng_post)
-        img_bgr = apply_dust_particles(img_bgr, float(augment.get("dust_density", 0.0) or 0.0), float(augment.get("dust_size", 2.0) or 2.0), rng_post)
-        img_bgr = apply_jpeg_compression(img_bgr, int(augment.get("jpeg_quality", 100) or 100))
-        img_bgr = apply_perspective_transform(img_bgr, float(augment.get("perspective_strength", 0.0) or 0.0), float(augment.get("perspective_angle_x", 0.0) or 0.0), float(augment.get("perspective_angle_y", 0.0) or 0.0))
-        rotation_deg = float(augment.get("rotation_deg", 0.0) or 0.0)
-        if abs(rotation_deg) > 0.1:
-            h_img, w_img = img_bgr.shape[:2]
-            rot_mat = cv2.getRotationMatrix2D((w_img // 2, h_img // 2), rotation_deg, 1.0)
-            img_bgr = cv2.warpAffine(img_bgr, rot_mat, (w_img, h_img), borderMode=cv2.BORDER_REPLICATE)
-
-        popup.top.after(0, lambda img=img_bgr: popup._show_preview_image(img, profile_id, backend="3D"))
-
-    except Exception as exc:
-        err = str(exc)
-        popup.top.after(0, lambda e=err: popup._preview_status_var.set(f"Render error: {e}"))
-    finally:
-        popup.top.after(0, lambda: setattr(popup, "_preview_is_rendering", False))
+    root = _sim_root(popup)
+    return render_filter_preview_3d(root, profile_id, filter_vals, root / "outputs" / out_subdir)
 
 
-def show_preview_image(popup: Any, img_bgr: Any, profile_id: str = "", backend: str = "2D") -> None:
+def _sim_root(popup: Any) -> Path:
+    sim_root = Path(popup._sim_root)
+    if str(sim_root) not in sys.path:
+        sys.path.insert(0, str(sim_root))
+    return sim_root
+
+
+def _to_photo(popup: Any, img_bgr: Any, max_px: int) -> tuple[Any, Any]:
+    """(full-size PIL image, Tk photo scaled to fit *max_px*)."""
+    from PIL import Image, ImageTk  # type: ignore
+    import numpy as np  # type: ignore
+
+    pil_img = Image.fromarray(np.ascontiguousarray(img_bgr[:, :, ::-1]).astype(np.uint8))
+    thumb = pil_img
+    w, h = pil_img.size
+    if w > max_px or h > max_px:
+        scale = max_px / max(w, h)
+        thumb = pil_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+    return pil_img, ImageTk.PhotoImage(thumb, master=popup.top)
+
+
+def show_preview_image(popup: Any, img_bgr: Any, profile_id: str = "", backend: str = "2D", source: str = "") -> None:
     """Display a rendered BGR numpy array in the preview label."""
     try:
-        from PIL import Image, ImageTk  # type: ignore
-        import numpy as np  # type: ignore
-
-        img_rgb = img_bgr[:, :, ::-1].copy()
-        pil_img = Image.fromarray(img_rgb.astype(np.uint8))
-
-        popup._preview_full_pil = pil_img.copy()
-
-        max_px = 300
-        w, h = pil_img.size
-        if w > max_px or h > max_px:
-            scale = max_px / max(w, h)
-            pil_img = pil_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
-
-        popup._preview_photo = ImageTk.PhotoImage(pil_img)
-        popup._preview_img_label.configure(image=popup._preview_photo, text="")
-        popup._preview_img_label.configure(cursor="hand2")
+        popup._preview_full_pil, popup._preview_photo = _to_photo(popup, img_bgr, 300)
+        popup._preview_img_label.configure(image=popup._preview_photo, text="", cursor="hand2")
         popup._preview_img_label.bind(
             "<Button-1>",
             lambda _evt: _open_zoom_image_popup(
@@ -464,12 +287,14 @@ def show_preview_image(popup: Any, img_bgr: Any, profile_id: str = "", backend: 
                 f"Filter Preview - {profile_id} ({backend})",
             ),
         )
-        popup._preview_status_var.set(f"Profile: {profile_id}  ·  defect: OK  ·  {backend}")
+        src = f"\n{source}" if source else ""
+        popup._preview_status_var.set(f"Profile: {profile_id}  ·  defect: OK  ·  {backend}{src}")
 
     except ImportError:
         popup._preview_status_var.set("Pillow not installed.\nRun: pip install Pillow")
     except Exception as exc:
         popup._preview_status_var.set(f"Display error: {exc}")
+
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +332,7 @@ def build_left_preview_panel(popup: Any, parent: ttk.Frame) -> None:
     ttk.Label(
         lf,
         textvariable=popup._left_preview_status_var,
-        foreground="#555",
+        style="Muted.TLabel",
         wraplength=170,
         justify="left",
     ).pack(anchor="w", pady=(0, 4))
@@ -607,6 +432,8 @@ def on_left_preview_profile_selected(popup: Any, _evt: tk.Event | None = None) -
     popup._left_preview_profile_var.set("")
 
 
+
+
 def render_left_preview(popup: Any) -> None:
     """Render the selected component profile with the CURRENT active filter settings."""
     if getattr(popup, "_left_preview_is_rendering", False):
@@ -623,244 +450,16 @@ def render_left_preview(popup: Any) -> None:
     profiles_2d = getattr(popup, "_left_preview_profiles_2d", set())
     profiles_3d = getattr(popup, "_left_preview_profiles_3d", set())
     is_3d_only = pid in profiles_3d and pid not in profiles_2d
-
-    popup._left_preview_is_rendering = True
-    popup._left_preview_status_var.set("Rendering…")
-
-    if is_3d_only:
-        threading.Thread(
-            target=_left_render_3d_thread,
-            args=(popup, pid, filter_vals),
-            daemon=True,
-        ).start()
-    else:
-        threading.Thread(
-            target=_left_render_2d_thread,
-            args=(popup, pid, filter_vals),
-            daemon=True,
-        ).start()
-
-
-def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> None:
-    """Background thread: 2D render for the left preview panel."""
-    try:
-        import sys
-        import numpy as np  # type: ignore
-
-        sim_root = Path(popup._sim_root)
-        if str(sim_root) not in sys.path:
-            sys.path.insert(0, str(sim_root))
-
-        from simple_sim.profile_hash import load_profile  # type: ignore
-        from simple_sim.config import merge_profile_render  # type: ignore
-        from simple_sim.generators.opencv_2d import (  # type: ignore
-            render_roi,
-            apply_image_filter_overrides,
-            sample_nominal_geometry,
-        )
-
-        profiles_dir = sim_root / "configs" / "profiles"
-        profile = load_profile(profile_id, profiles_dir)
-
-        footprint: str = (profile.get("component") or {}).get("footprint", "chip_2pad")
-        geometry_ranges = profile.get("geometry_ranges")
-        tolerances = profile.get("tolerances")
-        render_cfg = merge_profile_render(
-            {"substrate_color": [40, 90, 40], "copper_color": [60, 120, 180], "component_color": [20, 20, 20]}, profile
-        )
-
-        rng = np.random.default_rng(42)
-        nominal = sample_nominal_geometry({}, rng, geometry_ranges)
-        defect_params: dict[str, Any] = {
-            "type": "OK",
-            "shift_x": 0.0,
-            "shift_y": 0.0,
-            "rotation_deg": 0.0,
-            "tilt_deg": 0.0,
-        }
-
-        base_aug: dict[str, Any] = {
-            "blur_sigma": 1.0,
-            "noise_stddev": 8.0,
-            "brightness_factor": 1.1,
-            "contrast_factor": 1.1,
-            "rotation_deg": 15.0,
-        }
-        augment = apply_image_filter_overrides(base_aug, filter_vals)
-
-        roi_sizes: dict[str, tuple] = {
-            "soic_16": (600, 600),
-            "qfn32": (320, 320),
-            "sot23": (256, 256),
-        }
-        roi_size: tuple = roi_sizes.get(footprint, (256, 256))
-
-        img_bgr = render_roi(
-            nominal, defect_params, augment,
-            roi_size, render_cfg, tolerances, rng,
-            footprint=footprint,
-        )
-
-        popup.top.after(0, lambda img=img_bgr: _show_left_preview_image(popup, img, profile_id, "2D"))
-
-    except Exception as exc:
-        err = str(exc)
-        popup.top.after(0, lambda e=err: popup._left_preview_status_var.set(f"Render error: {e}"))
-    finally:
-        popup.top.after(0, lambda: setattr(popup, "_left_preview_is_rendering", False))
-
-
-def _left_render_3d_thread(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> None:
-    """Background thread: 3D (Blender) render for the left preview panel."""
-    try:
-        import sys
-        import numpy as np  # type: ignore
-
-        sim_root = Path(popup._sim_root)
-        if str(sim_root) not in sys.path:
-            sys.path.insert(0, str(sim_root))
-
-        from simple_sim.profile_hash import load_profile  # type: ignore
-        from simple_sim.config import load_config  # type: ignore
-        from simple_sim.defects import sample_defect_params  # type: ignore
-        from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # type: ignore
-        from simple_sim.generators.opencv_2d import (  # type: ignore
-            apply_image_filter_overrides,
-            sample_nominal_geometry,
-        )
-
-        profiles_dir = sim_root / "configs" / "profiles"
-        profile = load_profile(profile_id, profiles_dir)
-
-        blender_executable = "blender"
-        cycles_samples = 32
-        device = "CPU"
-        engine = "BLENDER_EEVEE"
-        roi_width_px = 320
-        roi_height_px = 320
-        mm_per_px = 0.02
-
-        configs_dir = sim_root / "configs"
-        for cfg_path in sorted(configs_dir.glob("*.yaml")):
-            try:
-                cfg = load_config(cfg_path)
-            except Exception:
-                continue
-            if str((cfg.get("render") or {}).get("backend", "")) != "blender_3d":
-                continue
-            if str((cfg.get("run") or {}).get("component_profile", "")) != str(profile_id):
-                continue
-            roi = cfg.get("roi") or {}
-            roi_width_px = int(roi.get("width_px", roi_width_px))
-            roi_height_px = int(roi.get("height_px", roi_height_px))
-            mm_per_px = float(roi.get("mm_per_px", mm_per_px))
-            blender_cfg = (cfg.get("render") or {}).get("blender") or {}
-            blender_executable = str(blender_cfg.get("executable", blender_executable))
-            cycles_samples = min(32, int(blender_cfg.get("samples", cycles_samples)))
-            device = str(blender_cfg.get("device", device))
-            engine = str(blender_cfg.get("engine", engine))
-            break
-
-        geometry_ranges = profile.get("geometry_ranges") or {}
-        tolerances = profile.get("tolerances") or {}
-        component_height_mm = float(
-            ((profile.get("component") or {}).get("nominal_dims_mm") or {}).get("height", 0.45) or 0.45
-        )
-        render_3d = profile.get("render_3d") or {}
-        footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
-
-        rng = np.random.default_rng(42)
-        nominal = sample_nominal_geometry({}, rng, geometry_ranges)
-        defect = sample_defect_params("OK", rng, tolerances=tolerances)
-
-        base_augment: dict[str, Any] = {
-            "blur_sigma": 1.0,
-            "noise_stddev": 8.0,
-            "brightness_factor": 1.1,
-            "contrast_factor": 1.1,
-            "rotation_deg": 15.0,
-        }
-        augment = apply_image_filter_overrides(base_augment, filter_vals)
-
-        out_root = sim_root / "outputs" / "filter_preview_left"
-        out_root.mkdir(parents=True, exist_ok=True)
-
-        rel_path = f"preview_{profile_id}.png"
-        job = {
-            "image_path": rel_path,
-            "seed": 42,
-            "mm_per_px": mm_per_px,
-            "roi_width_px": roi_width_px,
-            "roi_height_px": roi_height_px,
-            "footprint": footprint,
-            "component_height_mm": component_height_mm,
-            "nominal": nominal,
-            "defect": defect,
-            "augment": augment,
-            "render_3d": render_3d,
-            **profile_job_fields(profile),
-        }
-
-        jobs_path = out_root / f"jobs_{profile_id}.jsonl"
-        write_jobs_jsonl(jobs_path, [job])
-
-        render_blender_batch(
-            sim_root=sim_root,
-            jobs_path=jobs_path,
-            output_root=out_root,
-            blender_executable=blender_executable,
-            cycles_samples=cycles_samples,
-            device=device,
-            engine=engine,
-        )
-
-        import cv2  # type: ignore
-        out_img_path = out_root / rel_path
-        if not out_img_path.exists():
-            raise RuntimeError(f"Blender did not write output: {out_img_path}")
-        img_bgr = cv2.imread(str(out_img_path), cv2.IMREAD_COLOR)
-        if img_bgr is None:
-            raise RuntimeError(f"Failed to read rendered image: {out_img_path}")
-
-        from simple_sim.generators.opencv_2d import (  # type: ignore
-            apply_blur, apply_noise, apply_brightness, apply_contrast,
-            apply_saturation, apply_hue_shift, apply_color_temperature,
-            apply_vignetting, apply_chromatic_aberration, apply_lens_distortion,
-            apply_motion_blur, apply_sharpen, apply_shadow, apply_reflection,
-            apply_dust_particles, apply_jpeg_compression, apply_perspective_transform,
-        )
-
-        rng_post = np.random.default_rng(42)
-        img_bgr = apply_blur(img_bgr, float(augment.get("blur_sigma", 0.0) or 0.0))
-        img_bgr = apply_noise(img_bgr, float(augment.get("noise_stddev", 0.0) or 0.0), rng_post)
-        img_bgr = apply_brightness(img_bgr, float(augment.get("brightness_factor", 1.0) or 1.0))
-        img_bgr = apply_contrast(img_bgr, float(augment.get("contrast_factor", 1.0) or 1.0))
-        img_bgr = apply_saturation(img_bgr, float(augment.get("saturation_factor", 1.0) or 1.0))
-        img_bgr = apply_hue_shift(img_bgr, float(augment.get("hue_shift_deg", 0.0) or 0.0))
-        img_bgr = apply_color_temperature(img_bgr, int(augment.get("color_temperature_kelvin", 5500) or 5500))
-        img_bgr = apply_vignetting(img_bgr, float(augment.get("vignetting_strength", 0.0) or 0.0))
-        img_bgr = apply_chromatic_aberration(img_bgr, float(augment.get("chromatic_strength", 0.0) or 0.0))
-        img_bgr = apply_lens_distortion(img_bgr, float(augment.get("distortion_k1", 0.0) or 0.0), float(augment.get("distortion_k2", 0.0) or 0.0))
-        img_bgr = apply_motion_blur(img_bgr, float(augment.get("motion_blur_strength", 0.0) or 0.0), float(augment.get("motion_blur_angle", 0.0) or 0.0))
-        img_bgr = apply_sharpen(img_bgr, float(augment.get("sharpen_strength", 0.0) or 0.0))
-        img_bgr = apply_shadow(img_bgr, float(augment.get("shadow_strength", 0.0) or 0.0), float(augment.get("shadow_size", 0.2) or 0.2), rng_post)
-        img_bgr = apply_reflection(img_bgr, float(augment.get("reflection_strength", 0.0) or 0.0), float(augment.get("reflection_size", 0.15) or 0.15), rng_post)
-        img_bgr = apply_dust_particles(img_bgr, float(augment.get("dust_density", 0.0) or 0.0), float(augment.get("dust_size", 2.0) or 2.0), rng_post)
-        img_bgr = apply_jpeg_compression(img_bgr, int(augment.get("jpeg_quality", 100) or 100))
-        img_bgr = apply_perspective_transform(img_bgr, float(augment.get("perspective_strength", 0.0) or 0.0), float(augment.get("perspective_angle_x", 0.0) or 0.0), float(augment.get("perspective_angle_y", 0.0) or 0.0))
-        rotation_deg = float(augment.get("rotation_deg", 0.0) or 0.0)
-        if abs(rotation_deg) > 0.1:
-            h_img, w_img = img_bgr.shape[:2]
-            rot_mat = cv2.getRotationMatrix2D((w_img // 2, h_img // 2), rotation_deg, 1.0)
-            img_bgr = cv2.warpAffine(img_bgr, rot_mat, (w_img, h_img), borderMode=cv2.BORDER_REPLICATE)
-
-        popup.top.after(0, lambda img=img_bgr: _show_left_preview_image(popup, img, profile_id, "3D"))
-
-    except Exception as exc:
-        err = str(exc)
-        popup.top.after(0, lambda e=err: popup._left_preview_status_var.set(f"Render error: {e}"))
-    finally:
-        popup.top.after(0, lambda: setattr(popup, "_left_preview_is_rendering", False))
+    backend = "3D" if is_3d_only else "2D"
+    popup._left_preview_status_var.set(f"Rendering ({backend})…")
+    work = (lambda: do_render_3d_preview(popup, pid, filter_vals, "filter_preview_left")) if is_3d_only else (
+        lambda: do_render_2d_preview(popup, pid, filter_vals))
+    _run_in_background(
+        popup, work,
+        lambda res: _show_left_preview_image(popup, res[0], pid, backend),
+        lambda err: popup._left_preview_status_var.set(f"Render error: {err}"),
+        "_left_preview_is_rendering",
+    )
 
 
 def _show_left_preview_image(
@@ -868,23 +467,8 @@ def _show_left_preview_image(
 ) -> None:
     """Display a rendered image in the left preview label."""
     try:
-        from PIL import Image, ImageTk  # type: ignore
-        import numpy as np  # type: ignore
-
-        img_rgb = img_bgr[:, :, ::-1].copy()
-        pil_img = Image.fromarray(img_rgb.astype(np.uint8))
-
-        popup._left_preview_full_pil = pil_img.copy()
-
-        max_px = 180
-        w, h = pil_img.size
-        if w > max_px or h > max_px:
-            scale = max_px / max(w, h)
-            pil_img = pil_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
-
-        popup._left_preview_photo = ImageTk.PhotoImage(pil_img)
-        popup._left_preview_img_label.configure(image=popup._left_preview_photo, text="")
-        popup._left_preview_img_label.configure(cursor="hand2")
+        popup._left_preview_full_pil, popup._left_preview_photo = _to_photo(popup, img_bgr, 180)
+        popup._left_preview_img_label.configure(image=popup._left_preview_photo, text="", cursor="hand2")
         popup._left_preview_img_label.bind(
             "<Button-1>",
             lambda _evt: _open_zoom_image_popup(

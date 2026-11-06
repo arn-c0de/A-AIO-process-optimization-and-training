@@ -1,6 +1,6 @@
 # Sample Gallery
 
-Auto-generated reference images for all component profiles (2D and 3D). Last updated: 2026-11-06 11:12:20
+Auto-generated reference images for all component profiles (2D and 3D). Last updated: 2026-11-06 18:08:48
 
 Re-generate by running:
 ```bash
@@ -14,11 +14,13 @@ Re-generate by running:
   - [chip_0603_resistor@2](#chip-0603-resistor2)
   - [qfn32_ic@1](#qfn32-ic1)
   - [sot23_transistor@1](#sot23-transistor1)
+  - [sot23_transistor@2](#sot23-transistor2)
 - [3D Profiles](#3d-profiles)
   - [chip_0603_resistor_3d@2](#chip-0603-resistor-3d2)
   - [qfn32_ic_3d@2](#qfn32-ic-3d2)
   - [soic16_ic_3d@2](#soic16-ic-3d2)
   - [sot23_transistor_3d@2](#sot23-transistor-3d2)
+  - [sot23_transistor_3d@3](#sot23-transistor-3d3)
 
 ## 2D Profiles
 
@@ -59,6 +61,15 @@ Re-generate by running:
 | MISSING | ![MISSING](images/samples/sot23_transistor@1/MISSING.png) |
 | OK | ![OK](images/samples/sot23_transistor@1/OK.png) |
 | TOMBSTONE | ![TOMBSTONE](images/samples/sot23_transistor@1/TOMBSTONE.png) |
+
+### sot23_transistor@2
+
+| Class | Sample |
+|-------|--------|
+| MISALIGNED | ![MISALIGNED](images/samples/sot23_transistor@2/MISALIGNED.png) |
+| MISSING | ![MISSING](images/samples/sot23_transistor@2/MISSING.png) |
+| OK | ![OK](images/samples/sot23_transistor@2/OK.png) |
+| TOMBSTONE | ![TOMBSTONE](images/samples/sot23_transistor@2/TOMBSTONE.png) |
 
 ## 3D Profiles
 
@@ -105,4 +116,15 @@ Re-generate by running:
 | OK | ![OK](images/samples/sot23_transistor_3d@2/OK.png) |
 | SOLDER_BALL | ![SOLDER_BALL](images/samples/sot23_transistor_3d@2/SOLDER_BALL.png) |
 | TOMBSTONE | ![TOMBSTONE](images/samples/sot23_transistor_3d@2/TOMBSTONE.png) |
+
+### sot23_transistor_3d@3
+
+| Class | Sample |
+|-------|--------|
+| EXCESS_SOLDER | ![EXCESS_SOLDER](images/samples/sot23_transistor_3d@3/EXCESS_SOLDER.png) |
+| MISALIGNED | ![MISALIGNED](images/samples/sot23_transistor_3d@3/MISALIGNED.png) |
+| MISSING | ![MISSING](images/samples/sot23_transistor_3d@3/MISSING.png) |
+| OK | ![OK](images/samples/sot23_transistor_3d@3/OK.png) |
+| SOLDER_BALL | ![SOLDER_BALL](images/samples/sot23_transistor_3d@3/SOLDER_BALL.png) |
+| TOMBSTONE | ![TOMBSTONE](images/samples/sot23_transistor_3d@3/TOMBSTONE.png) |
 

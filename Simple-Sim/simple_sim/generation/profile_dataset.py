@@ -7,10 +7,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from tqdm import tqdm
 
 from simple_sim.config import load_config, merge_profile_render, validate_config
-from simple_sim.dataset_store import write_dataset
+from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files, write_image
+from simple_sim.parallel import imap_ordered, render_workers
 from simple_sim.generation.common import (
     build_rows,
     finalize_splits,
@@ -76,7 +78,7 @@ def generate_profile_dataset(
     print(f"Total samples: {total_per_class * len(profile_ids)}")
     print(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
 
-    all_images = {}
+    jobs: list[tuple[dict[str, Any], np.random.Generator, dict[str, Any], dict[str, Any] | None, str]] = []
     records: list[dict[str, Any]] = []
     global_index = 0
     t_total0 = time.perf_counter()
@@ -88,7 +90,7 @@ def generate_profile_dataset(
         geometry_ranges = profile.get("geometry_ranges")
         tolerances = profile.get("tolerances")
 
-        render_config = merge_profile_render(config["render"], profile)
+        render_config = merge_profile_render(config["render"], profile, config.get("roi"))
 
         print(f"\nGenerating samples for profile: {pid}")
         for class_name, count in classes.items():
@@ -105,17 +107,9 @@ def generate_profile_dataset(
                     footprint=footprint,
                     profile_id=pid,
                 )
-                # Rendering continues the sampling rng (unlike generate.py, which reseeds).
-                all_images[rec["image_path"]] = render_roi(
-                    nominal=rec["nominal"],
-                    defect_params=rec["defect"],
-                    augment=rec["augment"],
-                    roi_size=(roi_width, roi_height),
-                    config=render_config,
-                    tolerances=tolerances,
-                    rng=rng,
-                    footprint=footprint,
-                )
+                # Rendering continues the sampling rng (unlike generate.py, which reseeds); each
+                # record has its own rng, so rendering them later in threads gives the same images.
+                jobs.append((rec, rng, render_config, tolerances, footprint))
                 records.append(rec)
                 global_index += 1
 
@@ -131,7 +125,27 @@ def generate_profile_dataset(
     )
 
     print(f"\nWriting dataset to {output_dir}")
-    write_dataset(output_dir, all_images, meta_rows, label_rows, config)
+    workers = render_workers()
+
+    def render_job(job: tuple[dict[str, Any], np.random.Generator, dict[str, Any], dict[str, Any] | None, str]) -> None:
+        rec, rng, render_config, tolerances, footprint = job
+        img = render_roi(
+            nominal=rec["nominal"],
+            defect_params=rec["defect"],
+            augment=rec["augment"],
+            roi_size=(roi_width, roi_height),
+            config=render_config,
+            tolerances=tolerances,
+            rng=rng,
+            footprint=footprint,
+        )
+        write_image(temp_dir / rec["image_path"], img)
+
+    with atomic_dataset_dir(output_dir) as temp_dir:
+        print(f"Rendering {len(jobs)} images with {workers} worker thread(s)")
+        for _ in tqdm(imap_ordered(render_job, jobs, workers=workers), total=len(jobs), desc="render"):
+            pass
+        write_dataset_files(temp_dir, meta_rows, label_rows, config)
     finalize_splits(output_dir, splits, label_rows)
 
     write_multi_profile_manifest(

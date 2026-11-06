@@ -284,12 +284,17 @@ def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, 
     if family in ("sot", "soic") and not body.get("is_tombstone"):
         m_lead = _cfg_material("mat_lead", mats.get("solder") or {}, (0.7, 0.7, 0.72), 0.25, 1.0)
         contacts, t = [], 0.0
+        # Leads are rigid with the body: their layout comes from the *nominal* placement (part centred,
+        # body axis at lead_frame_deg), so a shifted/rotated part's feet miss their pads instead of
+        # stretching towards them.
+        a0 = -math.radians(float(body.get("lead_frame_deg", 0.0)))
+        axis0 = Vector((math.cos(a0), math.sin(a0), 0.0))
+        to_world = lambda v: Vector((cx, cy, 0.0)) + axis * v.x + Vector((-axis.y, axis.x, 0.0)) * v.y  # noqa: E731
         for k, (px, py, pw, ph) in enumerate(pads):
-            rel = Vector((px - cx, py - cy, 0.0))
-            loc = Vector((rel.dot(axis), rel.x * -axis.y + rel.y * axis.x, 0.0))  # pad in body frame
+            rel = Vector((px, py, 0.0))  # scene coordinates are relative to the nominal part centre
+            loc = Vector((rel.dot(axis0), rel.x * -axis0.y + rel.y * axis0.x, 0.0))  # pad in body frame
             edge = Vector((max(-L / 2, min(L / 2, loc.x)), max(-W / 2, min(W / 2, loc.y)), 0.0))
-            to_world = lambda v: Vector((cx, cy, 0.0)) + axis * v.x + Vector((-axis.y, axis.x, 0.0)) * v.y
-            start, foot = to_world(edge * 0.98), Vector((px, py, 0.0))
+            start, foot = to_world(edge * 0.98), to_world(loc)
             lw = min(0.55 * min(pw, ph), 0.15 * max(L, W))
             t = 0.25 * lw
             shoulder = start + Vector((0, 0, standoff + 0.45 * H))

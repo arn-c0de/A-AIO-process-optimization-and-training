@@ -235,6 +235,25 @@ Responsibilities:
 - Returns profile + defect probabilities/confidences and review flag.
 - Lazy-loads per-profile defect models and reuses them.
 
+## Board Model (`simple_sim/board/*`)
+
+Procedural PCB around the inspected part as plain data in mm (`render.board.routing: escape`;
+`legacy` keeps the old copper generator). Shared by the 2D render and the board baked for Blender.
+
+| Module | Responsibility |
+|---|---|
+| `board/__init__.py` | `build_window_board(...)` (pipeline for one render window), `BoardOptions` / `board_options(render_cfg)` / `validate_board_options`, keyed random streams per stage, `DEFAULT_MM_PER_PX` |
+| `board/model.py` | Dataclasses `Pad`, `Part`, `Track`, `Via`, `Zone`, `Port`, `Board` (mm, JSON-serialisable, no OpenCV) |
+| `board/rules.py` | `DesignRules` and presets (`consumer_dense`, `industrial`, `hdi`) as ranges; `sample_rules()` draws one set per board |
+| `board/footprints.py` | Footprint library: `footprint_pads()` (pixel geometry with pin, role, fan-out direction; the source of `draw._compute_pad_positions`), `chip_pads()`, `part_from_pads()` / `pads_px()` (mm <-> px), `family_of()` |
+| `board/placement.py` | `neighbour_layout()` (legacy neighbour chips, pixel dicts) and `place_window()` (target + neighbours as `Part`s) |
+| `board/netlist.py` | `assign_nets()`: nets per part family, shared nets between target and neighbours |
+| `board/occupancy.py` | `Grid` (mm -> cells, drawing helpers) and `Occupancy` (net id per cell, conflict checks with clearance) |
+| `board/routing/` | `Router` protocol, `RouteResult`, `seed_occupancy()`; `escape.py`: fan-out router (stubs, 45° routes to ports or vias, thermal via grids, through-nets, buses) |
+| `board/zones.py` | Ground pours: `sample_zones()`, `zone_fill()` (clearance, thermal relief) on any grid, `stitch_vias()` |
+| `board/drc.py` | `check(board) -> DrcReport`: clearance, dangling ends, forbidden pads, keep-out, widths |
+| `board/raster.py` | `rasterize(board, shape, px_to_mm) -> CopperLayers` (anti-aliased copper mask + via positions for `photoreal._draw_copper`) |
+
 ## Generators Package
 
 ## `simple_sim/generators/__init__.py`

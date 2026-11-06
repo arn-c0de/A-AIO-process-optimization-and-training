@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, Any
 
 from gui.components.chart_widgets import create_confusion_matrix_widget
 from gui.components.overlay_renderer import draw_prediction_overlay, draw_two_stage_overlay
+from gui.theme.style import on_theme_changed, palette
+from gui.theme.tokens import SPACE
 from gui.utils.tooltip import ToolTip
+from gui.widgets import FormGrid, LogView, ScrolledTree, Section, Toolbar, icon_button
 import numpy as np
 from PIL import Image, ImageTk
 import cv2
@@ -21,7 +24,7 @@ if TYPE_CHECKING:
 class PredictionsUI:
     def __init__(self, tab: PredictionsTab, parent: ttk.Frame):
         self.tab = tab
-        self.frame = ttk.Frame(parent, padding=10)
+        self.frame = ttk.Frame(parent, padding=SPACE.L)
 
         self._cm_canvas = None
         self._photo: ImageTk.PhotoImage | None = None
@@ -46,6 +49,10 @@ class PredictionsUI:
         self.var_multi_datasets: tk.BooleanVar
 
         self.tree: ttk.Treeview
+        self.tree_view: ScrolledTree
+        self.lbl_tree_empty: ttk.Label
+        self.metrics_view: LogView
+        self.log_view: LogView
         self.tree_ds: ttk.Treeview
         self.ds_summary_frame: ttk.Frame
         self.canvas: tk.Canvas
@@ -59,174 +66,193 @@ class PredictionsUI:
         self._cm_parent: ttk.Frame
 
     def build_ui(self) -> None:
+        # ------------------------------------------------------------ inputs
         top = ttk.Frame(self.frame)
-        top.pack(fill="x", pady=(0, 8))
-        top.columnconfigure(1, weight=1)
-        top.columnconfigure(4, weight=1)
+        top.pack(fill="x")
+        top.columnconfigure(0, weight=3)
+        top.columnconfigure(1, weight=2)
 
-        ttk.Label(top, text="Dataset:").grid(row=0, column=0, sticky="w")
+        src = Section(top, "Source", help_key="predictions.source")
+        src.grid(row=0, column=0, sticky="nsew", padx=(0, SPACE.M))
+        form = FormGrid(src, style="Card.TFrame")
+        form.pack(fill="x")
+
+        ds_row = form.inline("Card.TFrame")
         self.var_dataset = tk.StringVar(value="")
-        self.combo_dataset = ttk.Combobox(top, textvariable=self.var_dataset, state="readonly")
-        self.combo_dataset.grid(row=0, column=1, sticky="ew", padx=(6, 6))
+        self.combo_dataset = ttk.Combobox(ds_row, textvariable=self.var_dataset, state="readonly")
+        self.combo_dataset.pack(side="left", fill="x", expand=True)
         self.combo_dataset.bind("<<ComboboxSelected>>", self.tab._on_dataset_selected)
-        ToolTip(self.combo_dataset, text_func=lambda: self.var_dataset.get())
-        ds_tools = ttk.Frame(top)
-        ds_tools.grid(row=0, column=2, sticky="w", padx=(0, 12))
-        ttk.Button(ds_tools, text="↻", width=3, command=self.tab._refresh_datasets).pack(side="left")
+        ToolTip(self.combo_dataset, help_key="common.dataset", text_func=lambda: self.var_dataset.get())
+        icon_button(ds_row, "refresh", self.tab._refresh_datasets, help_key="common.refresh").pack(
+            side="left", padx=(SPACE.S, 0))
         self.var_multi_datasets = tk.BooleanVar(value=False)
-        ttk.Checkbutton(ds_tools, text="Multi", variable=self.var_multi_datasets, command=self.tab._on_multi_toggle).pack(side="left", padx=(8, 0))
-        ttk.Button(ds_tools, text="Select…", command=self.tab._open_multi_dataset_dialog).pack(side="left", padx=(6, 0))
+        chk_multi = ttk.Checkbutton(ds_row, text="Multi", variable=self.var_multi_datasets,
+                                    command=self.tab._on_multi_toggle, style="Card.TCheckbutton")
+        chk_multi.pack(side="left", padx=(SPACE.M, 0))
+        ToolTip(chk_multi, help_key="predictions.dataset_multi")
+        b_sel = ttk.Button(ds_row, text="Select…", command=self.tab._open_multi_dataset_dialog)
+        b_sel.pack(side="left", padx=(SPACE.S, 0))
+        ToolTip(b_sel, help_key="predictions.dataset_multi_pick")
         self.var_multi_sel = tk.StringVar(value="selected: 0")
-        ttk.Label(ds_tools, textvariable=self.var_multi_sel).pack(side="left", padx=(8, 0))
+        ttk.Label(ds_row, textvariable=self.var_multi_sel, style="CardMuted.TLabel").pack(
+            side="left", padx=(SPACE.S, 0))
+        form.row("Dataset", ds_row)
 
-        ttk.Label(top, text="Model:").grid(row=0, column=3, sticky="w")
+        model_row = form.inline("Card.TFrame")
         self.var_model = tk.StringVar(value="")
-        self.combo_model = ttk.Combobox(top, textvariable=self.var_model, state="readonly")
-        self.combo_model.grid(row=0, column=4, sticky="ew", padx=(6, 6))
-        ttk.Button(top, text="↻", width=3, command=self.tab._refresh_models).grid(row=0, column=5, sticky="w", padx=(0, 12))
+        self.combo_model = ttk.Combobox(model_row, textvariable=self.var_model, state="readonly")
+        self.combo_model.pack(side="left", fill="x", expand=True)
+        ToolTip(self.combo_model, help_key="common.model", text_func=lambda: self.var_model.get())
+        icon_button(model_row, "refresh", self.tab._refresh_models, help_key="common.refresh").pack(
+            side="left", padx=(SPACE.S, 0))
+        form.row("Model", model_row)
 
-        self.btn_run = ttk.Button(top, text="Start Predictions", command=self.tab._run_predictions, width=16)
-        self.btn_run.grid(row=0, column=6, sticky="e")
-        self.btn_stop = ttk.Button(top, text="Stop", command=self.tab._stop_predictions, state="disabled", width=8)
-        self.btn_stop.grid(row=0, column=7, sticky="e", padx=(8, 0))
-
-        opts = ttk.Frame(self.frame)
-        opts.pack(fill="x", pady=(0, 8))
-
-        ttk.Label(opts, text="Split:").pack(side="left")
-        self.var_split = tk.StringVar(value="test")
-        ttk.Combobox(opts, textvariable=self.var_split, values=["train", "val", "test", "all"], state="readonly", width=6).pack(side="left", padx=(6, 12))
-
-        ttk.Label(opts, text="Device:").pack(side="left")
-        self.var_device = tk.StringVar(value="auto")
-        ttk.Combobox(opts, textvariable=self.var_device, values=["auto", "cpu", "cuda"], state="readonly", width=6).pack(side="left", padx=(6, 12))
-
-        ttk.Label(opts, text="Max:").pack(side="left")
-        self.var_max_samples = tk.StringVar(value="")
-        ttk.Entry(opts, textvariable=self.var_max_samples, width=6).pack(side="left", padx=(6, 12))
-
-        self.chk_save_preds = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opts, text="Save per-sample preds", variable=self.chk_save_preds).pack(side="left")
-
-        self.chk_auto_train_bundle = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opts, text="Auto-train missing bundle ckpt", variable=self.chk_auto_train_bundle).pack(side="left", padx=(10, 0))
-
-        ttk.Separator(opts, orient="vertical").pack(side="left", fill="y", padx=(12, 12), pady=2)
-        ttk.Label(opts, text="Profile Model:").pack(side="left")
+        pm_row = form.inline("Card.TFrame")
         self.var_profile_model = tk.StringVar(value="")
-        self.combo_profile_model = ttk.Combobox(opts, textvariable=self.var_profile_model, state="readonly", width=30)
-        self.combo_profile_model.pack(side="left", padx=(6, 4))
-        ttk.Button(opts, text="↻", width=3, command=self.tab._refresh_profile_models).pack(side="left")
+        self.combo_profile_model = ttk.Combobox(pm_row, textvariable=self.var_profile_model, state="readonly", width=30)
+        self.combo_profile_model.pack(side="left", fill="x", expand=True)
+        ToolTip(self.combo_profile_model, help_key="predictions.profile_model")
+        icon_button(pm_row, "refresh", self.tab._refresh_profile_models, help_key="common.refresh").pack(
+            side="left", padx=(SPACE.S, 0))
+        form.row("Profile Model", pm_row)
 
-        status = ttk.Frame(self.frame)
-        status.pack(fill="x", pady=(0, 8))
+        opts = Section(top, "Options")
+        opts.grid(row=0, column=1, sticky="nsew")
+        oform = FormGrid(opts, style="Card.TFrame")
+        oform.pack(fill="x")
+        self.var_split = tk.StringVar(value="test")
+        oform.row("Split", ttk.Combobox(oform, textvariable=self.var_split, values=["train", "val", "test", "all"],
+                                        state="readonly", width=8), help_key="common.split", sticky="w")
+        self.var_device = tk.StringVar(value="auto")
+        oform.row("Device", ttk.Combobox(oform, textvariable=self.var_device, values=["auto", "cpu", "cuda"],
+                                         state="readonly", width=8), help_key="common.device", sticky="w")
+        self.var_max_samples = tk.StringVar(value="")
+        oform.row("Max Samples", ttk.Entry(oform, textvariable=self.var_max_samples, width=8),
+                  help_key="predictions.max_samples", sticky="w")
+        self.chk_save_preds = tk.BooleanVar(value=True)
+        cb_save = oform.full(ttk.Checkbutton(oform, text="Save per-sample predictions", variable=self.chk_save_preds,
+                                             style="Card.TCheckbutton"))
+        ToolTip(cb_save, help_key="predictions.save_preds")
+        self.chk_auto_train_bundle = tk.BooleanVar(value=False)
+        cb_auto = oform.full(ttk.Checkbutton(oform, text="Auto-train missing bundle checkpoints",
+                                             variable=self.chk_auto_train_bundle, style="Card.TCheckbutton"))
+        ToolTip(cb_auto, help_key="predictions.auto_train_bundle")
+
+        # ------------------------------------------------------------ actions + status
+        bar = Toolbar(self.frame)
+        bar.pack(fill="x", pady=(SPACE.M, 0))
+        self.btn_run = bar.button("Start Predictions", self.tab._run_predictions,
+                                  style="Accent.TButton", help_key="predictions.run")
+        self.btn_stop = bar.button("Stop", self.tab._stop_predictions, style="Danger.TButton",
+                                   help_key="predictions.stop", state="disabled")
+        bar.separator()
         self.var_status = tk.StringVar(value="status: idle")
-        ttk.Label(status, textvariable=self.var_status).pack(side="left")
+        bar.add(ttk.Label(bar, textvariable=self.var_status, style="Badge.TLabel"))
 
         paths = ttk.Frame(self.frame)
-        paths.pack(fill="x", pady=(0, 10))
+        paths.pack(fill="x", pady=(SPACE.S, 0))
         self.var_report_path = tk.StringVar(value="report: -")
         self.var_preds_path = tk.StringVar(value="preds: -")
-        ttk.Label(paths, textvariable=self.var_report_path).pack(side="left", padx=(0, 14))
-        ttk.Label(paths, textvariable=self.var_preds_path).pack(side="left")
+        ttk.Label(paths, textvariable=self.var_report_path, style="Small.TLabel").pack(side="left", padx=(0, SPACE.L))
+        ttk.Label(paths, textvariable=self.var_preds_path, style="Small.TLabel").pack(side="left")
 
         main = ttk.Panedwindow(self.frame, orient="horizontal")
-        main.pack(fill="both", expand=True)
+        main.pack(fill="both", expand=True, pady=(SPACE.M, 0))
 
-        left = ttk.Frame(main, padding=5)
+        # ------------------------------------------------------------ results list
+        left = Section(main, "Results", help_key="predictions.results")
         main.add(left, weight=2)
 
-        self.ds_summary_frame = ttk.Frame(left)
-        ttk.Label(self.ds_summary_frame, text="Dataset Results").pack(anchor="w")
-        ds_tree_frame = ttk.Frame(self.ds_summary_frame)
-        ds_tree_frame.pack(fill="x", expand=False, pady=(4, 0))
-        self.tree_ds = ttk.Treeview(ds_tree_frame, columns=("Dataset", "Acc", "F1", "Seen", "ProfAcc"), show="headings", height=6)
-        self.tree_ds.heading("Dataset", text="Dataset")
-        self.tree_ds.column("Dataset", width=210, anchor="w")
-        self.tree_ds.heading("Acc", text="Acc")
-        self.tree_ds.column("Acc", width=70, anchor="e")
-        self.tree_ds.heading("F1", text="Macro F1")
-        self.tree_ds.column("F1", width=80, anchor="e")
-        self.tree_ds.heading("Seen", text="Seen")
-        self.tree_ds.column("Seen", width=60, anchor="e")
-        self.tree_ds.heading("ProfAcc", text="Prof Acc")
-        self.tree_ds.column("ProfAcc", width=80, anchor="e")
-        ds_scroll = ttk.Scrollbar(ds_tree_frame, orient="vertical", command=self.tree_ds.yview)
-        self.tree_ds.configure(yscrollcommand=ds_scroll.set)
-        self.tree_ds.pack(side="left", fill="x", expand=True)
-        ds_scroll.pack(side="right", fill="y")
+        # Holder keeps the multi-dataset table at the top when the tab (re)packs it.
+        ds_holder = ttk.Frame(left, style="Card.TFrame")
+        ds_holder.pack(fill="x")
+        self.ds_summary_frame = ttk.Frame(ds_holder, style="Card.TFrame")
+        ttk.Label(self.ds_summary_frame, text="Dataset Results", style="CardMuted.TLabel").pack(anchor="w")
+        ds_view = ScrolledTree(
+            self.ds_summary_frame,
+            [("Dataset", "Dataset", 210, "w"), ("Acc", "Acc", 70, "e"), ("F1", "Macro F1", 80, "e"),
+             ("Seen", "Seen", 60, "e"), ("ProfAcc", "Prof Acc", 80, "e")],
+            height=6,
+        )
+        ds_view.pack(fill="x", expand=False, pady=(SPACE.S, 0))
+        self.tree_ds = ds_view.tree
+        ToolTip(self.tree_ds, help_key="predictions.ds_results")
         self.tree_ds.bind("<<TreeviewSelect>>", self.tab._on_tree_ds_select)
-        self.ds_summary_frame.pack_forget()
 
-        filters = ttk.Frame(left)
-        filters.pack(fill="x", pady=(0, 6))
-        ttk.Label(filters, text="Show:").pack(side="left")
+        filters = Toolbar(left, style="Card.TFrame")
+        filters.pack(fill="x", pady=(0, SPACE.S))
+        filters.add(ttk.Label(filters, text="Show", style="CardMuted.TLabel"))
         self.var_filter = tk.StringVar(value="all")
-        ttk.Radiobutton(filters, text="All", variable=self.var_filter, value="all", command=self.tab._refresh_tree).pack(side="left", padx=(6, 0))
-        ttk.Radiobutton(filters, text="Wrong", variable=self.var_filter, value="wrong", command=self.tab._refresh_tree).pack(side="left", padx=(6, 0))
-        ttk.Radiobutton(filters, text="Correct", variable=self.var_filter, value="correct", command=self.tab._refresh_tree).pack(side="left", padx=(6, 0))
-        ttk.Radiobutton(filters, text="Prof Wrong", variable=self.var_filter, value="prof_wrong", command=self.tab._refresh_tree).pack(side="left", padx=(6, 0))
-        
-        tree_frame = ttk.Frame(left)
-        tree_frame.pack(fill="both", expand=True)
+        for text, value in (("All", "all"), ("Wrong", "wrong"), ("Correct", "correct"), ("Prof Wrong", "prof_wrong")):
+            rb = ttk.Radiobutton(filters, text=text, variable=self.var_filter, value=value,
+                                 command=self.tab._refresh_tree, style="Card.TRadiobutton")
+            filters.add(rb)
+            ToolTip(rb, help_key="predictions.show_filter")
+        filters.add_right(icon_button(filters, "next", self.tab._next_sample, help_key="common.next"))
+        filters.add_right(icon_button(filters, "prev", self.tab._prev_sample, help_key="common.prev"))
 
-        self.tree = ttk.Treeview(tree_frame, columns=("GT", "Pred", "Conf", "OK", "GT Prof", "Pred Prof", "Prof"), show="tree headings")
-        self.tree.heading("#0", text="Sample ID")
-        self.tree.column("#0", width=200)
-        self.tree.heading("GT", text="GT")
-        self.tree.column("GT", width=80, anchor="center")
-        self.tree.heading("Pred", text="Pred")
-        self.tree.column("Pred", width=90, anchor="center")
-        self.tree.heading("Conf", text="Conf")
-        self.tree.column("Conf", width=60, anchor="e")
-        self.tree.heading("OK", text="OK")
-        self.tree.column("OK", width=40, anchor="center")
-        self.tree.heading("GT Prof", text="GT Prof")
-        self.tree.column("GT Prof", width=120, anchor="center")
-        self.tree.heading("Pred Prof", text="Pred Prof")
-        self.tree.column("Pred Prof", width=120, anchor="center")
-        self.tree.heading("Prof", text="Prof")
-        self.tree.column("Prof", width=40, anchor="center")
-        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
+        self.tree_view = ScrolledTree(
+            left,
+            [("GT", "GT", 80, "center"), ("Pred", "Pred", 90, "center"), ("Conf", "Conf", 60, "e"),
+             ("OK", "OK", 40, "center"), ("GT Prof", "GT Prof", 120, "center"),
+             ("Pred Prof", "Pred Prof", 120, "center"), ("Prof", "Prof", 40, "center")],
+            show_tree=True,
+            tree_heading="Sample ID",
+            tree_width=200,
+        )
+        self.tree_view.pack(fill="both", expand=True)
+        self.tree = self.tree_view.tree
+        self.lbl_tree_empty = ttk.Label(self.tree_view, text="No predictions yet. Press Start Predictions.",
+                                        style="CardMuted.TLabel")
+        self.lbl_tree_empty.place(relx=0.5, rely=0.4, anchor="center")
         self.tree.bind("<<TreeviewSelect>>", self.tab._on_tree_select)
+        self.tree.bind("<Left>", lambda _e: (self.tab._prev_sample(), "break")[1])
+        self.tree.bind("<Right>", lambda _e: (self.tab._next_sample(), "break")[1])
 
-        right = ttk.Frame(main, padding=5)
+        # ------------------------------------------------------------ report / viewer / logs
+        right = ttk.Frame(main)
         main.add(right, weight=3)
-        
+
         top_right = ttk.Panedwindow(right, orient="vertical")
         top_right.pack(fill="both", expand=True)
         self._right_paned = top_right
         top_right.bind("<Configure>", lambda _e: self._schedule_enforce_log_pane_min_height())
 
-        metrics_box = ttk.Frame(top_right, padding=5)
+        metrics_box = Section(top_right, "Metrics / Report")
         top_right.add(metrics_box, weight=2)
-        ttk.Label(metrics_box, text="Metrics / Report").pack(anchor="w")
-        self.txt_metrics = tk.Text(metrics_box, height=10, wrap="word")
-        self.txt_metrics.pack(fill="x", expand=False, pady=(6, 6))
-        self.txt_metrics.configure(state="disabled")
+        self.metrics_view = LogView(metrics_box, height=10, wrap="word")
+        self.metrics_view.pack(fill="x", expand=False, pady=(0, SPACE.M))
+        self.txt_metrics = self.metrics_view.text
 
-        cm_box = ttk.Frame(metrics_box)
+        cm_box = ttk.Frame(metrics_box, style="Card.TFrame")
         cm_box.pack(fill="both", expand=True)
-        ttk.Label(cm_box, text="Confusion Matrix").pack(anchor="w")
-        self._cm_parent = ttk.Frame(cm_box)
-        self._cm_parent.pack(fill="both", expand=True, pady=(6, 0))
+        ttk.Label(cm_box, text="Confusion Matrix", style="CardMuted.TLabel").pack(anchor="w")
+        self._cm_parent = ttk.Frame(cm_box, style="Card.TFrame")
+        self._cm_parent.pack(fill="both", expand=True, pady=(SPACE.S, 0))
 
-        viewer_box = ttk.Frame(top_right, padding=5)
+        viewer_box = Section(top_right, "Image Viewer")
         top_right.add(viewer_box, weight=2)
-        ttk.Label(viewer_box, text="Image Viewer").pack(anchor="w")
-        self.canvas = tk.Canvas(viewer_box, bg="gray20", width=520, height=520)
-        self.canvas.pack(fill="both", expand=True, pady=(6, 0))
+        self.canvas = tk.Canvas(viewer_box, background=palette(self.frame).canvas_bg, highlightthickness=0,
+                                width=520, height=520, takefocus=1)
+        self.canvas._simsim_role = "image"  # type: ignore[attr-defined]
+        self.canvas.pack(fill="both", expand=True)
+        on_theme_changed(self.canvas, lambda pal: self.canvas.configure(background=pal.canvas_bg))
+        self.canvas.bind("<Button-1>", lambda _e: self.canvas.focus_set())
+        self.canvas.bind("<Left>", lambda _e: (self.tab._prev_sample(), "break")[1])
+        self.canvas.bind("<Right>", lambda _e: (self.tab._next_sample(), "break")[1])
 
-        logs_box = ttk.Frame(top_right, padding=5, height=220)
+        logs_box = Section(top_right, "Logs", height=220)
         logs_box.pack_propagate(False)
         top_right.add(logs_box, weight=2)
-        ttk.Label(logs_box, text="Logs").pack(anchor="w")
-        self.txt_logs = tk.Text(logs_box, height=10, wrap="none")
-        self.txt_logs.pack(fill="both", expand=True, pady=(6, 0))
-        self.txt_logs.configure(state="disabled")
+        self.log_view = LogView(logs_box, height=10)
+        self.log_view.pack(fill="both", expand=True)
+        self.txt_logs = self.log_view.text
+        b_clear = ttk.Button(logs_box.actions, text="Clear", style="Icon.TButton", command=self.log_view.clear)
+        b_clear.pack(side="right")
+        ToolTip(b_clear, help_key="common.clear_log")
+        b_copy = ttk.Button(logs_box.actions, text="Copy", style="Icon.TButton", command=self.log_view.copy_all)
+        b_copy.pack(side="right", padx=(0, SPACE.S))
+        ToolTip(b_copy, help_key="common.copy_log")
         self._schedule_enforce_log_pane_min_height()
 
     def set_metrics_text(self, s: str) -> None:
@@ -236,10 +262,7 @@ class PredictionsUI:
         self.txt_metrics.configure(state="disabled")
 
     def append_log(self, s: str) -> None:
-        self.txt_logs.configure(state="normal")
-        self.txt_logs.insert("end", s)
-        self.txt_logs.see("end")
-        self.txt_logs.configure(state="disabled")
+        self.log_view.append(s)
 
     def clear_confusion_matrix(self) -> None:
         for w in list(self._cm_parent.winfo_children()):
@@ -317,7 +340,19 @@ class PredictionsUI:
             if profile_correct is not None:
                 prof_mark = "✓" if profile_correct else "✗"
             
-            self.tree.insert("", "end", iid=sid, text=sid, values=(gt, pred, f"{conf:.1%}", ok, str(r.get("gt_profile") or ""), str(r.get("pred_profile") or ""), prof_mark))
+            self.tree_view.insert(
+                (gt, pred, f"{conf:.1%}", ok, str(r.get("gt_profile") or ""), str(r.get("pred_profile") or ""), prof_mark),
+                iid=sid,
+                text=sid,
+                tags=() if correct else ("danger",),
+            )
+        if self.tree.get_children(""):
+            self.lbl_tree_empty.place_forget()
+        else:
+            self.lbl_tree_empty.configure(
+                text="No predictions yet. Press Start Predictions." if not pred_rows else "No samples match this filter."
+            )
+            self.lbl_tree_empty.place(relx=0.5, rely=0.4, anchor="center")
 
     def _top1_confidence(self, row: dict[str, Any]) -> float:
         try:

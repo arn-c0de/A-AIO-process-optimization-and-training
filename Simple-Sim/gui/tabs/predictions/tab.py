@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import queue
-import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from pathlib import Path
 from typing import Any
 
+from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_dataset_labels
@@ -152,62 +152,40 @@ class PredictionsTab(BaseTab):
         except Exception:
             pass
 
+    def _dataset_rel(self, p: Path) -> str:
+        try:
+            return str(p.resolve().relative_to(self.sim_root.resolve()))
+        except Exception:
+            return str(p.resolve())
+
     def _open_multi_dataset_dialog(self) -> None:
         self._refresh_datasets()
-        dlg = tk.Toplevel(self.frame)
-        dlg.title("Select Datasets")
-        dlg.transient(self.frame.winfo_toplevel())
-        dlg.grab_set()
-
-        frm = ttk.Frame(dlg, padding=10)
-        frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text="Select one or more datasets (Ctrl/Shift):").pack(anchor="w")
-
-        list_frame = ttk.Frame(frm)
-        list_frame.pack(fill="both", expand=True, pady=(8, 8))
-        lb = tk.Listbox(list_frame, selectmode="extended", height=16)
-        sb = ttk.Scrollbar(list_frame, orient="vertical", command=lb.yview)
-        lb.configure(yscrollcommand=sb.set)
-        lb.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-
         labels = list(self._dataset_by_label.keys())
-        for x in labels:
-            lb.insert("end", x)
-
         want = {str(p).strip() for p in self._multi_dataset_paths if str(p).strip()}
-        for idx, lab in enumerate(labels):
-            p = self._dataset_by_label.get(lab)
-            if not p:
-                continue
+        preselected = [lab for lab in labels if self._dataset_rel(self._dataset_by_label[lab]) in want]
+        picked_labels = dialogs.pick_from_list(
+            self.frame,
+            "Select Datasets",
+            labels,
+            multi=True,
+            selected=preselected,
+            prompt="Select one or more datasets (Ctrl/Shift for ranges). Predictions run on each of them.",
+            size=(560, 460),
+        )
+        if picked_labels is None:
+            return
+        picked: list[str] = []
+        for lab in picked_labels:
             try:
-                rel = str(p.resolve().relative_to(self.sim_root.resolve()))
-            except Exception:
-                rel = str(p.resolve())
-            if rel in want:
-                lb.selection_set(idx)
-
-        def on_ok() -> None:
-            sel = list(lb.curselection())
-            picked: list[str] = []
-            for i in sel:
-                try:
-                    lab = labels[int(i)]
-                    p = self._dataset_by_label.get(lab)
-                    if not p: continue
-                    picked.append(str(p.resolve().relative_to(self.sim_root.resolve())))
-                except Exception:
+                p = self._dataset_by_label.get(lab)
+                if not p:
                     continue
-            self._multi_dataset_paths = picked
-            self._persist_multi_dataset_paths()
-            self._update_multi_sel_label()
-            dlg.destroy()
-
-        btns = ttk.Frame(frm)
-        btns.pack(fill="x")
-        ttk.Button(btns, text="OK", command=on_ok).pack(side="right")
-        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side="right", padx=(0, 8))
-        dlg.geometry("560x420")
+                picked.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+            except Exception:
+                continue
+        self._multi_dataset_paths = picked
+        self._persist_multi_dataset_paths()
+        self._update_multi_sel_label()
 
     def _active_data_dir(self) -> Path | None:
         return self._active_dataset_dir or self.state.dataset_dir
@@ -241,18 +219,18 @@ class PredictionsTab(BaseTab):
 
     def _run_predictions(self) -> None:
         if self.logic.proc and self.logic.proc.poll() is None:
-            messagebox.showinfo("Info", "Predictions already running.")
+            dialogs.show_info(self.frame, "Predictions Running", "Predictions already running.")
             return
 
         model_s = self.ui.var_model.get().strip()
         model_path = self.logic.resolve_model_path(model_s)
         if not model_path.exists():
-            messagebox.showerror("Error", f"Model not found:\n{model_path}")
+            dialogs.show_error(self.frame, "Model Not Found", f"Model not found:\n{model_path}",
+                               hint="Pick a model from the list or press refresh.")
             return
 
         dataset_dirs = self._selected_dataset_paths()
-        if not dataset_dirs:
-            messagebox.showinfo("Info", "No dataset selected.")
+        if not dialogs.require(dataset_dirs, self.frame, "Select a dataset first (or datasets with Multi)."):
             return
         
         profile_model_s = self.ui.var_profile_model.get().strip()
@@ -260,7 +238,8 @@ class PredictionsTab(BaseTab):
         if profile_model_s:
             pm_path = self.logic.resolve_model_path(profile_model_s)
             if not pm_path.exists():
-                messagebox.showerror("Error", f"Profile model not found:\n{pm_path}")
+                dialogs.show_error(self.frame, "Profile Model Not Found", f"Profile model not found:\n{pm_path}",
+                                   hint="Clear the Profile Model field or pick an existing one.")
                 return
         
         self.ui.var_status.set("status: running...")
@@ -416,7 +395,7 @@ class PredictionsTab(BaseTab):
     def _load_preds(self, preds_path: Path) -> None:
         rows, err = self.logic.load_preds(preds_path)
         if err:
-            messagebox.showerror("Error", err)
+            dialogs.show_error(self.frame, "Load Predictions Failed", err)
             return
         if not rows: return
         
@@ -441,13 +420,35 @@ class PredictionsTab(BaseTab):
         if not image_rel: return
         image_path = data_dir / str(image_rel)
         if not image_path.exists():
-            messagebox.showerror("Error", f"Image not found:\n{image_path}")
+            dialogs.show_error(self.frame, "Image Not Found", f"Image not found:\n{image_path}")
             return
         
         try:
             self.ui.display_image(str(image_path), row)
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to display image:\n{e}")
+            dialogs.show_error(self.frame, "Display Error", e)
+
+    def _step_sample(self, step: int) -> None:
+        """Select the previous/next row of the per-sample table (wraps around)."""
+        tree = self.ui.tree
+        items = list(tree.get_children(""))
+        if not items:
+            return
+        sel = tree.selection()
+        if sel and sel[0] in items:
+            idx = (items.index(sel[0]) + step) % len(items)
+        else:
+            idx = 0 if step > 0 else len(items) - 1
+        iid = items[idx]
+        tree.selection_set(iid)
+        tree.focus(iid)
+        tree.see(iid)
+
+    def _prev_sample(self) -> None:
+        self._step_sample(-1)
+
+    def _next_sample(self) -> None:
+        self._step_sample(+1)
 
     def _on_tree_ds_select(self, _evt: object | None = None) -> None:
         sel = self.ui.tree_ds.selection()

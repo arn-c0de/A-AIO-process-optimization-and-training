@@ -303,8 +303,12 @@ def sample_preview_augment(
     }
 
 
-def apply_filter_overrides_to_augment(augment: dict[str, float], image_filters: dict[str, Any] | None) -> dict[str, float]:
-    """Apply image-filter overrides; enabled filters get a visible baseline when the value is neutral."""
+def apply_filter_overrides_to_augment(augment: dict[str, float], image_filters: dict[str, Any] | None,
+                                      rng: np.random.Generator | None = None) -> dict[str, float]:
+    """Apply image-filter overrides; enabled filters get a visible baseline when the value is neutral.
+
+    Pass the preview's seeded *rng* so randomized filter values are reproducible for a seed.
+    """
     from simple_sim.generators.opencv_2d import apply_image_filter_overrides
 
     f = normalize_image_filters(image_filters or {})
@@ -319,7 +323,7 @@ def apply_filter_overrides_to_augment(augment: dict[str, float], image_filters: 
         a["contrast_factor"] = 1.20
     if f.get("enable_rotation", True) and abs(float(a.get("rotation_deg", 0.0) or 0.0)) <= 1e-6:
         a["rotation_deg"] = 15.0
-    return apply_image_filter_overrides(a, f)
+    return apply_image_filter_overrides(a, f, rng)
 
 
 def _preview_seed(*parts: object) -> int:
@@ -361,7 +365,7 @@ def render_2d_previews(
 
     w, h, mpp = resolve_2d_roi(cfg, roi_override)
     roi_cfg = {"width_px": w, "height_px": h, "mm_per_px": mpp}
-    render_cfg = merge_profile_render(cfg["render"], profile)
+    render_cfg = merge_profile_render(cfg["render"], profile, roi_cfg)
     footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
     geometry_ranges = profile.get("geometry_ranges") or {}
     tolerances = profile.get("tolerances")
@@ -371,7 +375,7 @@ def render_2d_previews(
     for defect_type in map(str, defect_types):
         rng = np.random.default_rng(_preview_seed(*_seed_parts(seed_base, profile_id, BACKEND_2D, defect_type, run_id)))
         augment = sample_preview_augment(rng, rotation_range=rot_range, enable_cardinal_rotation_90=bool(enable_cardinal_rotation_90))
-        augment = apply_filter_overrides_to_augment(augment, image_filters)
+        augment = apply_filter_overrides_to_augment(augment, image_filters, rng)
         nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
         defect = sample_defect_params(defect_type, rng, tolerances=tolerances)
         img = render_roi(
@@ -423,7 +427,7 @@ def build_preview_jobs(
         nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
         defect = sample_defect_params(defect_type, rng, tolerances=tolerances)
         augment = sample_preview_augment(rng, rotation_range=rotation_range, enable_cardinal_rotation_90=enable_cardinal_rotation_90)
-        augment = apply_filter_overrides_to_augment(augment, image_filters)
+        augment = apply_filter_overrides_to_augment(augment, image_filters, rng)
         rel_path = preview_rel_path(profile_id, backend, defect_type)
         record = {"image_path": rel_path, "seed": seed, "nominal": nominal, "defect": defect, "augment": augment}
         jobs.append(

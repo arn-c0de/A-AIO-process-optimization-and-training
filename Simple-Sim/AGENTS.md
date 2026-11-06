@@ -125,6 +125,8 @@ python -m pytest -q --ignore=tests/test_tab_registry.py   # test_tab_registry ne
 
 - `simple_sim/` - library (no CLI side effects). Shared helpers: `io_utils` (atomic writes,
   JSON), `cli_utils` (`--json` convention), `reports`, `manifest`, `config`, `schema`.
+  `simple_sim/board/` - PCB model (footprints, nets, router, pours, DRC, raster) behind
+  `render.board` (`routing: legacy | none | escape`); `generators/` - the 2D/3D renderers.
 - `scripts/` - pipeline CLIs; `tools/` - dataset maintenance CLIs, `tools/_common.sh`
   (venv/python detection for the `*.sh` launchers), `tools/profile_editor/` (Tk GUI).
 - `gui/` - Tk monitor GUI (`./run.sh`). `configs/` - run configs and `profiles/`.

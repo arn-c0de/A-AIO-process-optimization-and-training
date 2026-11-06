@@ -34,6 +34,7 @@ from gui.components.overlay_renderer import draw_defect_overlay  # noqa: E402
 from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
 from simple_sim.config import load_config, merge_profile_render, validate_config  # noqa: E402
 from simple_sim.defects import sample_defect_params  # noqa: E402
+from simple_sim.generators.blender3d.bake import bake_fields  # noqa: E402
 from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # noqa: E402
 from simple_sim.generators.opencv_2d import render_roi, sample_nominal_geometry  # noqa: E402
 from simple_sim.io_utils import atomic_write_text  # noqa: E402
@@ -145,7 +146,7 @@ def _render_one_2d(
     nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
 
-    render_cfg = merge_profile_render(cfg.get("render") or {}, profile)
+    render_cfg = merge_profile_render(cfg.get("render") or {}, profile, roi_cfg)
     # Gallery should be stable and "clean": no blur/noise/brightness jitter.
     augment = {
         "blur_sigma": 0.0,
@@ -212,6 +213,7 @@ def _build_3d_job(
         "defect": defect,
         "render_3d": render_3d,
         **profile_job_fields(profile),
+        **bake_fields(cfg.get("render") or {}, roi_cfg),
     }
     return job, nominal, defect
 

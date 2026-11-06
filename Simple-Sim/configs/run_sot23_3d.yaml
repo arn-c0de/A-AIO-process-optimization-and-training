@@ -4,7 +4,7 @@ run:
   run_id: "run_sot23_v1_3d"
   seed: 2026
   schema_version: 2
-  component_profile: "sot23_transistor_3d@2"
+  component_profile: "sot23_transistor_3d@3"
 
 roi:
   width_px: 256

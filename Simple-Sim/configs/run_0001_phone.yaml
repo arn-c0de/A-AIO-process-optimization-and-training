@@ -20,12 +20,14 @@ domains:
     lighting_brightness:
     - 0.9
     - 1.1
+    # The phone camera model already blurs and adds sensor noise at the (low) capture resolution;
+    # extra full-resolution grain on the upscaled crop would not exist in real crops.
     blur_sigma:
     - 0.0
-    - 1.0
+    - 0.3
     noise_stddev:
     - 0.0
-    - 10.0
+    - 2.0
 splits:
   train_domains:
   - domain_A

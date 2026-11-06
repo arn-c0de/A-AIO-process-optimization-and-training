@@ -38,31 +38,45 @@ cd Simple-Sim
 - **Flagging System**: Mark problematic samples
 - **Export Reports**: JSON validation reports
 
+### Profile Preview
+- **Look before you generate**: renders 1-8 variants per defect state of one profile, no dataset needed
+- **Quality presets**: Draft (1x supersampling, 16 Cycles samples), Standard (2x, 64), Ultra (4x, 256); values editable (Custom)
+- **Render settings**: run config, style (photoreal/flat), camera preset (aoi/phone), Blender engine/device, seed, 90° orientation, optional GUI image filters
+- **Gallery**: thumbnail size, click for a full-size view (1-4x zoom); images in `outputs/gui/profile_preview/<profile>/<backend>/`
+
 ### Tab 4: Predictions
 - **Batch Prediction**: Run `predict.sh` (batch_predict) on a split (train/val/test/all)
 - **Metrics + Confusion Matrix**: Accuracy, macro-F1, critical FN rates, CM chart
 - **Per-sample Browser**: Inspect correct/wrong predictions with image overlay
 
+## Look & Feel
+
+- **Light / dark theme**: View → Dark Mode (Ctrl+Shift+D); remembered across restarts.
+- **UI scale** for HiDPI screens: View → UI Scale, or `SIMPLE_SIM_UI_SCALE=1.5 ./run.sh`.
+- **Help everywhere**: hover any control for a tooltip (also shown in the status bar),
+  "?" on a card explains the section, F1 opens the quick start, Help → Keyboard Shortcuts.
+- **Status bar**: messages, running background tasks with progress, CPU/GPU/RAM.
+
+Shortcuts: F1 help · F5 start pipeline · Shift+F5 stop · Ctrl+R refresh · Ctrl+1…9 pages · Ctrl+Q quit.
+
 ## Architecture
 
 ```
 gui/
-├── monitor.py                # Main multi-tab application
-├── run.sh                    # Launch script
-├── state.py                  # Shared state across tabs
-├── tabs/
-│   ├── pipeline_tab.py      # Pipeline control
-│   ├── analysis_tab.py      # Image analysis
-│   └── validation_tab.py    # Quality validation
-│   └── predictions_tab.py   # Batch predictions / scoring
-├── components/
-│   ├── overlay_renderer.py  # Defect visualization
-│   └── chart_widgets.py     # Matplotlib charts
-└── utils/
-    ├── model_inference.py   # Model loading
-    ├── flag_manager.py      # Sample flagging
-    └── validation_suite.py  # Validation tests
+├── monitor.py      # shell: window, menu, shortcuts, status bar, theme, AppContext
+├── core/           # AppContext, EventBus, TaskRunner (tk-free)
+├── theme/          # design tokens (colors, spacing, fonts) + ttk styles
+├── widgets/        # Section, FormGrid, PathPicker, ScrolledTree, LogView, StatusBar, ...
+├── dialogs.py      # confirm / error / text viewer / list picker
+├── help/texts.py   # all tooltip and help texts
+├── tabs/<name>/    # tab.py (controller) · ui.py (widgets) · logic.py (tk-free)
+├── components/     # filter popup, precise popup, overlays, charts
+├── utils/          # settings, processes, dataset/model helpers
+└── devtools/       # sandbox root for tests and screenshots
 ```
+
+Details and "add a tab in 3 steps": [docs/architekture/GUI_ARCHITECTURE.md](../docs/architekture/GUI_ARCHITECTURE.md).
+Screenshots of all tabs (light + dark): `python -m simple_sim gui-screenshots --out /tmp/shots --demo`.
 
 ## Performance
 

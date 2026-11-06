@@ -13,20 +13,22 @@ Set `style: flat` to reproduce the old look (e.g. for ablations or extending a f
 ## What `photoreal` renders
 
 Implemented in `simple_sim/generators/opencv2d/photoreal.py`. Everything is rendered at 2x and
-downsampled (anti-aliasing); all randomness comes from the sample's seeded `rng`, so images stay
+downsampled (anti-aliasing; `render.supersampling: 1-4`, default 2, 4 = "Ultra": cleaner edges and
+markings at about 4-5x the render time; also used for the baked board of the Blender backend); all randomness comes from the sample's seeded `rng`, so images stay
 deterministic per seed.
 
 | Layer | Details |
 |---|---|
-| Substrate | Solder-mask colour sampled from a palette measured on photos of the production boards (teal-green), resin mottling, fibre weave, sensor grain |
-| Copper under mask | Copper pours (large planes with 45° chamfers, clearance around the part), 1-3 autorouted traces with 45° jogs, traces leaving pads, 0-12 vias (mostly tented). Brightness ratio mask-over-copper / mask-over-laminate measured on the photos |
-| Residue | In `render.rework_artifacts` of the samples (default 0.3, 0 = clean): amber flux residue with a dried rim, smeared yellow contamination (colour and width measured on a board photo), thin patch wires (white or enamel) with shadow. Always outside the inspected part, so the label is unaffected: the model learns to ignore it |
-| Neighbour parts | 0-6 chip resistors/capacitors around the inspected part (pads, fillets, bodies), sized from its pads, at 0/90°, possibly cut by the ROI border, never in its keep-out |
+| Substrate | Solder-mask colour sampled from a palette measured on real part crops of the production boards (olive/bottle green, hue ~135-150°, HSV saturation ~90-110), resin mottling, fibre weave, sensor grain |
+| Mask gloss | In `render.mask_gloss` of the samples (default 0.5, 0 = off): broad whitish-green glare of a light source (phone flash, ring light) on the glossy mask, broken up by orange-peel texture. Bare board only, parts and joints are drawn on top |
+| Copper under mask | `render.board.routing: legacy` (default): copper pours (large planes with 45° chamfers, clearance around the part), 1-3 autorouted traces with 45° jogs, traces leaving pads, typically 2-16 vias (mostly tented, with a highlight on the mask dome); trace widths and via sizes scale with the part's pads. `routing: escape`: the same look from a **board model** in which every pad belongs to a net and the copper is routed around parts and other nets, see [Board model](#board-model-renderboard). Brightness ratio mask-over-copper / mask-over-laminate measured on the photos |
+| Residue | In `render.rework_artifacts` of the samples (default 0.15, 0 = clean): amber flux residue with a dried rim, smeared yellow contamination (colour and width measured on a board photo), thin patch wires (white or enamel) with shadow. Always outside the inspected part, so the label is unaffected: the model learns to ignore it |
+| Neighbour parts | Chip resistors/capacitors around the inspected part (pads, fillets, bodies), sized from its pads, possibly cut by the ROI border, never in its keep-out. 70 %: a row/column array of identical parts on a placement grid aligned with the inspected part (like real decoupling caps / resistor rows); otherwise 0-6 mixed parts at 0/90° |
 | Silkscreen | In 55 % of samples: white footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`), placed around the *nominal* footprint so it never moves with a defect |
 | Pads | Mask-defined opening with dark rim, ENIG (gold) or HASL (silver) finish visible at the pad edge. Large (thermal) pads without a part show window-pane stencil islands |
-| Solder | Height map with slight lumpiness, shaded as a rough mirror: flat areas reflect the overhead light, slopes reflect the dark board, sharp highlight towards the light. Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
+| Solder | Height map with slight lumpiness, shaded as a rough mirror: flat areas reflect the overhead light, slopes reflect a light grey-green environment, highlight towards the light; frosted (lead-free) with a generous diffuse share, so joints read as bright grey blobs as in real photos. Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
 | Chip body | Resistor: dark body, metallic end caps, white value code (`103`, `4R7`, ...). Capacitor (`component.type` contains `cap`): tan ceramic, nickel caps, no marking. Printed codes have blotchy ink |
-| IC body | SOT-23 / SOIC-16 / QFN: speckled mold compound, side walls, gloss, pin-1 dimple, grainy laser marking (two Hershey fonts, lines slightly offset); gull-wing leads for SOT/SOIC; QFN gets real pad rows (`qfn_<N>` -> N/4 per side) plus the exposed thermal pad |
+| IC body | SOT-23 / SOIC-16 / QFN: speckled mold compound, side walls, gloss, pin-1 dimple, grainy laser marking (two Hershey fonts, lines slightly offset); gull-wing leads for SOT/SOIC (shoulder bending out of the mold + flat tin-plated foot, laid out from the nominal footprint so they move rigidly with the body; SOT-23 body long axis along the pin-1/2 column); QFN gets real pad rows (`qfn_<N>` -> N/4 per side) plus the exposed thermal pad |
 | Shadows | Contact shadow around every body, cast shadow of the standing part for tombstones, lit facet for corner lifts |
 | Camera | Applied after downsampling so the image is not vector-sharp: lens blur, uneven illumination, soft highlight roll-off, signal-dependent and slightly correlated sensor noise |
 
@@ -41,6 +43,49 @@ for the flat style.
 
 `render.component_type` (filled from the profile's `component.type` by the pipeline) selects the
 resistor/capacitor look for `chip_2pad`.
+
+## Board model (`render.board`)
+
+The legacy copper generator draws traces and vias at random: traces run through the pads of the
+inspected part and under its neighbours, nothing is connected to anything. `render.board` replaces
+it with a small board model (`simple_sim/board/`, in mm, shared by the 2D render and the board
+baked for Blender):
+
+```yaml
+render:
+  board:
+    routing: escape          # legacy (default, bit-identical to v1.0.3) | none (no copper) | escape
+    design_rules: consumer_dense   # consumer_dense | industrial | hdi (track widths, clearances, via sizes)
+    pour_probability: 0.6    # share of boards with a ground pour
+    drc: off                 # off | warn (log violations) | strict (re-draw the routing until clean)
+```
+
+With `routing: escape` the pipeline is footprints -> placement -> netlist -> pours -> routing ->
+stitching vias -> DRC -> raster:
+
+- **Footprints** carry pin numbers, roles (`signal`, `gnd`, `power`, `thermal`, `nc`) and the
+  fan-out direction of every pad; the pad geometry is the same as before (regression-tested), so
+  labels, defects and the Blender scene are unchanged.
+- **Netlist** per family: chips on both ends (capacitors mostly with one pad on ground), SOT-23
+  on all three pins, ICs on ~85-90 % of their pins with a few NC, QFN thermal pad on ground.
+  Neighbour chips share nets with the inspected part (decoupling, pull-ups, series parts).
+- **Fan-out router**: a straight stub out of the pad edge (necked down at fine-pitch parts), then
+  a 45° route to the window border or a via; thermal pads get a via grid; ground pads inside a pour
+  are connected by the pour with thermal-relief spokes. 1-3 through-nets cross the window, some
+  as a parallel bus. Every candidate is checked on an occupancy grid (half the clearance per cell)
+  and dropped on conflict, so nets never touch and nothing crosses a part's keep-out.
+- **Pours** keep `zone_clearance` to foreign copper, have thermal reliefs on their own pads and
+  stitching vias on a jittered grid.
+- **Design rules** are drawn per board from the preset's ranges (variation stays), in mm at the
+  profile scale (`roi.mm_per_px`, passed to the renderer by every caller).
+- **DRC** (`simple_sim/board/drc.py`): clearance, dangling track ends, copper on thermal/NC pads,
+  foreign copper in the inspected part's keep-out, track widths. Used by the tests
+  (`tests/test_board.py`) and optionally per sample.
+
+The board's random streams are keyed (`default_rng([board_seed, stage])`), so a change in the
+router never moves the neighbours or the netlist. Switching from `legacy` to `escape` changes
+every image of a seed once (the shared stream of solder and camera shifts too); datasets made
+with `legacy` keep rendering bit-identically. Timing is the same as the legacy generator.
 
 ## Real board backgrounds (`render.texture_dir`)
 
@@ -66,8 +111,11 @@ Colours and proportions were taken from macro photos of real boards (dark olive 
 shimmering through the mask, white silkscreen, bright concave fillets, black 0603 resistors with
 white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings). Mask colours, the copper-under-mask
 brightness ratio, copper pours, tented vias and the density of neighbour parts come from 7 photos
-(JPEG and raw) of the production boards: median of bare mask pixels (hue 150-170°, i.e. teal-green
-although it reads as green) and of pour vs. laminate areas.
+(JPEG and raw) of the production boards. Mask, MLCC and solder colours were re-measured on the real
+per-part crops of the DeepVision xpa boards (top: phone photo, bottom: flatbed-like capture): median
+bare mask BGR (64, 89, 58) / (68, 86, 50), MLCC ~(120, 152, 170), joints ~(187, 196, 196). The earlier
+palette (hue 150-170°, saturation ~150) plus the default ±15° hue jitter rendered a lime/cyan mask
+that no real board shows; the default hue jitter is now ±5°, saturation 0.85-1.1.
 
 ## Camera model (`render.camera`) and calibration (`tools/calibrate_camera.py`)
 
@@ -87,11 +135,16 @@ render:
     defocus: [0, 0]            # extra blur towards the near/far edge of a tilted view (depth of field)
     sharpen: [0, 0]            # phone ISP sharpening (unsharp mask amount)
     jpeg_quality: [100, 100]   # < 95 compresses
+    capture_scale: [1, 1]      # sensor px per ROI px; < 1: captured at low resolution and upscaled to the ROI
+    chroma_shift: [0, 0]       # lateral chromatic aberration (R/B shift at the border, sensor px)
 ```
 
-`preset: phone` sets `tilt_deg: [5, 40]`, `zoom: [1, 2.5]`, `blur_sigma: [0.8, 1.6]`,
-`defocus: [0.5, 2.5]`, `read_noise: [4, 16]`, `shot_noise: 0.08`, `sharpen: [0.3, 0.8]`,
-`jpeg_quality: [70, 92]`; `configs/run_0001_phone.yaml` is `run_0001` with this preset. 2D renders a
+`preset: phone` sets `tilt_deg: [5, 40]`, `zoom: [1, 1.5]`, `blur_sigma: [0.5, 1.2]`,
+`defocus: [0.5, 2.5]`, `read_noise: [4, 16]`, `shot_noise: 0.08`, `sharpen: [0.3, 0.9]`,
+`jpeg_quality: [70, 92]`, `capture_scale: [0.2, 0.7]`, `chroma_shift: [0, 0.8]`. Real per-part crops
+from phone photos are small (a 0603 crop is ~50 px, ~10 px/mm) and get upscaled to the model input;
+`capture_scale` reproduces that: blur, noise, sharpening and JPEG happen at the low sensor resolution,
+then the image is resized to the ROI (soft, blocky, sharpening halos); `configs/run_0001_phone.yaml` is `run_0001` with this preset. 2D renders a
 larger board area for zoomed-out/oblique views (more neighbour parts) and projects it; the Blender
 backend tilts its camera and widens its view accordingly. The part always stays centred, so labels
 are unchanged.

@@ -72,6 +72,8 @@ Defect classes are **component-dependent**; common classes include:
 - **MISSING**: Component not present
 - **MISALIGNED**: Excessive shift or rotation
 - **TOMBSTONE**: Component tilted beyond profile tolerance
+- **SOLDER_BALL**: Stray solder balls next to the pads (v1.0.3, `@2` profiles)
+- **EXCESS_SOLDER**: Too much solder on one or more pads (v1.0.3, `@2` profiles)
 
 ## Features
 
@@ -88,6 +90,10 @@ Defect classes are **component-dependent**; common classes include:
 - **Multi-profile bundles**: `.bundle` directories with one checkpoint per profile (`<profile_id>.pt`) and automatic profile dispatch.
 - **Single-file ensembles**: One `.pt` with multiple sub-models; inference averages logits across members.
 - **Bundle metadata**: `bundle_details.json` with source path, profile hash, size, and key metrics.
+- **Photoreal 2D rendering (v1.0.3)**: Default `render.style: photoreal` calibrated on real boards (textured mask, silkscreen, solder fillets, camera model); `flat` keeps the old look. See [`docs/guides/PHOTOREAL_RENDERING.md`](docs/guides/PHOTOREAL_RENDERING.md).
+- **Blender backend rebuilt (v1.0.3)**: Shares the 2D board bake and pad layout, real Cycles GPU rendering (`render.blender.device: GPU`), 3D profiles are now `*_3d@2`.
+- **Camera presets (v1.0.3)**: `render.camera` (AOI default, `preset: phone` for oblique phone photos) plus `tools/calibrate_camera.py` and `tools/sim_to_real.py`.
+- **Profile Preview tab (v1.0.3)**: Render a few images per defect state of one profile without generating a dataset.
 - **Extended filter research**: Advanced image filter pipeline with persisted profiles and randomized ranges.
 
 ## Extended Image Filters (Current Research)
@@ -168,6 +174,7 @@ Included profiles:
 - `chip_0603_resistor@2` (default): 2-pad 0603 chip resistor (OK/MISSING/MISALIGNED/TOMBSTONE from 30 deg tilt/SOLDER_BALL/EXCESS_SOLDER)
 - `chip_0603_resistor@1`: same with TOMBSTONE from 75 deg (kept for existing datasets/models)
 - `sot23_transistor@1`: 3-pad SOT-23 transistor (OK/MISSING/MISALIGNED/TOMBSTONE)
+- `sot23_transistor@2`: same with real SOT-23 body/land proportions (used by `run_sot23.yaml`)
 - `qfn32_ic@1`: 4-pad QFN-32 IC (OK/MISSING/MISALIGNED/TOMBSTONE)
 
 3D profiles are intentionally **separate profile IDs** to keep datasets distinct in the GUI:
@@ -326,6 +333,11 @@ The GUI is a multi-tab Tkinter application launched via `./gui/run.sh`.
 - Legacy checkpoints (without profile metadata) are listed separately.
 - If no compatible model exists, `+` creates a new model entry.
 - `Render:` selector (`opencv_2d` / `blender_3d`) filters profile choices and auto-selects matching configs.
+
+### Profile Preview (v1.0.3)
+
+- Renders 1-8 variants per defect state of one profile with chosen settings (run config, quality preset, style, camera preset, Blender engine/device, seed, filters), no dataset needed.
+- Output in `outputs/gui/profile_preview/`.
 
 ### Analysis
 

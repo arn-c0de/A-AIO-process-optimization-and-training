@@ -58,3 +58,12 @@ def test_blender_script_renders(tmp_path, footprint):
     subprocess.run([sys.executable, str(script), "--", "--jobs", str(jobs_path), "--out_root", str(tmp_path),
                     "--samples", "4", "--engine", "CYCLES"], check=True, capture_output=True)
     assert (tmp_path / "images" / "OK.png").is_file()
+
+
+def test_bake_supersampling_capped_for_large_boards():
+    from simple_sim.generators.blender3d.bake import bake_supersampling
+
+    assert bake_supersampling(2, 8000) == 2  # default never changes (existing datasets stay identical)
+    assert bake_supersampling(1, 512) == 1
+    assert bake_supersampling(4, 512) == 4   # 256 px ROI: Ultra kept
+    assert bake_supersampling(4, 2048) == 2  # 1024 px ROI (SOIC-16): capped to the pixel budget

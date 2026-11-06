@@ -94,7 +94,7 @@ class ProfileEditorApp:
         ttk.Button(top, text="Link Run to Profile", command=self._link_run_to_profile).pack(side="left", padx=(0, 6))
         ttk.Button(top, text="Render HQ Now", command=self._trigger_hq_render_now).pack(side="left", padx=(0, 6))
         ttk.Button(top, text="Refresh Files", command=self._refresh_choices).pack(side="left")
-        ttk.Checkbutton(top, text="Night Mode", variable=self.dark_mode_var, command=self._on_theme_toggled).pack(
+        ttk.Checkbutton(top, text="Dark Mode", variable=self.dark_mode_var, command=self._on_theme_toggled).pack(
             side="left", padx=(8, 0)
         )
         ttk.Label(top, text="").pack(side="left", expand=True)
@@ -411,73 +411,17 @@ class ProfileEditorApp:
         self._schedule_settings_save()
 
     def _apply_theme(self, dark: bool) -> None:
+        # Shared design system (same palette, fonts and ttk styles as the monitor GUI).
+        from gui.theme.style import apply_theme
+
+        pal = apply_theme(self.root, "dark" if dark else "light")
         style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
-
-        if dark:
-            bg = "#171b20"
-            panel = "#1f2329"
-            fg = "#f5f7fa"
-            field_bg = "#11161c"
-            field_fg = "#f5f7fa"
-            tab_active = "#2a3138"
-            tab_selected = "#303841"
-            self.root.configure(bg=bg)
-            self.system_stats_label.configure(foreground="#d9e1ea")
-            self.status_label.configure(foreground="#d9e1ea")
-        else:
-            bg = "#f0f0f0"
-            panel = "#ffffff"
-            fg = "#000000"
-            field_bg = "#ffffff"
-            field_fg = "#000000"
-            tab_active = "#e7e7e7"
-            tab_selected = "#ffffff"
-            self.root.configure(bg=bg)
-            self.system_stats_label.configure(foreground="#4d5656")
-            self.status_label.configure(foreground="#34495e")
-
-        style.configure(".", background=bg, foreground=fg)
-        style.configure("TFrame", background=bg)
-        style.configure("TLabel", background=bg, foreground=fg)
-        style.configure("TButton", background=panel, foreground=fg)
-        style.configure("TCheckbutton", background=bg, foreground=fg)
-        style.configure("TMenubutton", background=panel, foreground=fg)
-        style.configure("TNotebook", background=bg)
-        style.configure("TNotebook.Tab", background=panel, foreground=fg)
-        style.map(
-            "TNotebook.Tab",
-            background=[("selected", tab_selected), ("active", tab_active), ("!selected", panel)],
-            foreground=[("selected", fg), ("active", fg), ("!selected", fg)],
-        )
-        style.configure("TPanedwindow", background=bg)
-        style.configure("TScale", background=bg)
-        style.configure("TEntry", fieldbackground=field_bg, foreground=field_fg)
-        style.configure("Dark.TEntry", fieldbackground="#11161c", foreground="#f5f7fa")
-        style.configure("Light.TEntry", fieldbackground="#ffffff", foreground="#000000")
-        style.configure(
-            "TCombobox",
-            fieldbackground=field_bg,
-            background=panel,
-            foreground=field_fg,
-            arrowcolor=field_fg,
-        )
-        style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", field_bg)],
-            foreground=[("readonly", field_fg)],
-            selectbackground=[("readonly", field_bg)],
-            selectforeground=[("readonly", field_fg)],
-        )
-
-        # ttk.Combobox popup list uses a Tk Listbox; theme it explicitly.
-        self.root.option_add("*TCombobox*Listbox.background", field_bg)
-        self.root.option_add("*TCombobox*Listbox.foreground", field_fg)
-        self.root.option_add("*TCombobox*Listbox.selectBackground", tab_active if dark else "#d9e8ff")
-        self.root.option_add("*TCombobox*Listbox.selectForeground", field_fg)
+        self.root.configure(bg=pal.bg)
+        self.system_stats_label.configure(foreground=pal.text_muted)
+        self.status_label.configure(foreground=pal.text_muted)
+        # Entry styles used by the form renderer.
+        for name in ("Dark.TEntry", "Light.TEntry"):
+            style.configure(name, fieldbackground=pal.surface, foreground=pal.text)
 
         self.preview.apply_theme(dark=dark)
         self.hq_preview.apply_theme(dark=dark)

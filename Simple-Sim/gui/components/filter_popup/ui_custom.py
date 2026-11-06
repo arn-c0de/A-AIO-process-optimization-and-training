@@ -7,12 +7,13 @@ from tkinter import ttk
 from typing import Any
 
 from .ui_realism import build_realism_controls
+from gui.theme.style import font
 
 
 def build_filter_controls(popup: Any, parent: ttk.Frame) -> None:
     """Build filter controls UI."""
     ttk.Label(parent, text="Apply filters during image generation",
-              font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+              font=font("Heading")).pack(anchor="w")
     ttk.Label(parent, text="Configure Custom filters or switch to grouped Realism mode.").pack(anchor="w", pady=(2, 8))
 
     current = popup.get_current_values()
@@ -133,7 +134,7 @@ def add_filter_sections(popup: Any, parent: ttk.Frame, current: dict[str, Any]) 
     popup._rotation_row_state_cb = None
 
     def add_section(title: str) -> None:
-        ttk.Label(parent, text=title, font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(6, 3))
+        ttk.Label(parent, text=title, font=font("SmallBold")).pack(anchor="w", pady=(6, 3))
 
     def add_filter_row(
         label: str,
@@ -185,7 +186,7 @@ def add_filter_sections(popup: Any, parent: ttk.Frame, current: dict[str, Any]) 
         var_max = tk.DoubleVar(value=popup.float_or_default(str(current.get(key_max, base_val)), default=base_val))
 
         ttk.Label(row_rand, text="Random").pack(side="left")
-        chk_random = ttk.Checkbutton(row_rand, text="Rnd", variable=var_randomize)
+        chk_random = ttk.Checkbutton(row_rand, text="Random", variable=var_randomize)
         chk_random.pack(side="left", padx=(6, 6))
         ttk.Label(row_rand, text="Min").pack(side="left")
         ent_min = ttk.Entry(row_rand, textvariable=var_min, width=7)

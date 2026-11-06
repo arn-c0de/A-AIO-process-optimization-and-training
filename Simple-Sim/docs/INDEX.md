@@ -1,7 +1,7 @@
 # Documentation Index
 
 Simple-Sim comprehensive documentation organized by topic and use case.
-Last updated: February 21, 2026
+Last updated: November 6, 2026 (v1.0.3)
 
 ## Guides
 
@@ -24,6 +24,9 @@ Architecture-oriented overviews of package modules, scripts, and GUI tabs.
 | [simple_sim Package Overview](architekture/simple_sim-Overview.md) | Architecture and responsibilities of all modules in `simple_sim` |
 | [Scripts Overview](architekture/scripts-Overview.md) | Architecture and behavior of all executable scripts in `scripts/` |
 | [Tabs Overview](architekture/Tabs-Overview.md) | Architecture and responsibilities of all GUI tabs in `gui/tabs` |
+| [GUI Architecture](architekture/GUI_ARCHITECTURE.md) | Layers, design system, widgets, help texts, services and "add a tab in 3 steps" |
+| [GUI Modernization Plan](refactoring/GUI_MODERNIZATION_PLAN.md) | Phased plan and review checklist for the GUI redesign |
+| [PCB Trace Routing Plan](refactoring/PCB_TRACE_ROUTING_PLAN.md) | Analysis of the current trace/via/pour generation and a modular plan towards component-aware routing and full-board generation (German) |
 | [Tools Overview](architekture/tools-Overview.md) | Architecture and responsibilities of all support tools in `tools/` |
 
 ## Technical Reference

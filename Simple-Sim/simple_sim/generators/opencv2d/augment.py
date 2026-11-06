@@ -177,7 +177,9 @@ def sample_augment_params(
         "perspective_angle_x": float(rng.uniform(-10.0, 10.0)),
         "perspective_angle_y": float(rng.uniform(-10.0, 10.0)),
         "motion_blur_angle": float(rng.uniform(0.0, 360.0)),
-        "saturation_factor": float(rng.uniform(0.8, 1.2)),
-        "hue_shift_deg": float(rng.uniform(-15.0, 15.0)),
+        # Mild colour jitter: +-15 deg hue turned the olive solder mask into lime or cyan, which no
+        # real board/camera produces (real crops: hue ~135-150 deg, see photoreal._MASK_PALETTE).
+        "saturation_factor": float(rng.uniform(0.85, 1.1)),
+        "hue_shift_deg": float(rng.uniform(-5.0, 5.0)),
         "color_temperature_kelvin": int(rng.choice([3000, 4000, 5500, 6500])),
     }

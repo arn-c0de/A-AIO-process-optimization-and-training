@@ -7,10 +7,11 @@ import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import ttk, filedialog
 from pathlib import Path
 from typing import Any
 
+from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.checkpoint_meta import profile_label_suffix
@@ -85,6 +86,38 @@ class WeightsTab(BaseTab):
 
     def _store(self) -> SettingsStore | None:
         return self.state.settings_store
+
+    def _status(self, text: str, level: str = "success") -> None:
+        """Non-blocking feedback in the main status bar (no-op without an AppContext)."""
+        ctx = getattr(self.state, "ctx", None)
+        if ctx is None:
+            return
+        try: ctx.status(text, level)
+        except Exception: pass
+
+    @staticmethod
+    def _fmt_list(items: list[str], limit: int = 8) -> str:
+        """Newline-joined list, truncated to ``limit`` entries with a "+N more" line."""
+        shown = os.linesep.join(items[:limit])
+        return f"{shown}\n... (+{len(items) - limit} more)" if len(items) > limit else shown
+
+    def _run_background(self, fn: Any, *, name: str, on_done: Any, on_error: Any) -> None:
+        """Run ``fn()`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
+        ctx = getattr(self.state, "ctx", None)
+        tasks = getattr(ctx, "tasks", None) if ctx is not None else None
+        if tasks is not None:
+            tasks.run(lambda _h: fn(), name=name, on_done=on_done, on_error=on_error)
+            return
+
+        def worker() -> None:
+            try:
+                result = fn()
+            except Exception as exc:  # noqa: BLE001 - reported to the UI
+                self.frame.after(0, lambda e=exc: on_error(e))
+                return
+            self.frame.after(0, lambda r=result: on_done(r))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _load_persisted_settings(self) -> None:
         st = self._store()
@@ -192,7 +225,7 @@ class WeightsTab(BaseTab):
     def _remove_selected_from_favorites(self) -> None:
         paths = [p for p in self._selected_model_paths() if self._is_favorited(p)]
         if not paths: return
-        if not messagebox.askyesno("Remove favorite", f"Remove from favorites?\n\n{os.linesep.join(self.logic.rel_path(p) for p in paths[:8])}\n... (+{len(paths) - 8} more)" if len(paths) > 8 else f"Remove from favorites?\n\n{os.linesep.join(self.logic.rel_path(p) for p in paths)}"): return
+        if not dialogs.confirm(self.frame, "Remove from Favorites", f"Remove {len(paths)} checkpoint(s) from favorites?\n\n{self._fmt_list([self.logic.rel_path(p) for p in paths])}"): return
         self._assign_selected_to_group(paths, "Uncategorized")
 
     def _add_selected_to_arena(self) -> None:
@@ -201,12 +234,13 @@ class WeightsTab(BaseTab):
         self.logic.add_to_arena(paths, self._arena)
         self.logic.save_arena(self._arena)
         self.ui.append_log(f"[arena] added {len(paths)} model(s)\n")
+        self._status(f"Added {len(paths)} model(s) to the Arena")
         self._refresh_models()
 
     def _remove_selected_from_arena(self) -> None:
         paths = [p for p in self._selected_model_paths() if self._is_arena_tracked(p)]
         if not paths: return
-        if not messagebox.askyesno("Remove from arena", f"Remove from arena tracking?\n\n{os.linesep.join(self.logic.rel_path(p) for p in paths[:8])}\n... (+{len(paths) - 8} more)" if len(paths) > 8 else f"Remove from arena tracking?\n\n{os.linesep.join(self.logic.rel_path(p) for p in paths)}"): return
+        if not dialogs.confirm(self.frame, "Remove from Arena", f"Remove {len(paths)} checkpoint(s) from Arena tracking?\n\n{self._fmt_list([self.logic.rel_path(p) for p in paths])}"): return
         self.logic.remove_from_arena(paths, self._arena)
         self.logic.save_arena(self._arena)
         self.ui.append_log(f"[arena] removed {len(paths)} model(s)\n")
@@ -214,8 +248,8 @@ class WeightsTab(BaseTab):
 
     def _generate_arena_report(self) -> None:
         try: self.logic.generate_arena_report()
-        except FileNotFoundError as e: messagebox.showerror("Missing script", str(e))
-        except Exception as e: messagebox.showerror("Error", f"Failed to generate arena report:\n{e}")
+        except FileNotFoundError as e: dialogs.show_error(self.frame, "Missing Script", str(e))
+        except Exception as e: dialogs.show_error(self.frame, "Arena Report Failed", e)
 
     def _refresh_models(self) -> None:
         self._models = self.logic.get_models()
@@ -332,34 +366,35 @@ class WeightsTab(BaseTab):
         st.schedule_save(self.frame)
 
     def _prompt_new_group(self) -> None:
-        name = simpledialog.askstring("New group", "Group name:", parent=self.frame.winfo_toplevel())
-        if not (name := (name or "").strip()) or "::" in name:
-            messagebox.showerror("Error", "Group name must be non-empty and not contain '::'.")
+        name = dialogs.ask_string(self.frame, "New Group", "Group name:")
+        if name is None: return  # cancelled
+        if not (name := name.strip()) or "::" in name:
+            dialogs.show_error(self.frame, "Invalid Group Name", "Group name must be non-empty and not contain '::'.")
             return
         if name in self._available_groups():
-            messagebox.showinfo("Info", f"Group already exists: {name}")
+            dialogs.show_info(self.frame, "Group Exists", f"Group already exists: {name}")
             return
         self._custom_groups.append(name)
         self._save_group_state()
         self._refresh_models()
+        self._status(f"Group created: {name}")
 
     def _duplicate_selected(self) -> None:
-        if not (paths := self._selected_model_paths()) or len(paths) != 1:
-            messagebox.showinfo("Info", "Select exactly one checkpoint to duplicate.")
-            return
+        paths = self._selected_model_paths()
+        if not dialogs.require(len(paths) == 1, self.frame, "Select exactly one checkpoint to duplicate."): return
         src = paths[0]
-        if not (new_name := simpledialog.askstring("Duplicate checkpoint", "New checkpoint name (without extension):", initialvalue=src.stem, parent=self.frame.winfo_toplevel())): return
+        if not (new_name := dialogs.ask_string(self.frame, "Duplicate Checkpoint", "New checkpoint name (without extension):", initial=src.stem)): return
         if not (new_name := new_name.strip()) or "/" in new_name or "\\" in new_name:
-            messagebox.showerror("Error", "Name must be non-empty and not contain path separators.")
+            dialogs.show_error(self.frame, "Invalid Name", "Name must be non-empty and not contain path separators.")
             return
         dst = src.with_name(new_name + src.suffix)
         if dst.exists():
-            messagebox.showerror("Error", f"Target already exists:\n{dst}")
+            dialogs.show_error(self.frame, "Target Exists", f"Target already exists:\n{dst}")
             return
         try:
             self.logic.duplicate_model(src, dst)
         except Exception as e:
-            messagebox.showerror("Error", f"Duplicate failed:\n{e}")
+            dialogs.show_error(self.frame, "Duplicate Failed", e)
             return
         
         rel_src, rel_dst = self.logic.rel_path(src), self.logic.rel_path(dst)
@@ -369,6 +404,7 @@ class WeightsTab(BaseTab):
             self.logic.save_favorites(self._favorites)
         self._save_group_state()
         self.ui.append_log(f"[duplicate] {rel_src} -> {rel_dst}\n")
+        self._status(f"Duplicated: {rel_dst}")
         self._refresh_models()
 
     def _on_tree_mouse_down(self, event: tk.Event) -> None:
@@ -416,13 +452,13 @@ class WeightsTab(BaseTab):
         can_delete = any(self.logic.is_deletable_checkpoint(p) and not self._is_favorited(p) and not self._is_arena_tracked(p) for p in paths)
         can_run = bool(paths) and bool(self.state.dataset_dir)
         
-        self.ui._models_menu.entryconfigure("Delete selected", state="normal" if can_delete else "disabled")
-        self.ui._models_menu.entryconfigure("Run selected", state="normal" if can_run else "disabled")
-        self.ui._models_menu.entryconfigure("Activate selected", state="normal" if bool(paths) else "disabled")
-        self.ui._models_menu.entryconfigure("Export selected...", state="normal" if bool(paths) else "disabled")
+        self.ui._models_menu.entryconfigure("Delete Selected", state="normal" if can_delete else "disabled")
+        self.ui._models_menu.entryconfigure("Run Selected", state="normal" if can_run else "disabled")
+        self.ui._models_menu.entryconfigure("Activate Selected", state="normal" if bool(paths) else "disabled")
+        self.ui._models_menu.entryconfigure("Export Selected…", state="normal" if bool(paths) else "disabled")
         self.ui._models_menu.entryconfigure("Set as Compare A", state="normal" if bool(paths) else "disabled")
         self.ui._models_menu.entryconfigure("Set as Compare B", state="normal" if bool(paths) else "disabled")
-        self.ui._models_menu.entryconfigure("Rename selected...", state="normal" if any(self.logic.is_deletable_checkpoint(p) for p in paths) else "disabled")
+        self.ui._models_menu.entryconfigure("Rename Selected…", state="normal" if any(self.logic.is_deletable_checkpoint(p) for p in paths) else "disabled")
         
         if paths:
             is_fav = self._is_favorited(paths[0])
@@ -456,18 +492,21 @@ class WeightsTab(BaseTab):
         finally: self.ui._reports_menu.grab_release()
 
     def _delete_selected_report(self) -> None:
-        if not (sel := self.ui.tree_reports.selection()): return messagebox.showinfo("Info", "Select a report first.")
-        if not (r := self._report_by_iid.get(sel[0])) or not (p := r.get("_path")): return messagebox.showerror("Error", "Report path missing.")
+        if not dialogs.require(sel := self.ui.tree_reports.selection(), self.frame, "Select a report first."): return
+        if not (r := self._report_by_iid.get(sel[0])) or not (p := r.get("_path")): return dialogs.show_error(self.frame, "Delete Report", "Report path missing.")
         rp = Path(str(p))
-        if not rp.exists(): return messagebox.showwarning("Not found", f"Report file not found:\n{rp}")
-        
-        try: rp.resolve().relative_to(self.logic.sim_root.resolve())  # Check if rp is within sim_root
-        except ValueError: return messagebox.showerror("Blocked", f"Refusing to delete file outside repo:\n{rp}")
+        if not rp.exists(): return dialogs.show_warning(self.frame, "Report Not Found", f"Report file not found:\n{rp}")
 
-        if not messagebox.askyesno("Delete report", f"Delete this report file?\n\n{rp}"): return
+        try: rp.resolve().relative_to(self.logic.sim_root.resolve())  # Check if rp is within sim_root
+        except ValueError: return dialogs.show_error(self.frame, "Delete Blocked", f"Refusing to delete file outside repo:\n{rp}")
+
+        if not dialogs.confirm(self.frame, "Delete Report", f"Delete report file {rp.name}?\n\n{rp}", danger=True): return
         try: rp.unlink()
-        except Exception as e: messagebox.showerror("Error", f"Failed to delete:\n{rp}\n\n{e}")
-        
+        except Exception as e:
+            dialogs.show_error(self.frame, "Delete Failed", f"Failed to delete:\n{rp}\n\n{e}")
+        else:
+            self._status(f"Report deleted: {rp.name}")
+
         self.ui.append_log(f"[delete] report: {rp}\n")
         self._refresh_reports()
 
@@ -483,59 +522,63 @@ class WeightsTab(BaseTab):
 
     def _snapshot_active(self) -> None:
         if not (active := self._active_model_path()) or not active.exists():
-            messagebox.showerror("Error", f"Active model not found:\n{active}")
+            dialogs.show_error(self.frame, "Active Model Not Found", f"Active model not found:\n{active}",
+                               hint="Train a model for this dataset or enter the checkpoint path under Active Model.")
             return
         try:
             dst = self.logic.snapshot_active_model(active)
             self.ui.append_log(f"[snapshot] {active} -> {dst}\n")
             self._refresh_models()
+            self._status(f"Snapshot saved: {self.logic.rel_path(dst)}")
         except Exception as e:
-            messagebox.showerror("Error", f"Snapshot failed:\n{e}")
+            dialogs.show_error(self.frame, "Snapshot Failed", e)
 
     def _import_model(self) -> None:
-        src = filedialog.askopenfilename(title="Import model (.pt) or bundle (.zip)", filetypes=[("PyTorch checkpoint", "*.pt"), ("Bundle archive", "*.zip"), ("All files", "*.*")])
+        src = filedialog.askopenfilename(parent=self.frame.winfo_toplevel(), title="Import model (.pt) or bundle (.zip)", filetypes=[("PyTorch checkpoint", "*.pt"), ("Bundle archive", "*.zip"), ("All files", "*.*")])
         if not src or not (src_p := Path(src)).exists(): return
         try:
             dst = self.logic.import_model(src_p)
             self.ui.append_log(f"[import] {src_p} -> {dst}\n")
             self._refresh_models()
+            self._status(f"Imported: {Path(dst).name}")
         except Exception as e:
-            messagebox.showerror("Error", f"Import failed:\n{e}")
+            dialogs.show_error(self.frame, "Import Failed", e)
 
     def _export_selected(self) -> None:
-        if not (p := self._selected_model_path()):
-            messagebox.showinfo("Info", "Select a model first.")
-            return
+        if not dialogs.require(p := self._selected_model_path(), self.frame, "Select a model first."): return
         try:
             if p.is_dir():
-                dst = filedialog.asksaveasfilename(title="Export selected bundle (zip)", initialfile=f"{p.name}.zip" if not p.name.endswith(".zip") else p.name, defaultextension=".zip", filetypes=[("Bundle archive", "*.zip"), ("All files", "*.*")])
+                dst = filedialog.asksaveasfilename(parent=self.frame.winfo_toplevel(), title="Export selected bundle (zip)", initialfile=f"{p.name}.zip" if not p.name.endswith(".zip") else p.name, defaultextension=".zip", filetypes=[("Bundle archive", "*.zip"), ("All files", "*.*")])
                 if not dst: return
                 self.logic.export_model(p, Path(dst))
                 self.ui.append_log(f"[export] bundle {p} -> {Path(dst).with_suffix('.zip')}\n")
+                self._status(f"Exported bundle: {Path(dst).with_suffix('.zip').name}")
             else:
-                dst = filedialog.asksaveasfilename(title="Export selected model", initialfile=p.name, defaultextension=".pt", filetypes=[("PyTorch checkpoint", "*.pt"), ("All files", "*.*")])
+                dst = filedialog.asksaveasfilename(parent=self.frame.winfo_toplevel(), title="Export selected model", initialfile=p.name, defaultextension=".pt", filetypes=[("PyTorch checkpoint", "*.pt"), ("All files", "*.*")])
                 if not dst: return
                 self.logic.export_model(p, Path(dst))
                 self.ui.append_log(f"[export] {p} -> {dst}\n")
+                self._status(f"Exported: {Path(dst).name}")
         except Exception as e:
-            messagebox.showerror("Error", f"Export failed:\n{e}")
+            dialogs.show_error(self.frame, "Export Failed", e)
 
     def _activate_selected(self) -> None:
-        if not (src := self._selected_model_path()): return messagebox.showinfo("Info", "Select a model first.")
+        if not dialogs.require(src := self._selected_model_path(), self.frame, "Select a model first."): return
         if not (dst := self._active_model_path()): return
-        if dst.exists() and not messagebox.askyesno("Overwrite active model?", f"Overwrite active model?\n\n{dst}\n\nWith:\n{src}"): return
+        if dst.exists() and not dialogs.confirm(self.frame, "Overwrite Active Model", f"Overwrite the active model {dst.name}?\n\n{dst}\n\nWith:\n{src}", danger=True, ok_text="Overwrite"): return
         try:
             self.logic.activate_model(src, dst)
             self.ui.append_log(f"[activate] {src} -> {dst}\n")
             self.state.current_model_path = dst
             self._refresh_models()
+            self._status(f"Activated: {src.name} -> {dst.name}")
         except Exception as e:
-            messagebox.showerror("Error", f"Activate failed:\n{e}")
+            dialogs.show_error(self.frame, "Activate Failed", e)
 
     def _delete_selected(self) -> None:
         paths = self._selected_model_paths()
-        if not paths: return messagebox.showinfo("Info", "Select one or more snapshots to delete.")
-        
+        if not dialogs.require(paths, self.frame, "Select one or more snapshots to delete."): return
+
         fav, arena, deletable, blocked = [], [], [], []
         for p in paths:
             if self._is_favorited(p): fav.append(p)
@@ -544,14 +587,14 @@ class WeightsTab(BaseTab):
             else: blocked.append(p)
 
         if fav:
-            messagebox.showwarning("Favorited", f"These selected checkpoint(s) are favorited and cannot be deleted from here.\n\n{os.linesep.join(self.logic.rel_path(p) for p in fav[:8])}\n... (+{len(fav) - 8} more)\n\nRemove from favorites first, then delete." if len(fav) > 8 else f"These selected checkpoint(s) are favorited and cannot be deleted from here.\n\n{os.linesep.join(self.logic.rel_path(p) for p in fav)}\n\nRemove from favorites first, then delete.")
+            dialogs.show_warning(self.frame, "Favorited", f"These selected checkpoint(s) are favorited and cannot be deleted from here.\n\n{self._fmt_list([self.logic.rel_path(p) for p in fav])}\n\nRemove from favorites first, then delete.")
         if arena:
-            messagebox.showwarning("Arena-tracked", f"These selected checkpoint(s) are tracked in the Arena and cannot be deleted from here.\n\n{os.linesep.join(self.logic.rel_path(p) for p in arena[:8])}\n... (+{len(arena) - 8} more)\n\nRemove from Arena first, then delete." if len(arena) > 8 else f"These selected checkpoint(s) are tracked in the Arena and cannot be deleted from here.\n\n{os.linesep.join(self.logic.rel_path(p) for p in arena)}\n\nRemove from Arena first, then delete.")
+            dialogs.show_warning(self.frame, "Arena-Tracked", f"These selected checkpoint(s) are tracked in the Arena and cannot be deleted from here.\n\n{self._fmt_list([self.logic.rel_path(p) for p in arena])}\n\nRemove from Arena first, then delete.")
         if blocked:
-            messagebox.showwarning("Not deletable", f"Some selected files are not deletable here (only versions/imports are allowed):\n\n{os.linesep.join(str(p) for p in blocked[:8])}\n... (+{len(blocked) - 8} more)" if len(blocked) > 8 else f"Some selected files are not deletable here (only versions/imports are allowed):\n\n{os.linesep.join(str(p) for p in blocked)}")
+            dialogs.show_warning(self.frame, "Not Deletable", f"Some selected files are not deletable here (only versions/imports are allowed):\n\n{self._fmt_list([str(p) for p in blocked])}")
         if not deletable: return
 
-        if not messagebox.askyesno("Delete checkpoints", f"Delete selected checkpoint(s)/bundle(s)?\n\n{os.linesep.join(self.logic.rel_path(p) for p in deletable[:8])}\n... (+{len(deletable) - 8} more)\n\nThis will also delete any adjacent *.meta.json file (for .pt checkpoints)." if len(deletable) > 8 else f"Delete selected checkpoint(s)/bundle(s)?\n\n{os.linesep.join(self.logic.rel_path(p) for p in deletable)}\n\nThis will also delete any adjacent *.meta.json file (for .pt checkpoints)."): return
+        if not dialogs.confirm(self.frame, "Delete Checkpoints", f"Delete {len(deletable)} checkpoint(s)/bundle(s)?\n\n{self._fmt_list([self.logic.rel_path(p) for p in deletable])}\n\nThis will also delete any adjacent *.meta.json file (for .pt checkpoints).", danger=True): return
 
         deleted = 0
         for p in deletable:
@@ -560,45 +603,35 @@ class WeightsTab(BaseTab):
                 deleted += 1
             except Exception as e: self.ui.append_log(f"[delete] failed: {p} ({e})\n")
         self.ui.append_log(f"[delete] deleted {deleted} item(s)\n")
+        self._status(f"Deleted {deleted} of {len(deletable)} checkpoint(s)", "success" if deleted == len(deletable) else "warning")
         self._refresh_models()
 
     def _show_model_profile_info(self) -> None:
-        if not (p := self._selected_model_path()): return messagebox.showinfo("Model Profile", "No model selected")
+        if not dialogs.require(p := self._selected_model_path(), self.frame, "Select a model first.", title="Model Profile"): return
         info_text, err = self.logic.show_model_profile_info(p)
-        if err: messagebox.showerror("Error", f"Failed to load model profile info:\n{err}")
-        else:
-            dialog = tk.Toplevel(self.frame)
-            dialog.title(f"Model Profile: {p.name}")
-            dialog.geometry("650x550")
-            text_frame = ttk.Frame(dialog)
-            text_frame.pack(fill="both", expand=True, padx=10, pady=10)
-            scrollbar = ttk.Scrollbar(text_frame)
-            scrollbar.pack(side="right", fill="y")
-            text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10))
-            text.pack(side="left", fill="both", expand=True)
-            scrollbar.config(command=text.yview)
-            text.insert("1.0", info_text)
-            text.config(state="disabled")
-            ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
+        if err: dialogs.show_error(self.frame, "Model Profile Failed", f"Failed to load model profile info:\n{err}")
+        else: dialogs.show_text(self.frame, f"Model Profile: {p.name}", info_text, size=(650, 550))
 
     def _rename_selected(self) -> None:
-        if not (paths := self._selected_model_paths()) or len(paths) != 1: return messagebox.showinfo("Info", "Select exactly one checkpoint to rename.")
+        paths = self._selected_model_paths()
+        if not dialogs.require(len(paths) == 1, self.frame, "Select exactly one checkpoint to rename."): return
         src = paths[0]
-        if not self.logic.is_deletable_checkpoint(src): return messagebox.showwarning("Not allowed", "Only snapshots/imports can be renamed from here.")
-        
+        if not self.logic.is_deletable_checkpoint(src): return dialogs.show_warning(self.frame, "Rename Not Allowed", "Only snapshots/imports can be renamed from here.")
+
         old_rel, old_name = self.logic.rel_path(src), src.stem
-        new_stem = simpledialog.askstring("Rename checkpoint", "New name (no path, no extension):", initialvalue=old_name, parent=self.frame.winfo_toplevel())
-        if not (new_stem := (new_stem or "").strip()) or "/" in new_stem or "\\" in new_stem: return messagebox.showerror("Error", "Name must be non-empty and not contain path separators.")
-        
+        new_stem = dialogs.ask_string(self.frame, "Rename Checkpoint", "New name (no path, no extension):", initial=old_name)
+        if new_stem is None: return  # cancelled
+        if not (new_stem := new_stem.strip()) or "/" in new_stem or "\\" in new_stem: return dialogs.show_error(self.frame, "Invalid Name", "Name must be non-empty and not contain path separators.")
+
         dst = src.with_name(new_stem + src.suffix)
-        if dst.exists(): return messagebox.showerror("Error", f"Target already exists:\n{dst}")
-        
+        if dst.exists(): return dialogs.show_error(self.frame, "Target Exists", f"Target already exists:\n{dst}")
+
         was_fav = old_rel in self._favorites; fav_entry = self._favorites.get(old_rel)
         was_arena = old_rel in self._arena; arena_entry = self._arena.get(old_rel)
 
         try:
             self.logic.rename_model(src, dst)
-        except Exception as e: return messagebox.showerror("Error", f"Rename failed:\n{e}")
+        except Exception as e: return dialogs.show_error(self.frame, "Rename Failed", e)
 
         if was_fav and fav_entry:
             self._favorites.pop(old_rel, None)
@@ -617,6 +650,7 @@ class WeightsTab(BaseTab):
             self._save_group_state()
 
         self.ui.append_log(f"[rename] {old_rel} -> {self.logic.rel_path(dst)}\n")
+        self._status(f"Renamed: {src.name} -> {dst.name}")
         self._refresh_models()
 
     def _stop(self) -> None:
@@ -632,14 +666,16 @@ class WeightsTab(BaseTab):
         return None
 
     def _run_selected(self) -> None:
-        if not (p := self._selected_model_path()): return messagebox.showinfo("Info", "Select a model first.")
-        if not self.state.dataset_dir: return messagebox.showinfo("Info", "No dataset selected.")
-        if self.logic.proc and self.logic.proc.poll() is None: return messagebox.showinfo("Info", "A run is already in progress.")
+        if not dialogs.require(p := self._selected_model_path(), self.frame, "Select a model first."): return
+        if not dialogs.require(self.state.dataset_dir, self.frame, "No dataset selected. Choose one in the Pipeline tab first."): return
+        if self.logic.proc and self.logic.proc.poll() is None: return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
 
         try:
             self.ui.var_status.set(f"status: running (selected({p.name}))")
             self.logic.run_predict(p, self.state.dataset_dir, f"selected({p.name})", self.ui.var_split.get().strip(), self.ui.var_device.get().strip(), self.ui.var_max_samples.get().strip(), self.ui.chk_save_preds.get(), lambda *res: self.frame.after(0, self._on_predict_complete, *res))
-        except Exception as e: messagebox.showerror("Error", str(e))
+        except Exception as e:
+            self.ui.var_status.set("status: failed")
+            dialogs.show_error(self.frame, "Evaluation Failed", e)
 
     def _on_predict_complete(self, report_path: Path | None, was_stopped: bool) -> None:
         if was_stopped: self.ui.var_status.set("status: stopped")
@@ -648,8 +684,10 @@ class WeightsTab(BaseTab):
         self._refresh_reports()
 
     def _run_compare(self) -> None:
-        if not (a := self._path_from_combo(self.ui.var_cmp_a.get().strip())) or not (b := self._path_from_combo(self.ui.var_cmp_b.get().strip())): return messagebox.showinfo("Info", "Choose two models to compare.")
-        if self.logic.proc and self.logic.proc.poll() is None: return messagebox.showinfo("Info", "A run is already in progress.")
+        a = self._path_from_combo(self.ui.var_cmp_a.get().strip())
+        b = self._path_from_combo(self.ui.var_cmp_b.get().strip())
+        if not dialogs.require(a and b, self.frame, "Choose two models to compare (Model A and Model B)."): return
+        if self.logic.proc and self.logic.proc.poll() is None: return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
 
         # Read Tk state on the main thread; the worker must not touch widgets/variables.
         ds_dirs = self._selected_compare_datasets()
@@ -685,11 +723,21 @@ class WeightsTab(BaseTab):
                 else: self.log_q.put(f"\n[skip] compare incomplete for dataset {ds.name} (see logs above)\n")
 
             if len(paired) > 1: self.log_q.put(self.logic.compare_summary_multi(paired, model_a=a, model_b=b, split=split))
-            self.frame.after(0, lambda: self.ui.var_status.set("status: done" if not self.logic.stop_evt.is_set() else "status: stopped"))
+
+        def on_done(_result: Any) -> None:
+            stopped = self.logic.stop_evt.is_set()
+            self.ui.var_status.set("status: stopped" if stopped else "status: done")
+            if not stopped: self._status(f"Compare finished: {a.name} vs {b.name}")
+            self._refresh_reports()
+
+        def on_error(exc: BaseException) -> None:
+            self.log_q.put(f"\n[error] compare failed: {exc}\n")
+            self.ui.var_status.set("status: failed")
+            self._status(f"Compare failed: {exc}", "error")
 
         self.logic.stop_evt.clear()
         self.ui.var_status.set("status: running compare")
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_background(worker, name="Compare models", on_done=on_done, on_error=on_error)
 
     def _refresh_reports(self) -> None:
         self._reports = self.logic.load_reports()
@@ -744,7 +792,7 @@ class WeightsTab(BaseTab):
         self.ui.populate_reports_tree(reports_data)
 
     def _show_selected_report_summary(self) -> None:
-        if not (sel := self.ui.tree_reports.selection()): return messagebox.showinfo("Info", "Select a report first.")
+        if not dialogs.require(sel := self.ui.tree_reports.selection(), self.frame, "Select a report first."): return
         if not (r := self._report_by_iid.get(sel[0])): return
         if (p := r.get("_path")) and Path(str(p)).exists(): self.ui.append_log(self.logic.short_report(Path(str(p))))
         else:

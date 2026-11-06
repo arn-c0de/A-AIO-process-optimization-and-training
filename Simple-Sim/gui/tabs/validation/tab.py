@@ -1,10 +1,11 @@
 """Validation Tab"""
 
 from __future__ import annotations
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from pathlib import Path
 import threading
 
+from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_dataset_labels
@@ -25,6 +26,17 @@ class ValidationTab(BaseTab):
         self.ui.frame.pack(fill="both", expand=True)
         self._refresh_datasets()
         self.on_dataset_changed()
+
+    def _status(self, text: str, level: str = "success") -> bool:
+        """Non-blocking status message; returns False when no AppContext is available."""
+        ctx = getattr(self.state, "ctx", None)
+        if ctx is None:
+            return False
+        try:
+            ctx.status(text, level)
+            return True
+        except Exception:
+            return False
 
     def on_dataset_changed(self) -> None:
         self._sync_combo_to_state()
@@ -63,22 +75,35 @@ class ValidationTab(BaseTab):
         except Exception: pass
 
     def _run_validation(self) -> None:
-        if not self.state.dataset_dir:
-            messagebox.showinfo("Info", "No dataset selected")
+        if not dialogs.require(self.state.dataset_dir, self.frame,
+                               "Select a dataset first (Dataset field at the top).", title="No Dataset"):
             return
-        self.ui.set_results_text("Running validation suite...\n\nThis may take a while for large datasets.")
         # Read Tk state on the main thread; the worker must not touch widgets/variables.
         checks = {name: var.get() for name, var in self.ui.check_vars.items()}
+        if not dialogs.require(any(checks.values()), self.frame,
+                               "Enable at least one check in the Checks section.", title="No Checks Selected"):
+            return
+        self.ui.set_results_text("Running validation suite...\n\nThis may take a while for large datasets.")
         dataset_dir = self.state.dataset_dir
 
-        def on_error(e: Exception) -> None:
-            messagebox.showerror("Error", f"Validation failed:\n{e}")
+        def on_error(e: BaseException) -> None:
             self.ui.set_results_text(f"Validation failed:\n{e}")
+            dialogs.show_error(self.frame, "Validation Failed", e)
 
         def on_done(results: dict) -> None:
             self.validation_results = results
             self.ui.display_results(results)
             self._refresh_flag_tree()
+
+        def on_finally() -> None:
+            self.ui.set_running(False)
+
+        self.ui.set_running(True)
+        ctx = getattr(self.state, "ctx", None)
+        if ctx is not None and getattr(ctx, "tasks", None) is not None:
+            ctx.tasks.run(lambda _h: self.logic.run_validation(dataset_dir, checks), name="Validation",
+                          on_done=on_done, on_error=on_error, on_finally=on_finally)
+            return
 
         def validate():
             try:
@@ -86,6 +111,8 @@ class ValidationTab(BaseTab):
                 self.frame.after(0, on_done, results)
             except Exception as e:
                 self.frame.after(0, on_error, e)
+            finally:
+                self.frame.after(0, on_finally)
 
         threading.Thread(target=validate, daemon=True).start()
 
@@ -99,24 +126,37 @@ class ValidationTab(BaseTab):
 
     def _remove_flag(self) -> None:
         selection = self.ui.flag_tree.selection()
-        if not selection: return
+        if not dialogs.require(selection, self.frame, "Select a flagged sample in the list first."):
+            return
         item = selection[0]
         sample_id = self.ui.flag_tree.item(item, "text")
         flag_type = self.ui.flag_tree.item(item, "values")[0]
         self.logic.remove_flag(sample_id, flag_type)
         self._refresh_flag_tree()
+        self._status(f"Flag {flag_type} removed from {sample_id}.")
 
     def _clear_all_flags(self) -> None:
-        if messagebox.askyesno("Confirm", "Clear all flags?"):
+        samples = self.logic.get_all_flagged_samples()
+        if not samples:
+            self._status("There are no flags to clear.", "info")
+            return
+        if dialogs.confirm(self.frame, "Clear All Flags",
+                           f"Remove all flags from {len(samples)} sample(s) of this dataset?\n\n"
+                           "Images and labels are not changed.",
+                           danger=True, ok_text="Clear Flags"):
             self.logic.clear_all_flags()
             self._refresh_flag_tree()
+            self._status(f"Flags cleared for {len(samples)} sample(s).")
 
     def _export_report(self) -> None:
-        if not self.validation_results or not self.state.dataset_dir:
-            messagebox.showinfo("Info", "Run validation first")
+        if not dialogs.require(self.validation_results and self.state.dataset_dir, self.frame,
+                               "Run the validation first; the report contains its results.",
+                               title="No Results"):
             return
         try:
             path = self.logic.export_report(self.validation_results, self.state.dataset_dir)
-            messagebox.showinfo("Success", f"Report exported to:\n{path}")
         except Exception as e:
-            messagebox.showerror("Error", f"Export failed:\n{e}")
+            dialogs.show_error(self.frame, "Export Failed", e)
+            return
+        if not self._status(f"Validation report exported to {path}"):
+            dialogs.show_info(self.frame, "Report Exported", f"Report exported to:\n{path}")

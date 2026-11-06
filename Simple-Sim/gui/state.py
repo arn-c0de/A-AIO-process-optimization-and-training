@@ -27,3 +27,6 @@ class UiState:
     # Settings persistence
     settings: dict[str, Any] = field(default_factory=dict)
     settings_store: SettingsStore | None = None
+
+    # App services (gui.core.context.AppContext): event bus, task runner, status.
+    ctx: Any = None

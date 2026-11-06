@@ -16,6 +16,7 @@ import shlex
 
 import yaml
 
+from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.components.overlay_renderer import draw_defect_overlay
@@ -300,7 +301,7 @@ class PipelineControlTab(BaseTab):
             block.pack(fill="x", pady=(0, 6))
             state = {"open": False}
             body = ttk.Frame(block)
-            btn = ttk.Button(block, text=f"▶ {title}")
+            btn = ttk.Button(block, text=f"\u25b8 {title}")
             btn.pack(anchor="w")
 
             height = min(14, max(3, len(text.splitlines())))
@@ -312,7 +313,7 @@ class PipelineControlTab(BaseTab):
             def _toggle() -> None:
                 if state["open"]:
                     body.pack_forget()
-                    btn.configure(text=f"▶ {title}")
+                    btn.configure(text=f"\u25b8 {title}")
                     state["open"] = False
                 else:
                     body.pack(fill="x", pady=(4, 0))
@@ -1218,38 +1219,29 @@ class PipelineControlTab(BaseTab):
             self.ui.show_messagebox("info", "Datasets", "No datasets found. Click Refresh after generating datasets.")
             return
 
-        top = tk.Toplevel(self.frame.winfo_toplevel()); top.title("Select datasets"); top.transient(self.frame.winfo_toplevel()); top.grab_set()
-        frm = ttk.Frame(top, padding=10); frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text="Select one or more datasets (Ctrl/Shift for multi-select):").pack(anchor="w")
-        lb = tk.Listbox(frm, selectmode="extended", height=min(18, max(6, len(self._dataset_labels)))); lb.pack(fill="both", expand=True, pady=(6, 8))
-        for s in self._dataset_labels: lb.insert("end", s)
+        selected_paths = {str(p.resolve()) for p in self._decode_dataset_paths_json(self.ui.var_dataset_multi_paths.get())}
+        if not selected_paths and (ds := self._selected_dataset_dir_single()) is not None:
+            selected_paths.add(str(ds.resolve()))
+        preselected = [
+            label for label in self._dataset_labels
+            if (p := self._dataset_by_label.get(label)) is not None and str(p.resolve()) in selected_paths
+        ]
+        picked = dialogs.pick_from_list(
+            self.frame, "Select Datasets", self._dataset_labels, multi=True, selected=preselected,
+            prompt="Select one or more datasets. One model is trained on all of them.", size=(640, 480),
+        )
+        if picked is None:
+            return
+        paths: list[Path] = [self._dataset_by_label[label] for label in picked if label in self._dataset_by_label]
+        if not paths and (ds := self._selected_dataset_dir_single()) is not None:
+            paths = [ds]
 
-        selected_paths = set(str(p.resolve()) if not p.is_absolute() else str(p) for p in self._decode_dataset_paths_json(self.ui.var_dataset_multi_paths.get()))
-        if not selected_paths and (ds := self._selected_dataset_dir_single()) is not None: selected_paths.add(str(ds.resolve()))
-
-        for i, label in enumerate(self._dataset_labels):
-            if (p := self._dataset_by_label.get(label)) is not None and str(p.resolve()) in selected_paths: lb.selection_set(i)
-        
-        btns = ttk.Frame(frm); btns.pack(fill="x")
-        ttk.Button(btns, text="Select all", command=lambda: lb.selection_set(0, "end")).pack(side="left")
-        ttk.Button(btns, text="Clear", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=(8, 0))
-        ttk.Button(btns, text="Cancel", command=top.destroy).pack(side="right")
-        ttk.Button(btns, text="OK", command=lambda: self._on_multi_picker_ok(lb, top)).pack(side="right", padx=(0, 8))
-        lb.bind("<Double-Button-1>", lambda _e: self._on_multi_picker_ok(lb, top))
-        top.minsize(640, 320)
-
-    def _on_multi_picker_ok(self, listbox: tk.Listbox, dialog: tk.Toplevel) -> None:
-        idxs = list(listbox.curselection())
-        paths: list[Path] = [self._dataset_by_label[self._dataset_labels[int(i)]] for i in idxs]
-        if not paths and (ds := self._selected_dataset_dir_single()) is not None: paths = [ds]
-        
         self.ui.var_dataset_multi_paths.set(self._encode_dataset_paths_json(paths))
         self._sync_multi_summary()
-
         if paths:
-            if label0 := self._dataset_label_for_path(paths[0]): self.ui.var_dataset.set(label0)
+            if label0 := self._dataset_label_for_path(paths[0]):
+                self.ui.var_dataset.set(label0)
         self._on_dataset_selected()
-        dialog.destroy()
 
     def _decode_dataset_paths_json(self, s: str) -> list[Path]:
         return decode_dataset_paths_json(s, self.sim_root)
@@ -1414,34 +1406,23 @@ class PipelineControlTab(BaseTab):
 
     def _pick_profiles_multi(self) -> None:
         values = self._profiles_multi_available_values()
-        if not values: self.ui.show_messagebox("info", "Profiles", "No profiles available."); return
-
+        if not values:
+            self.ui.show_messagebox("info", "Profiles", "No profiles available.")
+            return
         cur = set(self._profiles_multi_list(available=values))
-        win = tk.Toplevel(self.frame); win.title("Select Profiles"); win.geometry("520x420")
-        frm = ttk.Frame(win, padding=10); frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text="Select one or more profiles to generate:").pack(anchor="w")
-        lb = tk.Listbox(frm, selectmode="extended", height=16); lb.pack(fill="both", expand=True, pady=(8, 0))
-        sb = ttk.Scrollbar(frm, orient="vertical", command=lb.yview); sb.pack(side="left", fill="y", pady=(8, 0))
-        lb.configure(yscrollcommand=sb.set)
-        for i, pid in enumerate(values): lb.insert("end", pid);
-        for i, pid in enumerate(values):
-            if pid in cur: lb.selection_set(i)
-
-        btns = ttk.Frame(frm); btns.pack(fill="x", pady=(10, 0))
-        ttk.Button(btns, text="Select All", command=lambda: lb.selection_set(0, "end")).pack(side="left")
-        ttk.Button(btns, text="OK", command=lambda: self._on_pick_profiles_multi_ok(lb, win)).pack(side="right")
-        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right", padx=(0, 8))
-        win.minsize(560, 260)
-
-    def _on_pick_profiles_multi_ok(self, listbox: tk.Listbox, dialog: tk.Toplevel) -> None:
-        idxs = list(listbox.curselection())
-        values = self._profiles_multi_available_values()
-        sel = [values[i] for i in idxs if 0 <= i < len(values)]
+        sel = dialogs.pick_from_list(
+            self.frame, "Select Profiles", values, multi=True, selected=[v for v in values if v in cur],
+            prompt="Select one or more component profiles to generate.",
+        )
+        if sel is None:
+            return
         self._set_profiles_multi(sel)
-        if sel: self.ui.var_profile.set(sel[0])
-        dialog.destroy()
-        try: self._refresh_precise_classes()
-        except Exception: pass
+        if sel:
+            self.ui.var_profile.set(sel[0])
+        try:
+            self._refresh_precise_classes()
+        except Exception:
+            pass
 
     def _on_render_backend_changed(self, _event: object | None = None) -> None:
         try:
@@ -1507,15 +1488,8 @@ class PipelineControlTab(BaseTab):
 
         try:
             with open(profile_path) as f: profile_data = yaml.safe_load(f)
-            dialog = tk.Toplevel(self.frame); dialog.title(f"Profile Info: {profile_id}"); dialog.geometry("600x500")
-            text_frame = ttk.Frame(dialog); text_frame.pack(fill="both", expand=True, padx=10, pady=10)
-            scrollbar = ttk.Scrollbar(text_frame); scrollbar.pack(side="right", fill="y")
-            text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10)); text.pack(side="left", fill="both", expand=True)
-            scrollbar.config(command=text.yview)
-
             info_text = f"Profile ID: {profile_id}\nPath: {profile_path}\n\n" + "="*60 + "\n\n" + yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
-            text.insert("1.0", info_text); text.config(state="disabled")
-            ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
+            dialogs.show_text(self.frame, f"Profile Info: {profile_id}", info_text, size=(640, 520))
 
         except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load profile:\n{str(e)}")
 
@@ -1549,12 +1523,12 @@ class PipelineControlTab(BaseTab):
             
             if model_path.is_dir():
                 if not (cand := bundle_checkpoint_path(model_path, ds_profile_id, kind="best")).exists():
-                    self.ui.var_profile_compat.set(f"⚠ Multi-model: no weights for {ds_profile_id}"); self.ui.lbl_profile_compat.configure(foreground="orange"); return
+                    self.ui.var_profile_compat.set(f"⚠ Multi-model: no weights for {ds_profile_id}"); self.ui.set_compat_color("orange"); return
                 model_path = cand
 
             if (meta := self.logic.cached_checkpoint_meta(model_path)) is None:
                 # Uncached: load metadata in the background, then re-run this check on the Tk thread.
-                self.ui.var_profile_compat.set("… checking model profile"); self.ui.lbl_profile_compat.configure(foreground="gray")
+                self.ui.var_profile_compat.set("… checking model profile"); self.ui.set_compat_color("gray")
                 if (key := str(model_path.resolve())) not in self._compat_loading:
                     self._compat_loading.add(key)
                     def worker() -> None:
@@ -1567,7 +1541,7 @@ class PipelineControlTab(BaseTab):
                 return
             if meta.get("error"): self.ui.var_profile_compat.set(""); return
             text, color = profile_compat_status(ds_profile_id, ds_profile_hash, meta.get("component_profile"))
-            self.ui.var_profile_compat.set(text); self.ui.lbl_profile_compat.configure(foreground=color)
+            self.ui.var_profile_compat.set(text); self.ui.set_compat_color(color)
 
         except Exception as e: _LOG.warning("Profile compatibility check failed: %s", e); self.ui.var_profile_compat.set("")
 
@@ -1582,17 +1556,10 @@ class PipelineControlTab(BaseTab):
             profiles_dir = self.sim_root / "configs" / "profiles"
             profile_path = profiles_dir / f"{profile_id}.yaml"
 
-            dialog = tk.Toplevel(self.frame); dialog.title(f"Dataset Profile: {ds.name}"); dialog.geometry("650x550")
-            text_frame = ttk.Frame(dialog); text_frame.pack(fill="both", expand=True, padx=10, pady=10)
-            scrollbar = ttk.Scrollbar(text_frame); scrollbar.pack(side="right", fill="y")
-            text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10)); text.pack(side="left", fill="both", expand=True)
-            scrollbar.config(command=text.yview)
-
             info_text = f"Dataset: {ds.name}\nProfile ID: {profile_id}\nProfile Hash: {profile_hash}\nProfile Path: {profile_path_str}\n\n" + "="*60 + "\nMANIFEST METADATA\n" + "="*60 + "\n\n" + json.dumps(manifest, indent=2)
             if profile_path.exists(): info_text += "\n\n" + "="*60 + "\nPROFILE DETAILS\n" + "="*60 + "\n\n" + yaml.dump(yaml.safe_load(profile_path.read_text(encoding="utf-8")), default_flow_style=False, sort_keys=False)
             else: info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
-            text.insert("1.0", info_text); text.config(state="disabled")
-            ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
+            dialogs.show_text(self.frame, f"Dataset Profile: {ds.name}", info_text, size=(680, 560))
 
         except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load dataset profile info:\n{str(e)}")
 
@@ -1670,7 +1637,7 @@ class PipelineControlTab(BaseTab):
     def _delete_dataset(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
         if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before deleting datasets."); return
-        if not self.ui.ask_yes_no("Delete dataset", f"Delete dataset folder?\n\n{ds}"): return
+        if not dialogs.confirm(self.frame, "Delete Dataset", f"Permanently delete the dataset folder and all its images?\n\n{ds}", danger=True): return
         try: shutil.rmtree(ds); self._append_log(f"\n[deleted dataset {ds}]\n")
         except Exception as e: self.ui.show_messagebox("error", "Delete failed", str(e))
         self._refresh_datasets()
@@ -1759,91 +1726,29 @@ class PipelineControlTab(BaseTab):
             return []
 
         samples_sorted = sorted(samples, key=lambda s: s.sample_id)
-        dialog = tk.Toplevel(self.frame.winfo_toplevel())
-        dialog.title(title)
-        dialog.transient(self.frame.winfo_toplevel())
-        dialog.grab_set()
-        dialog.minsize(860, 420)
-
-        selected_ids: list[str] = []
-
-        frm = ttk.Frame(dialog, padding=10)
-        frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text=f"Dataset: {dataset_dir.name}").pack(anchor="w")
-        ttk.Label(frm, text="Select one or more samples (Ctrl/Shift for multi-select):").pack(anchor="w", pady=(2, 6))
-
-        list_frame = ttk.Frame(frm)
-        list_frame.pack(fill="both", expand=True)
-        lb = tk.Listbox(list_frame, selectmode="extended")
-        lb.pack(side="left", fill="both", expand=True)
-        sb = ttk.Scrollbar(list_frame, orient="vertical", command=lb.yview)
-        sb.pack(side="right", fill="y")
-        lb.configure(yscrollcommand=sb.set)
-
-        for row in samples_sorted:
-            lb.insert("end", self._sample_list_label(row))
-
-        btns = ttk.Frame(frm)
-        btns.pack(fill="x", pady=(8, 0))
-        ttk.Button(btns, text="Select all", command=lambda: lb.selection_set(0, "end")).pack(side="left")
-        ttk.Button(btns, text="Clear", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=(8, 0))
-        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
-
-        def _confirm_selection() -> None:
-            idxs = lb.curselection()
-            if not idxs:
-                self.ui.show_messagebox("info", action_text, "No samples selected.")
-                return
-            selected_ids.extend(samples_sorted[int(i)].sample_id for i in idxs)
-            dialog.destroy()
-
-        ttk.Button(btns, text=action_text, command=_confirm_selection).pack(side="right", padx=(0, 8))
-        lb.bind("<Double-Button-1>", lambda _e: _confirm_selection())
-
-        dialog.wait_window()
-        return selected_ids
+        ids = [row.sample_id for row in samples_sorted]
+        picked = dialogs.pick_from_list(
+            self.frame, title, ids, multi=True, labels=[self._sample_list_label(r) for r in samples_sorted],
+            prompt=f"Dataset: {dataset_dir.name}. Select one or more samples.", size=(860, 520), ok_text=action_text,
+        )
+        return list(picked or [])
 
     def _open_target_dataset_selector(self, source_dataset: Path) -> Path | None:
         targets = [p for p in self._dataset_dirs if p.resolve() != source_dataset.resolve()]
         if not targets:
-            self.ui.show_messagebox("info", "Move images", "No target dataset available.")
+            self.ui.show_messagebox("info", "Move Images", "No target dataset available.")
             return None
-
         targets_sorted = sorted(targets, key=lambda p: self._dataset_label_for_path(p) or p.name)
-        dialog = tk.Toplevel(self.frame.winfo_toplevel())
-        dialog.title("Select target dataset")
-        dialog.transient(self.frame.winfo_toplevel())
-        dialog.grab_set()
-        dialog.minsize(620, 300)
-
-        selected: list[Path] = []
-        frm = ttk.Frame(dialog, padding=10)
-        frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text=f"Source dataset: {source_dataset.name}").pack(anchor="w")
-        ttk.Label(frm, text="Choose a target dataset:").pack(anchor="w", pady=(2, 6))
-
-        lb = tk.Listbox(frm, exportselection=False, height=min(18, max(6, len(targets_sorted))))
-        lb.pack(fill="both", expand=True)
-        for p in targets_sorted:
-            lb.insert("end", self._dataset_label_for_path(p) or p.name)
-        lb.selection_set(0)
-
-        btns = ttk.Frame(frm)
-        btns.pack(fill="x", pady=(8, 0))
-        ttk.Button(btns, text="Cancel", command=dialog.destroy).pack(side="right")
-
-        def _confirm_target() -> None:
-            idxs = lb.curselection()
-            if not idxs:
-                return
-            selected.append(targets_sorted[int(idxs[0])])
-            dialog.destroy()
-
-        ttk.Button(btns, text="Use target", command=_confirm_target).pack(side="right", padx=(0, 8))
-        lb.bind("<Double-Button-1>", lambda _e: _confirm_target())
-
-        dialog.wait_window()
-        return selected[0] if selected else None
+        keys = [str(p) for p in targets_sorted]
+        picked = dialogs.pick_from_list(
+            self.frame, "Select Target Dataset", keys,
+            labels=[self._dataset_label_for_path(p) or p.name for p in targets_sorted],
+            prompt=f"Source dataset: {source_dataset.name}. Choose the dataset the images move to.",
+            size=(620, 420), ok_text="Use Target",
+        )
+        if not picked:
+            return None
+        return targets_sorted[keys.index(picked[0])]
 
     def _sample_list_label(self, sample: DatasetSampleInfo) -> str:
         return f"{sample.sample_id} | class={sample.class_name} | split={sample.split} | image={Path(sample.image_path).name}"

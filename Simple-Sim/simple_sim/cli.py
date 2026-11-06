@@ -47,6 +47,7 @@ COMMANDS: dict[str, str] = {
     "backfill-manifest": "tools/backfill_manifest.py",
     "backfill-labels": "tools/backfill_labels_v2.py",
     "update-sample-gallery": "tools/update_sample_gallery.py",
+    "gui-screenshots": "tools/gui_screenshots.py",
 }
 
 BUILTINS: dict[str, str] = {

@@ -13,13 +13,20 @@ RENDER_STYLES = {"photoreal", "flat"}
 DEFAULT_COMPONENT_PROFILE = "chip_0603_resistor@2"
 
 
-def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
-    """Render config with the profile's defaults filled in (schema v2: colour/type come from the profile)."""
+def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any],
+                         roi: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Render config with the profile's defaults filled in (schema v2: colour/type come from the profile).
+
+    With *roi* (the run config's ``roi`` section) the ROI scale ``mm_per_px`` is passed along too:
+    the board model (``render.board``) works in mm, profiles are in pixels at that scale.
+    """
     out = dict(render_cfg)
     prof_render = profile.get("render") or {}
     if "component_color" not in out and "component_color_bgr" in prof_render:
         out["component_color"] = list(prof_render["component_color_bgr"])
     out.setdefault("component_type", str((profile.get("component") or {}).get("type", "")))
+    if roi and roi.get("mm_per_px"):
+        out["mm_per_px"] = float(roi["mm_per_px"])
     return out
 
 VALID_CLASSES = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT', 'SOLDER_BALL', 'EXCESS_SOLDER'}
@@ -270,6 +277,25 @@ def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> 
     else:
         raise ValueError(f"Unsupported render backend: {backend}")
     _validate_camera(render.get('camera'))
+    _validate_supersampling(render.get('supersampling'))
+    _validate_board(render.get('board'))
+
+
+def _validate_board(board: Any) -> None:
+    """``render.board`` (both backends): router, design-rule preset, pour probability, DRC mode."""
+    from simple_sim.board import validate_board_options
+
+    validate_board_options(board)
+
+
+def _validate_supersampling(factor: Any) -> None:
+    """``render.supersampling`` (both backends; 3D: the baked board): photoreal render scale, default 2."""
+    if factor is None:
+        return
+    from simple_sim.generators.opencv2d.photoreal import SUPERSAMPLING_CHOICES
+
+    if isinstance(factor, bool) or factor not in SUPERSAMPLING_CHOICES:
+        raise ValueError(f"render.supersampling must be one of {list(SUPERSAMPLING_CHOICES)}")
 
 
 def _validate_camera(camera: Any) -> None:
@@ -282,7 +308,7 @@ def _validate_camera(camera: Any) -> None:
         raise ValueError(f"render.camera must be a mapping with keys from {sorted(set(CAMERA_DEFAULTS) | {'preset'})}")
     if camera.get('preset', 'aoi') not in CAMERA_PRESETS:
         raise ValueError(f"render.camera.preset must be one of {sorted(CAMERA_PRESETS)}")
-    limits = {'tilt_deg': 60.0, 'jpeg_quality': 100.0}
+    limits = {'tilt_deg': 60.0, 'jpeg_quality': 100.0, 'capture_scale': 1.0}
     for key, default in CAMERA_DEFAULTS.items():
         if key not in camera or not isinstance(default, list):
             continue
@@ -290,6 +316,8 @@ def _validate_camera(camera: Any) -> None:
         if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(v, (int, float)) for v in rng)
                 and 0 <= rng[0] <= rng[1] <= limits.get(key, float('inf'))):
             raise ValueError(f"render.camera.{key} must be [min, max] with 0 <= min <= max <= {limits.get(key, 'inf')}")
+    if 'capture_scale' in camera and camera['capture_scale'][0] < 0.05:
+        raise ValueError("render.camera.capture_scale must be in [0.05, 1] (sensor pixels per ROI pixel)")
     if 'zoom' in camera and camera['zoom'][0] < 1:
         raise ValueError("render.camera.zoom must be >= 1 (1 = profile scale, larger = farther away)")
     if 'shot_noise' in camera and not (isinstance(camera['shot_noise'], (int, float)) and camera['shot_noise'] >= 0):
@@ -327,6 +355,9 @@ def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
     rework = render.get('rework_artifacts')
     if rework is not None and not (isinstance(rework, (int, float)) and 0 <= rework <= 1):
         raise ValueError("render.rework_artifacts must be a probability in [0, 1]")
+    gloss = render.get('mask_gloss')
+    if gloss is not None and not (isinstance(gloss, (int, float)) and 0 <= gloss <= 1):
+        raise ValueError("render.mask_gloss must be a probability in [0, 1]")
 
     texture_dir = render.get('texture_dir')
     if texture_dir is not None:

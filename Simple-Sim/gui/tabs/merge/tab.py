@@ -10,9 +10,10 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from typing import Any
 
+from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from simple_sim.model_bundle import read_bundle_meta
@@ -51,6 +52,46 @@ class MergeTab(BaseTab):
 
     def _append_log(self, s: str) -> None:
         self.ui.append_log(s)
+
+    def _status(self, text: str, level: str = "success") -> None:
+        """Non-blocking feedback in the main status bar (no-op without an AppContext)."""
+        ctx = getattr(self.state, "ctx", None)
+        if ctx is None:
+            return
+        try:
+            ctx.status(text, level)
+        except Exception:
+            pass
+
+    def _run_background(self, fn: Any, *, name: str, on_done: Any, on_error: Any, on_finally: Any = None) -> None:
+        """Run ``fn()`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
+        ctx = getattr(self.state, "ctx", None)
+        tasks = getattr(ctx, "tasks", None) if ctx is not None else None
+        if tasks is not None:
+            tasks.run(lambda _h: fn(), name=name, on_done=on_done, on_error=on_error, on_finally=on_finally)
+            return
+
+        def finish(cb: Any, arg: Any) -> None:
+            try:
+                cb(arg)
+            finally:
+                if on_finally is not None:
+                    on_finally()
+
+        def worker() -> None:
+            try:
+                result = fn()
+            except Exception as exc:  # noqa: BLE001 - reported to the UI
+                self.frame.after(0, lambda e=exc: finish(on_error, e))
+                return
+            self.frame.after(0, lambda r=result: finish(on_done, r))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _rebuild(self) -> None:
+        self.ui.rebuild_tree(self._profile_models, self._iid_to_model, self._model_meta_cache,
+                             self._selected_weights, self._favorites, self._group_for_path, self._available_groups())
+        self._refresh_selection_summary()
 
     def _load_group_data(self) -> None:
         self._favorites.clear()
@@ -123,9 +164,7 @@ class MergeTab(BaseTab):
         self._load_group_data()
         self._profile_models = self.logic.scan_models()
 
-        self.ui.rebuild_tree(self._profile_models, self._iid_to_model, self._model_meta_cache,
-                             self._selected_weights, self._favorites, self._group_for_path, self._available_groups())
-        self._refresh_selection_summary()
+        self._rebuild()
         self._refresh_bundles()
         self._append_log(f"[scan] Found {sum(len(v) for v in self._profile_models.values())} "
                          f"models across {len(self._profile_models)} profile(s)\n")
@@ -138,20 +177,17 @@ class MergeTab(BaseTab):
 
     def _select_weight(self) -> None:
         sel = self.ui.tree.selection()
-        if not sel:
-            messagebox.showinfo("Info", "Select a model from the list.")
+        if not dialogs.require(sel, self.frame, "Select a model from the list."):
             return
 
         iid = sel[0]
         entry = self._iid_to_model.get(iid)
-        if not entry:
-            messagebox.showinfo("Info", "Select a model, not a profile header.")
+        if not dialogs.require(entry, self.frame, "Select a model, not a profile or group header."):
             return
 
         profile_id, model_path = entry
         self._selected_weights[profile_id] = model_path
-        self.ui.rebuild_tree(self._profile_models, self._iid_to_model, self._model_meta_cache,
-                             self._selected_weights, self._favorites, self._group_for_path, self._available_groups())
+        self._rebuild()
         self._append_log(f"[select] {profile_id} -> {model_path.name}\n")
 
     def _deselect_weight(self) -> None:
@@ -170,18 +206,17 @@ class MergeTab(BaseTab):
 
         if profile_id in self._selected_weights:
             del self._selected_weights[profile_id]
-            self.ui.rebuild_tree(self._profile_models, self._iid_to_model, self._model_meta_cache,
-                                 self._selected_weights, self._favorites, self._group_for_path, self._available_groups())
+            self._rebuild()
             self._append_log(f"[deselect] {profile_id}\n")
 
     def _do_merge(self) -> None:
-        if not self._selected_weights:
-            messagebox.showinfo("Info", "Select at least one weight per profile first.")
+        if not dialogs.require(self._selected_weights, self.frame, "Select at least one weight per profile first."):
             return
 
         if len(self._selected_weights) < 2:
-            if not messagebox.askyesno(
-                "Only 1 profile",
+            if not dialogs.confirm(
+                self.frame,
+                "Only One Profile",
                 f"Only {len(self._selected_weights)} profile selected.\n"
                 "A merged bundle is more useful with multiple profiles.\n\n"
                 "Create anyway?",
@@ -190,7 +225,7 @@ class MergeTab(BaseTab):
 
         name = self.ui.var_bundle_name.get().strip()
         if not name:
-            messagebox.showerror("Error", "Bundle name must not be empty.")
+            dialogs.show_error(self.frame, "Invalid Name", "Bundle name must not be empty.")
             return
 
         if self.ui.var_add_timestamp.get():
@@ -199,56 +234,52 @@ class MergeTab(BaseTab):
 
         bundle_dir = self.logic._model_root() / f"{name}.bundle"
         if bundle_dir.exists():
-            messagebox.showerror("Error", f"Bundle already exists:\n{bundle_dir}")
+            dialogs.show_error(self.frame, "Bundle Exists", f"Bundle already exists:\n{bundle_dir}",
+                               hint="Choose another name or enable Append Timestamp.")
             return
 
         self.ui.btn_merge.configure(state="disabled")
         self.ui.var_status.set("Status: merging...")
+        selected = dict(self._selected_weights)  # snapshot: the worker must not see UI-thread edits
 
-        def worker() -> None:
+        def work() -> list[str]:
             try:
-                profiles_merged, model_details, sources = self.logic.do_merge(bundle_dir, self._selected_weights, self._model_meta_cache)
+                profiles_merged, model_details, sources = self.logic.do_merge(bundle_dir, selected, self._model_meta_cache)
                 self.logic.write_bundle_details(bundle_dir, model_details, sources=sources)
-
-                self._log_threadsafe(
-                    f"\n[merge] Bundle created: {bundle_dir}\n"
-                    f"[merge] Contains {len(profiles_merged)} profiles: {', '.join(profiles_merged)}\n"
-                )
-
-                def on_done() -> None:
-                    self.ui.btn_merge.configure(state="normal")
-                    self.ui.var_status.set(f"Status: bundle created ({name})")
-                    self._refresh_bundles()
-
-                self.frame.after(0, on_done)
-
-            except Exception as e:
-                self._log_threadsafe(f"\n[error] Merge failed: {e}\n")
+            except Exception:
                 try:
                     if bundle_dir.exists():
                         shutil.rmtree(bundle_dir)
                 except Exception:
                     pass
+                raise
+            return list(profiles_merged)
 
-                def on_error() -> None:
-                    self.ui.btn_merge.configure(state="normal")
-                    self.ui.var_status.set("Status: merge failed")
+        def on_done(profiles_merged: list[str]) -> None:
+            self._append_log(
+                f"\n[merge] Bundle created: {bundle_dir}\n"
+                f"[merge] Contains {len(profiles_merged)} profiles: {', '.join(profiles_merged)}\n"
+            )
+            self.ui.btn_merge.configure(state="normal")
+            self.ui.var_status.set(f"Status: bundle created ({name})")
+            self._status(f"Bundle created: {bundle_dir.name}")
+            self._refresh_bundles()
 
-                try:
-                    self.frame.after(0, on_error)
-                except Exception:
-                    pass
+        def on_error(exc: BaseException) -> None:
+            self._append_log(f"\n[error] Merge failed: {exc}\n")
+            self.ui.btn_merge.configure(state="normal")
+            self.ui.var_status.set("Status: merge failed")
+            self._status(f"Merge failed: {exc}", "error")
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_background(work, name="Merge bundle", on_done=on_done, on_error=on_error)
 
     def _do_merge_ensemble(self) -> None:
-        if not self._selected_weights:
-            messagebox.showinfo("Info", "Select at least one weight per profile first.")
+        if not dialogs.require(self._selected_weights, self.frame, "Select at least one weight per profile first."):
             return
 
         name = self.ui.var_bundle_name.get().strip()
         if not name:
-            messagebox.showerror("Error", "Name must not be empty.")
+            dialogs.show_error(self.frame, "Invalid Name", "Name must not be empty.")
             return
 
         if self.ui.var_add_timestamp.get():
@@ -257,47 +288,52 @@ class MergeTab(BaseTab):
 
         out_path = self.logic._model_root() / f"{name}_ensemble.pt"
         if out_path.exists():
-            messagebox.showerror("Error", f"Target already exists:\n{out_path}")
+            dialogs.show_error(self.frame, "Target Exists", f"Target already exists:\n{out_path}",
+                               hint="Choose another name or enable Append Timestamp.")
             return
 
         self.ui.btn_merge.configure(state="disabled")
         self.ui.btn_merge_ensemble.configure(state="disabled")
         self.ui.var_status.set("Status: building ensemble...")
-        log_q = queue.Queue() # temp queue for ensemble logging
+        log_q: queue.Queue[str] = queue.Queue()  # worker log lines, drained on the UI thread
+        selected = dict(self._selected_weights)
 
-        def worker() -> None:
+        def work() -> None:
             try:
-                self.logic.do_merge_ensemble(out_path, self._selected_weights, log_q)
-
-                def on_done() -> None:
-                    self.ui.btn_merge.configure(state="normal")
-                    self.ui.btn_merge_ensemble.configure(state="normal")
-                    self.ui.var_status.set(f"Status: ensemble created ({out_path.name})")
-                    self._scan_models()
-                    self._refresh_bundles()
-
-                self.frame.after(0, on_done)
-
-            except Exception as e:
-                self._log_threadsafe(f"\n[error] Ensemble build failed: {e}\n")
+                self.logic.do_merge_ensemble(out_path, selected, log_q)
+            except Exception:
                 try:
                     if out_path.exists():
                         out_path.unlink()
                 except Exception:
                     pass
+                raise
 
-                def on_error() -> None:
-                    self.ui.btn_merge.configure(state="normal")
-                    self.ui.btn_merge_ensemble.configure(state="normal")
-                    self.ui.var_status.set("Status: ensemble failed")
+        def drain_log() -> None:
+            while True:
+                try:
+                    self._append_log(log_q.get_nowait())
+                except queue.Empty:
+                    break
 
-                self.frame.after(0, on_error)
-            finally:
-                while True: # drain logs to main UI log
-                    try: self._log_threadsafe(log_q.get_nowait())
-                    except queue.Empty: break
+        def on_done(_result: Any) -> None:
+            drain_log()
+            self.ui.btn_merge.configure(state="normal")
+            self.ui.btn_merge_ensemble.configure(state="normal")
+            self.ui.var_status.set(f"Status: ensemble created ({out_path.name})")
+            self._status(f"Ensemble created: {out_path.name}")
+            self._scan_models()
+            self._refresh_bundles()
 
-        threading.Thread(target=worker, daemon=True).start()
+        def on_error(exc: BaseException) -> None:
+            drain_log()
+            self._append_log(f"\n[error] Ensemble build failed: {exc}\n")
+            self.ui.btn_merge.configure(state="normal")
+            self.ui.btn_merge_ensemble.configure(state="normal")
+            self.ui.var_status.set("Status: ensemble failed")
+            self._status(f"Ensemble build failed: {exc}", "error")
+
+        self._run_background(work, name="Build ensemble", on_done=on_done, on_error=on_error)
 
     def _log_threadsafe(self, msg: str) -> None:
         self.frame.after(0, lambda: self._append_log(msg))
@@ -308,31 +344,16 @@ class MergeTab(BaseTab):
 
     def _show_bundle_info(self) -> None:
         sel = self.ui.bundle_tree.selection()
-        if not sel:
-            messagebox.showinfo("Info", "Select a bundle first.")
+        if not dialogs.require(sel, self.frame, "Select a bundle first."):
             return
 
         bd = Path(sel[0])
         if not bd.exists():
-            messagebox.showerror("Error", f"Bundle not found:\n{bd}")
+            dialogs.show_error(self.frame, "Bundle Not Found", f"Bundle not found:\n{bd}")
             return
 
         meta = read_bundle_meta(bd)
         details = self.logic._read_bundle_details(bd)
-
-        dialog = tk.Toplevel(self.frame)
-        dialog.title(f"Bundle: {bd.name}")
-        dialog.geometry("550x400")
-
-        text_frame = ttk.Frame(dialog)
-        text_frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-        scrollbar = ttk.Scrollbar(text_frame)
-        scrollbar.pack(side="right", fill="y")
-
-        text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=("Courier", 10))
-        text.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=text.yview)
 
         info = f"Bundle: {bd.name}\n"
         info += f"Path: {bd}\n\n"
@@ -377,19 +398,16 @@ class MergeTab(BaseTab):
             for f in sorted(bd.iterdir()):
                 info += f"  {f.name}\n"
 
-        text.insert("1.0", info)
-        text.config(state="disabled")
-        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 10))
+        dialogs.show_text(self.frame, f"Bundle: {bd.name}", info, size=(600, 460))
 
     def _load_bundle_into_selection(self) -> None:
         sel = self.ui.bundle_tree.selection()
-        if not sel:
-            messagebox.showinfo("Info", "Select a bundle first.")
+        if not dialogs.require(sel, self.frame, "Select a bundle first."):
             return
 
         bd = Path(sel[0])
         if not bd.exists():
-            messagebox.showerror("Error", f"Bundle not found:\n{bd}")
+            dialogs.show_error(self.frame, "Bundle Not Found", f"Bundle not found:\n{bd}")
             return
 
         meta = read_bundle_meta(bd)
@@ -410,31 +428,32 @@ class MergeTab(BaseTab):
                     loaded += 1
 
         if loaded <= 0:
-            messagebox.showwarning("No checkpoints", f"No usable checkpoints found in:\n{bd}")
+            dialogs.show_warning(self.frame, "No Checkpoints", f"No usable checkpoints found in:\n{bd}")
             return
 
-        self.ui.rebuild_tree(self._profile_models, self._iid_to_model, self._model_meta_cache,
-                             self._selected_weights, self._favorites, self._group_for_path, self._available_groups())
+        self._rebuild()
         self._append_log(f"[bundle] loaded {loaded} checkpoint(s) into selection from {bd.name}\n")
+        self._status(f"Loaded {loaded} checkpoint(s) from {bd.name}")
 
     def _delete_bundle(self) -> None:
         sel = self.ui.bundle_tree.selection()
-        if not sel:
-            messagebox.showinfo("Info", "Select a bundle first.")
+        if not dialogs.require(sel, self.frame, "Select a bundle first."):
             return
 
         bd = Path(sel[0])
         if not bd.exists():
             return
 
-        if not messagebox.askyesno("Delete Bundle", f"Delete this bundle?\n\n{bd}"):
+        if not dialogs.confirm(self.frame, "Delete Bundle",
+                               f"Delete bundle {bd.name} and all checkpoints inside it?\n\n{bd}", danger=True):
             return
 
         try:
             self.logic.delete_bundle(bd)
             self._append_log(f"[delete] Bundle deleted: {bd}\n")
+            self._status(f"Bundle deleted: {bd.name}")
         except Exception as e:
-            messagebox.showerror("Error", f"Delete failed:\n{e}")
+            dialogs.show_error(self.frame, "Delete Failed", e)
             return
 
         self._refresh_bundles()

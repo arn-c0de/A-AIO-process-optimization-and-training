@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 from collections.abc import Callable
 from datetime import datetime
+
+from gui.theme.style import font
+from gui.theme.tokens import SPACE
 from gui.utils.formatting import fmt_bytes
+from gui.utils.tooltip import ToolTip
+from gui.widgets import FormGrid, LogView, ScrolledTree, Section, Toolbar
 
 if TYPE_CHECKING:
     from .tab import MergeTab
@@ -16,11 +21,17 @@ if TYPE_CHECKING:
 class MergeUI:
     def __init__(self, tab: MergeTab, parent: ttk.Frame):
         self.tab = tab
-        self.frame = ttk.Frame(parent, padding=10)
+        self.frame = ttk.Frame(parent, padding=0)
 
         self.tree: ttk.Treeview
         self.selection_tree: ttk.Treeview
         self.bundle_tree: ttk.Treeview
+        self.weights_view: ScrolledTree
+        self.selection_view: ScrolledTree
+        self.bundles_view: ScrolledTree
+        self.lbl_selection_empty: ttk.Label
+        self.lbl_bundles_empty: ttk.Label
+        self.log_view: LogView
         self.txt: tk.Text
 
         self.var_bundle_name = tk.StringVar(value="merged_v1")
@@ -28,132 +39,133 @@ class MergeUI:
         self.btn_merge: ttk.Button
         self.btn_merge_ensemble: ttk.Button
         self.var_status = tk.StringVar(value="Status: idle")
-        
-    def build_ui(self) -> None:
-        top = ttk.Frame(self.frame)
-        top.pack(fill="x", pady=(0, 8))
 
-        ttk.Label(top, text="Merge", font=("TkDefaultFont", 12, "bold")).pack(side="left")
-        ttk.Button(top, text="Refresh", command=self.tab._scan_models).pack(side="right")
+    def build_ui(self) -> None:
+        top = Toolbar(self.frame)
+        top.pack(fill="x")
+        top.add(ttk.Label(top, text="Merge Weights", style="Title.TLabel"))
+        top.icon("refresh", self.tab._scan_models, help_key="merge.refresh", right=True)
 
         main = ttk.Panedwindow(self.frame, orient="horizontal")
-        main.pack(fill="both", expand=True, pady=(0, 8))
+        main.pack(fill="both", expand=True, pady=(SPACE.M, 0))
 
-        left = ttk.Frame(main, padding=5)
+        left = ttk.Frame(main)
         main.add(left, weight=3)
+        self._build_weights_section(left)
 
-        ttk.Label(left, text="Available weights by profile type").pack(anchor="w")
-
-        tree_frame = ttk.Frame(left)
-        tree_frame.pack(fill="both", expand=True, pady=(6, 0))
-
-        self.tree = ttk.Treeview(
-            tree_frame,
-            columns=("Acc", "F1", "Size", "Modified", "Hash"),
-            show="tree headings",
-            selectmode="browse",
-        )
-        self.tree.heading("#0", text="Profile / Model")
-        self.tree.column("#0", width=260, anchor="w")
-        self.tree.heading("Acc", text="Accuracy")
-        self.tree.column("Acc", width=75, anchor="e")
-        self.tree.heading("F1", text="F1")
-        self.tree.column("F1", width=70, anchor="e")
-        self.tree.heading("Size", text="Size")
-        self.tree.column("Size", width=75, anchor="e")
-        self.tree.heading("Modified", text="Modified")
-        self.tree.column("Modified", width=130, anchor="w")
-        self.tree.heading("Hash", text="Profile Hash")
-        self.tree.column("Hash", width=110, anchor="w")
-        self.tree.tag_configure("profile_header", font=("TkDefaultFont", 10, "bold"))
-        self.tree.tag_configure("group_header", font=("TkDefaultFont", 9, "italic"))
-        self.tree.tag_configure("selected_weight", foreground="green")
-
-        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-
-        self.tree.bind("<Double-1>", self.tab._on_tree_double_click)
-
-        btn_frame = ttk.Frame(left)
-        btn_frame.pack(fill="x", pady=(6, 0))
-        ttk.Button(btn_frame, text="Select weight for profile", command=self.tab._select_weight).pack(side="left")
-        ttk.Button(btn_frame, text="Deselect", command=self.tab._deselect_weight).pack(side="left", padx=(8, 0))
-
-        right = ttk.Frame(main, padding=5)
+        right = ttk.Frame(main)
         main.add(right, weight=2)
+        self._build_selection_section(right)
+        self._build_merge_section(right)
+        self._build_bundles_section(right)
+        self._build_log_section(right)
 
-        ttk.Label(right, text="Selected weights for merge").pack(anchor="w")
+    # ------------------------------------------------------------------ sections
+    def _build_weights_section(self, parent: tk.Misc) -> None:
+        sec = Section(parent, "Available Weights by Profile", help_key="merge.weights")
+        sec.pack(fill="both", expand=True)
 
-        self.selection_tree = ttk.Treeview(
-            right,
-            columns=("Model",),
-            show="headings",
+        self.weights_view = ScrolledTree(
+            sec,
+            columns=[
+                ("Acc", "Accuracy", 75, "e"),
+                ("F1", "F1", 70, "e"),
+                ("Size", "Size", 75, "e"),
+                ("Modified", "Modified", 130, "w"),
+                ("Hash", "Profile Hash", 110, "w"),
+            ],
+            show_tree=True,
+            tree_heading="Profile / Model",
+            tree_width=260,
             selectmode="browse",
-            height=8,
+            sortable=False,  # hierarchical: profile -> group -> model
+            striped=False,
         )
-        self.selection_tree.heading("Model", text="Profile -> Model")
-        self.selection_tree.column("Model", width=350, anchor="w")
-        self.selection_tree.pack(fill="x", pady=(6, 0))
+        self.weights_view.pack(fill="both", expand=True)
+        self.tree = self.weights_view.tree
+        self.tree.tag_configure("profile_header", font=font("BodyBold"))
+        self.tree.tag_configure("group_header", font=font("SmallItalic"))
+        # "selected_weight" rows also carry the themed "success" tag (see rebuild_tree).
+        self.tree.bind("<Double-1>", self.tab._on_tree_double_click)
+        ToolTip(self.tree, help_key="merge.tree")
 
-        merge_frame = ttk.LabelFrame(right, text="Merge", padding=8)
-        merge_frame.pack(fill="x", pady=(10, 0))
+        bar = Toolbar(sec, style="Card.TFrame")
+        bar.pack(fill="x", pady=(SPACE.M, 0))
+        bar.button("Select Weight for Profile", self.tab._select_weight, help_key="merge.select")
+        bar.button("Deselect", self.tab._deselect_weight, help_key="merge.deselect")
 
-        ttk.Label(merge_frame, text="Bundle Name:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(merge_frame, textvariable=self.var_bundle_name, width=30).grid(
-            row=0, column=1, sticky="ew", padx=(6, 0)
-        )
-        merge_frame.columnconfigure(1, weight=1)
+    def _build_selection_section(self, parent: tk.Misc) -> None:
+        sec = Section(parent, "Selected Weights for Merge", help_key="merge.selection")
+        sec.pack(fill="x", pady=(0, SPACE.M))
+        self.lbl_selection_empty = ttk.Label(
+            sec, text="No weights selected yet. Double-click a model on the left (one per profile).",
+            style="CardMuted.TLabel", wraplength=360, justify="left")
+        self.selection_view = ScrolledTree(sec, columns=[("Model", "Profile -> Model", 350, "w")], height=8)
+        self.selection_view.pack(fill="x")
+        self.selection_tree = self.selection_view.tree
+        self._toggle_empty(self.lbl_selection_empty, self.selection_view, True)
 
-        ttk.Checkbutton(merge_frame, text="Append timestamp", variable=self.var_add_timestamp).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(4, 0)
-        )
+    def _build_merge_section(self, parent: tk.Misc) -> None:
+        sec = Section(parent, "Merge", help_key="merge.merge")
+        sec.pack(fill="x", pady=(0, SPACE.M))
+        form = FormGrid(sec, style="Card.TFrame")
+        form.pack(fill="x")
+        form.row("Bundle Name", ttk.Entry(form, textvariable=self.var_bundle_name, width=30), help_key="merge.name")
+        chk = ttk.Checkbutton(form, text="Append Timestamp", variable=self.var_add_timestamp, style="Card.TCheckbutton")
+        form.row("", chk, help_key="merge.timestamp", sticky="w")
 
-        self.btn_merge = ttk.Button(merge_frame, text="Merge -> Bundle", command=self.tab._do_merge)
-        self.btn_merge.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        bar = Toolbar(sec, style="Card.TFrame")
+        bar.pack(fill="x", pady=(SPACE.M, 0))
+        self.btn_merge = bar.button("Merge into Bundle", self.tab._do_merge, style="Accent.TButton",
+                                    help_key="merge.bundle")
+        self.btn_merge_ensemble = bar.button("Merge into Single .pt", self.tab._do_merge_ensemble,
+                                             help_key="merge.ensemble")
+        ttk.Label(sec, textvariable=self.var_status, style="CardMuted.TLabel").pack(anchor="w", pady=(SPACE.S, 0))
 
-        self.btn_merge_ensemble = ttk.Button(
-            merge_frame, text="Merge -> Single .pt (Ensemble)", command=self.tab._do_merge_ensemble
-        )
-        self.btn_merge_ensemble.grid(row=2, column=1, sticky="e", pady=(8, 0))
-
-        ttk.Label(merge_frame, textvariable=self.var_status).grid(
-            row=3, column=0, columnspan=2, sticky="w", pady=(4, 0)
-        )
-
-        bundles_frame = ttk.LabelFrame(right, text="Existing Bundles", padding=8)
-        bundles_frame.pack(fill="x", pady=(10, 0))
-
-        self.bundle_tree = ttk.Treeview(
-            bundles_frame,
-            columns=("Profiles", "Created"),
-            show="headings",
-            selectmode="browse",
+    def _build_bundles_section(self, parent: tk.Misc) -> None:
+        sec = Section(parent, "Existing Bundles", help_key="merge.bundles")
+        sec.pack(fill="x", pady=(0, SPACE.M))
+        self.lbl_bundles_empty = ttk.Label(sec, text="No bundles yet. Select weights above and press Merge into Bundle.",
+                                           style="CardMuted.TLabel", wraplength=360, justify="left")
+        self.bundles_view = ScrolledTree(
+            sec,
+            columns=[("Profiles", "Included Profiles", 250, "w"), ("Created", "Created", 140, "w")],
             height=5,
         )
-        self.bundle_tree.heading("Profiles", text="Included Profiles")
-        self.bundle_tree.column("Profiles", width=250, anchor="w")
-        self.bundle_tree.heading("Created", text="Created")
-        self.bundle_tree.column("Created", width=140, anchor="w")
-        self.bundle_tree.pack(fill="x")
+        self.bundles_view.pack(fill="x")
+        self.bundle_tree = self.bundles_view.tree
+        self.bundle_tree.bind("<Double-1>", lambda _e: self.tab._show_bundle_info())
+        self._toggle_empty(self.lbl_bundles_empty, self.bundles_view, True)
 
-        bundle_btns = ttk.Frame(bundles_frame)
-        bundle_btns.pack(fill="x", pady=(6, 0))
-        ttk.Button(bundle_btns, text="Bundle Info", command=self.tab._show_bundle_info).pack(side="left")
-        ttk.Button(bundle_btns, text="Load Into Selection", command=self.tab._load_bundle_into_selection).pack(side="left", padx=(8, 0))
-        ttk.Button(bundle_btns, text="Delete Bundle", command=self.tab._delete_bundle).pack(side="left", padx=(8, 0))
+        bar = Toolbar(sec, style="Card.TFrame")
+        bar.pack(fill="x", pady=(SPACE.M, 0))
+        bar.button("Bundle Info…", self.tab._show_bundle_info, help_key="merge.bundle_info")
+        bar.button("Load Into Selection", self.tab._load_bundle_into_selection, help_key="merge.load_bundle")
+        bar.button("Delete Bundle", self.tab._delete_bundle, style="Danger.TButton", help_key="merge.delete_bundle",
+                   right=True)
 
-        ttk.Label(right, text="Log").pack(anchor="w", pady=(10, 0))
-        self.txt = tk.Text(right, height=8, wrap="none")
-        self.txt.pack(fill="both", expand=True, pady=(4, 0))
-        self.txt.configure(state="disabled")
+    def _build_log_section(self, parent: tk.Misc) -> None:
+        sec = Section(parent, "Log")
+        sec.pack(fill="both", expand=True)
+        self.log_view = LogView(sec, height=8)
+        self.log_view.pack(fill="both", expand=True)
+        self.txt = self.log_view.text
+        b_clear = ttk.Button(sec.actions, text="Clear", style="Icon.TButton", command=self.log_view.clear)
+        b_clear.pack(side="right")
+        ToolTip(b_clear, help_key="common.clear_log")
+        b_copy = ttk.Button(sec.actions, text="Copy", style="Icon.TButton", command=self.log_view.copy_all)
+        b_copy.pack(side="right", padx=(0, SPACE.S))
+        ToolTip(b_copy, help_key="common.copy_log")
+
+    @staticmethod
+    def _toggle_empty(label: ttk.Label, view: tk.Widget, empty: bool) -> None:
+        if not empty:
+            label.pack_forget()
+        elif not label.winfo_manager():
+            label.pack(anchor="w", pady=(0, SPACE.S), before=view)
 
     def append_log(self, s: str) -> None:
-        self.txt.configure(state="normal")
-        self.txt.insert("end", s)
-        self.txt.see("end")
-        self.txt.configure(state="disabled")
+        self.log_view.append(s)
 
     def rebuild_tree(self, profile_models: dict[str, list[tuple[str, Path]]], iid_to_model: dict[str, tuple[str, Path]],
                      model_meta_cache: dict, selected_weights: dict[str, Path], favorites: dict[str, Any],
@@ -209,7 +221,7 @@ class MergeUI:
                     counter += 1
 
                     is_selected = selected is not None and selected.resolve() == p.resolve()
-                    tags = ("selected_weight",) if is_selected else ()
+                    tags = ("selected_weight", "success") if is_selected else ()
                     marker = " *" if is_selected else ""
 
                     fav_s = "★" if self.tab.logic._rel(p) in favorites else ""
@@ -222,13 +234,14 @@ class MergeUI:
                     iid_to_model[iid_model] = (profile_id, p)
     
     def refresh_selection_summary(self, selected_weights: dict[str, Path]) -> None:
-        self.selection_tree.delete(*self.selection_tree.get_children())
+        self.selection_view.clear()
         for profile_id in sorted(selected_weights.keys()):
             p = selected_weights[profile_id]
-            self.selection_tree.insert("", "end", values=(f"{profile_id}  ->  {p.name}",))
+            self.selection_view.insert((f"{profile_id}  ->  {p.name}",))
+        self._toggle_empty(self.lbl_selection_empty, self.selection_view, not selected_weights)
 
     def refresh_bundles(self, bundle_dirs: list[Path], read_bundle_meta_func: Callable[[Path], Any], fmt_bytes_func: Callable[[int], str]) -> None:
-        self.bundle_tree.delete(*self.bundle_tree.get_children())
+        self.bundles_view.clear()
 
         for bd in bundle_dirs:
             meta = read_bundle_meta_func(bd)
@@ -241,6 +254,7 @@ class MergeUI:
                 try: created = datetime.fromtimestamp(bd.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
                 except Exception: created = "?"
 
-            self.bundle_tree.insert("", "end", iid=str(bd), values=(profiles, created))
+            self.bundles_view.insert((profiles, created), iid=str(bd))
+        self._toggle_empty(self.lbl_bundles_empty, self.bundles_view, not bundle_dirs)
 
     fmt_bytes = staticmethod(fmt_bytes)

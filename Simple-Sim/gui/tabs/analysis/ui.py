@@ -7,8 +7,12 @@ from typing import TYPE_CHECKING
 from PIL import Image, ImageTk
 import cv2
 
+from gui import dialogs
 from gui.components.overlay_renderer import draw_defect_overlay, draw_prediction_overlay
+from gui.theme.style import on_theme_changed, palette
+from gui.theme.tokens import SPACE
 from gui.utils.tooltip import ToolTip
+from gui.widgets import LogView, ScrolledTree, Section, Toolbar
 from simple_sim.schema import MetaRow
 
 if TYPE_CHECKING:
@@ -18,7 +22,7 @@ if TYPE_CHECKING:
 class AnalysisUI:
     def __init__(self, tab: AnalysisTab, parent: ttk.Frame):
         self.tab = tab
-        self.frame = ttk.Frame(parent, padding=10)
+        self.frame = ttk.Frame(parent, padding=SPACE.L)
         self.var_dataset: tk.StringVar
         self.var_dataset_stats: tk.StringVar
         self.dataset_combo: ttk.Combobox
@@ -44,206 +48,202 @@ class AnalysisUI:
         self.var_feedback_status: tk.StringVar
         self._feedback_class_values: list[str]
         self.feedback_history_tree: ttk.Treeview
+        self.feedback_history_view: ScrolledTree
+        self.info_view: LogView
+        self.lbl_tree_empty: ttk.Label
+        self.lbl_history_empty: ttk.Label
 
     def build_ui(self):
-        top = ttk.Frame(self.frame)
-        top.pack(fill="x", pady=(0, 10))
-
-        ttk.Label(top, text="Dataset:").pack(side="left")
+        # ------------------------------------------------------------ action bar
+        top = Toolbar(self.frame)
+        top.pack(fill="x")
+        top.add(ttk.Label(top, text="Dataset", style="Field.TLabel"))
         self.var_dataset = tk.StringVar(value="")
         self.dataset_combo = ttk.Combobox(top, textvariable=self.var_dataset, state="readonly", width=32)
-        self.dataset_combo.pack(side="left", padx=(5, 6))
+        top.add(self.dataset_combo)
         self.dataset_combo.bind("<<ComboboxSelected>>", self.tab._on_dataset_selected)
-        ToolTip(self.dataset_combo, text_func=lambda: self.var_dataset.get())
-        ttk.Button(top, text="↻", width=3, command=self.tab._refresh_datasets).pack(side="left", padx=(0, 15))
+        ToolTip(self.dataset_combo, help_key="common.dataset", text_func=lambda: self.var_dataset.get())
+        top.icon("refresh", self.tab._refresh_datasets, help_key="common.refresh")
+        top.separator()
+        top.icon("prev", self.tab._prev_image, help_key="common.prev")
+        top.icon("next", self.tab._next_image, help_key="common.next")
+        top.separator()
+        top.button("Delete Image…", self.tab._delete_current_image, style="Danger.TButton",
+                   help_key="analysis.delete")
+        top.button("Move To…", self.tab._move_current_image, help_key="analysis.move")
+        top.button("Recompute With Feedback", self.tab._recompute_with_feedback, help_key="analysis.recompute",
+                   right=True)
+        top.button("Analyze Dataset", self.tab._analyze_dataset, style="Accent.TButton", help_key="analysis.batch",
+                   right=True)
 
-        ttk.Button(top, text="←", command=self.tab._prev_image, width=3).pack(side="left", padx=2)
-        ttk.Button(top, text="→", command=self.tab._next_image, width=3).pack(side="left", padx=2)
-        ttk.Button(top, text="Delete Image", command=self.tab._delete_current_image).pack(side="left", padx=(10, 0))
-        ttk.Button(top, text="Move To...", command=self.tab._move_current_image).pack(side="left", padx=(6, 0))
-        ttk.Button(top, text="Analyze Dataset", command=self.tab._analyze_dataset).pack(side="left", padx=(15, 0))
-        ttk.Button(top, text="Recompute with Feedback", command=self.tab._recompute_with_feedback).pack(side="left", padx=(6, 0))
-        
         stats_row = ttk.Frame(self.frame)
-        stats_row.pack(fill="x", pady=(0, 8))
+        stats_row.pack(fill="x", pady=(SPACE.M, 0))
         self.var_dataset_stats = tk.StringVar(value="Dataset Stats: -")
-        ttk.Label(stats_row, textvariable=self.var_dataset_stats).pack(side="left")
+        ttk.Label(stats_row, textvariable=self.var_dataset_stats, style="Muted.TLabel").pack(side="left")
 
         main = ttk.Panedwindow(self.frame, orient="horizontal")
-        main.pack(fill="both", expand=True)
+        main.pack(fill="both", expand=True, pady=(SPACE.M, 0))
 
-        left = ttk.Frame(main, padding=5)
+        # ------------------------------------------------------------ image list
+        left = Section(main, "Images", help_key="analysis.images")
         main.add(left, weight=1)
-        ttk.Label(left, text="Images").pack(anchor="w")
 
-        filters = ttk.Frame(left)
-        filters.pack(fill="x", pady=(5, 0))
+        filters = ttk.Frame(left, style="Card.TFrame")
+        filters.pack(fill="x")
         filters.columnconfigure(1, weight=1)
+        filters.columnconfigure(3, weight=1)
+
+        def field_label(text: str, row: int, col: int, help_key: str) -> None:
+            lbl = ttk.Label(filters, text=text, style="CardMuted.TLabel")
+            lbl.grid(row=row, column=col, sticky="e", padx=(SPACE.M if col else 0, SPACE.S), pady=SPACE.XS)
+            ToolTip(lbl, help_key=help_key)
+
+        def filter_combo(var: tk.StringVar, values: list[str], row: int, col: int, help_key: str,
+                         width: int = 12) -> ttk.Combobox:
+            cb = ttk.Combobox(filters, textvariable=var, values=values, state="readonly", width=width)
+            cb.grid(row=row, column=col, sticky="ew", pady=SPACE.XS)
+            ToolTip(cb, help_key=help_key)
+            return cb
 
         self.var_search = tk.StringVar(value="")
-        ttk.Label(filters, text="Search:").grid(row=0, column=0, sticky="w")
-        ent_search = ttk.Entry(filters, textvariable=self.var_search)
-        ent_search.grid(row=0, column=1, sticky="ew", padx=(5, 5))
-        ttk.Button(filters, text="Clear", command=lambda: self.tab._set_search("")).grid(row=0, column=2, sticky="e")
+        field_label("Search", 0, 0, "analysis.search")
+        search_row = ttk.Frame(filters, style="Card.TFrame")
+        search_row.grid(row=0, column=1, columnspan=3, sticky="ew", pady=SPACE.XS)
+        ent_search = ttk.Entry(search_row, textvariable=self.var_search)
+        ent_search.pack(side="left", fill="x", expand=True)
+        ToolTip(ent_search, help_key="analysis.search")
+        b_clear = ttk.Button(search_row, text="Clear", command=lambda: self.tab._set_search(""))
+        b_clear.pack(side="left", padx=(SPACE.S, 0))
+        ToolTip(b_clear, help_key="analysis.search_clear")
         ent_search.bind("<KeyRelease>", lambda e: self.tab._schedule_filter_images())
 
-        row2 = ttk.Frame(filters)
-        row2.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(3, 0))
+        def refilter(_e: object = None) -> None:
+            self.tab._filter_images(display_first=True)
 
         self.var_run = tk.StringVar(value="All")
-        ttk.Label(row2, text="Run").pack(side="left")
-        self.combo_run = ttk.Combobox(row2, textvariable=self.var_run, values=["All"], state="readonly", width=12)
-        self.combo_run.pack(side="left", padx=(4, 10))
-        self.combo_run.bind("<<ComboboxSelected>>", lambda e: self.tab._filter_images(display_first=True))
+        field_label("Run", 1, 0, "analysis.run_filter")
+        self.combo_run = filter_combo(self.var_run, ["All"], 1, 1, "analysis.run_filter")
+        self.combo_run.bind("<<ComboboxSelected>>", refilter)
 
         self.var_domain = tk.StringVar(value="All")
-        ttk.Label(row2, text="Domain").pack(side="left")
-        self.combo_domain = ttk.Combobox(row2, textvariable=self.var_domain, values=["All"], state="readonly", width=12)
-        self.combo_domain.pack(side="left", padx=(4, 10))
-        self.combo_domain.bind("<<ComboboxSelected>>", lambda e: self.tab._filter_images(display_first=True))
+        field_label("Domain", 1, 2, "analysis.domain_filter")
+        self.combo_domain = filter_combo(self.var_domain, ["All"], 1, 3, "analysis.domain_filter")
+        self.combo_domain.bind("<<ComboboxSelected>>", refilter)
 
         self.var_split = tk.StringVar(value="All")
-        ttk.Label(row2, text="Split").pack(side="left")
-        combo_split = ttk.Combobox(row2, textvariable=self.var_split, values=["All", "train", "val", "test"], state="readonly", width=8)
-        combo_split.pack(side="left", padx=(4, 10))
-        combo_split.bind("<<ComboboxSelected>>", lambda e: self.tab._filter_images(display_first=True))
+        field_label("Split", 2, 0, "analysis.split_filter")
+        combo_split = filter_combo(self.var_split, ["All", "train", "val", "test"], 2, 1, "analysis.split_filter")
+        combo_split.bind("<<ComboboxSelected>>", refilter)
 
         self.var_filter = tk.StringVar(value="All")
-        ttk.Label(row2, text="Class").pack(side="left")
-        self.combo_class = ttk.Combobox(row2, textvariable=self.var_filter, values=["All"], state="readonly", width=12)
-        self.combo_class.pack(side="left", padx=(4, 0))
-        self.combo_class.bind("<<ComboboxSelected>>", lambda e: self.tab._filter_images(display_first=True))
+        field_label("Class", 2, 2, "analysis.class_filter")
+        self.combo_class = filter_combo(self.var_filter, ["All"], 2, 3, "analysis.class_filter")
+        self.combo_class.bind("<<ComboboxSelected>>", refilter)
 
         self.var_sort = tk.StringVar(value="Default")
-        ttk.Label(row2, text="Sort").pack(side="left", padx=(10, 0))
-        self.combo_sort = ttk.Combobox(
-            row2,
-            textvariable=self.var_sort,
-            values=["Default", "Newest first", "Oldest first", "ID A-Z", "ID Z-A"],
-            state="readonly",
-            width=12,
+        field_label("Sort", 3, 0, "analysis.sort")
+        self.combo_sort = filter_combo(
+            self.var_sort, ["Default", "Newest first", "Oldest first", "ID A-Z", "ID Z-A"], 3, 1, "analysis.sort"
         )
-        self.combo_sort.pack(side="left", padx=(4, 0))
-        self.combo_sort.bind("<<ComboboxSelected>>", lambda e: self.tab._filter_images(display_first=True))
+        self.combo_sort.bind("<<ComboboxSelected>>", refilter)
 
         self.var_profile = tk.StringVar(value="All")
-        ttk.Label(row2, text="Profile").pack(side="left", padx=(10, 0))
-        self.combo_profile = ttk.Combobox(row2, textvariable=self.var_profile, values=["All"], state="readonly", width=16)
-        self.combo_profile.pack(side="left", padx=(4, 4))
+        field_label("Profile", 3, 2, "analysis.profile_filter")
+        self.combo_profile = filter_combo(self.var_profile, ["All"], 3, 3, "analysis.profile_filter", width=16)
         self.combo_profile.bind("<<ComboboxSelected>>", self.tab._on_profile_filter_selected)
-        ttk.Button(row2, text="Multi...", command=self.tab._open_profile_multi_select).pack(side="left")
-        self.var_profile_multi = tk.StringVar(value="multi: off")
-        ttk.Label(row2, textvariable=self.var_profile_multi).pack(side="left", padx=(6, 0))
 
-        tree_frame = ttk.Frame(left)
-        tree_frame.pack(fill="both", expand=True, pady=(5, 0))
-        self.tree = ttk.Treeview(tree_frame, columns=("Class", "Date"), show="tree headings", height=20, selectmode="extended")
-        self.tree.heading("#0", text="ID")
-        self.tree.column("#0", width=200)
-        self.tree.heading("Class", text="Class")
-        self.tree.column("Class", width=100)
-        self.tree.heading("Date", text="Added")
-        self.tree.column("Date", width=145, anchor="w")
-        tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=tree_scroll.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        tree_scroll.pack(side="right", fill="y")
+        multi_row = ttk.Frame(filters, style="Card.TFrame")
+        multi_row.grid(row=4, column=3, sticky="ew", pady=(0, SPACE.XS))
+        b_multi = ttk.Button(multi_row, text="Multi…", command=self.tab._open_profile_multi_select)
+        b_multi.pack(side="left")
+        ToolTip(b_multi, help_key="analysis.profile_multi")
+        self.var_profile_multi = tk.StringVar(value="multi: off")
+        ttk.Label(multi_row, textvariable=self.var_profile_multi, style="CardMuted.TLabel").pack(
+            side="left", padx=(SPACE.S, 0))
+
+        st = ScrolledTree(
+            left,
+            [("Class", "Class", 100, "w"), ("Date", "Added", 145, "w")],
+            show_tree=True,
+            tree_heading="ID",
+            tree_width=200,
+            height=20,
+            selectmode="extended",
+            sortable=False,
+            striped=False,
+        )
+        st.pack(fill="both", expand=True, pady=(SPACE.M, 0))
+        self.tree = st.tree
+        self.lbl_tree_empty = ttk.Label(st, text="No samples match the current filters.", style="CardMuted.TLabel")
         self.tree.bind("<<TreeviewSelect>>", self.tab._on_tree_select)
         self.tree.bind("<Button-3>", self._on_tree_right_click)
         self.tree.bind("<Delete>", lambda _e: self.tab._delete_current_image())
+        self.tree.bind("<Left>", lambda _e: self._on_tree_arrow(-1))
+        self.tree.bind("<Right>", lambda _e: self._on_tree_arrow(+1))
 
         self.sample_menu = tk.Menu(self.tree, tearoff=0)
-        self.sample_menu.add_command(label="Delete Image", command=self.tab._delete_current_image)
-        self.sample_menu.add_command(label="Move To...", command=self.tab._move_current_image)
+        self.sample_menu.add_command(label="Delete Image…", command=self.tab._delete_current_image)
+        self.sample_menu.add_command(label="Move To…", command=self.tab._move_current_image)
 
-        right = ttk.Frame(main, padding=5)
+        # ------------------------------------------------------------ viewer column
+        right = ttk.Frame(main)
         main.add(right, weight=3)
-        ttk.Label(right, text="Image Viewer").pack(anchor="w")
 
-        canvas_frame = ttk.Frame(right, relief="sunken", borderwidth=2)
-        canvas_frame.pack(fill="x", expand=False, pady=(5, 10))
-        self.canvas = tk.Canvas(canvas_frame, bg="gray20", width=self._preview_max_px, height=self._preview_max_px)
+        viewer = Section(right, "Image Viewer")
+        viewer.pack(fill="x")
+        self.canvas = tk.Canvas(viewer, background=palette(self.frame).canvas_bg, highlightthickness=0,
+                                width=self._preview_max_px, height=self._preview_max_px, takefocus=1)
+        self.canvas._simsim_role = "image"  # type: ignore[attr-defined]
         self.canvas.pack(fill="x", expand=False)
-        
-        ttk.Label(right, text="Metadata:").pack(anchor="w")
-        info_frame = ttk.Frame(right, relief="sunken", borderwidth=1)
-        info_frame.pack(fill="both", expand=True, pady=(5, 0))
-        self.info_text = tk.Text(info_frame, height=12, wrap="word", state="disabled")
-        self.info_text.pack(fill="both", expand=True)
+        on_theme_changed(self.canvas, lambda pal: self.canvas.configure(background=pal.canvas_bg))
+        self.canvas.bind("<Button-1>", lambda _e: self.canvas.focus_set())
+        self.canvas.bind("<Left>", lambda _e: (self.tab._prev_image(), "break")[1])
+        self.canvas.bind("<Right>", lambda _e: (self.tab._next_image(), "break")[1])
 
-        feedback_frame = ttk.LabelFrame(right, text="User Feedback", padding=10)
-        feedback_frame.pack(fill="x", pady=(10, 0))
+        meta = Section(right, "Metadata")
+        meta.pack(fill="both", expand=True, pady=(SPACE.M, 0))
+        self.info_view = LogView(meta, height=12, wrap="word")
+        self.info_view.pack(fill="both", expand=True)
+        self.info_text = self.info_view.text
+
+        feedback_frame = Section(right, "User Feedback", help_key="analysis.feedback")
+        feedback_frame.pack(fill="x", pady=(SPACE.M, 0))
         self.var_feedback_status = tk.StringVar(value="No manual feedback yet.")
-        ttk.Label(feedback_frame, textvariable=self.var_feedback_status).pack(anchor="w")
+        ttk.Label(feedback_frame, textvariable=self.var_feedback_status, style="CardMuted.TLabel").pack(anchor="w")
 
-        action_row = tk.Frame(feedback_frame, bg="#d4d7db")
-        action_row.pack(fill="x", pady=(8, 4))
-        tk.Button(
-            action_row,
-            text="👍 Correct",
-            command=self.tab._feedback_thumbs_up,
-            bd=0,
-            relief="flat",
-            bg="#4b5563",
-            fg="white",
-            activebackground="#374151",
-            activeforeground="white",
-            padx=16,
-            pady=8,
-            cursor="hand2",
-        ).pack(side="left", padx=(8, 6), pady=8)
-        tk.Button(
-            action_row,
-            text="👎 Wrong",
-            command=self.tab._feedback_thumbs_down,
-            bd=0,
-            relief="flat",
-            bg="#6b7280",
-            fg="white",
-            activebackground="#4b5563",
-            activeforeground="white",
-            padx=16,
-            pady=8,
-            cursor="hand2",
-        ).pack(side="left", padx=6, pady=8)
-        tk.Button(
-            action_row,
-            text="History",
-            command=self.tab._open_feedback_history,
-            bd=0,
-            relief="flat",
-            bg="#9ca3af",
-            fg="white",
-            activebackground="#6b7280",
-            activeforeground="white",
-            padx=14,
-            pady=8,
-            cursor="hand2",
-        ).pack(side="left", padx=(6, 8), pady=8)
+        action_row = Toolbar(feedback_frame, style="Card.TFrame")
+        action_row.pack(fill="x", pady=(SPACE.M, SPACE.S))
+        action_row.button("Correct", self.tab._feedback_thumbs_up, help_key="analysis.feedback_up")
+        action_row.button("Wrong…", self.tab._feedback_thumbs_down, help_key="analysis.feedback_down")
+        action_row.button("History…", self.tab._open_feedback_history, help_key="analysis.feedback_history")
         self._feedback_class_values = []
 
-        ttk.Label(feedback_frame, text="Recent feedback").pack(anchor="w", pady=(6, 2))
-        hist_frame = ttk.Frame(feedback_frame)
-        hist_frame.pack(fill="x")
-        self.feedback_history_tree = ttk.Treeview(
-            hist_frame,
-            columns=("Time", "Sample", "Action", "To"),
-            show="headings",
+        ttk.Label(feedback_frame, text="Recent Feedback", style="CardMuted.TLabel").pack(
+            anchor="w", pady=(SPACE.S, SPACE.XS))
+        hist = ScrolledTree(
+            feedback_frame,
+            [("Time", "Time", 130, "w"), ("Sample", "Sample", 240, "w"),
+             ("Action", "Action", 90, "center"), ("To", "To", 110, "center")],
             height=6,
         )
-        self.feedback_history_tree.heading("Time", text="Time")
-        self.feedback_history_tree.heading("Sample", text="Sample")
-        self.feedback_history_tree.heading("Action", text="Action")
-        self.feedback_history_tree.heading("To", text="To")
-        self.feedback_history_tree.column("Time", width=130, anchor="w")
-        self.feedback_history_tree.column("Sample", width=240, anchor="w")
-        self.feedback_history_tree.column("Action", width=90, anchor="center")
-        self.feedback_history_tree.column("To", width=110, anchor="center")
-        hist_scroll = ttk.Scrollbar(hist_frame, orient="vertical", command=self.feedback_history_tree.yview)
-        self.feedback_history_tree.configure(yscrollcommand=hist_scroll.set)
-        self.feedback_history_tree.pack(side="left", fill="x", expand=True)
-        hist_scroll.pack(side="right", fill="y")
+        hist.pack(fill="x")
+        self.feedback_history_view = hist
+        self.feedback_history_tree = hist.tree
+        ToolTip(self.feedback_history_tree, help_key="analysis.feedback_recent")
+        self.lbl_history_empty = ttk.Label(hist, text="No feedback yet.", style="CardMuted.TLabel")
+        self.lbl_history_empty.place(relx=0.5, rely=0.55, anchor="center")
         self.feedback_history_tree.bind("<<TreeviewSelect>>", self.tab._on_feedback_history_select)
+
+    def _on_tree_arrow(self, step: int) -> str | None:
+        """Left/Right on a sample row = previous/next image; on group rows keep collapse/expand."""
+        sel = self.tree.selection()
+        if not sel or "sample" not in self.tree.item(sel[0], "tags"):
+            return None
+        if step < 0:
+            self.tab._prev_image()
+        else:
+            self.tab._next_image()
+        return "break"
 
     def display_image(
         self,
@@ -334,7 +334,8 @@ class AnalysisUI:
         open_nodes = bool(query)
         
         for run_id in sorted(hierarchy.keys()):
-            run_node = self.tree.insert("", "end", text=f"📁 {run_id}", values=("", ""), open=open_nodes)
+            run_node = self.tree.insert("", "end", text=f"📁 {run_id}", values=("", ""), open=open_nodes,
+                                        tags=("group",))
             for domain in sorted(hierarchy[run_id].keys()):
                 domain_node = self.tree.insert(run_node, "end", text=f"🌐 {domain}", values=("", ""), open=open_nodes)
                 for split in sorted(hierarchy[run_id][domain].keys(), key=lambda x: {"train": 0, "val": 1, "test": 2}.get(x, 3)):
@@ -365,11 +366,15 @@ class AnalysisUI:
                         )
                         visible_sample_ids.append(sample_id)
                         visible_sample_item_by_id[sample_id] = item_iid
-                        
-        self.tree.tag_configure("sample", foreground="black")
+
+        if visible_sample_ids:
+            self.lbl_tree_empty.place_forget()
+        else:
+            self.lbl_tree_empty.place(relx=0.5, rely=0.4, anchor="center")
 
     def select_sample_in_tree(self, sample_id: str):
         self.tree.selection_set(sample_id)
+        self.tree.focus(sample_id)
         self.tree.see(sample_id)
 
     def _on_tree_right_click(self, event) -> None:
@@ -394,10 +399,14 @@ class AnalysisUI:
             ts_short = ts.replace("T", " ")[:19] if ts else "-"
             sample_id = str(entry.get("id") or "")
             verdict = str(entry.get("verdict") or "")
-            action = "👍" if verdict == "thumbs_up" else "👎"
+            action = "Correct" if verdict == "thumbs_up" else "Wrong"
             corrected = str(entry.get("corrected_class") or "").strip() or "-"
             iid = f"fb::{idx}"
-            self.feedback_history_tree.insert("", "end", iid=iid, values=(ts_short, sample_id, action, corrected))
+            self.feedback_history_view.insert((ts_short, sample_id, action, corrected), iid=iid)
+        if entries:
+            self.lbl_history_empty.place_forget()
+        else:
+            self.lbl_history_empty.place(relx=0.5, rely=0.55, anchor="center")
 
     def selected_feedback_sample_id(self) -> str | None:
         sel = self.feedback_history_tree.selection()
@@ -413,42 +422,29 @@ class AnalysisUI:
         """Ask user for corrected class and optional note on thumbs-down."""
         if not self._feedback_class_values:
             return None
-        dlg = tk.Toplevel(self.frame.winfo_toplevel())
-        dlg.title("Mark As Wrong")
-        dlg.transient(self.frame.winfo_toplevel())
-        dlg.grab_set()
-        dlg.configure(bg="#d4d7db")
-
-        wrap = ttk.Frame(dlg, padding=12)
-        wrap.pack(fill="both", expand=True)
-        ttk.Label(wrap, text="Select correct class (required):").pack(anchor="w")
-
+        dlg = dialogs.Dialog(self.frame, "Mark As Wrong")
+        ttk.Label(dlg.body, text="Correct class (required)", style="Field.TLabel").pack(anchor="w")
         var_class = tk.StringVar(value=self._feedback_class_values[0])
-        combo = ttk.Combobox(wrap, textvariable=var_class, values=self._feedback_class_values, state="readonly", width=18)
-        combo.pack(anchor="w", pady=(4, 10))
-        combo.focus_set()
+        combo = ttk.Combobox(dlg.body, textvariable=var_class, values=self._feedback_class_values,
+                             state="readonly", width=18)
+        combo.pack(anchor="w", pady=(SPACE.S, SPACE.L))
+        ToolTip(combo, help_key="analysis.feedback_class")
 
-        ttk.Label(wrap, text="Note (optional):").pack(anchor="w")
+        ttk.Label(dlg.body, text="Note (optional)", style="Field.TLabel").pack(anchor="w")
         var_note = tk.StringVar(value="")
-        entry = ttk.Entry(wrap, textvariable=var_note, width=42)
-        entry.pack(fill="x", pady=(4, 12))
-
-        result: dict[str, str] = {}
+        entry = ttk.Entry(dlg.body, textvariable=var_note, width=42)
+        entry.pack(fill="x", pady=(SPACE.S, 0))
+        ToolTip(entry, help_key="analysis.feedback_note")
 
         def _save() -> None:
             cls = var_class.get().strip()
             if not cls:
                 return
-            result["class"] = cls
-            result["note"] = var_note.get().strip()
-            dlg.destroy()
+            dlg.ok((cls, var_note.get().strip()))
 
-        btn_row = ttk.Frame(wrap)
-        btn_row.pack(fill="x")
-        ttk.Button(btn_row, text="Cancel", command=dlg.destroy).pack(side="right")
-        ttk.Button(btn_row, text="Save", command=_save).pack(side="right", padx=(0, 8))
-
-        dlg.wait_window()
-        if "class" not in result:
+        dlg.buttons([("Save", _save, "Accent.TButton"), ("Cancel", dlg.cancel, None)])
+        combo.after_idle(combo.focus_set)
+        result = dlg.show()
+        if not result:
             return None
-        return result["class"], result.get("note", "")
+        return result[0], result[1]

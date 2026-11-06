@@ -6,7 +6,39 @@ All notable changes to **Simple-Sim** are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Board model for the `photoreal` copper (`render.board`, new package `simple_sim/board/`, both backends): footprints with pin numbers, roles and fan-out directions, a netlist per part family, a fan-out router with occupancy checks (stubs out of the pad edge, 45° routes to the window border or a via, via grid in thermal pads, through-nets and buses), ground pours with clearance, thermal reliefs and stitching vias, design-rule presets (`consumer_dense`, `industrial`, `hdi`) and a DRC (`drc: off | warn | strict`). `routing: legacy` (default) keeps the v1.0.3 copper bit-identically; `routing: escape` enables the model; `none` renders no copper. `roi.mm_per_px` is passed to the renderer (`render.mm_per_px`) by every caller. See `docs/guides/PHOTOREAL_RENDERING.md` and `docs/refactoring/PCB_TRACE_ROUTING_PLAN.md`.
+- Pad geometry (`draw._compute_pad_positions`), neighbour placement and the part-family lookup moved to `simple_sim.board` (`footprints.footprint_pads`, `placement.neighbour_layout`, `footprints.family_of`); the drawing code calls them, results are unchanged (regression-tested). Via drawing is one helper for both copper generators. The Blender bake job fields come from one `bake.bake_fields()` instead of three hand-written dicts.
+
+### Changed (photoreal realism, compared against real DeepVision crops)
+- Solder-mask palette re-measured on real part crops: olive/bottle green with HSV saturation ~100 instead of a saturated lime/cyan (~150). Default augmentation hue jitter ±15° -> ±5°, saturation 0.8-1.2 -> 0.85-1.1.
+- Solder joints, solder balls and bulges shaded brighter (frosted lead-free solder, light environment), fuller fillets; MLCC body colour less orange.
+- New `render.mask_gloss` (default 0.5): glossy mask glare with orange-peel texture.
+- Traces and vias scale with the part (were hairlines/pin pricks), more vias with a tented-dome highlight.
+- Neighbour parts are mostly placed as aligned rows/columns of identical parts on a placement grid instead of a random scatter.
+- Camera model: `capture_scale` (low-resolution capture upscaled to the ROI, like real small crops) and `chroma_shift` (lateral chromatic aberration); phone preset uses both, zoom 1-2.5 -> 1-1.5 (part stays at the real crop's share of the image). `run_0001_phone.yaml` drops the extra full-resolution grain/blur.
+- `render.rework_artifacts` default 0.3 -> 0.15.
+- SOT-23 rendered with the body's long axis along the pin-1/2 column (was a bar lying across the pads), proper gull-wing leads (shoulder + flat foot, solder fillet around the foot) instead of round-capped lines, 2-3 character marking. Leads of SOT/SOIC are rigid with the body (2D and Blender): a misplaced part's feet miss their pads instead of stretching to them.
+- New profile `sot23_transistor@2` with real SOT-23 land/body proportions (`run_sot23.yaml` uses it); `@1` unchanged for existing datasets/models.
+- IC bodies: no thick bevel frame any more (QFN sawn edges ~vertical, small draft for SOT/SOIC).
+- Existing datasets render differently with the same seed; extending an old dataset mixes both looks.
+
+### Performance
+- 2D `photoreal` render ~2x faster with pixel-identical output: alpha blends only touch the bounding box of their mask instead of the whole supersampled board.
+- Supersampling factor is thread-local instead of a module global behind a lock, so 2D renders run in parallel threads (new `simple_sim.parallel.imap_ordered`, `$SIMPLE_SIM_RENDER_WORKERS`, default `min(8, CPUs)`). Results are identical to a sequential run (tested).
+- `generate` / `generate-profile-dataset` (2D) render and write images in parallel and stream them to disk instead of holding the whole dataset in memory. Profile Preview tab renders its 2D images in parallel (Ultra: ~3 -> ~16 images/s on 8 threads).
+- Blender backend: board textures are baked in parallel threads before the Blender run, and the camera model / post filters on the renders run in parallel too (3D dataset generation no longer bakes every board sequentially). Profile Preview (3D) bakes the next boards in the background while Blender renders the current image, so only the first bake is on the critical path (new `bake.prepare_job`, `runner.render_prepared_batch`, `generation.blender.run_prepared_blender_jobs`).
+- Profile Preview gallery caches decoded images; resizing the window only re-grids the thumbnails instead of re-reading every PNG.
+
+### Fixed
+- Filter popup previews: 3D preview was rotated twice (Blender rotates the scene, the popup rotated again) and skipped the board bake/camera settings; 2D preview ignored the run config (camera, textures, supersampling) and used a ROI table with wrong footprint names. Both now use the run config matching the profile and the dataset render path; the four duplicated render functions are one module (`gui/components/filter_popup/preview_render.py`). Results reach Tk via polling instead of Tk calls from the worker thread.
+- Randomized image filters in previews (Profile Preview tab, debug previews) are seeded from the preview seed, so the same seed gives the same image.
+
+## [1.0.3] - 2026-11-06
+
 ### Summary
+- New GUI tab **Profile Preview**: renders a few images per defect state of one profile with chosen settings (run config, quality preset Draft/Standard/Ultra, supersampling, style, camera preset, Cycles samples/engine/device, seed, variants, optional GUI image filters) without generating a dataset; click a thumbnail for full size. Output in `outputs/gui/profile_preview/`.
+- `photoreal` supersampling configurable via `render.supersampling` (1-4, default 2 = unchanged images); applies to the 2D render and the board baked for Blender.
 - Blender backend now really renders on the GPU: `render.blender.device: GPU` enables a Cycles compute backend (OptiX, CUDA, HIP, oneAPI) in the add-on preferences; before, Blender silently fell back to the CPU. Falls back to CPU if no GPU is found; the chosen device is logged. All `*_3d` run configs default to `device: GPU`.
 - New default 2D render style `photoreal` (`render.style`), calibrated on photos of real boards: textured solder mask with traces and vias, silkscreen outlines and reference designators, ENIG/HASL pads with height-map shaded solder fillets, resistor value codes and tan capacitors, speckled IC mold bodies with pin-1 marks, laser markings and gull-wing leads, contact/cast shadows. `style: flat` keeps the previous look. See `docs/guides/PHOTOREAL_RENDERING.md`.
 - `photoreal` no longer looks like a vector drawing: a camera model (lens blur, uneven illumination, highlight roll-off, sensor noise) is applied after supersampling, solder is shaded as a lumpy metallic mirror instead of milky plastic, silkscreen ink is blotchy.

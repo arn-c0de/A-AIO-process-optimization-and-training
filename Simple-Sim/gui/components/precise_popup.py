@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 from collections.abc import Callable
+from gui.theme.style import font
 
 
 def open_precise_popup(
@@ -212,12 +213,12 @@ class PrecisePopup:
         # Header row
         hdr = ttk.Frame(self._content_frame)
         hdr.pack(fill="x")
-        ttk.Label(hdr, text="Profile", width=22, font=("TkDefaultFont", 9, "bold")).pack(side="left")
+        ttk.Label(hdr, text="Profile", width=22, font=font("SmallBold")).pack(side="left")
         if per_class:
             for cls in class_names:
-                ttk.Label(hdr, text=cls, width=8, font=("TkDefaultFont", 9, "bold")).pack(side="left")
+                ttk.Label(hdr, text=cls, width=8, font=font("SmallBold")).pack(side="left")
         else:
-            ttk.Label(hdr, text="Count", width=8, font=("TkDefaultFont", 9, "bold")).pack(side="left")
+            ttk.Label(hdr, text="Count", width=8, font=font("SmallBold")).pack(side="left")
 
         ttk.Separator(self._content_frame, orient="horizontal").pack(fill="x", pady=(2, 4))
 

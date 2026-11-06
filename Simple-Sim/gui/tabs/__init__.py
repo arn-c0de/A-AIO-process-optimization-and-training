@@ -9,6 +9,7 @@ from .weights.tab import WeightsTab
 from .merge.tab import MergeTab
 from .pipeline.tab import PipelineControlTab
 from .datasets.tab import DatasetsTab
+from .profile_preview.tab import ProfilePreviewTab
 
 __all__ = [
     'BaseTab',
@@ -20,4 +21,5 @@ __all__ = [
     'MergeTab',
     'BoardDetectionTab',
     'DatasetsTab',
+    'ProfilePreviewTab',
 ]

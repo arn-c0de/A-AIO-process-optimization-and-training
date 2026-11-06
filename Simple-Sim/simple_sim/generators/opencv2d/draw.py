@@ -8,6 +8,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from simple_sim.board.footprints import footprint_pads
+
 
 def draw_substrate(img: np.ndarray, config: dict[str, Any]) -> None:
     """Draw green PCB substrate background."""
@@ -15,84 +17,8 @@ def draw_substrate(img: np.ndarray, config: dict[str, Any]) -> None:
 
 
 def _compute_pad_positions(footprint: str, nominal: dict[str, float], img_shape: tuple[int, int]) -> list[dict[str, int]]:
-    h, w = img_shape
-    center_x, center_y = w // 2, h // 2
-
-    pad_width = int(nominal["pad_width"])
-    pad_height = int(nominal["pad_height"])
-    pad_spacing = int(nominal["pad_spacing"])
-
-    if footprint == "sot23":
-        pad_spacing_y = int(nominal["pad_spacing_y"])
-        small_h = int(pad_height * 0.8)
-        min_gap_px = 10
-        effective_spacing_y = max(pad_spacing_y, small_h + min_gap_px)
-
-        p1_x = center_x - pad_spacing // 2 - pad_width // 2
-        p1_y = center_y - effective_spacing_y // 2 - small_h // 2
-        p2_x = center_x - pad_spacing // 2 - pad_width // 2
-        p2_y = center_y + effective_spacing_y // 2 - small_h // 2
-        p3_x = center_x + pad_spacing // 2 - pad_width // 2
-        p3_y = center_y - pad_height // 2
-        return [
-            {"x": p1_x, "y": p1_y, "w": pad_width, "h": small_h},
-            {"x": p2_x, "y": p2_y, "w": pad_width, "h": small_h},
-            {"x": p3_x, "y": p3_y, "w": pad_width, "h": pad_height},
-        ]
-
-    if footprint.startswith("qfn"):
-        pad_spacing_y = int(nominal["pad_spacing_y"])
-        # qfn_<N>: N/4 pads per side on a span of ~70% of the body edge, plus the exposed thermal pad.
-        try:
-            pins = max(4, int(footprint.split("_", 1)[1]))
-        except (IndexError, ValueError):
-            pins = 32
-        per_side = pins // 4
-        body = int(nominal.get("component_length", pad_spacing))
-        span = 0.7 * body
-        pitch = span / max(1, per_side - 1)
-        across = max(2, int(round(pitch * 0.5)))
-        left_x = center_x - pad_spacing // 2 - pad_width // 2
-        right_x = center_x + pad_spacing // 2 - pad_width // 2
-        top_y = center_y - pad_spacing_y // 2 - pad_width // 2
-        bot_y = center_y + pad_spacing_y // 2 - pad_width // 2
-        pads: list[dict[str, int]] = []
-        for i in range(per_side):
-            c = int(round(-span / 2.0 + i * pitch))
-            pads.append({"x": left_x, "y": center_y + c - across // 2, "w": pad_width, "h": across})
-            pads.append({"x": right_x, "y": center_y + c - across // 2, "w": pad_width, "h": across})
-            pads.append({"x": center_x + c - across // 2, "y": top_y, "w": across, "h": pad_width})
-            pads.append({"x": center_x + c - across // 2, "y": bot_y, "w": across, "h": pad_width})
-        thermal = int(round(body * 0.6))
-        pads.append({"x": center_x - thermal // 2, "y": center_y - thermal // 2, "w": thermal, "h": thermal})
-        return pads
-
-    if footprint == "soic_16":
-        comp_w = int(nominal.get("component_width", 0))
-        pad_spacing_y = int(nominal.get("pad_spacing_y", 0))
-        y_span = max(pad_width * 7, pad_spacing_y if pad_spacing_y > 0 else int(comp_w * 0.72))
-        pitch = y_span / 7.0
-        y0 = center_y - (y_span / 2.0)
-
-        left_x = center_x - pad_spacing // 2 - pad_height // 2
-        right_x = center_x + pad_spacing // 2 - pad_height // 2
-
-        pads: list[dict[str, int]] = []
-        for i in range(8):
-            cy = int(round(y0 + (i * pitch)))
-            y = cy - pad_width // 2
-            pads.append({"x": left_x, "y": y, "w": pad_height, "h": pad_width})
-            pads.append({"x": right_x, "y": y, "w": pad_height, "h": pad_width})
-        return pads
-
-    left_x = center_x - pad_spacing // 2 - pad_width // 2
-    left_y = center_y - pad_height // 2
-    right_x = center_x + pad_spacing // 2 - pad_width // 2
-    right_y = center_y - pad_height // 2
-    return [
-        {"x": left_x, "y": left_y, "w": pad_width, "h": pad_height},
-        {"x": right_x, "y": right_y, "w": pad_width, "h": pad_height},
-    ]
+    """Pad rectangles of *footprint* as ``{"x", "y", "w", "h"}`` dicts (geometry: :func:`simple_sim.board.footprints.footprint_pads`)."""
+    return [p.as_dict() for p in footprint_pads(footprint, nominal, img_shape)]
 
 
 def draw_pads(img: np.ndarray, nominal: dict[str, float], color: tuple[int, int, int], footprint: str = "chip_2pad") -> None:

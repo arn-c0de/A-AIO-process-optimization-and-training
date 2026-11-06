@@ -8,9 +8,12 @@ from typing import Any
 
 import numpy as np
 
+from simple_sim.generators.blender3d.runner import render_prepared_batch
 from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
 from simple_sim.generators.filter_settings import NEUTRAL_AUGMENT
 from simple_sim.generators.opencv_2d import apply_post_filters
+from simple_sim.generators.blender3d.bake import bake_fields
+from simple_sim.parallel import imap_ordered
 
 # Augment keys that do not by themselves require the post-filter chain:
 # rotation_deg is already applied by render_batch.py (global_rotation_root), and the
@@ -85,10 +88,10 @@ def postprocess_blender_images(records: Iterable[dict[str, Any]], output_root: P
     """
     import cv2
 
-    for r in records:
+    def one(r: dict[str, Any]) -> None:
         aug = {k: v for k, v in (r.get("augment") or {}).items() if v is not None}
         if not _needs_post_filter(aug):
-            continue
+            return
         path = Path(output_root) / str(r["image_path"])
         img = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if img is None:
@@ -96,6 +99,9 @@ def postprocess_blender_images(records: Iterable[dict[str, Any]], output_root: P
         img = apply_post_filters(img, aug, np.random.default_rng(int(r["seed"])))
         if not cv2.imwrite(str(path), img):
             raise OSError(f"Failed to write filtered Blender image: {path}")
+
+    for _ in imap_ordered(one, list(records)):
+        pass
 
 
 def run_blender_jobs(
@@ -120,6 +126,28 @@ def run_blender_jobs(
     postprocess_blender_images(jobs, output_root)
 
 
+def run_prepared_blender_jobs(
+    prepared: list[dict[str, Any]],
+    *,
+    sim_root: Path,
+    output_root: Path,
+    jobs_path: Path,
+    settings: dict[str, Any],
+) -> None:
+    """Like :func:`run_blender_jobs` for jobs whose boards are already baked (``bake.prepare_job``)."""
+    render_prepared_batch(
+        sim_root=sim_root,
+        prepared=prepared,
+        prepared_path=jobs_path,
+        output_root=output_root,
+        blender_executable=settings["executable"],
+        cycles_samples=settings["samples"],
+        device=settings["device"],
+        engine=settings["engine"],
+    )
+    postprocess_blender_images(prepared, output_root)
+
+
 def render_blender_records(
     records: list[dict[str, Any]],
     *,
@@ -137,9 +165,8 @@ def render_blender_records(
 ) -> None:
     """Render dataset *records* with Blender into ``output_root/images`` and verify the image count."""
     render_cfg = config.get("render") or {}
-    bake = {"component_type": str(render_cfg.get("component_type", "")), "texture_dir": render_cfg.get("texture_dir"),
-            "tolerances": tolerances, "camera": render_cfg.get("camera"),
-            "rework_artifacts": render_cfg.get("rework_artifacts", 0.3)}
+    bake = {"component_type": str(render_cfg.get("component_type", "")), "tolerances": tolerances,
+            **bake_fields(render_cfg, config.get("roi"))}
     jobs = [
         blender_job(
             r,

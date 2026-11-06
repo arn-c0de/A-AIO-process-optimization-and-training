@@ -12,7 +12,7 @@ import numpy as np
 from tqdm import tqdm
 
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE, load_config, merge_profile_render, validate_config
-from simple_sim.dataset_store import atomic_dataset_dir, write_dataset, write_dataset_files, write_image
+from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files, write_image
 from simple_sim.generation.blender import blender_settings, render_blender_records
 from simple_sim.generation.common import (
     SPLIT_NAMES,
@@ -25,6 +25,7 @@ from simple_sim.generation.common import (
 )
 from simple_sim.generators.filter_settings import load_image_filters_env
 from simple_sim.generators.opencv_2d import render_roi
+from simple_sim.parallel import imap_ordered, render_workers
 from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
 from simple_sim.profile_hash import hash_profile, load_profile
 from simple_sim.schema import LabelRow, MetaRow, append_jsonl_rows, read_jsonl, validate_jsonl_pair
@@ -249,7 +250,7 @@ def generate_dataset(
             geometry_ranges = config["geometry_ranges"]
 
     # Fill component_color/component_type from the profile (also persisted in config.yaml).
-    config["render"] = merge_profile_render(config["render"], profile)
+    config["render"] = merge_profile_render(config["render"], profile, config.get("roi"))
 
     ext: ExtendState | None = None
     if extend and output_dir.exists():
@@ -362,6 +363,17 @@ def generate_dataset(
             footprint=footprint,
         )
 
+    def write_2d(out_root: Path) -> None:
+        """Render + write all records in parallel threads (streamed: images are never all held in memory)."""
+        workers = render_workers()
+        print(f"Rendering {len(records)} images with {workers} worker thread(s)")
+
+        def job(r: dict[str, Any]) -> None:
+            write_image(out_root / r["image_path"], render_2d(r))
+
+        for _ in tqdm(imap_ordered(job, records, workers=workers), total=len(records), desc="render"):
+            pass
+
     def render_3d(out_root: Path, jobs_filename: str, at_least: bool) -> None:
         render_blender_records(
             records,
@@ -383,8 +395,7 @@ def generate_dataset(
         # Append mode: keep existing dataset, add new images + rows + update split files.
         (output_dir / "images").mkdir(parents=True, exist_ok=True)
         if backend == "opencv_2d":
-            for r in records:
-                write_image(output_dir / r["image_path"], render_2d(r))
+            write_2d(output_dir)
         else:
             render_3d(output_dir, "blender_jobs_extend.jsonl", True)
         append_jsonl_rows(output_dir / "meta.jsonl", meta_rows)
@@ -396,12 +407,12 @@ def generate_dataset(
         all_meta_rows = ext.meta_rows + meta_rows
         all_label_rows = ext.label_rows + label_rows
     else:
-        if backend == "opencv_2d":
-            write_dataset(output_dir, {r["image_path"]: render_2d(r) for r in records}, meta_rows, label_rows, config)
-        else:
-            with atomic_dataset_dir(output_dir) as temp_dir:
+        with atomic_dataset_dir(output_dir) as temp_dir:
+            if backend == "opencv_2d":
+                write_2d(temp_dir)
+            else:
                 render_3d(temp_dir, "blender_jobs.jsonl", False)
-                write_dataset_files(temp_dir, meta_rows, label_rows, config)
+            write_dataset_files(temp_dir, meta_rows, label_rows, config)
         final_splits = new_splits
         all_meta_rows = meta_rows
         all_label_rows = label_rows

@@ -194,3 +194,80 @@ def test_phone_camera_preset():
     phone = _render("chip_2pad", "OK", seed=2, camera={"preset": "phone"})
     assert phone.shape == (128, 128, 3)
     assert not np.array_equal(phone, _render("chip_2pad", "OK", seed=2))
+
+
+@pytest.mark.parametrize("footprint", list(FOOTPRINTS))
+@pytest.mark.parametrize("factor", [1, 3, 4])
+def test_supersampling_factors_render(footprint, factor):
+    """``render.supersampling`` 1-4 renders every footprint; the default (2) is unchanged and SS is restored."""
+    from simple_sim.generators.opencv2d import photoreal
+
+    img = _render(footprint, "TOMBSTONE", supersampling=factor)
+    assert img.shape == (128, 128, 3) and img.dtype == np.uint8
+    assert photoreal.SS == photoreal.DEFAULT_SUPERSAMPLING
+    assert np.array_equal(_render(footprint, "OK", seed=3), _render(footprint, "OK", seed=3, supersampling=2))
+
+
+def test_supersampling_validation():
+    from simple_sim.config import _validate_supersampling
+
+    _validate_supersampling(None)
+    _validate_supersampling(4)
+    for bad in (0, 5, 2.5, True, "4"):
+        with pytest.raises(ValueError):
+            _validate_supersampling(bad)
+
+
+def test_low_res_capture_keeps_roi_size_and_softens():
+    """``camera.capture_scale`` < 1 samples at sensor resolution and upscales back to the ROI."""
+    from simple_sim.generators.opencv2d.photoreal import camera_model
+
+    img = np.zeros((96, 128, 3), np.uint8)
+    img[:, 64:] = 220
+    full = camera_model(img, np.random.default_rng(1), {"read_noise": [0, 0], "shot_noise": 0})
+    small = camera_model(img, np.random.default_rng(1), {"capture_scale": [0.25, 0.25], "read_noise": [0, 0],
+                                                       "shot_noise": 0, "chroma_shift": [1.0, 1.0]})
+    assert small.shape == full.shape == img.shape
+    edge = lambda x: np.abs(np.diff(x[48, :, 1].astype(int))).max()  # noqa: E731
+    assert edge(small) < edge(full)
+
+
+def test_camera_and_gloss_validation():
+    from simple_sim.config import _validate_camera
+
+    _validate_camera({"preset": "phone", "capture_scale": [0.2, 0.7], "chroma_shift": [0, 1]})
+    for bad in ({"capture_scale": [0.0, 0.5]}, {"capture_scale": [0.5, 1.5]}, {"chroma_shift": [1, 0]}):
+        with pytest.raises(ValueError):
+            _validate_camera(bad)
+
+
+def test_mask_gloss_is_optional_and_deterministic():
+    a = _render("chip_2pad", "OK", seed=4, mask_gloss=1.0)
+    assert np.array_equal(a, _render("chip_2pad", "OK", seed=4, mask_gloss=1.0))
+    assert not np.array_equal(a, _render("chip_2pad", "OK", seed=4, mask_gloss=0.0))
+
+
+def test_mask_colour_matches_real_boards():
+    """Bare mask is an olive/bottle green with moderate saturation (real crops: HSV S ~90-110), not lime/cyan."""
+    import cv2
+
+    img = _render("chip_2pad", "MISSING", seed=7, mask_gloss=0.0, rework_artifacts=0.0)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    green = hsv[(hsv[:, 0] >= 35) & (hsv[:, 0] <= 95)]
+    assert 60 < np.median(green[:, 1]) < 140
+
+
+def test_sot23_body_is_vertical_and_leads_move_with_it():
+    """SOT-23: body long axis along the pin-1/2 column; leads are rigid with the body (a shifted part's feet miss the pads)."""
+    from simple_sim.generators.opencv2d.photoreal import lead_layout, nominal_body_angle
+
+    assert nominal_body_angle("sot") == 90.0 and nominal_body_angle("resistor") == 0.0
+    nom = {"pad_width": 22, "pad_height": 18, "pad_spacing": 50, "pad_spacing_y": 42,
+           "component_length": 64, "component_width": 29}
+    pads = _compute_pad_positions("sot23", nom, (128, 128))
+    leads = lead_layout("sot", pads, (64, 64), 64.0, 29.0)
+    assert len(leads) == 3 and all(l["axis"] == "v" for l in leads)  # all leave the long sides
+    assert sorted(sum(l["side"] == s for l in leads) for s in (-1.0, 1.0)) == [1, 2]  # pins 1+2 on one side, pin 3 opposite
+    assert all(l["tip"] > l["edge"] for l in leads)
+    img = _render("sot23", "OK", seed=3)
+    assert img.shape == (128, 128, 3)

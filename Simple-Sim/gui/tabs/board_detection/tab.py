@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from gui.state import UiState
 
+from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from .ui import BoardDetectionUI
 from .logic import BoardDetectionLogic
@@ -59,24 +60,23 @@ class BoardDetectionTab(BaseTab):
         defect_bundle = self.ui._defect_bundle_var.get().strip()
         image_path = self.ui._image_path_var.get().strip()
 
-        if not profile_model or not defect_bundle or not image_path:
-            messagebox.showwarning("Missing Input", "Please set profile model, defect bundle, and image path.")
+        missing = [name for name, val in (("profile classifier", profile_model), ("defect bundle", defect_bundle),
+                                          ("image", image_path)) if not val]
+        if not dialogs.require(not missing, self.frame, f"Please choose the {', '.join(missing)}.",
+                               title="Missing Input"):
             return
 
-        if not Path(profile_model).exists():
-            messagebox.showerror("Error", f"Profile model not found: {profile_model}")
-            return
-        if not Path(defect_bundle).exists():
-            messagebox.showerror("Error", f"Defect bundle not found: {defect_bundle}")
-            return
-        if not Path(image_path).exists():
-            messagebox.showerror("Error", f"Image not found: {image_path}")
-            return
+        for what, value in (("Profile model", profile_model), ("Defect bundle", defect_bundle), ("Image", image_path)):
+            if not Path(value).exists():
+                dialogs.show_error(self.frame, "File Not Found", f"{what} not found: {value}",
+                                   hint="Use Browse… to pick an existing path.")
+                return
 
         try:
             min_conf = float(self.ui._conf_var.get())
         except ValueError:
             min_conf = 0.5
+            self.ui._conf_var.set("0.5")
 
         self.ui.set_predict_button_state("disabled")
         self.ui.set_status("Loading models and predicting...")
@@ -98,3 +98,9 @@ class BoardDetectionTab(BaseTab):
         self.ui.set_status("Prediction complete")
         self._result = result
         self.ui.show_result(result)
+        ctx = getattr(self.state, "ctx", None)
+        if ctx is not None:
+            try:
+                ctx.status(f"Board detection: {result.profile_id} / {result.defect_class}", "success")
+            except Exception:
+                pass
