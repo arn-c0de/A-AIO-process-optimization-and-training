@@ -18,9 +18,10 @@ deterministic per seed.
 
 | Layer | Details |
 |---|---|
-| Substrate | Solder-mask green sampled from a palette measured on real boards, resin mottling, fibre weave, sensor grain |
-| Copper under mask | 1-3 autorouted traces with 45° jogs, traces leaving pads, 0-3 vias with annular ring and dark hole |
-| Silkscreen | White footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`), placed around the *nominal* footprint so it never moves with a defect |
+| Substrate | Solder-mask colour sampled from a palette measured on photos of the production boards (teal-green), resin mottling, fibre weave, sensor grain |
+| Copper under mask | Copper pours (large planes with 45° chamfers, clearance around the part), 1-3 autorouted traces with 45° jogs, traces leaving pads, 0-12 vias (mostly tented). Brightness ratio mask-over-copper / mask-over-laminate measured on the photos |
+| Neighbour parts | 0-6 chip resistors/capacitors around the inspected part (pads, fillets, bodies), sized from its pads, at 0/90°, possibly cut by the ROI border, never in its keep-out |
+| Silkscreen | In 55 % of samples: white footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`), placed around the *nominal* footprint so it never moves with a defect |
 | Pads | Mask-defined opening with dark rim, ENIG (gold) or HASL (silver) finish visible at the pad edge. Large (thermal) pads without a part show window-pane stencil islands |
 | Solder | Height map with slight lumpiness, shaded as a rough mirror: flat areas reflect the overhead light, slopes reflect the dark board, sharp highlight towards the light. Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
 | Chip body | Resistor: dark body, metallic end caps, white value code (`103`, `4R7`, ...). Capacitor (`component.type` contains `cap`): tan ceramic, nickel caps, no marking. Printed codes have blotchy ink |
@@ -59,8 +60,10 @@ render:
 
 Colours and proportions were taken from macro photos of real boards (dark olive solder mask, traces
 shimmering through the mask, white silkscreen, bright concave fillets, black 0603 resistors with
-white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings). The mask palette also contains the
-brighter, more saturated greens of the production boards (estimated from overview photos).
+white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings). Mask colours, the copper-under-mask
+brightness ratio, copper pours, tented vias and the density of neighbour parts come from 7 photos
+(JPEG and raw) of the production boards: median of bare mask pixels (hue 150-170°, i.e. teal-green
+although it reads as green) and of pour vs. laminate areas.
 
 ## Camera model (`render.camera`) and calibration (`tools/calibrate_camera.py`)
 

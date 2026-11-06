@@ -31,10 +31,11 @@ _LIGHT /= np.linalg.norm(_LIGHT)
 _HALF = _LIGHT + np.array([0.0, 0.0, 1.0], dtype=np.float32)
 _HALF /= np.linalg.norm(_HALF)
 
-# Solder-mask greens (BGR): dark olive from macro photos of real boards, plus the brighter, more
-# saturated greens (one teal-ish) of the production boards (estimated from photos).
-_MASK_PALETTE = ((44, 86, 34), (50, 96, 40), (38, 76, 30), (56, 104, 46), (48, 90, 42), (42, 82, 38),
-                 (52, 128, 22), (60, 145, 30), (70, 135, 25), (75, 125, 20))
+# Solder-mask colours (BGR): median of bare mask pixels in 7 photos of the production boards. The
+# mask is teal-green (hue ~150-170 deg), not the yellow-green it reads as to the eye.
+_MASK_PALETTE = ((77, 94, 26), (71, 91, 33), (68, 98, 28), (113, 137, 36), (94, 118, 35), (81, 96, 55), (93, 109, 61))
+# Mask over copper (traces, pours) relative to mask over bare laminate, measured on the same photos.
+_COPPER_UNDER_MASK = np.array((1.29, 1.39, 1.40), dtype=np.float32)
 _SILKSCREEN = np.array((215, 228, 228), dtype=np.float32)
 _SOLDER = np.array((176, 180, 184), dtype=np.float32)
 _FINISHES = {"enig": np.array((70, 165, 205), dtype=np.float32), "hasl": np.array((165, 170, 175), dtype=np.float32)}
@@ -157,8 +158,23 @@ def _substrate(h: int, w: int, rng: np.random.Generator) -> tuple[np.ndarray, np
 def _traces_and_vias(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int]], keepout: tuple[int, int, int, int],
                      rng: np.random.Generator) -> None:
     h, w = img.shape[:2]
-    trace_col = np.clip(base * np.array((1.30, 1.33, 1.52), dtype=np.float32), 0, 255)
+    trace_col = np.clip(base * _COPPER_UNDER_MASK, 0, 255)
     mask = np.zeros((h, w), dtype=np.uint8)
+    x0, y0, x1, y1 = keepout
+
+    # Copper pours: large planes with straight, 45-degree chamfered edges, kept clear of the part.
+    if rng.random() < 0.6:
+        pour = np.zeros((h, w), dtype=np.uint8)
+        for _ in range(int(rng.integers(1, 3))):
+            pw_, ph_ = float(rng.uniform(0.4, 1.2)) * w, float(rng.uniform(0.4, 1.2)) * h
+            ax, ay = float(rng.uniform(-0.2 * w, w - 0.5 * pw_)), float(rng.uniform(-0.2 * h, h - 0.5 * ph_))
+            c = float(rng.uniform(0.05, 0.25)) * min(pw_, ph_)
+            poly = [(ax + c, ay), (ax + pw_ - c, ay), (ax + pw_, ay + c), (ax + pw_, ay + ph_ - c),
+                    (ax + pw_ - c, ay + ph_), (ax + c, ay + ph_), (ax, ay + ph_ - c), (ax, ay + c)]
+            cv2.fillPoly(pour, [np.round(poly).astype(np.int32)], 255)
+        gap = int(round(float(rng.uniform(3.0, 6.0)) * SS))
+        cv2.rectangle(pour, (x0 - gap, y0 - gap), (x1 + gap, y1 + gap), 0, -1)
+        mask = np.maximum(mask, pour)
 
     def _polyline(p0: tuple[int, int], p1: tuple[int, int], width: int) -> None:
         # Route with one 45-degree jog like real autorouted traces.
@@ -193,9 +209,8 @@ def _traces_and_vias(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
     alpha = cv2.GaussianBlur(mask, (0, 0), 0.6 * SS).astype(np.float32) / 255.0 * 0.7
     _blend(img, trace_col, alpha)
 
-    # Vias outside the footprint keep-out.
-    x0, y0, x1, y1 = keepout
-    for _ in range(int(rng.integers(0, 4))):
+    # Vias outside the footprint keep-out; most are tented (covered by mask), some open.
+    for _ in range(int(rng.integers(0, 13))):
         for _try in range(6):
             vx, vy = int(rng.integers(0, w)), int(rng.integers(0, h))
             if not (x0 <= vx <= x1 and y0 <= vy <= y1):
@@ -208,11 +223,12 @@ def _traces_and_vias(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
         _blend(img, trace_col, ring.astype(np.float32) / 255.0 * 0.9)
         hole = np.zeros((h, w), dtype=np.uint8)
         cv2.circle(hole, (vx, vy), max(1, int(r * 0.45)), 255, -1, lineType=cv2.LINE_AA)
-        _blend(img, np.array((22, 30, 24), dtype=np.float32), hole.astype(np.float32) / 255.0)
+        hole_col = base * 0.7 if rng.random() < 0.85 else np.array((22, 30, 24), dtype=np.float32)
+        _blend(img, hole_col, hole.astype(np.float32) / 255.0)
 
 
 def _silkscreen(img: np.ndarray, keepout: tuple[int, int, int, int], family: str, rng: np.random.Generator) -> None:
-    if rng.random() < 0.2:
+    if rng.random() < 0.45:  # dense production boards often have no print next to small parts
         return
     h, w = img.shape[:2]
     x0, y0, x1, y1 = keepout
@@ -255,9 +271,8 @@ def thermal_pad_index(pads: list[dict[str, int]]) -> int | None:
 
 
 def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int]], body_mask: np.ndarray,
-                     rng: np.random.Generator, *, with_solder: bool = True) -> None:
+                     rng: np.random.Generator, finish: np.ndarray, *, with_solder: bool = True) -> None:
     h, w = img.shape[:2]
-    finish = _FINISHES["enig" if rng.random() < 0.5 else "hasl"] * float(rng.uniform(0.92, 1.06))
     solder = _SOLDER * float(rng.uniform(0.9, 1.05))
     mask_edge = base * 0.65
     env = base * 0.8 + 12.0  # what slopes of the solder mirror: the surrounding board
@@ -413,8 +428,8 @@ def _marking(img: np.ndarray, family: str, center: tuple[float, float], length: 
 
 
 def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length: float, width: float, angle_deg: float,
-               base_color: np.ndarray, rng: np.random.Generator, *, standing: bool = False) -> None:
-    """Part body seen from above. *standing*: only the (foreshortened) top face of a tombstone, no marks."""
+               base_color: np.ndarray, rng: np.random.Generator, *, marks: bool = True) -> None:
+    """Part body seen from above. ``marks=False``: no marking/pin-1 (tombstone top face, small neighbour parts)."""
     h, w = img.shape[:2]
     u, v, aa_body = _rect_alpha(h, w, center, length, width, angle_deg)
     hl, hw = length / 2.0, width / 2.0
@@ -457,9 +472,9 @@ def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length
         shade = 0.72 + 0.45 * ridge - 0.25 * np.clip(v / hw, 0, 1) * 0.5
         cap_img = cap_col * shade[..., None] * (1.0 + rng.normal(0.0, 0.02, (h, w, 1)).astype(np.float32))
         _blend(img, cap_img, cap.astype(np.float32) * aa_body)
-        if standing:
+        if not marks:
             return
-    elif standing:
+    elif not marks:
         return
     else:
         # Pin-1 indicator (molded dimple / laser dot).
@@ -529,7 +544,7 @@ def _draw_tombstone(img: np.ndarray, family: str, pose: dict[str, Any], width: f
     # Steep top face: the foreshortened body, shaded by how much it still faces the light.
     top_c = anchor + axis * (pose["top_len"] / 2.0 - pose["end_len"])
     _draw_body(img, family, (float(top_c[0]), float(top_c[1])), pose["top_len"], width, angle, base_color, rng,
-               standing=True)
+               marks=False)
     n_top = np.array([*(-axis * np.sin(tilt)), np.cos(tilt)], dtype=np.float32)
     _, _, m_top = _rect_alpha(h, w, top_c, pose["top_len"], width, angle)
     img *= (1.0 + (0.35 + 0.65 * max(0.0, float(n_top @ _LIGHT)) - 1.0) * m_top)[..., None]
@@ -552,12 +567,70 @@ def _draw_tombstone(img: np.ndarray, family: str, pose: dict[str, Any], width: f
     _blend(img, face, m_end)
 
 
-def _board(nom: dict[str, float], footprint: str, family: str, shape: tuple[int, int], config: dict[str, Any],
-           rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, list[dict[str, int]]]:
-    """Substrate, copper and silkscreen at supersampled *shape*. Returns (float image, mask colour, pads).
+def _neighbours(pads: list[dict[str, int]], keepout: tuple[int, int, int, int], shape: tuple[int, int],
+                rng: np.random.Generator) -> list[dict[str, Any]]:
+    """Small chip parts around the inspected one: real ROIs are densely populated.
 
-    The silkscreen keep-out uses the *nominal* body, so the print never follows a defect (a real
-    board's silkscreen does not move when a part is misplaced).
+    Sized from the target's pads (a neighbour is about a chip with pads of that size, so it fits
+    every package), at 0 or 90 degrees, possibly cut by the ROI border, never in the keep-out.
+    """
+    h, w = shape
+    ref = 2.2 * min(min(p["w"], p["h"]) for p in pads)
+    x0, y0, x1, y1 = keepout
+    gap = 0.35 * ref
+    taken = [(x0 - gap, y0 - gap, x1 + gap, y1 + gap)]
+    parts: list[dict[str, Any]] = []
+    for _ in range(int(rng.integers(0, 7))):
+        length = float(rng.uniform(0.6, 1.1)) * ref
+        width = length * float(rng.uniform(0.45, 0.6))
+        vertical = bool(rng.random() < 0.5)
+        pad_l, pad_w, off = 0.45 * length, 1.15 * width, 0.45 * length  # pad size along/across, centre offset
+        ex, ey = off + pad_l / 2.0, pad_w / 2.0
+        if vertical:
+            ex, ey = ey, ex
+        for _try in range(8):
+            cx, cy = float(rng.uniform(-0.3 * ex, w + 0.3 * ex)), float(rng.uniform(-0.3 * ey, h + 0.3 * ey))
+            box = (cx - ex, cy - ey, cx + ex, cy + ey)
+            if all(box[2] + 0.15 * ref < t[0] or box[0] - 0.15 * ref > t[2] or box[3] + 0.15 * ref < t[1]
+                   or box[1] - 0.15 * ref > t[3] for t in taken):
+                break
+        else:
+            continue
+        taken.append(box)
+        part_pads = []
+        for s in (-1.0, 1.0):
+            px, py, pw_, ph_ = (cx, cy + s * off, pad_w, pad_l) if vertical else (cx + s * off, cy, pad_l, pad_w)
+            part_pads.append({"x": int(round(px - pw_ / 2)), "y": int(round(py - ph_ / 2)),
+                              "w": int(round(pw_)), "h": int(round(ph_))})
+        parts.append({"center": (cx, cy), "length": length, "width": width, "pads": part_pads,
+                      "angle": (90.0 if vertical else 0.0) + float(rng.uniform(-1.5, 1.5)),
+                      "family": "capacitor" if rng.random() < 0.55 else "resistor"})
+    return parts
+
+
+def _draw_neighbours(img: np.ndarray, base: np.ndarray, parts: list[dict[str, Any]], finish: np.ndarray,
+                     rng: np.random.Generator) -> None:
+    if not parts:
+        return
+    h, w = img.shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for p in parts:
+        box = cv2.boxPoints(((p["center"][0], p["center"][1]), (p["length"], p["width"]), p["angle"]))
+        cv2.fillPoly(mask, [np.round(box).astype(np.int32)], 255)
+    _pads_and_solder(img, base, [pad for p in parts for pad in p["pads"]], mask, rng, finish)
+    _contact_shadow(img, mask, 0.35, 3 * SS)
+    dark = np.array((20, 20, 20), dtype=np.float32)
+    for p in parts:
+        _draw_body(img, p["family"], p["center"], p["length"], p["width"], p["angle"], dark, rng, marks=False)
+
+
+def _board(nom: dict[str, float], footprint: str, family: str, shape: tuple[int, int], config: dict[str, Any],
+           rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, list[dict[str, int]], np.ndarray]:
+    """Board around the inspected part at supersampled *shape*: substrate, copper, silkscreen and
+    populated neighbour parts. Returns (float image, mask colour, target pads, pad finish colour).
+
+    The keep-out uses the *nominal* body, so nothing on the board follows a defect (a real board's
+    silkscreen and neighbours do not move when a part is misplaced).
     """
     h, w = shape
     pads = _compute_pad_positions(footprint, nom, (h, w))
@@ -573,7 +646,9 @@ def _board(nom: dict[str, float], footprint: str, family: str, shape: tuple[int,
         img, base = _substrate(h, w, rng)
         _traces_and_vias(img, base, pads, keepout, rng)
     _silkscreen(img, keepout, family, rng)
-    return img, base, pads
+    finish = _FINISHES["enig" if rng.random() < 0.5 else "hasl"] * float(rng.uniform(0.92, 1.06))
+    _draw_neighbours(img, base, _neighbours(pads, keepout, (h, w), rng), finish, rng)
+    return img, base, pads, finish
 
 
 def _scaled(nominal: dict[str, float], defect_params: dict[str, Any]) -> tuple[dict[str, float], dict[str, Any]]:
@@ -603,8 +678,8 @@ def render_board(
     h, w = height * SS, width * SS
     nom, dp = _scaled(nominal, defect_params)
     family = _family(footprint, str(config.get("component_type", "")))
-    img, base, pads = _board(nom, footprint, family, (h, w), config, rng)
-    _pads_and_solder(img, base, pads, np.zeros((h, w), dtype=np.uint8), rng, with_solder=False)
+    img, base, pads, finish = _board(nom, footprint, family, (h, w), config, rng)
+    _pads_and_solder(img, base, pads, np.zeros((h, w), dtype=np.uint8), rng, finish, with_solder=False)
     if dp["type"] == "SOLDER_BRIDGE":  # flat solder between neighbouring pads
         geo = body_geometry(nom, dp, tolerances, (h, w))
         img8 = _clip8(img)
@@ -648,7 +723,7 @@ def render_photoreal_base(
     base_color = np.array(config.get("component_color", (20, 20, 20)), dtype=np.float32)
     defect_type = dp["type"]
 
-    img, base, pads = _board(nom, footprint, family, (h, w), config, rng)
+    img, base, pads, finish = _board(nom, footprint, family, (h, w), config, rng)
     geo = body_geometry(nom, dp, tolerances, (h, w))
     length, width_px = float(geo["length"]), float(geo["width"])
     cx, cy = geo["center"]
@@ -666,7 +741,7 @@ def render_photoreal_base(
             pts = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector)["lifted"]
         cv2.fillPoly(body_mask, [np.round(pts).astype(np.int32)], 255)
 
-    _pads_and_solder(img, base, pads, body_mask, rng)
+    _pads_and_solder(img, base, pads, body_mask, rng, finish)
 
     if pose is not None:
         _draw_tombstone(img, family, pose, width_px, base_color, rng)
