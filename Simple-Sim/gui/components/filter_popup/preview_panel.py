@@ -296,6 +296,7 @@ def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any
         blender_executable = "blender"
         cycles_samples = 32
         device = "CPU"
+        engine = "BLENDER_EEVEE"
         roi_width_px = 320
         roi_height_px = 320
         mm_per_px = 0.02
@@ -319,6 +320,7 @@ def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any
             blender_executable = str(blender_cfg.get("executable", blender_executable))
             cycles_samples = min(32, int(blender_cfg.get("samples", cycles_samples)))
             device = str(blender_cfg.get("device", device))
+            engine = str(blender_cfg.get("engine", engine))
             break
 
         geometry_ranges = profile.get("geometry_ranges") or {}
@@ -369,6 +371,7 @@ def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any
             blender_executable=blender_executable,
             cycles_samples=cycles_samples,
             device=device,
+            engine=engine,
         )
 
         import cv2  # type: ignore
@@ -732,6 +735,7 @@ def _left_render_3d_thread(popup: Any, profile_id: str, filter_vals: dict[str, A
         blender_executable = "blender"
         cycles_samples = 32
         device = "CPU"
+        engine = "BLENDER_EEVEE"
         roi_width_px = 320
         roi_height_px = 320
         mm_per_px = 0.02
@@ -754,6 +758,7 @@ def _left_render_3d_thread(popup: Any, profile_id: str, filter_vals: dict[str, A
             blender_executable = str(blender_cfg.get("executable", blender_executable))
             cycles_samples = min(32, int(blender_cfg.get("samples", cycles_samples)))
             device = str(blender_cfg.get("device", device))
+            engine = str(blender_cfg.get("engine", engine))
             break
 
         geometry_ranges = profile.get("geometry_ranges") or {}
@@ -806,6 +811,7 @@ def _left_render_3d_thread(popup: Any, profile_id: str, filter_vals: dict[str, A
             blender_executable=blender_executable,
             cycles_samples=cycles_samples,
             device=device,
+            engine=engine,
         )
 
         import cv2  # type: ignore

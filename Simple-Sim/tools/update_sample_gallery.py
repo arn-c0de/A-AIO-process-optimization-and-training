@@ -293,10 +293,10 @@ def main() -> None:
             raise SystemExit(f"Invalid --roi format: {args.roi!r} (expected WIDTHxHEIGHT@MM_PER_PX)")
         roi_override = (int(m.group(1)), int(m.group(2)), float(m.group(3)))
 
-    # Stage 3D jobs and run Blender in batches grouped by (exe, samples, device).
-    # We can't mix sample counts in a single Blender invocation because render_batch.py
-    # takes samples via a single CLI flag.
-    staged_3d_groups: dict[tuple[str, int, str], dict[str, Any]] = {}
+    # Stage 3D jobs and run Blender in batches grouped by (exe, samples, device, engine).
+    # We can't mix these in a single Blender invocation because render_batch.py
+    # takes them via single CLI flags.
+    staged_3d_groups: dict[tuple[str, int, str, str], dict[str, Any]] = {}
 
     for profile_path in profiles:
         profile_data = read_profile(profile_path)
@@ -373,7 +373,8 @@ def main() -> None:
             this_exe = str(args.blender or blender_cfg.get("executable", "blender"))
             this_samples = int(args.samples or blender_cfg.get("samples", 64))
             this_device = str(args.device or blender_cfg.get("device", "CPU"))
-            group_key = (this_exe, this_samples, this_device)
+            this_engine = str(blender_cfg.get("engine", "BLENDER_EEVEE"))
+            group_key = (this_exe, this_samples, this_device, this_engine)
             if group_key not in staged_3d_groups:
                 staged_3d_groups[group_key] = {"jobs": [], "overlays": []}
 
@@ -404,7 +405,7 @@ def main() -> None:
         out_jobs_dir.mkdir(parents=True, exist_ok=True)
 
         for gi, (group_key, group) in enumerate(sorted(staged_3d_groups.items(), key=lambda kv: kv[0]), 1):
-            exe, samples, device = group_key
+            exe, samples, device, engine = group_key
             jobs: list[dict[str, Any]] = group["jobs"]
             overlays: list[tuple[Path, dict[str, Any], dict[str, Any]]] = group["overlays"]
             if not jobs:
@@ -413,7 +414,7 @@ def main() -> None:
             jobs_path = (out_jobs_dir / f"sample_gallery_jobs_{gi:02d}.jsonl").resolve()
             write_jobs_jsonl(jobs_path, jobs)
 
-            print(f"\nRendering {len(jobs)} 3D sample(s) via Blender (exe={exe!r} samples={samples} device={device!r})...")
+            print(f"\nRendering {len(jobs)} 3D sample(s) via Blender (exe={exe!r} samples={samples} device={device!r} engine={engine})...")
             try:
                 render_blender_batch(
                     sim_root=project_root,
@@ -422,6 +423,7 @@ def main() -> None:
                     blender_executable=str(exe),
                     cycles_samples=int(samples),
                     device=str(device),
+                    engine=str(engine),
                 )
             except Exception as e:
                 raise SystemExit(

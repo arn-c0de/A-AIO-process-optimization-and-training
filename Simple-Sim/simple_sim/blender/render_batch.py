@@ -168,6 +168,7 @@ def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big
     if big and not touched:
         nx, ny = max(2, round(pw / (min(pw, ph) / 3))), max(2, round(ph / (min(pw, ph) / 3)))
 
+    dome_h = 0.18 * min(pw / nx, ph / ny)  # reflowed paste height scales with the paste deposit, as in 2D
     verts = []
     for j, y in enumerate(ys):
         for i, x in enumerate(xs):
@@ -178,7 +179,7 @@ def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big
             else:
                 u = ((i / n * nx) % 1.0) * 2 - 1
                 v = ((j / n * ny) % 1.0) * 2 - 1
-                z = 0.3 * h_term * max(0.0, 1.0 - (abs(u) ** 3 + abs(v) ** 3) * (0.85 if nx * ny == 1 else 1.2))
+                z = dome_h * max(0.0, 1.0 - (abs(u) ** 3 + abs(v) ** 3) * (0.85 if nx * ny == 1 else 1.2))
             verts.append((x, y, 0.001 + z * rim))
     faces = [(j * (n + 1) + i, j * (n + 1) + i + 1, (j + 1) * (n + 1) + i + 1, (j + 1) * (n + 1) + i)
              for j in range(n) for i in range(n)]
@@ -212,7 +213,7 @@ def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, 
     """
     family, body = board["family"], board["body"]
     if body is None:
-        return [], [None] * len(pads), 0.25 * min(min(p[2], p[3]) for p in pads)
+        return [], [None] * len(pads), 0.0  # no contacts: every pad gets a paste dome
 
     mats = render_3d.get("materials") or {}
     L, W = float(body["length"]) * mmpp, float(body["width"]) * mmpp
@@ -293,7 +294,7 @@ def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, 
             contacts.append({"cx": mid.x, "cy": mid.y, "hl": d.length / 2, "hw": lw / 2, "angle": math.atan2(d.y, d.x)})
         return objs, contacts, 0.9 * t
     if family in ("sot", "soic"):
-        return objs, [None] * len(pads), 0.5 * H  # tombstoned leaded part: leads lifted, paste only
+        return objs, [None] * len(pads), 0.0  # tombstoned leaded part: leads lifted, paste only
     return objs, [contact] * len(pads), 0.3 * H
 
 

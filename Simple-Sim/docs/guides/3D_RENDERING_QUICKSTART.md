@@ -60,6 +60,8 @@ Board colours, traces, silkscreen and pad finish are changed in the 2D generator
 
 ## Run config (`render.blender`)
 
+Requires Blender 4.0 or newer (Principled BSDF v2 input names); tested with 5.2.
+
 ```yaml
 render:
   backend: blender_3d
