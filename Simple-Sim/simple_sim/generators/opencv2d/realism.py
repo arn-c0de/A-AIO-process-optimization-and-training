@@ -16,9 +16,27 @@ from pathlib import Path
 
 import numpy as np
 
+from simple_sim.generators.filter_settings import NEUTRAL_AUGMENT
+
 
 _HEAVY_GROUPS = {"G2", "G5", "G7"}
 _GROUPS: Sequence[str] = ("G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8")
+# Group-driven effects that G0 resets to neutral before the selected groups re-enable them.
+_G0_RESET_KEYS: Sequence[str] = (
+    "perspective_strength",
+    "motion_blur_strength",
+    "vignetting_strength",
+    "reflection_strength",
+    "chromatic_strength",
+    "dust_density",
+    "hue_shift_deg",
+    "sharpen_strength",
+    "distortion_k1",
+    "distortion_k2",
+    "jpeg_quality",
+    "color_temperature_kelvin",
+    "shadow_strength",
+)
 
 _PROFILE_PRESETS: dict[str, dict[str, float]] = {
     # Baseline from issue #19
@@ -222,19 +240,7 @@ def apply_realism_groups(
     # Keep the cardinal 0/90/180/270 base orientation, only replace the small jitter.
     base_orientation_deg = (90.0 * round(float(aug.get("rotation_deg", 0.0) or 0.0) / 90.0)) % 360.0
     aug["rotation_deg"] = base_orientation_deg + _tri_sample(rng, -4.0, 0.0, 4.0)
-    aug["perspective_strength"] = 0.0
-    aug["motion_blur_strength"] = 0.0
-    aug["vignetting_strength"] = 0.0
-    aug["reflection_strength"] = 0.0
-    aug["chromatic_strength"] = 0.0
-    aug["dust_density"] = 0.0
-    aug["hue_shift_deg"] = 0.0
-    aug["sharpen_strength"] = 0.0
-    aug["distortion_k1"] = 0.0
-    aug["distortion_k2"] = 0.0
-    aug["jpeg_quality"] = 100
-    aug["color_temperature_kelvin"] = 5500
-    aug["shadow_strength"] = 0.0
+    aug.update({k: NEUTRAL_AUGMENT[k] for k in _G0_RESET_KEYS})
 
     k = _sample_k(rng, policy["k0"], policy["k1"], policy["k2"])
     probs = {g: policy[g] for g in _GROUPS}

@@ -252,6 +252,7 @@ def create_multi_dataset(
             meta_rows=meta_rows,
             label_rows=label_rows,
             splits=splits,
+            script_name=SCRIPT_NAME,
         )
     else:
         print("WARNING: no samples merged; no dataset_manifest.json written")

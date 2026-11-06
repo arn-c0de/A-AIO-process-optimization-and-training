@@ -241,9 +241,6 @@ class PredictionsUI:
         self.txt_logs.see("end")
         self.txt_logs.configure(state="disabled")
 
-    def update_stats_bar(self, cpu_pct: float | None, ram_info: tuple[float, int, int] | None, gpu_pct: float | None) -> None:
-        return
-
     def clear_confusion_matrix(self) -> None:
         for w in list(self._cm_parent.winfo_children()):
             try:

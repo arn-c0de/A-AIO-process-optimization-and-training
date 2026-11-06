@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import random
 import sys
 from pathlib import Path
 from typing import Any
@@ -195,8 +194,6 @@ def _pad_positions_mm(footprint: str, nominal: dict[str, float], *, mm_per_px: f
         ]
     if footprint == "soic_16":
         # SOIC-16: 8 pads on the left and 8 pads on the right side.
-        float(nominal.get("component_width", 0.0)) * mm_per_px
-        pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
         # Keep lead rows compact using pad width as reference.
         y_span = pad_w * 7.0
         pitch = y_span / 7.0
@@ -382,7 +379,6 @@ def _normalize_qfn_pad_spacing(footprint: str, nominal: dict[str, Any]) -> dict[
 
 def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engine: str = "BLENDER_EEVEE") -> None:
     seed = int(job.get("seed", 0))
-    random.seed(seed)
 
     mm_per_px = float(job["mm_per_px"])
     width_px = int(job["roi_width_px"])
@@ -624,7 +620,9 @@ def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engi
         # Point the light at the target
         _look_at(l, Vector(target_mm), track_axis="-Z", up_axis="Y")
 
-    target = Vector((0.0, 0.0, pad_th + comp_h / 2.0 if comp_obj else 0.0))
+    # Component centre (or pad surface when there is no component); shared by lights and camera.
+    target_z = pad_th + (comp_h / 2.0 if comp_obj else 0.0)
+    target = Vector((0.0, 0.0, target_z))
     add_area(
         "key_light",
         key.get("location_mm", [4.0, -4.0, 10.0]),
@@ -660,8 +658,7 @@ def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engi
         _look_at(cam, Vector((float(look[0]), float(look[1]), float(look[2]))))
     else:
         # Default: look at component center
-        target_z = pad_th + (comp_h / 2.0 if comp_obj else 0.0)
-        _look_at(cam, Vector((0.0, 0.0, target_z)))
+        _look_at(cam, target)
 
     bpy.context.scene.camera = cam
 

@@ -13,7 +13,39 @@ from typing import Any
 
 import yaml
 
+from gui.utils.filter_profile_store import FILTER_SETTING_SPECS
+from gui.utils.paths import model_root
+
 PYTHON = "./.venv/bin/python"
+
+# (SettingsStore key, PipelineUI variable attribute) pairs persisted by the Pipeline tab.
+PERSISTED_FIELD_MAP: tuple[tuple[str, str], ...] = (
+    ("pipeline.run_mode", "var_run_mode"),
+    ("pipeline.run_count", "var_run_count"),
+    ("pipeline.dataset_mode", "var_dataset_mode"),
+    ("pipeline.config", "var_config"),
+    ("pipeline.out", "var_out"),
+    ("pipeline.model", "var_model"),
+    ("pipeline.autosnap", "var_autosnap"),
+    ("pipeline.snap_every", "var_snap_every"),
+    ("pipeline.snap_keep", "var_snap_keep"),
+    ("pipeline.continue_epochs", "var_continue_epochs"),
+    ("pipeline.continue_out_mode", "var_continue_out_mode"),
+    ("pipeline.name", "var_name"),
+    ("pipeline.name_ts", "var_name_ts"),
+    ("pipeline.dataset_selection", "var_dataset"),
+    ("pipeline.dataset_multi_enabled", "var_dataset_multi"),
+    ("pipeline.dataset_multi_paths", "var_dataset_multi_paths"),
+    ("pipeline.profile_model", "var_profile_model"),
+    ("pipeline.profile_model_locked", "var_profile_model_lock"),
+    ("pipeline.profile_build_preset", "var_profile_build_preset"),
+    ("pipeline.render_backend", "var_render_backend"),
+) + tuple((f"pipeline.filter.{key}", f"var_filter_{key}") for key, _kind, _default in FILTER_SETTING_SPECS)
+
+# Persisted keys that selecting a dataset overwrites (``_apply_dataset_settings``); restored again afterwards.
+DATASET_DERIVED_KEYS: frozenset[str] = frozenset(
+    {"pipeline.config", "pipeline.out", "pipeline.model", "pipeline.name", "pipeline.dataset_mode"}
+)
 DEFAULT_CLASS_NAMES: tuple[str, ...] = ("OK", "MISSING", "MISALIGNED", "TOMBSTONE")
 
 
@@ -182,7 +214,7 @@ def profile_model_paths(sim_root: Path, preset: str, tag: str) -> tuple[Path, Pa
     full = preset == "full"
     cfg = sim_root / "configs" / ("run_profile_cls.yaml" if full else "run_profile_cls_quick.yaml")
     out_ds = sim_root / "outputs" / "sim_data" / "runs" / ("run_profile_cls" if full else "run_profile_cls_quick")
-    out_model = sim_root / "outputs" / "models" / ("profile_classifier_v1.pt" if full else "profile_classifier_quick.pt")
+    out_model = model_root(sim_root) / ("profile_classifier_v1.pt" if full else "profile_classifier_quick.pt")
     if out_ds.exists():
         out_ds = out_ds.parent / f"{out_ds.name}_{tag}"
     if out_model.exists():

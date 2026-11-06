@@ -116,12 +116,13 @@ def run_streaming(
 
     assert proc.stdout is not None
     try:
-        for line in proc.stdout:
-            if stop_evt is not None and stop_evt.is_set():
-                break
-            log_q.put(line)
-            if on_line is not None:
-                on_line(line)
+        with proc.stdout:
+            for line in proc.stdout:
+                if stop_evt is not None and stop_evt.is_set():
+                    break
+                log_q.put(line)
+                if on_line is not None:
+                    on_line(line)
     except BaseException:
         _abort(proc)
         raise

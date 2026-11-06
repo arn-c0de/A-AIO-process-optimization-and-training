@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from simple_sim.config import load_config, validate_config
+from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
 from simple_sim.generators.filter_settings import normalize_image_filters
@@ -360,10 +360,7 @@ def render_2d_previews(
 
     w, h, mpp = resolve_2d_roi(cfg, roi_override)
     roi_cfg = {"width_px": w, "height_px": h, "mm_per_px": mpp}
-    render_cfg = dict(cfg["render"])
-    # schema v2: allow render.component_color to come from profile.
-    if "component_color" not in render_cfg and "render" in profile:
-        render_cfg["component_color"] = profile["render"]["component_color_bgr"]
+    render_cfg = merge_profile_render(cfg["render"], profile)
     footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
     geometry_ranges = profile.get("geometry_ranges") or {}
     tolerances = profile.get("tolerances")

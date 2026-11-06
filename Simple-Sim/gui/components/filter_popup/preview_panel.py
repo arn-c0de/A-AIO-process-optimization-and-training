@@ -213,6 +213,7 @@ def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any
             sys.path.insert(0, str(sim_root))
 
         from simple_sim.profile_hash import load_profile  # type: ignore
+        from simple_sim.config import merge_profile_render  # type: ignore
         from simple_sim.generators.opencv_2d import (  # type: ignore
             render_roi,
             apply_image_filter_overrides,
@@ -225,13 +226,9 @@ def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any
         footprint: str = (profile.get("component") or {}).get("footprint", "chip_2pad")
         geometry_ranges = profile.get("geometry_ranges")
         tolerances = profile.get("tolerances")
-        component_color = (profile.get("render") or {}).get("component_color_bgr", [20, 20, 20])
-
-        render_cfg: dict[str, Any] = {
-            "substrate_color": [40, 90, 40],
-            "copper_color": [60, 120, 180],
-            "component_color": list(component_color),
-        }
+        render_cfg = merge_profile_render(
+            {"substrate_color": [40, 90, 40], "copper_color": [60, 120, 180], "component_color": [20, 20, 20]}, profile
+        )
 
         rng = np.random.default_rng(42)
         nominal = sample_nominal_geometry({}, rng, geometry_ranges)
@@ -651,6 +648,7 @@ def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: dict[str, A
             sys.path.insert(0, str(sim_root))
 
         from simple_sim.profile_hash import load_profile  # type: ignore
+        from simple_sim.config import merge_profile_render  # type: ignore
         from simple_sim.generators.opencv_2d import (  # type: ignore
             render_roi,
             apply_image_filter_overrides,
@@ -663,13 +661,9 @@ def _left_render_2d_thread(popup: Any, profile_id: str, filter_vals: dict[str, A
         footprint: str = (profile.get("component") or {}).get("footprint", "chip_2pad")
         geometry_ranges = profile.get("geometry_ranges")
         tolerances = profile.get("tolerances")
-        component_color = (profile.get("render") or {}).get("component_color_bgr", [20, 20, 20])
-
-        render_cfg: dict[str, Any] = {
-            "substrate_color": [40, 90, 40],
-            "copper_color": [60, 120, 180],
-            "component_color": list(component_color),
-        }
+        render_cfg = merge_profile_render(
+            {"substrate_color": [40, 90, 40], "copper_color": [60, 120, 180], "component_color": [20, 20, 20]}, profile
+        )
 
         rng = np.random.default_rng(42)
         nominal = sample_nominal_geometry({}, rng, geometry_ranges)

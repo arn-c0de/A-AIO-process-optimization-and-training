@@ -185,6 +185,7 @@ def _check_seeds(data_dir: Path, meta_rows: list[MetaRow], log_limit: int, c: _C
 
     manifest_version = None
     extend_len = 0
+    generator_script = "scripts/generate.py"
     manifest_path = data_dir / "dataset_manifest.json"
     if manifest_path.exists():
         try:
@@ -192,11 +193,15 @@ def _check_seeds(data_dir: Path, meta_rows: list[MetaRow], log_limit: int, c: _C
             manifest_version = int(manifest.get("manifest_version", 1))
             hist = manifest.get("extend_history") or []
             extend_len = len(hist) if isinstance(hist, list) else 0
+            generator = manifest.get("generator")
+            if isinstance(generator, dict) and generator.get("script"):
+                generator_script = str(generator["script"])
         except (OSError, ValueError):
             pass
-    # Extended and/or multi-profile datasets can contain historical rows generated
-    # with previous configs/seeds, so strict per-row seed replay can yield false negatives.
-    strict = not (manifest_version == 2 or extend_len > 1)
+    # Extended, multi-profile and merged datasets (other generator scripts) can contain
+    # historical rows generated with previous configs/seeds, so strict per-row seed replay
+    # can yield false negatives.
+    strict = not (manifest_version == 2 or extend_len > 1 or generator_script != "scripts/generate.py")
 
     checked = mismatches = logged = 0
     for row in meta_rows[:20]:
@@ -221,7 +226,7 @@ def _check_seeds(data_dir: Path, meta_rows: list[MetaRow], log_limit: int, c: _C
         c.add("determinism", FAIL, f"{mismatches}/{checked} samples have seed mismatches")
     else:
         c.add("determinism", WARN, f"{mismatches}/{checked} sampled rows have seed mismatches "
-              "(non-strict mode for multi/extended dataset)")
+              "(non-strict mode for multi/extended/merged dataset)")
 
 
 def main() -> None:

@@ -15,6 +15,7 @@ from .filters import (
     apply_motion_blur,
     apply_noise,
     apply_perspective_transform,
+    apply_post_filters,
     apply_reflection,
     apply_saturation,
     apply_shadow,
@@ -22,7 +23,7 @@ from .filters import (
     apply_vignetting,
 )
 from .geometry import sample_nominal_geometry
-from .render import apply_augment_filters, render_roi
+from .render import render_roi
 from simple_sim.generators.filter_settings import normalize_image_filters
 
 __all__ = [
@@ -50,7 +51,7 @@ __all__ = [
     "apply_reflection",
     "apply_dust_particles",
     "apply_color_temperature",
-    "apply_augment_filters",
+    "apply_post_filters",
     "render_roi",
     "normalize_image_filters",
 ]

@@ -315,28 +315,6 @@ class WeightsUI:
         self.txt.see("end")
         self.txt.configure(state="disabled")
 
-    def populate_models_tree(self, models: list[tuple[str, str, str, str, str, str, str]], group_iids: dict[str, str], groups_to_open: set) -> None:
-        self.tree.delete(*self.tree.get_children())
-        for group, group_iid in group_iids.items():
-            self.tree.insert(
-                "",
-                "end",
-                iid=group_iid,
-                text=group,
-                values=("", "", "", "", "", ""),
-                tags=("group_header",),
-                open=group_iid in groups_to_open,
-            )
-        for parent_iid, iid, display_name, fav_s, runs_s, size_s, mt, rel, group in models:
-            self.tree.insert(
-                parent_iid,
-                "end",
-                iid=iid,
-                text=display_name,
-                values=(fav_s, runs_s, size_s, mt, rel, group),
-                tags=("model_entry",),
-            )
-    
     def set_compare_combobox_values(self, values: list[str]) -> None:
         self.combo_a.configure(values=values)
         self.combo_b.configure(values=values)

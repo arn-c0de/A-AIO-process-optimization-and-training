@@ -9,6 +9,18 @@ import yaml
 
 from simple_sim.config_schema import parse_config_typed
 
+RENDER_STYLES = {"photoreal", "flat"}
+
+
+def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    """Render config with the profile's defaults filled in (schema v2: colour/type come from the profile)."""
+    out = dict(render_cfg)
+    prof_render = profile.get("render") or {}
+    if "component_color" not in out and "component_color_bgr" in prof_render:
+        out["component_color"] = list(prof_render["component_color_bgr"])
+    out.setdefault("component_type", str((profile.get("component") or {}).get("type", "")))
+    return out
+
 VALID_CLASSES = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT'}
 
 _SUPPORTED_SCHEMA_VERSIONS = (1, 2)
@@ -283,6 +295,9 @@ def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
     if not isinstance(render['solder_mask_alpha'], (int, float)) or not 0 <= render['solder_mask_alpha'] <= 1:
         raise ValueError("render.solder_mask_alpha must be in [0, 1]")
 
+    if render.get('style', 'photoreal') not in RENDER_STYLES:
+        raise ValueError(f"render.style must be one of {sorted(RENDER_STYLES)}")
+
 
 def _validate_render_3d(render: dict[str, Any]) -> None:
     blender = render.get('blender')
@@ -297,7 +312,7 @@ def _validate_render_3d(render: dict[str, Any]) -> None:
     if not isinstance(exe, str) or not exe.strip():
         raise ValueError("render.blender.executable must be a non-empty string if provided")
 
-    engine = blender.get('engine', 'CYCLES')
+    engine = blender.get('engine', 'BLENDER_EEVEE')
     if not isinstance(engine, str) or not engine.strip():
         raise ValueError("render.blender.engine must be a non-empty string if provided")
 

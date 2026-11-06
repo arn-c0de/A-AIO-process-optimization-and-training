@@ -17,7 +17,7 @@ from gui.utils.checkpoint_meta import (
     profile_label_suffix,
     short_profile_hash,
 )
-from gui.utils.dataset_catalog import DatasetCatalog
+from gui.utils.dataset_catalog import DatasetCatalog, catalog_labels, sim_data_roots
 from gui.utils.filter_profile_store import (
     FILTER_SETTING_SPECS,
     float_or_default,
@@ -26,7 +26,7 @@ from gui.utils.filter_profile_store import (
     normalized_filter_settings,
 )
 from gui.utils.formatting import fmt_bytes
-from gui.utils.paths import newest_file
+from gui.utils.paths import list_model_paths, newest_file
 from gui.utils.pipeline_helpers import (
     DEFAULT_CLASS_NAMES,
     apply_precise_counts,
@@ -81,6 +81,20 @@ def test_newest_file(tmp_path: Path) -> None:
     assert newest_file(tmp_path, "batch_report_*.json") == b
     assert newest_file(tmp_path, "batch_report_*.json", min_mtime=1500) == b
     assert newest_file(tmp_path, "batch_report_*.json", min_mtime=2500) is None
+
+
+def test_list_model_paths(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    assert list_model_paths(root) == [] and root.is_dir()
+    (root / "versions" / "x").mkdir(parents=True)
+    (root / "imports").mkdir()
+    (root / "a.bundle").mkdir()
+    (root / "bundles" / "b").mkdir(parents=True)
+    for f in (root / "m.pt", root / "versions" / "x" / "v.pt", root / "imports" / "i.pt", root / "notes.txt"):
+        f.write_text("")
+    got = {p.relative_to(root).as_posix() for p in list_model_paths(root)}
+    assert got == {"m.pt", "versions/x/v.pt", "imports/i.pt", "a.bundle", "bundles/b"}
+    assert "a.bundle" not in {p.name for p in list_model_paths(root, include_bundles=False)}
 
 
 # --------------------------------------------------------------------------- checkpoint metadata
@@ -317,16 +331,18 @@ def test_multi_train_argvs_single_checkpoint_and_bundle() -> None:
 
 # --------------------------------------------------------------------------- dataset catalog / settings
 
-def test_dataset_catalog_unique_labels(tmp_path: Path) -> None:
+def test_catalog_labels(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
-    runs, versions = tmp_path / "runs", tmp_path / "versions"
-    a, b, snap = runs / "a", runs / "b", versions / "g" / "a"
-    for d in (a, b, snap):
+    runs, versions = sim_data_roots(tmp_path)
+    a, b, c, snap = runs / "a", runs / "b", runs / "c", versions / "g" / "a"
+    for d in (a, b, c, snap):
         d.mkdir(parents=True)
     cat = DatasetCatalog(tmp_path, store)
     cat.set_category([b], "Mine")
-    labels = cat.unique_labels([a, b, snap, a], runs_root=runs, versions_root=versions)
-    assert list(labels) == ["a", "[Mine] b", "g:a", "a (2)"]
+    cat.set_archived([c], True)
+    cat.save()  # catalog_labels() reloads from the store
+    labels = catalog_labels(tmp_path, cat)
+    assert labels == {"a": a, "[Mine] b": b, "g:a": snap}
     assert cat.display_label(b, runs_root=runs, versions_root=versions) == "[Mine] b"
 
 

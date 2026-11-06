@@ -8,62 +8,8 @@ import cv2
 import numpy as np
 
 from .draw import draw_component, draw_pads, draw_solder, draw_substrate
-from .filters import (
-    apply_blur,
-    apply_brightness,
-    apply_chromatic_aberration,
-    apply_color_temperature,
-    apply_contrast,
-    apply_dust_particles,
-    apply_hue_shift,
-    apply_jpeg_compression,
-    apply_lens_distortion,
-    apply_motion_blur,
-    apply_noise,
-    apply_perspective_transform,
-    apply_reflection,
-    apply_saturation,
-    apply_shadow,
-    apply_sharpen,
-    apply_vignetting,
-)
-
-
-def apply_augment_filters(img: np.ndarray, augment: dict[str, Any], rng: np.random.Generator) -> np.ndarray:
-    """Apply the post-render image filter chain (everything except rotation) in a fixed order.
-
-    Shared by :func:`render_roi` and the Blender post-processing so 2D and 3D images get
-    identical filters for the same augment values.
-    """
-    img = apply_blur(img, augment.get("blur_sigma", 0.0))
-    img = apply_noise(img, augment.get("noise_stddev", 0.0), rng)
-    img = apply_brightness(img, augment.get("brightness_factor", 1.0))
-    img = apply_contrast(img, augment.get("contrast_factor", 1.0))
-
-    img = apply_saturation(img, augment.get("saturation_factor", 1.0))
-    img = apply_hue_shift(img, augment.get("hue_shift_deg", 0.0))
-    img = apply_color_temperature(img, augment.get("color_temperature_kelvin", 5500))
-
-    img = apply_vignetting(img, augment.get("vignetting_strength", 0.0))
-    img = apply_chromatic_aberration(img, augment.get("chromatic_strength", 0.0))
-    img = apply_lens_distortion(img, augment.get("distortion_k1", 0.0), augment.get("distortion_k2", 0.0))
-
-    img = apply_motion_blur(img, augment.get("motion_blur_strength", 0.0), augment.get("motion_blur_angle", 0.0))
-    img = apply_sharpen(img, augment.get("sharpen_strength", 0.0))
-
-    img = apply_shadow(img, augment.get("shadow_strength", 0.0), augment.get("shadow_size", 0.2), rng)
-    img = apply_reflection(img, augment.get("reflection_strength", 0.0), augment.get("reflection_size", 0.15), rng)
-    img = apply_dust_particles(img, augment.get("dust_density", 0.0), augment.get("dust_size", 2.0), rng)
-
-    img = apply_jpeg_compression(img, augment.get("jpeg_quality", 100))
-
-    img = apply_perspective_transform(
-        img,
-        augment.get("perspective_strength", 0.0),
-        augment.get("perspective_angle_x", 0.0),
-        augment.get("perspective_angle_y", 0.0),
-    )
-    return img
+from .filters import apply_post_filters
+from .photoreal import render_photoreal_base
 
 
 def render_roi(
@@ -78,16 +24,18 @@ def render_roi(
 ) -> np.ndarray:
     """Render complete ROI with defects and augmentation."""
     width, height = roi_size
-    img = np.zeros((height, width, 3), dtype=np.uint8)
+    if str(config.get("style", "photoreal")) == "photoreal":
+        img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size)
+    else:
+        img = np.zeros((height, width, 3), dtype=np.uint8)
+        draw_substrate(img, config)
+        draw_pads(img, nominal, tuple(config["copper_color"]), footprint=footprint)
+        draw_solder(img, nominal, footprint=footprint)
+        draw_component(
+            img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances, footprint=footprint
+        )
 
-    draw_substrate(img, config)
-    draw_pads(img, nominal, tuple(config["copper_color"]), footprint=footprint)
-    draw_solder(img, nominal, footprint=footprint)
-    draw_component(
-        img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances, footprint=footprint
-    )
-
-    img = apply_augment_filters(img, augment, rng)
+    img = apply_post_filters(img, augment, rng)
 
     if abs(augment.get("rotation_deg", 0.0)) > 0.1:
         center = (width // 2, height // 2)

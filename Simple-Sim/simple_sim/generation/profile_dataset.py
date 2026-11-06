@@ -9,7 +9,7 @@ from typing import Any
 
 from tqdm import tqdm
 
-from simple_sim.config import load_config, validate_config
+from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.dataset_store import write_dataset
 from simple_sim.generation.common import (
     build_rows,
@@ -88,9 +88,7 @@ def generate_profile_dataset(
         geometry_ranges = profile.get("geometry_ranges")
         tolerances = profile.get("tolerances")
 
-        render_config = dict(config["render"])
-        if "component_color" not in render_config and "render" in profile:
-            render_config["component_color"] = profile["render"]["component_color_bgr"]
+        render_config = merge_profile_render(config["render"], profile)
 
         print(f"\nGenerating samples for profile: {pid}")
         for class_name, count in classes.items():

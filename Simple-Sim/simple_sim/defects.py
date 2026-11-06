@@ -36,6 +36,19 @@ _EPS = 1e-6
 # Public API
 # ---------------------------------------------------------------------------
 
+def _tolerance_bounds(tolerances: dict[str, Any] | None) -> tuple[float, float, float]:
+    """``(ok_shift_px, ok_rotation_deg, tombstone_tilt_deg)`` with defaults for missing keys.
+
+    Shared by classify_defect() and sample_defect_params() so partial/missing tolerances
+    classify and sample consistently.
+    """
+    tol = tolerances or {}
+    return (
+        float(tol.get('ok_shift_px', _DEFAULT_OK_SHIFT_PX)),
+        float(tol.get('ok_rotation_deg', _DEFAULT_OK_ROT_DEG)),
+        float(tol.get('tombstone_tilt_deg', _DEFAULT_TOMBSTONE_TILT)),
+    )
+
 def classify_defect(nominal: dict[str, float], defect_params: dict[str, Any], tolerances: dict[str, Any] | None) -> str:
     """Classify defect based on tolerances.
 
@@ -54,11 +67,7 @@ def classify_defect(nominal: dict[str, float], defect_params: dict[str, Any], to
     if defect_type in ('SOLDER_BRIDGE', 'CORNER_LIFT', 'MISSING'):
         return defect_type
 
-    # Same fallbacks as sample_defect_params() so profiles without tolerances still classify.
-    tolerances = tolerances or {}
-    ok_shift_px = float(tolerances.get('ok_shift_px', _DEFAULT_OK_SHIFT_PX))
-    ok_rotation_deg = float(tolerances.get('ok_rotation_deg', _DEFAULT_OK_ROT_DEG))
-    tombstone_tilt_deg = float(tolerances.get('tombstone_tilt_deg', _DEFAULT_TOMBSTONE_TILT))
+    ok_shift_px, ok_rotation_deg, tombstone_tilt_deg = _tolerance_bounds(tolerances)
 
     tilt_deg = abs(defect_params['tilt_deg'])
     if tilt_deg >= tombstone_tilt_deg:
@@ -90,9 +99,7 @@ def sample_defect_params(
     Returns:
         Dictionary with defect parameters
     """
-    ok_shift_px = float(tolerances['ok_shift_px']) if tolerances else None
-    ok_rotation_deg = float(tolerances['ok_rotation_deg']) if tolerances else None
-    tombstone_tilt_deg = float(tolerances['tombstone_tilt_deg']) if tolerances else None
+    ok_shift_px, ok_rotation_deg, tombstone_tilt_deg = _tolerance_bounds(tolerances)
 
     samplers: dict[str, Callable[..., _Sample]] = {
         'OK':           _sample_ok,

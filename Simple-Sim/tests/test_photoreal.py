@@ -1,0 +1,68 @@
+"""Photoreal 2D base renderer: determinism, class separability, footprint coverage."""
+
+import numpy as np
+import pytest
+
+from simple_sim.defects import sample_defect_params
+from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
+from simple_sim.generators.opencv2d.draw import _compute_pad_positions
+
+TOL = {"ok_shift_px": 3.0, "ok_rotation_deg": 5.0, "tombstone_tilt_deg": 75.0}
+CFG = {"component_color": [20, 20, 20], "substrate_color": [40, 90, 40], "copper_color": [60, 120, 180]}
+FOOTPRINTS = {
+    "chip_2pad": {},
+    "sot23": {"pad_spacing_y": [36.0, 50.0]},
+    "qfn_32": {"pad_width": [15.0, 18.0], "pad_spacing": [173.0, 187.0], "pad_spacing_y": [173.0, 187.0],
+               "component_length": [162.0, 172.0], "component_width": [162.0, 172.0]},
+    "soic_16": {"pad_width": [10.0, 12.0], "pad_spacing": [120.0, 130.0], "component_length": [90.0, 100.0],
+                "component_width": [70.0, 80.0]},
+}
+CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE", "SOLDER_BRIDGE", "CORNER_LIFT"]
+
+
+def _render(footprint, defect_type, seed=1, **cfg):
+    rng = np.random.default_rng(seed)
+    nominal = sample_nominal_geometry({}, rng, FOOTPRINTS[footprint])
+    defect = sample_defect_params(defect_type, rng, TOL)
+    return render_roi(nominal, defect, {"rotation_deg": 0.0}, (128, 128), {**CFG, **cfg}, TOL, rng, footprint=footprint)
+
+
+@pytest.mark.parametrize("footprint", list(FOOTPRINTS))
+@pytest.mark.parametrize("defect_type", CLASSES)
+def test_all_footprints_and_classes_render(footprint, defect_type):
+    img = _render(footprint, defect_type)
+    assert img.shape == (128, 128, 3) and img.dtype == np.uint8
+    assert 10 < img.mean() < 200
+
+
+def test_photoreal_is_deterministic_per_seed():
+    assert np.array_equal(_render("chip_2pad", "OK", seed=5), _render("chip_2pad", "OK", seed=5))
+    assert not np.array_equal(_render("chip_2pad", "OK", seed=5), _render("chip_2pad", "OK", seed=6))
+
+
+def test_missing_differs_from_ok_and_has_no_dark_body():
+    ok, missing = _render("chip_2pad", "OK"), _render("chip_2pad", "MISSING")
+    assert np.abs(ok.astype(int) - missing).sum() > 0
+    centre = slice(44, 84)
+    assert (ok[centre, centre].max(axis=2) < 60).sum() > (missing[centre, centre].max(axis=2) < 60).sum()
+
+
+def test_capacitor_type_renders_tan_body():
+    res = _render("chip_2pad", "OK", component_type="chip_resistor")
+    cap = _render("chip_2pad", "OK", component_type="chip_capacitor")
+    c = cap[60:68, 60:68].reshape(-1, 3).mean(axis=0)
+    assert c[2] > c[0] + 30  # tan: red channel well above blue
+    assert np.abs(res.astype(int) - cap).sum() > 0
+
+
+def test_flat_style_still_available():
+    img = _render("chip_2pad", "OK", style="flat")
+    assert tuple(img[2, 2]) == (40, 90, 40)
+
+
+def test_qfn_footprint_has_pad_rows_and_thermal_pad():
+    nominal = {"pad_width": 16, "pad_height": 40, "pad_spacing": 180, "pad_spacing_y": 180,
+               "component_length": 168, "component_width": 168}
+    pads = _compute_pad_positions("qfn_32", nominal, (256, 256))
+    assert len(pads) == 33
+    assert pads[-1]["w"] == pads[-1]["h"] == round(168 * 0.6)

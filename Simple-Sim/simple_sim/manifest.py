@@ -90,7 +90,8 @@ def write_dataset_manifest(
     meta_rows: list[Any],
     label_rows: list[Any],
     splits: dict[str, list[str]],
-    extend: bool = False
+    extend: bool = False,
+    script_name: str = "scripts/generate.py",
 ) -> None:
     """Write or update dataset manifest.
 
@@ -104,6 +105,7 @@ def write_dataset_manifest(
         label_rows: List of LabelRow instances
         splits: Dictionary mapping split names to sample IDs
         extend: If True, update existing manifest; if False, create new
+        script_name: Generator script name for metadata (new manifests only)
 
     Raises:
         ValueError: If extend=True but manifest doesn't exist
@@ -175,7 +177,7 @@ def write_dataset_manifest(
             'generator': {
                 'version': _VERSION,
                 'git_commit': git_commit,
-                'script': 'scripts/generate.py'
+                'script': script_name
             },
 
             'dataset_stats': dataset_stats(meta_rows, label_rows, splits),
@@ -343,6 +345,7 @@ def write_multi_profile_manifest(
     label_rows: list[Any],
     splits: dict[str, list[str]],
     script_name: str = "scripts/generate_profile_dataset.py",
+    existing: dict[str, Any] | None = None,
 ) -> None:
     """Write a multi-profile dataset manifest (manifest_version 2).
 
@@ -350,10 +353,13 @@ def write_multi_profile_manifest(
         output_dir: Dataset output directory
         run_id: Run identifier
         profiles: List of dicts with keys: profile_id, profile_hash, profile_path
-        meta_rows: List of MetaRow instances
-        label_rows: List of LabelRow instances
+        meta_rows: List of MetaRow instances (the complete dataset)
+        label_rows: List of LabelRow instances (the complete dataset)
         splits: Dictionary mapping split names to sample IDs
         script_name: Generator script name for metadata
+        existing: Previous manifest when extending; its ``created_at`` and
+            ``extend_history`` are preserved and a new history entry is appended
+            (``samples_added`` = growth of ``total_samples``).
     """
     output_dir = Path(output_dir)
     manifest_path = output_dir / "dataset_manifest.json"
@@ -367,9 +373,22 @@ def write_multi_profile_manifest(
         if pid:
             profile_counts[pid] = profile_counts.get(pid, 0) + 1
 
+    history_entry = {
+        'timestamp': datetime.now().isoformat(),
+        'samples_added': len(meta_rows),
+        'git_commit': git_commit,
+    }
+    created_at = datetime.now().isoformat()
+    extend_history = [history_entry]
+    if existing:
+        created_at = existing.get('created_at') or created_at
+        prev_total = int((existing.get('dataset_stats') or {}).get('total_samples') or 0)
+        history_entry['samples_added'] = max(0, len(meta_rows) - prev_total)
+        extend_history = list(existing.get('extend_history') or []) + [history_entry]
+
     manifest = {
         'manifest_version': 2,
-        'created_at': datetime.now().isoformat(),
+        'created_at': created_at,
         'run_id': run_id,
 
         'component_profiles': profiles,
@@ -382,11 +401,7 @@ def write_multi_profile_manifest(
 
         'dataset_stats': {**dataset_stats(meta_rows, label_rows, splits), 'profile_counts': profile_counts},
 
-        'extend_history': [{
-            'timestamp': datetime.now().isoformat(),
-            'samples_added': len(meta_rows),
-            'git_commit': git_commit,
-        }],
+        'extend_history': extend_history,
     }
 
     atomic_write_json(manifest_path, manifest)

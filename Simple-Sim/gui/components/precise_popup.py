@@ -98,9 +98,12 @@ class PrecisePopup:
             return
         self._flush_widget_values()
         # Merge in the new top-level keys that change the layout
-        for k in ("multi_profiles", "class_names", "multi_totals", "multi_classes"):
+        for k in ("multi_profiles", "class_names", "multi_totals"):
             if k in settings:
-                self._s[k] = settings[k]
+                val = settings[k]
+                self._s[k] = dict(val) if isinstance(val, dict) else list(val)
+        if "multi_classes" in settings:
+            self._s["multi_classes"] = {pid: dict(v) for pid, v in (settings["multi_classes"] or {}).items()}
         # Ensure every new profile has at least empty entries
         default = self._s.get("total", 100)
         for pid in self._s.get("multi_profiles", []):

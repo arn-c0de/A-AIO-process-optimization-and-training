@@ -140,3 +140,43 @@ def test_script_cores_end_to_end(tmp_path):
 
     sc = sample_check(model, data, per_class=1, device="cpu")
     assert sc["seen"] == len(sc["rows"]) > 0
+
+
+def test_ensemble_and_bundle_eval_predict(tmp_path):
+    """Ensembles (no top-level config/epoch) evaluate and predict; bundle reports sit next to the bundle dir."""
+    import shutil
+
+    from scripts.eval import run_eval
+    from scripts.generate import generate_dataset
+    from scripts.predict import predict_image
+    from scripts.train import train_model
+    from simple_sim.eval_utils import dataset_profile
+    from simple_sim.model_bundle import bundle_checkpoint_path
+    from simple_sim.models import ENSEMBLE_FORMAT, load_checkpoint
+
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(yaml.dump(TINY_CONFIG), encoding="utf-8")
+    data = tmp_path / "ds"
+    generate_dataset(cfg, data)
+    model = tmp_path / "models" / "tiny.pt"
+    train_model(data, model, device="cpu")
+
+    ckpt = load_checkpoint(model)
+    ens = tmp_path / "models" / "ens.pt"
+    torch.save({
+        "format": ENSEMBLE_FORMAT, "class_names": ckpt["class_names"],
+        "models": [{"profile_id": "a", "checkpoint": ckpt}, {"profile_id": "b", "checkpoint": ckpt}],
+        "component_profile": {"profile_id": "multi", "profiles": ["a", "b"]},
+    }, ens)
+    ev = run_eval(data, ens, "cpu", allow_profile_mismatch=True)
+    assert Path(ev["report_path"]) == ens.parent / "report_ens.json"
+    sid = (data / "splits" / "test.txt").read_text().split()[0]
+    pr = predict_image(ens, data_dir=data, sample_id=sid, device="cpu")  # "multi" skips the profile guard
+    assert pr["pred"] in TINY_CONFIG["classes"]
+
+    bundle = tmp_path / "models" / "my.bundle"
+    bundle.mkdir()
+    shutil.copy(model, bundle_checkpoint_path(bundle, dataset_profile(data)[0]))
+    ev = run_eval(data, bundle, "cpu")
+    assert Path(ev["report_path"]) == bundle.parent / "report_my.json"
+    assert ev["model_path"] == str(bundle) and ev["resolved_model_path"] != str(bundle)

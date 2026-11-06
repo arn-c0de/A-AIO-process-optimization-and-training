@@ -9,33 +9,21 @@ from typing import Any
 import numpy as np
 
 from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
-from simple_sim.generators.opencv_2d import apply_augment_filters
+from simple_sim.generators.filter_settings import NEUTRAL_AUGMENT
+from simple_sim.generators.opencv_2d import apply_post_filters
 
-# (key, neutral default). Missing/None/0-ish values fall back to the default, like the generator always did.
-_POST_FILTER_DEFAULTS: tuple[tuple[str, float], ...] = (
-    ("blur_sigma", 0.0),
-    ("noise_stddev", 0.0),
-    ("brightness_factor", 1.0),
-    ("contrast_factor", 1.0),
-    ("saturation_factor", 1.0),
-    ("hue_shift_deg", 0.0),
-    ("vignetting_strength", 0.0),
-    ("chromatic_strength", 0.0),
-    ("distortion_k1", 0.0),
-    ("distortion_k2", 0.0),
-    ("motion_blur_strength", 0.0),
-    ("motion_blur_angle", 0.0),
-    ("sharpen_strength", 0.0),
-    ("shadow_strength", 0.0),
-    ("shadow_size", 0.2),
-    ("reflection_strength", 0.0),
-    ("reflection_size", 0.15),
-    ("dust_density", 0.0),
-    ("dust_size", 2.0),
-    ("perspective_strength", 0.0),
-    ("perspective_angle_x", 0.0),
-    ("perspective_angle_y", 0.0),
-)
+# Augment keys that do not by themselves require the post-filter chain:
+# rotation_deg is already applied by render_batch.py (global_rotation_root), and the
+# angle/size parameters only matter when their strength/density is non-neutral.
+_POST_FILTER_SECONDARY_KEYS = frozenset({
+    "rotation_deg",
+    "perspective_angle_x",
+    "perspective_angle_y",
+    "motion_blur_angle",
+    "shadow_size",
+    "reflection_size",
+    "dust_size",
+})
 
 
 def blender_settings(config: dict[str, Any]) -> dict[str, Any]:
@@ -75,24 +63,11 @@ def blender_job(
     }
 
 
-def _post_filter_values(aug: dict[str, Any]) -> dict[str, Any]:
-    vals: dict[str, Any] = {k: float(aug.get(k, d) or d) for k, d in _POST_FILTER_DEFAULTS}
-    vals["color_temperature_kelvin"] = int(aug.get("color_temperature_kelvin", 5500) or 5500)
-    vals["jpeg_quality"] = int(aug.get("jpeg_quality", 100) or 100)
-    return vals
-
-
-def _needs_post_filter(v: dict[str, Any]) -> bool:
-    eps = 1e-6
-    return (
-        any(v[k] > eps for k in (
-            "blur_sigma", "noise_stddev", "vignetting_strength", "chromatic_strength", "motion_blur_strength",
-            "sharpen_strength", "shadow_strength", "reflection_strength", "dust_density", "perspective_strength",
-        ))
-        or any(abs(v[k] - 1.0) > eps for k in ("brightness_factor", "contrast_factor", "saturation_factor"))
-        or any(abs(v[k]) > eps for k in ("hue_shift_deg", "distortion_k1", "distortion_k2"))
-        or v["color_temperature_kelvin"] != 5500
-        or v["jpeg_quality"] < 100
+def _needs_post_filter(aug: dict[str, Any]) -> bool:
+    return any(
+        abs(float(aug.get(key, neutral)) - float(neutral)) > 1e-6
+        for key, neutral in NEUTRAL_AUGMENT.items()
+        if key not in _POST_FILTER_SECONDARY_KEYS
     )
 
 
@@ -105,14 +80,14 @@ def postprocess_blender_images(records: Iterable[dict[str, Any]], output_root: P
     import cv2
 
     for r in records:
-        vals = _post_filter_values(r.get("augment", {}))
-        if not _needs_post_filter(vals):
+        aug = {k: v for k, v in (r.get("augment") or {}).items() if v is not None}
+        if not _needs_post_filter(aug):
             continue
         path = Path(output_root) / str(r["image_path"])
         img = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if img is None:
             raise OSError(f"Failed to read Blender output image for filter postprocess: {path}")
-        img = apply_augment_filters(img, vals, np.random.default_rng(int(r["seed"])))
+        img = apply_post_filters(img, aug, np.random.default_rng(int(r["seed"])))
         if not cv2.imwrite(str(path), img):
             raise OSError(f"Failed to write filtered Blender image: {path}")
 

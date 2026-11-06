@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from gui.utils.dataset_catalog import list_dataset_dirs
-from gui.utils.paths import newest_file
+from gui.utils.paths import list_model_paths, model_root, newest_file
 from gui.utils.process import run_streaming, terminate_process
 from simple_sim.model_bundle import bundle_checkpoint_path
 
@@ -27,20 +27,11 @@ class PredictionsLogic:
         return list_dataset_dirs(self.sim_root)
 
     def get_models(self) -> list[Path]:
-        root = self.sim_root / "outputs" / "models"
-        cand: list[Path] = []
-        for search_path in [root, root / "versions", root / "imports"]:
-            if not search_path.exists(): continue
-            cand.extend(sorted(search_path.glob("**/*.pt" if search_path.name == "versions" else "*.pt")))
-            cand.extend([p for p in sorted(search_path.glob("*.bundle")) if p.is_dir()])
-            if (bundles_subdir := search_path / "bundles").exists():
-                cand.extend([p for p in sorted(bundles_subdir.iterdir()) if p.is_dir()])
-        
-        uniq: dict[str, Path] = {str(p.resolve()): p for p in cand if p.exists()}
-        return sorted(list(uniq.values()), key=lambda p: p.stat().st_mtime, reverse=True)
+        paths = list_model_paths(model_root(self.sim_root))
+        return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
 
     def get_profile_models(self) -> list[Path]:
-        root = self.sim_root / "outputs" / "models"
+        root = model_root(self.sim_root)
         cand = sorted(root.glob("**/profile_classifier_*.pt")) if root.exists() else []
         seen: dict[str, Path] = {str(p.resolve()): p for p in cand}
         return sorted(list(seen.values()), key=lambda p: p.stat().st_mtime, reverse=True)

@@ -12,7 +12,7 @@ from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 from gui.utils.dataset_ops import delete_samples, move_samples
-from gui.utils.dataset_catalog import DatasetCatalog
+from gui.utils.dataset_catalog import DatasetCatalog, catalog_labels
 from gui.utils.feedback_manager import (
     FeedbackManager,
     VERDICT_THUMBS_DOWN,
@@ -76,7 +76,7 @@ class AnalysisTab(BaseTab):
     def _load_persisted_settings(self) -> None:
         st = self._store()
         if st is None: return
-        if v := st.get("analysis.dataset_selection"):
+        if self.state.dataset_dir is None and (v := st.get("analysis.dataset_selection")):
             try:
                 self.ui.var_dataset.set(v)
                 self._on_dataset_selected()
@@ -113,16 +113,8 @@ class AnalysisTab(BaseTab):
         return self._dataset_catalog.display_label(p, runs_root=runs, versions_root=versions)
 
     def _refresh_datasets(self) -> None:
-        self._dataset_catalog.reload()
-        cand = self.logic.get_datasets()
-        self._dataset_catalog.prune_unknown(cand)
-        self._dataset_catalog.save(self.frame)
-        cand = [p for p in cand if not self._dataset_catalog.is_archived(p)]
-
-        runs, versions = self.logic.sim_data_roots()
-        self._dataset_by_display = self._dataset_catalog.unique_labels(cand, runs_root=runs, versions_root=versions)
+        self._dataset_by_display = catalog_labels(self.sim_root, self._dataset_catalog, save_widget=self.frame)
         displays = list(self._dataset_by_display)
-
         self.ui.dataset_combo["values"] = displays
         if (cur := self.ui.var_dataset.get().strip()) and cur in self._dataset_by_display: return
 

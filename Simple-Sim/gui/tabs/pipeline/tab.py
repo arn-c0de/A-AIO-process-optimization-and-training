@@ -21,10 +21,10 @@ from gui.state import UiState
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.components.filter_popup import open_filter_popup
 from gui.components.precise_popup import open_precise_popup
-from gui.utils.settings_store import SettingsStore
+from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 from gui.utils.dataset_ops import delete_samples, list_dataset_samples, move_samples, DatasetSampleInfo
 from gui.utils.checkpoint_meta import short_profile_hash
-from gui.utils.dataset_catalog import DatasetCatalog, dataset_display_name, sim_data_roots, sorted_dataset_dirs
+from gui.utils.dataset_catalog import DatasetCatalog, catalog_labels, dataset_display_name, sim_data_roots
 from gui.utils.filter_profile_store import (
     extract_filter_popup_extras,
     float_or_default,
@@ -34,6 +34,8 @@ from gui.utils.filter_profile_store import (
     normalized_filter_settings,
 )
 from gui.utils.pipeline_helpers import (
+    DATASET_DERIVED_KEYS,
+    PERSISTED_FIELD_MAP,
     apply_precise_counts,
     chain_commands,
     config_class_names,
@@ -67,7 +69,6 @@ from simple_sim.io_utils import append_jsonl, rel_to
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
 
-from .persisted_fields import PERSISTED_FIELD_MAP
 from .ui import PipelineUI
 from .logic import PipelineLogic
 
@@ -98,7 +99,8 @@ class PipelineControlTab(BaseTab):
         self._meta_by_image_rel: dict[str, MetaRow] = {}
         
         self._last_profile_id: str = "chip_0603_resistor@1"
-        self._suspend_profile_event: bool = False
+        # Temp configs written under outputs/live for the current run; removed when the run ends.
+        self._temp_cfg_paths: list[Path] = []
 
         self._precise_settings: dict[str, Any] = {
             "total": 100,
@@ -378,16 +380,8 @@ class PipelineControlTab(BaseTab):
         st = self._store()
         if st is None: return
 
-        for key, var in self._iter_setting_bindings():
-            v = st.get(key, None)
-            if v is None:
-                continue
-            if isinstance(v, str) and not v.strip():
-                continue
-            try:
-                var.set(v)
-            except Exception:
-                pass
+        bindings = self._iter_setting_bindings()
+        restore_persisted_vars(st, bindings, skip_empty_strings=True)
         try:
             raw = str(st.get("pipeline.precise_settings_json", "") or "").strip()
             if raw:
@@ -401,6 +395,9 @@ class PipelineControlTab(BaseTab):
 
         try: self._refresh_datasets(); self._on_dataset_multi_toggle(); self._on_dataset_selected()
         except Exception: pass
+        # _on_dataset_selected() -> _apply_dataset_settings() derives these from the dataset;
+        # put the persisted values back on top.
+        restore_persisted_vars(st, [b for b in bindings if b[0] in DATASET_DERIVED_KEYS], skip_empty_strings=True)
         try: self._refresh_models()
         except Exception: pass
         try: self._load_filter_popup_extras_from_profiles(st)
@@ -412,11 +409,7 @@ class PipelineControlTab(BaseTab):
         self._filter_popup_extras = load_filter_popup_extras_from_profiles_json(raw_profiles, raw_active)
 
     def _wire_settings_autosave(self) -> None:
-        st = self._store()
-        if st is None: return
-
-        for key, var in self._iter_setting_bindings():
-            var.trace_add("write", lambda *a, v=var, k=key: (st.set(k, v.get()), st.schedule_save(self.frame)))
+        wire_vars_autosave(self._store(), self._iter_setting_bindings(), self.frame)
 
     def _iter_setting_bindings(self) -> list[tuple[str, Any]]:
         return [(key, getattr(self.ui, attr_name)) for key, attr_name in PERSISTED_FIELD_MAP]
@@ -550,7 +543,13 @@ class PipelineControlTab(BaseTab):
     def _write_precise_config(self, cfg_path: Path, counts: dict[str, Any]) -> Path:
         """Write a temp config YAML with the classes section overridden by counts."""
         data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-        return write_temp_yaml(apply_precise_counts(data, counts), self.sim_root / "outputs" / "live", prefix="precise_")
+        return self._write_temp_cfg(apply_precise_counts(data, counts), prefix="precise_")
+
+    def _write_temp_cfg(self, data: Any, *, prefix: str) -> Path:
+        """Write a temp config under outputs/live; it is removed when the current run ends."""
+        path = write_temp_yaml(data, self.sim_root / "outputs" / "live", prefix=prefix)
+        self._temp_cfg_paths.append(path)
+        return path
 
     # ------------------------------------------------------------------
 
@@ -677,9 +676,8 @@ class PipelineControlTab(BaseTab):
                     self.ui.show_messagebox("error", "Error", f"Failed to read config:\n{cfg_path}\n\n{e}")
                     return None
 
-                live_dir = self.sim_root / "outputs" / "live"
                 try:
-                    tmp_cfg_path = write_temp_yaml(mixed_profile_config(base_cfg, profile_ids), live_dir, prefix="run_profile_cls_selected_")
+                    tmp_cfg_path = self._write_temp_cfg(mixed_profile_config(base_cfg, profile_ids), prefix="run_profile_cls_selected_")
                 except Exception as e:
                     self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\n\n{e}")
                     return None
@@ -931,6 +929,10 @@ class PipelineControlTab(BaseTab):
             if self.state.dataset_dir: self._start_dataset_size_calc(self.state.dataset_dir)
 
     def _reset_ui_on_pipeline_end(self) -> None:
+        for p in self._temp_cfg_paths:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+        self._temp_cfg_paths.clear()
         self.ui.set_run_buttons_state(False)
         self.ui.var_phase.set("phase: idle")
         self.ui.var_run_progress.set("run: -")
@@ -1169,28 +1171,20 @@ class PipelineControlTab(BaseTab):
         self._update_model_dropdown_for_dataset()
 
     def _set_profile_value(self, profile_id: str) -> None:
-        self._suspend_profile_event = True
         self.ui.var_profile.set(profile_id)
         self._last_profile_id = profile_id
 
     def _refresh_datasets(self) -> None:
-        self._dataset_catalog.reload()
-        runs, versions = sim_data_roots(self.sim_root)
-
-        cand = sorted_dataset_dirs(self.sim_root)
-        self._dataset_catalog.prune_unknown(cand)
-        self._dataset_catalog.save(self.frame)
-        cand = [p for p in cand if not self._dataset_catalog.is_archived(p)]
-
-        self._dataset_dirs = cand
-        self._dataset_by_label = self._dataset_catalog.unique_labels(cand, runs_root=runs, versions_root=versions)
+        self._dataset_by_label = catalog_labels(self.sim_root, self._dataset_catalog, save_widget=self.frame)
         self._dataset_labels = list(self._dataset_by_label)
+        self._dataset_dirs = list(self._dataset_by_label.values())
 
         self.ui.set_dataset_combo_values(self._dataset_labels)
         self._sync_multi_selection_after_dataset_refresh()
 
         if (cur := self.ui.var_dataset.get().strip()) and cur in self._dataset_by_label: return
         if self.state.dataset_dir:
+            runs, versions = sim_data_roots(self.sim_root, create=False)
             want = self._dataset_catalog.display_label(self.state.dataset_dir, runs_root=runs, versions_root=versions)
             for label, p in self._dataset_by_label.items():
                 if p == self.state.dataset_dir or label == want: self.ui.var_dataset.set(label); return
@@ -1210,7 +1204,7 @@ class PipelineControlTab(BaseTab):
             if not paths and (ds := self._selected_dataset_dir_single()) is not None:
                 self.ui.var_dataset_multi_paths.set(self._encode_dataset_paths_json([ds]))
 
-        self.ui.toggle_dataset_multi_widgets(enabled, self._dataset_multi_tooltip_text)
+        self.ui.toggle_dataset_multi_widgets(enabled)
         self._sync_multi_summary()
         
         if enabled:
@@ -1455,7 +1449,6 @@ class PipelineControlTab(BaseTab):
         except Exception: pass
 
     def _on_profile_selected(self, _event: object | None = None) -> None:
-        if self._suspend_profile_event: self._suspend_profile_event = False; return
         if not (profile_id := self.ui.var_profile.get().strip()): return
 
         try: self._autoselect_config_for_profile(profile_id, prefer_quiet=True)
@@ -1464,14 +1457,6 @@ class PipelineControlTab(BaseTab):
         # Do not open profile-switch/create popups automatically.
         # Keep profile selection passive and only update state.
         self._last_profile_id = profile_id
-
-    def _find_dataset_for_profile(self, profile_id: str) -> Path | None:
-        runs_root = self.sim_root / "outputs" / "sim_data" / "runs"
-        if not runs_root.exists(): return None
-        for ds in sorted(runs_root.iterdir()):
-            if not ds.is_dir(): continue
-            if self.logic.get_dataset_profile_id(ds) == profile_id: return ds
-        return None
 
     def _select_dataset(self, ds: Path) -> None:
         self._refresh_datasets()
@@ -1482,40 +1467,6 @@ class PipelineControlTab(BaseTab):
         self.state.dataset_dir = ds
         self.ui.var_dataset.set(label)
         self._on_dataset_selected()
-
-    def _revert_profile_selection(self) -> None:
-        self._suspend_profile_event = True
-        self.ui.var_profile.set(self._last_profile_id or "chip_0603_resistor@1")
-
-    def _prepare_dataset_for_profile(self, profile_id: str, cfg_info: dict[str, Any] | None) -> None:
-        cfg_path: Path | None = None
-        if cfg_info:
-            cfg_path = cfg_info["path"]
-            self.ui.var_config.set(str(cfg_path))
-            suggested_run = cfg_info.get("run_id")
-        else: suggested_run = self.logic.slugify_name(profile_id)
-        
-        self.ui.var_dataset_mode.set("new")
-        if suggested_run:
-            suggested_out = self.sim_root / "outputs" / "sim_data" / "runs" / suggested_run
-            self.ui.var_out.set(str(suggested_out))
-            self.ui.var_name.set(suggested_run)
-            suggested_model = self.sim_root / "outputs" / "models" / f"{suggested_run}.pt"
-            self.ui.var_model.set(str(suggested_model))
-        self._append_log(f"[profile] prepared dataset for profile {profile_id}\n")
-        
-        if cfg_info:
-            self.ui.show_messagebox("info", "Ready", f"Config '{cfg_path.name}' assigned.\nOut directory: {self.ui.var_out.get()}\nRun the pipeline to generate the matching dataset for this profile.")
-        else:
-            self.ui.show_messagebox("info", "Ready", "No config automatically detected for this profile.\nPick or create a config that sets `run.component_profile` to " f"'{profile_id}', then run the pipeline to create the dataset.")
-
-        config_candidate = cfg_path if cfg_path else Path(self.ui.var_config.get())
-        out_dir = Path(self.ui.var_out.get())
-        try:
-            if self.logic.ensure_dataset_skeleton(profile_id, config_candidate, out_dir, self._append_log):
-                self._refresh_datasets()
-                self._select_dataset(out_dir)
-        except Exception as exc: _LOG.warning("Failed to create dataset placeholder: %s", exc)
 
     def _autoselect_config_for_profile(self, profile_id: str, *, prefer_quiet: bool) -> None:
         want_backend = (self.ui.var_render_backend.get().strip() or None)
@@ -1712,13 +1663,7 @@ class PipelineControlTab(BaseTab):
         try: self.parent.event_generate("<<DatasetChanged>>", when="tail")
         except Exception: pass
         
-        try:
-            if (prev_ds := self.state.dataset_dir) is not None:
-                cur_model = self.ui.var_model.get().strip()
-                prev_default = str((self.sim_root / "outputs" / "models" / f"{prev_ds.name}.pt").resolve())
-                cur_resolved = str(self.logic._resolve_model_path(cur_model))
-                if cur_resolved == prev_default: self.ui.var_model.set(str(self.sim_root / "outputs" / "models" / f"{ds.name}.pt"))
-            self._refresh_models()
+        try: self._refresh_models()
         except Exception: pass
 
     def _delete_dataset(self) -> None:

@@ -98,7 +98,9 @@ def predict_image(
     model, class_names, checkpoint = load_checkpoint_model(model_path, device)
 
     # GUARD: Validate profile compatibility if using dataset (hard fail, no override flag here).
-    if data_dir and (data_dir / MANIFEST_NAME).exists():
+    # Ensemble checkpoints (profile_id "multi") span several profiles and are not checked.
+    ckpt_profile_id = (checkpoint.get("component_profile") or {}).get("profile_id")
+    if data_dir and ckpt_profile_id != "multi" and (data_dir / MANIFEST_NAME).exists():
         profile_id, profile_hash = dataset_profile(data_dir)
         check_checkpoint_profile(checkpoint, profile_id, profile_hash, action="predict on")
 

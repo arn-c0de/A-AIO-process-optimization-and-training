@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ProfileDataset
-from simple_sim.eval_utils import eval_loader, metrics_summary, print_checkpoint_info, print_distribution
+from simple_sim.eval_utils import checkpoint_val_accuracy, eval_loader, metrics_summary, print_checkpoint_info, print_distribution
 from simple_sim.io_utils import atomic_write_json
 from simple_sim.metrics import check_success_criteria, format_metrics
 from simple_sim.models import load_checkpoint_model
@@ -73,7 +73,7 @@ def run_eval_profile(data_dir: Path, model_path: Path, device: str | torch.devic
     atomic_write_json(report_path, report)
     print(f"\nReport saved to: {report_path}")
 
-    passed = check_success_criteria(checkpoint['val_accuracy'], metrics, entity="profile", ascii_only=True)
+    passed = check_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="profile", ascii_only=True)
     return {
         "model_path": str(model_path),
         "dataset_path": str(data_dir),

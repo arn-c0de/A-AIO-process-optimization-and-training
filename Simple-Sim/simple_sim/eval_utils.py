@@ -156,23 +156,39 @@ def top_prediction(probs: np.ndarray, class_names: Sequence[str]) -> tuple[str, 
     return class_names[idx], float(probs[idx]), {n: float(probs[i]) for i, n in enumerate(class_names)}
 
 
+def checkpoint_eval_config(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    """The checkpoint config's ``eval`` section (``{}`` for ensembles, which carry no top-level config)."""
+    return (checkpoint.get("config") or {}).get("eval") or {}
+
+
+def checkpoint_val_accuracy(checkpoint: dict[str, Any]) -> float:
+    """Validation accuracy stored in *checkpoint* (0.0 when absent, e.g. for ensembles)."""
+    return float(checkpoint.get("val_accuracy") or 0.0)
+
+
 def eval_loader(dataset: Dataset, checkpoint: dict[str, Any]) -> DataLoader:
-    """Sequential DataLoader using the checkpoint config's ``eval.batch_size`` / ``eval.num_workers``."""
-    eval_cfg = checkpoint["config"]["eval"]
+    """Sequential DataLoader using the checkpoint config's ``eval.batch_size`` / ``eval.num_workers``.
+
+    Falls back to batch size 64 / no workers when the checkpoint has no config (ensembles).
+    """
+    eval_cfg = checkpoint_eval_config(checkpoint)
     return DataLoader(
         dataset,
-        batch_size=eval_cfg["batch_size"],
+        batch_size=int(eval_cfg.get("batch_size", 64)),
         shuffle=False,
         num_workers=eval_cfg.get("num_workers", 0),
     )
 
 
 def print_checkpoint_info(checkpoint: dict[str, Any], label: str = "Classes") -> None:
-    """Print the standard checkpoint summary lines (class names, epoch, val metrics)."""
-    print(f"  {label}: {checkpoint['class_names']}")
-    print(f"  Trained epoch: {checkpoint['epoch']}")
-    print(f"  Val accuracy: {checkpoint['val_accuracy']:.4f}")
-    print(f"  Val F1: {checkpoint['val_f1']:.4f}")
+    """Print the standard checkpoint summary lines (class names, epoch, val metrics).
+
+    Tolerates ensemble checkpoints, which have no epoch / val metrics.
+    """
+    print(f"  {label}: {checkpoint.get('class_names')}")
+    print(f"  Trained epoch: {checkpoint.get('epoch', '-')}")
+    print(f"  Val accuracy: {checkpoint_val_accuracy(checkpoint):.4f}")
+    print(f"  Val F1: {float(checkpoint.get('val_f1') or 0.0):.4f}")
 
 
 def print_distribution(title: str, dist: dict[str, int]) -> None:

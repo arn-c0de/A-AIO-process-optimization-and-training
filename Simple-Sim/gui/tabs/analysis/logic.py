@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from gui.utils.checkpoint_meta import read_checkpoint_dict
-from gui.utils.dataset_catalog import sim_data_roots, sorted_dataset_dirs
+from gui.utils.dataset_catalog import sim_data_roots
 from gui.utils.model_inference import load_model, ModelWrapper
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from simple_sim.manifest import hash_file
@@ -20,10 +20,6 @@ class AnalysisLogic:
 
     def sim_data_roots(self) -> tuple[Path, Path]:
         return sim_data_roots(self.sim_root)
-
-    def get_datasets(self) -> list[Path]:
-        """Dataset dirs sorted for display (runs by name, then snapshots newest-first)."""
-        return sorted_dataset_dirs(self.sim_root)
 
     def load_dataset(self, dataset_dir: Path) -> tuple[dict[str, MetaRow], dict[str, str], dict[str, str], list[str]]:
         meta_rows = read_jsonl(dataset_dir / "meta.jsonl", MetaRow)

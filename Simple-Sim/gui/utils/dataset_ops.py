@@ -129,6 +129,7 @@ def move_samples(
 
     src_splits = _read_split_files(src_dataset_dir)
     dst_splits = _read_split_files(dst_dataset_dir)
+    dst_splits_existed = bool(dst_splits)
     src_split_of: dict[str, str] = {}
     for split_name, ids in src_splits.items():
         for sid in ids:
@@ -190,7 +191,8 @@ def move_samples(
 
         if src_splits:
             _write_split_files(src_dataset_dir, _remove_from_splits(src_splits, selected_set))
-        _write_split_files(dst_dataset_dir, dst_splits)
+        if dst_splits_existed:
+            _write_split_files(dst_dataset_dir, dst_splits)
 
         recompute_manifest_stats(src_dataset_dir)
         recompute_manifest_stats(dst_dataset_dir)

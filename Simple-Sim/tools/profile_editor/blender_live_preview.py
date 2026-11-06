@@ -95,6 +95,7 @@ class BlenderLivePreviewWorker:
         blender_executable = str(blender.get("executable", "blender"))
         cycles_samples = int(blender.get("samples", 48))
         device = str(blender.get("device", "CPU"))
+        engine = str(blender.get("engine", "BLENDER_EEVEE"))
 
         digest = hashlib.sha1(
             json.dumps({"p": profile_data, "r": run_data}, sort_keys=True, default=str).encode("utf-8")
@@ -106,7 +107,7 @@ class BlenderLivePreviewWorker:
         image_rel = f"preview_{digest}.png"
 
         nominal = self._nominal_from_ranges(geometry_ranges)
-        component_height_mm = float(nominal_dims.get("height", 0.6))
+        component_height_mm = float(nominal_dims.get("height", 0.45))
 
         job = {
             "image_path": image_rel,
@@ -136,6 +137,7 @@ class BlenderLivePreviewWorker:
             blender_executable=blender_executable,
             cycles_samples=cycles_samples,
             device=device,
+            engine=engine,
         )
         img_path = out_root / image_rel
         if not img_path.exists():

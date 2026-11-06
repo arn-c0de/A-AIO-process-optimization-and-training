@@ -664,14 +664,15 @@ class WeightsTab(BaseTab):
                 return
 
             paired: list[tuple[Path, dict[str, Any], dict[str, Any]]] = []
+            cls_a, cls_b = self.logic.get_model_classes(a), self.logic.get_model_classes(b)
 
             for ds in ds_dirs:
                 if self.logic.stop_evt.is_set(): break
                 if (ds_classes := self.logic.get_dataset_classes(ds)):
-                    if (cls_a := self.logic.get_model_classes(a)) and sorted(ds_classes) != sorted(cls_a):
+                    if cls_a and sorted(ds_classes) != sorted(cls_a):
                         self.log_q.put(f"\n[skip] A({a.name}) incompatible with dataset {ds.name}: model classes={cls_a} dataset classes={ds_classes}\n")
                         continue
-                    if (cls_b := self.logic.get_model_classes(b)) and sorted(ds_classes) != sorted(cls_b):
+                    if cls_b and sorted(ds_classes) != sorted(cls_b):
                         self.log_q.put(f"\n[skip] B({b.name}) incompatible with dataset {ds.name}: model classes={cls_b} dataset classes={ds_classes}\n")
                         continue
 
@@ -730,7 +731,8 @@ class WeightsTab(BaseTab):
             iid = f"r{i}"
             when = (r.get("timestamp") or "-").replace("T", " ")[:19]
             split = str(r.get("split") or "-")
-            seen = str(int(r.get("seen_samples") or r.get("test_size") or "-"))
+            seen_v = r.get("seen_samples") or r.get("test_size")
+            seen = str(int(seen_v)) if seen_v is not None else "-"
             acc, f1 = r.get("metrics", {}).get("accuracy"), r.get("metrics", {}).get("macro_f1")
             acc_s = f"{float(acc):.4f}" if acc is not None else "-"
             f1_s = f"{float(f1):.4f}" if f1 is not None else "-"

@@ -83,7 +83,11 @@ class PredictionsTab(BaseTab):
         st = self._store()
         if st is None:
             return
-        restore_persisted_vars(st, self._persisted_var_bindings())
+        bindings = self._persisted_var_bindings()
+        if self.state.dataset_dir is not None:
+            # Another tab already picked a dataset; keep the shared selection.
+            bindings = [b for b in bindings if b[0] != "pred.dataset_selection"]
+        restore_persisted_vars(st, bindings)
         try:
             raw = st.get("pred.multi_dataset_paths_json")
             if isinstance(raw, str) and raw.strip():

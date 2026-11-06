@@ -7,7 +7,6 @@ by ``tools/update_sample_gallery.py``) import without tkinter.
 from importlib import import_module
 
 _EXPORTS = {
-    'ImageCache': '.image_cache',
     'draw_defect_overlay': '.overlay_renderer',
     'create_confusion_matrix_widget': '.chart_widgets',
     'create_class_distribution_widget': '.chart_widgets',

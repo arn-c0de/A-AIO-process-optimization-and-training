@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
-from simple_sim.config import load_config, validate_config
+from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.dataset_store import atomic_dataset_dir, write_dataset, write_dataset_files, write_image
 from simple_sim.generation.blender import blender_settings, render_blender_records
 from simple_sim.generation.common import (
@@ -248,9 +248,8 @@ def generate_dataset(
         if "geometry_ranges" in config:
             geometry_ranges = config["geometry_ranges"]
 
-    # Merge component_color from profile into render config if not present (also persisted in config.yaml).
-    if "component_color" not in config["render"] and "render" in profile:
-        config["render"]["component_color"] = profile["render"]["component_color_bgr"]
+    # Fill component_color/component_type from the profile (also persisted in config.yaml).
+    config["render"] = merge_profile_render(config["render"], profile)
 
     ext: ExtendState | None = None
     if extend and output_dir.exists():
@@ -420,6 +419,7 @@ def generate_dataset(
             label_rows=all_label_rows,
             splits=final_splits,
             script_name="scripts/generate.py",
+            existing=ext.manifest,
         )
     else:
         write_dataset_manifest(

@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ROIDataset
 from simple_sim.eval_utils import (
+    checkpoint_eval_config,
+    checkpoint_val_accuracy,
     dataset_profile,
     eval_loader,
     metrics_summary,
@@ -54,12 +56,16 @@ def run_eval(
     *,
     allow_profile_mismatch: bool = False,
 ) -> dict[str, Any]:
-    """Evaluate a checkpoint (or bundle dir) on the dataset's test split and write ``report_<stem>.json``.
+    """Evaluate a checkpoint, ensemble or bundle dir on the dataset's test split.
+
+    ``report_<stem>.json`` is written next to the *requested* model path (for a bundle dir:
+    next to the dir, not the resolved checkpoint inside it), which is where
+    batch_predict / arena_report look it up.
 
     Returns a summary dict (report path, metrics, success-criteria result, ...).
     """
     data_dir = Path(data_dir)
-    model_path = Path(model_path)
+    requested_model_path = model_path = Path(model_path)
     device = torch.device(device)
 
     print("Evaluation configuration:")
@@ -73,7 +79,7 @@ def run_eval(
         model_path, dataset_profile_id, hint="Train this profile into the bundle first."
     )
 
-    print("\nLoading model checkpoint...")
+    print("\nLoading model checkpoint (single model or ensemble)...")
     model, class_names, checkpoint = load_checkpoint_model(model_path, device)
     print_checkpoint_info(checkpoint)
 
@@ -99,7 +105,7 @@ def run_eval(
     print("EVALUATION ON TEST SET")
     print("=" * 60)
 
-    critical_classes = checkpoint['config'].get('eval', {}).get('critical_classes')
+    critical_classes = checkpoint_eval_config(checkpoint).get('critical_classes')
     metrics, seen = evaluate(
         model, eval_loader(test_dataset, checkpoint), device, class_names, critical_classes=critical_classes
     )
@@ -108,23 +114,26 @@ def run_eval(
     print(f"\nSeen samples: {seen}")
     emit("eval_done", seen_samples=int(seen), accuracy=float(metrics["accuracy"]), macro_f1=float(metrics["macro_f1"]))
 
+    resolved_model_path = str(model_path) if model_path != requested_model_path else None
     report = {
         'timestamp': datetime.now().isoformat(),
         'dataset_path': str(data_dir),
-        'model_path': str(model_path),
+        'model_path': str(requested_model_path),
+        'resolved_model_path': resolved_model_path,
         'split': 'test',
         'metrics': metrics,
         'test_size': len(test_dataset),
         'seen_samples': int(seen),
         'class_distribution': test_dist,
     }
-    report_path = model_path.parent / f'report_{model_path.stem}.json'
+    report_path = requested_model_path.parent / f'report_{requested_model_path.stem}.json'
     atomic_write_json(report_path, report)
     print(f"\nReport saved to: {report_path}")
 
-    passed = check_success_criteria(checkpoint['val_accuracy'], metrics, entity="class")
+    passed = check_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="class")
     return {
-        "model_path": str(model_path),
+        "model_path": str(requested_model_path),
+        "resolved_model_path": resolved_model_path,
         "dataset_path": str(data_dir),
         "report_path": str(report_path),
         "test_size": len(test_dataset),
