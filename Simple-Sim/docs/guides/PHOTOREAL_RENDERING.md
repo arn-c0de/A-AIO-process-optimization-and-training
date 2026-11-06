@@ -60,6 +60,25 @@ Colours and proportions were taken from macro photos of real boards (dark olive 
 shimmering through the mask, white silkscreen, bright concave fillets, black 0603 resistors with
 white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings).
 
+## Measuring the sim-to-real gap (`tools/sim_to_real.py`)
+
+Compares a folder of synthetic ROIs with a folder of real camera ROIs (both searched recursively,
+no labels needed) using ResNet18 embeddings (ImageNet weights, or a trained checkpoint via
+`--weights`):
+
+```bash
+python tools/sim_to_real.py --synthetic data/run_0001/images --real data/real_rois --json gap.json
+```
+
+| Metric | Meaning |
+|---|---|
+| `one_nn_accuracy` | 1-NN two-sample test on equally many real/synthetic images. 0.5 = indistinguishable, 1.0 = fully separable |
+| `nn_distance_ratio` | Mean distance real -> nearest synthetic divided by real -> nearest other real. ~1 = synthetic covers the real images as well as they cover each other |
+
+Sanity check on renders: photoreal vs. photoreal (other seeds) gives 0.52 / 1.01, flat vs. photoreal
+1.00 / 9.8. Use the same real folder and `--seed` between releases so numbers are comparable;
+a few hundred real ROIs per package are enough.
+
 ## Roadmap towards "indistinguishable from the camera"
 
 1. **Done – procedural photoreal 2D** (this document).
@@ -67,6 +86,5 @@ white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings).
    trace/via/silkscreen generator baked to an image, add a solder-fillet mesh instead of flat pads,
    marking decals, HDRI/ring-light rig matching the AOI box.
 3. **Done – real-photo texture bank**: `render.texture_dir` (see above).
-4. **Sim-to-real check**: train on synthetic, measure on a small labelled set of real ROIs per
-   package; track feature-distance (e.g. kNN on ResNet embeddings) between synthetic and real images
-   per release so realism changes are measurable, not eyeballed.
+4. **Done – sim-to-real check**: `tools/sim_to_real.py` (see below). Still open: a small labelled
+   set of real ROIs per package to measure classifier accuracy on real data.

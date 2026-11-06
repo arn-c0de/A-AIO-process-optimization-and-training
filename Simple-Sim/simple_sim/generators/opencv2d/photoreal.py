@@ -44,7 +44,7 @@ _RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330",
 _REFDES_PREFIX = {"resistor": "R", "capacitor": "C", "sot": "Q", "soic": "U", "qfn": "U"}
 _MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
 _FONTS = (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX)
-_TEXTURE_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 def _family(footprint: str, component_type: str) -> str:
@@ -114,7 +114,7 @@ def _text_layer(shape: tuple[int, int], text: str, center: tuple[float, float], 
 @lru_cache(maxsize=8)
 def texture_files(texture_dir: str) -> tuple[Path, ...]:
     """Sorted image files in *texture_dir* (sorted so a seed always picks the same file)."""
-    return tuple(sorted(p for p in Path(texture_dir).iterdir() if p.suffix.lower() in _TEXTURE_EXT))
+    return tuple(sorted(p for p in Path(texture_dir).iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS))
 
 
 def _texture_substrate(h: int, w: int, texture_dir: str, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
