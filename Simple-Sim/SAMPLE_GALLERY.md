@@ -1,6 +1,6 @@
 # Sample Gallery
 
-Auto-generated reference images for all component profiles (2D and 3D). Last updated: 2026-11-06 09:10:10
+Auto-generated reference images for all component profiles (2D and 3D). Last updated: 2026-11-06 09:39:40
 
 Re-generate by running:
 ```bash
@@ -11,6 +11,7 @@ Re-generate by running:
 
 - [2D Profiles](#2d-profiles)
   - [chip_0603_resistor@1](#chip-0603-resistor1)
+  - [chip_0603_resistor@2](#chip-0603-resistor2)
   - [qfn32_ic@1](#qfn32-ic1)
   - [sot23_transistor@1](#sot23-transistor1)
 - [3D Profiles](#3d-profiles)
@@ -29,6 +30,15 @@ Re-generate by running:
 | MISSING | ![MISSING](images/samples/chip_0603_resistor@1/MISSING.png) |
 | OK | ![OK](images/samples/chip_0603_resistor@1/OK.png) |
 | TOMBSTONE | ![TOMBSTONE](images/samples/chip_0603_resistor@1/TOMBSTONE.png) |
+
+### chip_0603_resistor@2
+
+| Class | Sample |
+|-------|--------|
+| MISALIGNED | ![MISALIGNED](images/samples/chip_0603_resistor@2/MISALIGNED.png) |
+| MISSING | ![MISSING](images/samples/chip_0603_resistor@2/MISSING.png) |
+| OK | ![OK](images/samples/chip_0603_resistor@2/OK.png) |
+| TOMBSTONE | ![TOMBSTONE](images/samples/chip_0603_resistor@2/TOMBSTONE.png) |
 
 ### qfn32_ic@1
 
