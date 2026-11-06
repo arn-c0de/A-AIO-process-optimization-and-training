@@ -2,7 +2,8 @@
 
 Produces the un-augmented ROI (substrate, pads, solder fillets, component body) with
 procedural textures and simple physically motivated shading, rendered at 2x and
-downsampled for anti-aliasing. Every random choice is drawn from the passed ``rng``,
+downsampled for anti-aliasing, then passed through a simple camera model (lens blur, uneven
+illumination, highlight roll-off, sensor noise) so it does not look like a vector drawing. Every random choice is drawn from the passed ``rng``,
 so a sample is fully determined by its seed.
 
 Visual targets were calibrated against photos of real assembled boards: dark olive
@@ -63,16 +64,30 @@ def _blend(img: np.ndarray, color: np.ndarray, alpha: np.ndarray) -> None:
     img += color * a
 
 
-def _shade_heightmap(hmap: np.ndarray, base: np.ndarray, spec_power: float = 40.0, spec_gain: float = 0.9) -> np.ndarray:
-    """Lambert + Blinn-Phong shading of a height map. Returns float BGR (H, W, 3)."""
+def _shade_solder(hmap: np.ndarray, base: np.ndarray, env: np.ndarray, spec_power: float, spec_gain: float) -> np.ndarray:
+    """Shade a solder height map as a rough mirror. Returns float BGR (H, W, 3).
+
+    Solder is metallic: little diffuse light, mostly a reflection of the surroundings. Flat areas
+    mirror the bright overhead illumination, slopes mirror the dark board (*env*), and slopes facing
+    the light catch a sharp highlight.
+    """
     gy, gx = np.gradient(hmap)
     n = np.dstack([-gx, -gy, np.ones_like(hmap)])
     n /= np.linalg.norm(n, axis=2, keepdims=True)
-    ndl = np.clip(n @ _LIGHT, 0.0, 1.0)
-    spec = np.where(ndl > 0, np.clip(n @ _HALF, 0.0, 1.0) ** spec_power, 0.0)
-    out = base * (0.38 + 0.62 * ndl)[..., None]
+    up = np.clip(2.0 * n[..., 2] ** 2 - 1.0, 0.0, 1.0)  # z of the reflected view ray
+    sky = up**3
+    spec = np.clip(n @ _HALF, 0.0, 1.0) ** spec_power
+    out = base * (0.12 + 0.18 * np.clip(n @ _LIGHT, 0.0, 1.0))[..., None]
+    out += base * (0.8 * sky)[..., None] + env * (0.45 * (1.0 - sky))[..., None]
     out += (255.0 * spec_gain * spec)[..., None]
     return out
+
+
+def _smooth_noise(shape: tuple[int, int], cell: float, rng: np.random.Generator) -> np.ndarray:
+    """Zero-mean, roughly unit-amplitude value noise with feature size *cell* pixels."""
+    h, w = shape
+    small = rng.normal(0.0, 1.0, (int(h / cell) + 2, int(w / cell) + 2)).astype(np.float32)
+    return cv2.resize(small, (w, h), interpolation=cv2.INTER_CUBIC)
 
 
 def _text_layer(shape: tuple[int, int], text: str, center: tuple[float, float], height_px: float,
@@ -100,8 +115,7 @@ def _substrate(h: int, w: int, rng: np.random.Generator) -> tuple[np.ndarray, np
     img[:] = base
 
     # Low-frequency mottling (resin thickness) + fibre weave + fine grain.
-    coarse = rng.normal(0.0, 1.0, (h // (32 * SS) + 2, w // (32 * SS) + 2)).astype(np.float32)
-    coarse = cv2.resize(coarse, (w, h), interpolation=cv2.INTER_CUBIC)
+    coarse = _smooth_noise((h, w), 32 * SS, rng)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     period = float(rng.uniform(6.0, 9.0)) * SS
     weave = np.sin(2 * np.pi * xx / period) * np.sin(2 * np.pi * yy / period)
@@ -195,7 +209,8 @@ def _silkscreen(img: np.ndarray, keepout: tuple[int, int, int, int], family: str
     layer = np.maximum(layer, _text_layer((h, w), refdes, (cx, cy), text_h, angle, max(1, SS)))
 
     layer = cv2.GaussianBlur(layer, (0, 0), 0.5 * SS)
-    _blend(img, _SILKSCREEN, np.clip(layer * 0.85, 0, 1))
+    ink = 0.85 + 0.12 * _smooth_noise((h, w), 2 * SS, rng)  # screen-printed ink is blotchy, not uniform
+    _blend(img, _SILKSCREEN, np.clip(layer * ink, 0, 1))
 
 
 # --------------------------------------------------------------------------- pads & solder
@@ -206,6 +221,9 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
     finish = _FINISHES["enig" if rng.random() < 0.5 else "hasl"] * float(rng.uniform(0.92, 1.06))
     solder = _SOLDER * float(rng.uniform(0.9, 1.05))
     mask_edge = base * 0.65
+    env = base * 0.8 + 12.0  # what slopes of the solder mirror: the surrounding board
+    # Surface irregularity: real fillets are lumpy, not mathematically smooth.
+    lumps = _smooth_noise((h, w), 8 * SS, rng) * 0.06
 
     for pad in pads:
         x0, y0 = max(0, pad["x"]), max(0, pad["y"])
@@ -227,16 +245,40 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
             dist = cv2.distanceTransform((~covered).astype(np.uint8), cv2.DIST_L2, 3)
             t = 1.0 - dist / max(1.0, float(dist.max()))
             hmap = np.where(covered, 1.0, t ** 1.8) * rim * amp  # concave fillet rising to the terminal
-            spec_power, spec_gain = 40.0, 0.9
+            spec_power, spec_gain = 60.0, 0.85
         else:
             u, v = (xx / (pw - 1)) * 2 - 1, (yy / (ph - 1)) * 2 - 1
             dome = np.clip(1.0 - (np.abs(u) ** 3 + np.abs(v) ** 3) * 0.85, 0, 1)  # reflowed paste, no part
             hmap = dome * rim * min(amp * 0.35, 4.0 * SS)
-            spec_power, spec_gain = 25.0, 0.35
-        shaded = _shade_heightmap(hmap, solder, spec_power=spec_power, spec_gain=spec_gain)
+            spec_power, spec_gain = 40.0, 0.5
+        hmap = hmap * (1.0 + lumps[y0:y1, x0:x1])
+        shaded = _shade_solder(hmap, solder, env, spec_power, spec_gain)
         alpha = np.clip(hmap / (0.08 * amp), 0.0, 1.0)
         _blend(region, shaded, alpha)
         img[y0:y1, x0:x1] = region
+
+
+# --------------------------------------------------------------------------- camera
+
+def _camera(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Turn the ideal (supersampled, perfectly sharp) render into a camera image. Float in, uint8 out.
+
+    Lens blur, uneven illumination, soft highlight roll-off instead of hard clipping, and
+    signal-dependent sensor noise that is slightly correlated by demosaicing.
+    """
+    h, w = img.shape[:2]
+    img = cv2.GaussianBlur(img, (0, 0), float(rng.uniform(0.55, 0.95)))
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    a = float(rng.uniform(0.0, 2.0 * np.pi))
+    ramp = ((xx - w / 2.0) * np.cos(a) + (yy - h / 2.0) * np.sin(a)) / max(h, w)
+    img *= (1.0 + float(rng.uniform(0.04, 0.12)) * ramp + 0.03 * _smooth_noise((h, w), max(h, w) / 3.0, rng))[..., None]
+    knee = 205.0
+    img = np.where(img > knee, knee + (255.0 - knee) * (1.0 - np.exp(-(img - knee) / (255.0 - knee))), img)
+    sigma = np.sqrt(float(rng.uniform(1.0, 4.0)) + 0.04 * np.clip(img, 0.0, None))  # read + shot noise
+    noise = rng.normal(0.0, 1.0, img.shape).astype(np.float32)
+    noise = cv2.GaussianBlur(noise, (0, 0), 0.5) * 1.6  # demosaic correlation, variance roughly kept
+    noise += rng.normal(0.0, 0.35, (h, w, 1)).astype(np.float32)  # luminance-dominated
+    return _clip8(img + sigma * noise)
 
 
 # --------------------------------------------------------------------------- component body
@@ -481,4 +523,4 @@ def render_photoreal_base(
             _draw_solder_bridge(img8, nom, footprint, (int(cx), int(cy)), (int(length), int(width_px)), selector, geo["tilt_deg"])
             img = img8.astype(np.float32)
 
-    return cv2.resize(_clip8(img), (width, height), interpolation=cv2.INTER_AREA)
+    return _camera(cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA), rng)

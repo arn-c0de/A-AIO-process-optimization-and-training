@@ -22,10 +22,11 @@ deterministic per seed.
 | Copper under mask | 1-3 autorouted traces with 45° jogs, traces leaving pads, 0-3 vias with annular ring and dark hole |
 | Silkscreen | White footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`) |
 | Pads | Mask-defined opening with dark rim, ENIG (gold) or HASL (silver) finish visible at the pad edge |
-| Solder | Height-map shaded (Lambert + Blinn-Phong). Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
+| Solder | Height map with slight lumpiness, shaded as a rough mirror: flat areas reflect the overhead light, slopes reflect the dark board, sharp highlight towards the light. Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
 | Chip body | Resistor: dark body, metallic end caps, white value code (`103`, `4R7`, ...). Capacitor (`component.type` contains `cap`): tan ceramic, nickel caps, no marking |
 | IC body | SOT-23 / SOIC-16 / QFN: speckled mold compound, side walls, gloss, pin-1 dimple, laser marking; gull-wing leads for SOT/SOIC; QFN gets real pad rows (`qfn_<N>` -> N/4 per side) plus the exposed thermal pad |
 | Shadows | Contact shadow around every body, long cast shadow for tombstones, lit facet for corner lifts |
+| Camera | Applied after downsampling so the image is not vector-sharp: lens blur, uneven illumination, soft highlight roll-off, signal-dependent and slightly correlated sensor noise |
 
 Defect semantics are unchanged: `MISSING`, `MISALIGNED` (shift/rotation), `TOMBSTONE` (foreshortened
 body anchored on one end), `SOLDER_BRIDGE`, `CORNER_LIFT` are driven by the same `defect_params`
