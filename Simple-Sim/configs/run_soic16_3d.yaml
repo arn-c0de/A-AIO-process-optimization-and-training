@@ -39,7 +39,7 @@ render:
     executable: "blender"
     engine: "CYCLES"
     samples: 128
-    device: "CPU"
+    device: "GPU"
 
 augment:
   rotation_deg_range: [-2, 2]

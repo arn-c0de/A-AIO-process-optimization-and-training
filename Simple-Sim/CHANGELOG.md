@@ -7,6 +7,7 @@ All notable changes to **Simple-Sim** are documented in this file.
 ## [Unreleased]
 
 ### Summary
+- Blender backend now really renders on the GPU: `render.blender.device: GPU` enables a Cycles compute backend (OptiX, CUDA, HIP, oneAPI) in the add-on preferences; before, Blender silently fell back to the CPU. Falls back to CPU if no GPU is found; the chosen device is logged. All `*_3d` run configs default to `device: GPU`.
 - New default 2D render style `photoreal` (`render.style`), calibrated on photos of real boards: textured solder mask with traces and vias, silkscreen outlines and reference designators, ENIG/HASL pads with height-map shaded solder fillets, resistor value codes and tan capacitors, speckled IC mold bodies with pin-1 marks, laser markings and gull-wing leads, contact/cast shadows. `style: flat` keeps the previous look. See `docs/guides/PHOTOREAL_RENDERING.md`.
 - `photoreal` no longer looks like a vector drawing: a camera model (lens blur, uneven illumination, highlight roll-off, sensor noise) is applied after supersampling, solder is shaded as a lumpy metallic mirror instead of milky plastic, silkscreen ink is blotchy.
 - `photoreal`: optional `render.texture_dir` uses real photos of empty board areas as substrate; large thermal pads without a part show window-pane stencil islands; IC laser marking is grainy and uses varied fonts/line offsets.

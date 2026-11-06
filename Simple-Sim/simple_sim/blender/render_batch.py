@@ -308,6 +308,39 @@ def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, 
 
 # --------------------------------------------------------------------------- scene
 
+_GPU_BACKEND: str | None = None
+
+
+def _enable_cycles_gpu() -> bool:
+    """Enable a Cycles GPU backend (OptiX, CUDA, HIP, oneAPI) once per Blender process.
+
+    Setting ``scene.cycles.device = "GPU"`` alone is not enough: without compute devices
+    enabled in the Cycles add-on preferences Blender silently renders on the CPU.
+    Returns False (render on CPU) if no GPU backend is available.
+    """
+    global _GPU_BACKEND
+    if _GPU_BACKEND is None:
+        _GPU_BACKEND = ""
+        try:
+            prefs = bpy.context.preferences.addons["cycles"].preferences
+            for dev_type in ("OPTIX", "CUDA", "HIP", "ONEAPI"):
+                try:
+                    prefs.compute_device_type = dev_type
+                except TypeError:
+                    continue
+                prefs.refresh_devices()
+                gpus = [d for d in prefs.devices if d.type == dev_type]
+                if gpus:
+                    for d in prefs.devices:
+                        d.use = d.type == dev_type
+                    _GPU_BACKEND = f"{dev_type}: {', '.join(d.name for d in gpus)}"
+                    break
+        except Exception as exc:  # noqa: BLE001 - fall back to CPU and say why
+            print(f"[render_batch] GPU setup failed, rendering on CPU: {exc}", flush=True)
+        print(f"[render_batch] Cycles device: {_GPU_BACKEND or 'CPU'}", flush=True)
+    return bool(_GPU_BACKEND)
+
+
 def _configure_render(*, width_px: int, height_px: int, samples: int, seed: int, device: str, engine: str) -> None:
     scene = bpy.context.scene
     engine = str(engine or "").strip().upper()
@@ -323,7 +356,8 @@ def _configure_render(*, width_px: int, height_px: int, samples: int, seed: int,
             scene.cycles.samples = int(samples)
             scene.cycles.seed = int(seed) % (2**31)  # deterministic per job; IntProperty is 32-bit
             scene.cycles.use_denoising = True
-            scene.cycles.device = "GPU" if str(device).upper() != "CPU" else "CPU"
+            want_gpu = str(device).upper() != "CPU"
+            scene.cycles.device = "GPU" if want_gpu and _enable_cycles_gpu() else "CPU"
 
     scene.render.use_compositing = False
     scene.render.use_sequencer = False
