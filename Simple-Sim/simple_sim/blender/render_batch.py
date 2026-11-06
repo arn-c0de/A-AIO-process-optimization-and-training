@@ -35,6 +35,7 @@ from mathutils import Vector
 _HEIGHT_RATIO = {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18}
 _RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
 _MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
+RING_STRENGTH, TOP_STRENGTH = 5.0, 2.5  # emission strengths, calibrated to the baked board colours
 
 
 def _parse_args() -> argparse.Namespace:
@@ -168,7 +169,7 @@ def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big
     if big and not touched:
         nx, ny = max(2, round(pw / (min(pw, ph) / 3))), max(2, round(ph / (min(pw, ph) / 3)))
 
-    dome_h = 0.18 * min(pw / nx, ph / ny)  # reflowed paste height scales with the paste deposit, as in 2D
+    dome_h = 0.1 * min(pw / nx, ph / ny)  # reflowed paste height scales with the paste deposit, as in 2D
     verts = []
     for j, y in enumerate(ys):
         for i, x in enumerate(xs):
@@ -234,9 +235,10 @@ def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, 
         root.location = (anchor.x, anchor.y, standoff)
         root.rotation_euler = (0.0, -tilt * sign, angle)
         offset = sign * L / 2  # body extends from the anchored end towards the raised one
-        proj = L * math.cos(tilt) + H * math.sin(tilt)
-        mid = anchor + axis * sign * (proj / 2)
-        contact = {"cx": mid.x, "cy": mid.y, "hl": proj / 2, "hw": W / 2, "angle": angle}
+        # Footprint seen from above, as in 2D: top face from H*sin behind the anchor to L*cos in front.
+        top_len, end_len = L * math.cos(tilt), H * math.sin(tilt)
+        mid = anchor + axis * sign * ((top_len - end_len) / 2)
+        contact = {"cx": mid.x, "cy": mid.y, "hl": (top_len + end_len) / 2, "hw": W / 2, "angle": angle}
     else:
         root.location = (cx, cy, standoff)
         root.rotation_euler = (0.0, 0.0, angle)
@@ -249,7 +251,8 @@ def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, 
     objs.append(_box("body", (L, W, H), (offset, 0.0, H / 2), m_body, parent=root, bevel=0.06 * min(W, H)))
 
     if family in ("resistor", "capacitor"):
-        m_cap = _material("mat_endcap", (0.75, 0.75, 0.74), roughness=0.3, metallic=1.0, bump=0.05)
+        # Tin plating is satin, not a mirror: it must catch the ring light when it faces the camera.
+        m_cap = _material("mat_endcap", (0.75, 0.75, 0.74), roughness=0.45, metallic=1.0, bump=0.05)
         cap = (0.26 if family == "capacitor" else 0.22) * L
         for s in (-1, 1):
             objs.append(_box(f"endcap_{s}", (cap, W * 1.02, H * 1.02), (offset + s * (L - cap) / 2, 0.0, H / 2), m_cap,
@@ -338,20 +341,32 @@ def _configure_render(*, width_px: int, height_px: int, samples: int, seed: int,
     world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.1
 
 
-def _ring_light(render_3d: dict[str, Any], roi_mm: float) -> None:
-    """AOI ring light around the optical axis (``render_3d.lighting.ring_light``: strength, height_mm, radius_mm).
+def _aoi_lights(render_3d: dict[str, Any], roi_mm: float) -> None:
+    """AOI lighting: low-angle ring light plus a diffuse top light around the optical axis.
 
-    The default strength is calibrated so the board renders at its baked (photo-calibrated) colours.
+    ``render_3d.lighting.ring_light`` (strength, height_mm, radius_mm) and ``.top_light`` (strength).
+    The ring gives slopes and edges their highlights; the top light makes flat metal (solder tops,
+    upright end caps) bright as on real AOI images. Default strengths are calibrated so the board
+    renders at its baked (photo-calibrated) colours.
     """
-    ring_cfg = (render_3d.get("lighting") or {}).get("ring_light") or {}
+    cfg = render_3d.get("lighting") or {}
+    ring_cfg, top_cfg = cfg.get("ring_light") or {}, cfg.get("top_light") or {}
     height = float(ring_cfg.get("height_mm", 2.0 * roi_mm))
     radius = float(ring_cfg.get("radius_mm", height * math.tan(math.radians(35.0))))
     bpy.ops.mesh.primitive_torus_add(major_radius=radius, minor_radius=0.06 * radius, location=(0.0, 0.0, height))
     ring = bpy.context.active_object
     ring.name = "ring_light"
     ring.data.materials.append(_material("mat_ring", (0, 0, 0), roughness=1.0,
-                                         emission=float(ring_cfg.get("strength", 14.0))))
+                                         emission=float(ring_cfg.get("strength", RING_STRENGTH))))
     ring.visible_camera = False
+
+    bpy.ops.mesh.primitive_circle_add(vertices=48, radius=0.8 * radius, fill_type="NGON",
+                                      location=(0.0, 0.0, 1.2 * height), rotation=(math.pi, 0.0, 0.0))
+    top = bpy.context.active_object
+    top.name = "top_light"
+    top.data.materials.append(_material("mat_top", (0, 0, 0), roughness=1.0,
+                                        emission=float(top_cfg.get("strength", TOP_STRENGTH))))
+    top.visible_camera = False
 
 
 def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engine: str) -> None:
@@ -392,7 +407,7 @@ def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engi
         root.rotation_euler[2] = math.radians(rot)
 
     roi_mm = max(roi_w, roi_h)
-    _ring_light(render_3d, roi_mm)
+    _aoi_lights(render_3d, roi_mm)
 
     # Orthographic camera framing exactly the ROI (top-down unless the profile tilts it).
     cam_cfg = render_3d.get("camera") or {}

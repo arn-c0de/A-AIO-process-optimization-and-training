@@ -333,6 +333,12 @@ def _local_coords(h: int, w: int, center: tuple[float, float], angle_deg: float)
     return dx * np.cos(a) + dy * np.sin(a), -dx * np.sin(a) + dy * np.cos(a)
 
 
+def _rect_alpha(h: int, w: int, center, length: float, width: float, angle_deg: float):
+    """Local coords (u along *length*) and an anti-aliased 0..1 mask of a rotated rectangle."""
+    u, v = _local_coords(h, w, center, angle_deg)
+    return u, v, np.clip(0.5 - np.maximum(np.abs(u) - length / 2.0, np.abs(v) - width / 2.0), 0.0, 1.0)
+
+
 def _contact_shadow(img: np.ndarray, mask: np.ndarray, strength: float, spread: float) -> None:
     sh = cv2.dilate(mask, np.ones((int(spread), int(spread)), np.uint8))
     sh = cv2.GaussianBlur(sh, (0, 0), spread * 0.8).astype(np.float32) / 255.0
@@ -395,17 +401,15 @@ def _marking(img: np.ndarray, family: str, center: tuple[float, float], length: 
 
 
 def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length: float, width: float, angle_deg: float,
-               base_color: np.ndarray, rng: np.random.Generator, *, raised_sign: float = 0.0) -> None:
+               base_color: np.ndarray, rng: np.random.Generator, *, standing: bool = False) -> None:
+    """Part body seen from above. *standing*: only the (foreshortened) top face of a tombstone, no marks."""
     h, w = img.shape[:2]
-    u, v = _local_coords(h, w, center, angle_deg)
+    u, v, aa_body = _rect_alpha(h, w, center, length, width, angle_deg)
     hl, hw = length / 2.0, width / 2.0
     inset = max(1.0, 0.07 * min(length, width))
 
     inside = (np.abs(u) <= hl) & (np.abs(v) <= hw)
     top = (np.abs(u) <= hl - inset) & (np.abs(v) <= hw - inset)
-    # Soft anti-aliased edges via distance to the rectangle border.
-    d_out = np.maximum(np.abs(u) - hl, np.abs(v) - hw)
-    aa_body = np.clip(0.5 - d_out, 0.0, 1.0)
     d_top = np.maximum(np.abs(u) - (hl - inset), np.abs(v) - (hw - inset))
     aa_top = np.clip(0.5 - d_top, 0.0, 1.0)
 
@@ -441,11 +445,9 @@ def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length
         shade = 0.72 + 0.45 * ridge - 0.25 * np.clip(v / hw, 0, 1) * 0.5
         cap_img = cap_col * shade[..., None] * (1.0 + rng.normal(0.0, 0.02, (h, w, 1)).astype(np.float32))
         _blend(img, cap_img, cap.astype(np.float32) * aa_body)
-        if raised_sign:
+        if standing:
             return
-    elif raised_sign:
-        wall = top & (u * raised_sign > hl - inset - 0.18 * length)  # raised side wall facing the camera
-        img *= np.where(wall, 1.6, 1.0)[..., None]
+    elif standing:
         return
     else:
         # Pin-1 indicator (molded dimple / laser dot).
@@ -468,39 +470,74 @@ def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length
              angle_deg, rng)
 
 
+_THICKNESS_RATIO = 0.55  # body height / width of chip parts (0603: 0.45 / 0.8)
+
+
 def _tombstone_pose(geo: dict[str, Any], selector: int, img_shape: tuple[int, int]) -> dict[str, Any]:
-    """Body raised on one end: foreshortened top anchored at the other end. Returns pose + footprint mask."""
-    length, width, tilt = float(geo["length"]), float(geo["width"]), float(geo["tilt_deg"])
+    """Part raised on one end, pivoting about the bottom edge of its anchored end.
+
+    Seen from above two faces are visible: the steep top face (length*cos(tilt)), which starts
+    thickness*sin(tilt) *behind* the anchor, and the raised end face (thickness*sin(tilt)), which
+    points almost straight up. Returns pose + footprint mask.
+    """
+    length, width = float(geo["length"]), float(geo["width"])
+    tilt = np.radians(float(geo["tilt_deg"]))
     angle = float(geo["rotation_deg"])
     a = np.radians(angle)
     raised_sign = 1.0 if selector % 2 == 0 else -1.0
     axis = np.array([np.cos(a), np.sin(a)], dtype=np.float32) * raised_sign
     anchor = np.array(geo["center"], dtype=np.float32) - axis * (length / 2.0)
-    thickness = width * 0.55
-    proj = length * np.cos(np.radians(tilt)) + thickness * np.sin(np.radians(tilt))
-    center = anchor + axis * (proj / 2.0)
-    box = cv2.boxPoints(((float(center[0]), float(center[1])), (float(proj), width), angle)).astype(np.int32)
+    top_len = length * np.cos(tilt)
+    end_len = width * _THICKNESS_RATIO * np.sin(tilt)
+    center = anchor + axis * ((top_len - end_len) / 2.0)
+    box = cv2.boxPoints(((float(center[0]), float(center[1])), (float(top_len + end_len), width), angle)).astype(np.int32)
     mask = np.zeros(img_shape, dtype=np.uint8)
     cv2.fillPoly(mask, [box], 255)
-    return {"center": center, "proj": proj, "angle": angle, "box": box, "mask": mask, "raised_sign": raised_sign,
-            "shadow_len": length * np.sin(np.radians(tilt)) * 0.7}
+    return {"center": center, "angle": angle, "box": box, "mask": mask, "raised_sign": raised_sign, "axis": axis,
+            "anchor": anchor, "tilt": tilt, "top_len": top_len, "end_len": end_len, "height": length * np.sin(tilt)}
 
 
 def _draw_tombstone(img: np.ndarray, family: str, pose: dict[str, Any], width: float, base_color: np.ndarray,
                     rng: np.random.Generator) -> None:
     h, w = img.shape[:2]
-    center, box = pose["center"], pose["box"]
-    # Long shadow cast away from the light, proportional to the raised height.
-    far = center + np.array([0.6, 0.8], dtype=np.float32) * pose["shadow_len"]
+    axis, anchor, tilt, angle = pose["axis"], pose["anchor"], pose["tilt"], pose["angle"]
+    perp = np.array([-axis[1], axis[0]], dtype=np.float32) * (width / 2.0)
+
+    # Shadow: projection of the standing part along the light onto the board.
+    light_xy = _LIGHT[:2] / np.linalg.norm(_LIGHT[:2])
+    shift = -light_xy * pose["height"] * np.linalg.norm(_LIGHT[:2]) / _LIGHT[2]
+    raised_end = anchor + axis * pose["top_len"]
+    pts = np.vstack([pose["box"], raised_end + perp + shift, raised_end - perp + shift]).astype(np.int32)
     sh = np.zeros((h, w), dtype=np.uint8)
-    for i, j in ((0, 1), (1, 2), (2, 3), (3, 0)):
-        quad = np.array([box[i], box[j], far + (box[j] - center) * 0.6, far + (box[i] - center) * 0.6], dtype=np.int32)
-        cv2.fillPoly(sh, [quad], 255)
-    sh = cv2.GaussianBlur(sh, (0, 0), 2.5 * SS).astype(np.float32) / 255.0
-    img *= (1.0 - 0.45 * sh)[..., None]
+    cv2.fillConvexPoly(sh, cv2.convexHull(pts), 255)
+    sh = cv2.GaussianBlur(sh, (0, 0), 2.0 * SS).astype(np.float32) / 255.0
+    img *= (1.0 - 0.4 * sh)[..., None]
     _contact_shadow(img, pose["mask"], 0.4, 3 * SS)
-    _draw_body(img, family, (float(center[0]), float(center[1])), pose["proj"], width, pose["angle"], base_color, rng,
-               raised_sign=pose["raised_sign"])
+
+    # Steep top face: the foreshortened body, shaded by how much it still faces the light.
+    top_c = anchor + axis * (pose["top_len"] / 2.0 - pose["end_len"])
+    _draw_body(img, family, (float(top_c[0]), float(top_c[1])), pose["top_len"], width, angle, base_color, rng,
+               standing=True)
+    n_top = np.array([*(-axis * np.sin(tilt)), np.cos(tilt)], dtype=np.float32)
+    _, _, m_top = _rect_alpha(h, w, top_c, pose["top_len"], width, angle)
+    img *= (1.0 + (0.35 + 0.65 * max(0.0, float(n_top @ _LIGHT)) - 1.0) * m_top)[..., None]
+
+    # Raised end face, pointing almost straight up: bare metal end cap on chips, mold wall on ICs.
+    end_c = anchor + axis * (pose["top_len"] - pose["end_len"] / 2.0)
+    u, v, m_end = _rect_alpha(h, w, end_c, pose["end_len"], width, angle)
+    n_end = np.array([*(axis * np.cos(tilt)), np.sin(tilt)], dtype=np.float32)
+    lit = 0.55 + 0.6 * max(0.0, float(n_end @ _LIGHT))
+    if family in ("resistor", "capacitor"):
+        # Tin-plated cap, slightly convex: shaded as metal like the solder, tilted with the part.
+        su = np.clip(np.abs(u) / (pose["end_len"] / 2.0), 0.0, 1.0)
+        sv = np.clip(np.abs(v) / (width / 2.0), 0.0, 1.0)
+        bulge = (1.0 - su**4) * (1.0 - sv**4) * 0.12 * min(pose["end_len"], width)
+        bulge += 0.04 * _smooth_noise((h, w), 3 * SS, rng)  # plating texture
+        face = _shade_solder(bulge, _END_CAP * float(rng.uniform(0.95, 1.08)), np.full(3, 70.0, dtype=np.float32),
+                             30.0, 0.45) * lit
+    else:
+        face = (np.maximum(base_color, 34.0) * 1.3 * lit)[None, None, :] * np.ones((h, w, 1), dtype=np.float32)
+    _blend(img, face, m_end)
 
 
 def _board(nom: dict[str, float], footprint: str, family: str, shape: tuple[int, int], config: dict[str, Any],

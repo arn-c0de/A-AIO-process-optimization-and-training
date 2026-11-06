@@ -30,8 +30,8 @@ only models what needs real 3D: solder fillets, part bodies, leads, lighting.
 | Board | Plane (2x the ROI, so rotations never show its edge) with the baked texture; low specular because the baked colours already include the mask sheen |
 | Solder | One height-field mesh per pad, metallic. Concave fillet rising to the terminal (chips, QFN) or the lead foot (SOT/SOIC); reflowed paste dome when nothing touches the pad; window-pane islands on a free thermal pad |
 | Part | Body box (height from `component.nominal_dims_mm.height`, capped at the real package's height/width ratio). Resistor: metal end caps + printed value code. Capacitor (`component.type` contains `cap`): tan ceramic + end caps. SOT/SOIC/QFN: mold body with fine speckle, pin-1 dot, laser marking; SOT/SOIC get gull-wing leads to every pad |
-| Defects | Same semantics as 2D: shift/rotation, `MISSING`, `TOMBSTONE` (body pivots about its anchored end edge, `tolerances.tombstone_tilt_deg`), `SOLDER_BRIDGE` (baked into the board). `CORNER_LIFT` renders like a flat part |
-| Light | AOI ring light around the camera axis (emissive torus, invisible to the camera) plus a dim ambient |
+| Defects | Same semantics as 2D: shift/rotation, `MISSING`, `TOMBSTONE` (body pivots about the bottom edge of its anchored end; from above you see the steep top face and the upright end cap, `tolerances.tombstone_tilt_deg`), `SOLDER_BRIDGE` (baked into the board). `CORNER_LIFT` renders like a flat part |
+| Light | AOI rig around the camera axis, invisible to the camera: low-angle ring light (emissive torus; highlights on slopes and edges) plus a diffuse top light (emissive disc; makes flat metal such as solder tops and upright end caps bright), dim ambient |
 | Camera | Orthographic, framed exactly to the ROI, top-down by default |
 | Orientation | `augment.rotation_deg` (cardinal 0/90/180/270 + jitter) rotates the whole scene, like the 2D image rotation |
 
@@ -43,7 +43,8 @@ render_3d:
     location_mm: [0.0, 0.0, 9.0]   # straight down; an x/y offset tilts the view (foreshortens pads)
     look_at_mm: [0.0, 0.0, 0.0]
   lighting:
-    ring_light: {}                 # optional: strength (14), height_mm (2x ROI), radius_mm (35 deg ring)
+    ring_light: {}                 # optional: strength (5), height_mm (2x ROI), radius_mm (35 deg ring)
+    top_light: {}                  # optional: strength (2.5)
   materials:
     body:   {base_color: [0.02, 0.02, 0.02], roughness: 0.6, metallic: 0.0}   # linear RGB
     solder: {base_color: [0.70, 0.70, 0.72], roughness: 0.18, metallic: 1.0}  # also used for leads
@@ -83,7 +84,8 @@ Output: `outputs/debug_previews/index.html`. The baked board textures live in
 
 Common issues:
 
-- **Board too dark/bright**: tune `render_3d.lighting.ring_light.strength`.
+- **Board too dark/bright**: scale `ring_light.strength` and `top_light.strength` together (the defaults render the board at its baked colours).
+- **Solder/end caps too dark or too flat**: shift the ratio towards `top_light` (brighter flat metal) or `ring_light` (more edge contrast).
 - **Pads look squashed**: the camera is tilted; use `location_mm: [0, 0, z]`.
 - **`KeyError: 'pad_spacing_y'`**: SOT-23, QFN and SOIC profiles need `pad_spacing_y` in `geometry_ranges`.
 - **Render failures**: check `render.blender.executable`; the Blender log is printed to the console.

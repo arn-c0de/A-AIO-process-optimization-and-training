@@ -89,3 +89,26 @@ def test_texture_dir_is_validated(tmp_path):
         _validate_render_2d({**render, "texture_dir": str(tmp_path / "nope")}, 2)
     with pytest.raises(ValueError, match="no images"):
         _validate_render_2d({**render, "texture_dir": str(tmp_path)}, 2)
+
+
+def test_tombstone_pose_shows_top_and_raised_end_face():
+    """Pivot about the anchored bottom edge: top face L*cos(t) starts H*sin(t) behind the anchor."""
+    from simple_sim.generators.opencv2d.photoreal import _THICKNESS_RATIO, _tombstone_pose
+
+    geo = {"length": 60.0, "width": 30.0, "tilt_deg": 80.0, "rotation_deg": 0.0, "center": (64, 64)}
+    pose = _tombstone_pose(geo, selector=0, img_shape=(128, 128))
+    t = np.radians(80.0)
+    assert pose["top_len"] == pytest.approx(60.0 * np.cos(t), rel=1e-5)
+    assert pose["end_len"] == pytest.approx(30.0 * _THICKNESS_RATIO * np.sin(t), rel=1e-5)
+    xs = pose["box"][:, 0]
+    anchor_x = pose["anchor"][0]  # raised towards +x for selector 0
+    assert xs.min() == pytest.approx(anchor_x - pose["end_len"], abs=1.0)
+    assert xs.max() == pytest.approx(anchor_x + pose["top_len"], abs=1.0)
+
+
+def test_tombstoned_chip_shows_bright_end_cap():
+    img = _render("chip_2pad", "TOMBSTONE", seed=1).astype(float)
+    ok = _render("chip_2pad", "OK", seed=1).astype(float)
+    centre = slice(40, 88)
+    # The upright tin end cap faces the camera: the part area is clearly brighter than a flat black resistor.
+    assert img[centre, centre].mean() > ok[centre, centre].mean()
