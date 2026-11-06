@@ -43,8 +43,8 @@ render_3d:
     location_mm: [0.0, 0.0, 9.0]   # straight down; an x/y offset tilts the view (foreshortens pads)
     look_at_mm: [0.0, 0.0, 0.0]
   lighting:
-    ring_light: {}                 # optional: strength (5), height_mm (2x ROI), radius_mm (35 deg ring)
-    top_light: {}                  # optional: strength (2.5)
+    ring_light: {}                 # optional: strength (6), height_mm (2x ROI), radius_mm (35 deg ring)
+    top_light: {}                  # optional: strength (0.9)
   materials:
     body:   {base_color: [0.02, 0.02, 0.02], roughness: 0.6, metallic: 0.0}   # linear RGB
     solder: {base_color: [0.70, 0.70, 0.72], roughness: 0.18, metallic: 1.0}  # also used for leads

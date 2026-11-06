@@ -35,7 +35,7 @@ from mathutils import Vector
 _HEIGHT_RATIO = {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18}
 _RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
 _MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
-RING_STRENGTH, TOP_STRENGTH = 5.0, 2.5  # emission strengths, calibrated to the baked board colours
+RING_STRENGTH, TOP_STRENGTH = 6.0, 0.9  # emission strengths, calibrated to the baked board colours
 
 
 def _parse_args() -> argparse.Namespace:
@@ -360,7 +360,7 @@ def _aoi_lights(render_3d: dict[str, Any], roi_mm: float) -> None:
                                          emission=float(ring_cfg.get("strength", RING_STRENGTH))))
     ring.visible_camera = False
 
-    bpy.ops.mesh.primitive_circle_add(vertices=48, radius=0.8 * radius, fill_type="NGON",
+    bpy.ops.mesh.primitive_circle_add(vertices=48, radius=2.0 * radius, fill_type="NGON",
                                       location=(0.0, 0.0, 1.2 * height), rotation=(math.pi, 0.0, 0.0))
     top = bpy.context.active_object
     top.name = "top_light"
