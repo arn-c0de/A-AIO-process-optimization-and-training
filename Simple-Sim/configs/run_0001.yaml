@@ -2,7 +2,7 @@ run:
   run_id: run_0001
   seed: 42
   schema_version: 2
-  component_profile: chip_0603_resistor@1
+  component_profile: chip_0603_resistor@2
 roi:
   width_px: 256
   height_px: 256
@@ -12,6 +12,8 @@ classes:
   MISSING: 100
   MISALIGNED: 100
   TOMBSTONE: 100
+  SOLDER_BALL: 100
+  EXCESS_SOLDER: 100
 domains:
   domain_A:
     lighting_brightness:

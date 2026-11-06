@@ -60,11 +60,12 @@ def classify_defect(nominal: dict[str, float], defect_params: dict[str, Any], to
         tolerances: Tolerance thresholds from config
 
     Returns:
-        Class name: 'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE'
+        Class name: 'OK', 'MISALIGNED', 'TOMBSTONE' or the sampled type for MISSING, SOLDER_BRIDGE,
+        CORNER_LIFT, SOLDER_BALL and EXCESS_SOLDER
     """
     defect_type = defect_params['type']
 
-    if defect_type in ('SOLDER_BRIDGE', 'CORNER_LIFT', 'MISSING'):
+    if defect_type in ('SOLDER_BRIDGE', 'CORNER_LIFT', 'MISSING', 'SOLDER_BALL', 'EXCESS_SOLDER'):
         return defect_type
 
     ok_shift_px, ok_rotation_deg, tombstone_tilt_deg = _tolerance_bounds(tolerances)
@@ -92,7 +93,7 @@ def sample_defect_params(
 
     Args:
         defect_type: Target defect class ('OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE',
-                     'SOLDER_BRIDGE', 'CORNER_LIFT')
+                     'SOLDER_BRIDGE', 'CORNER_LIFT', 'SOLDER_BALL', 'EXCESS_SOLDER')
         rng: NumPy random generator
         tolerances: Optional tolerance thresholds from config for footprint-specific sampling
 
@@ -108,6 +109,9 @@ def sample_defect_params(
         'TOMBSTONE':    _sample_tombstone,
         'SOLDER_BRIDGE': _sample_solder_bridge,
         'CORNER_LIFT':  _sample_corner_lift,
+        # Solder defects on a correctly placed part (placement like OK; the renderer draws the solder).
+        'SOLDER_BALL':  _sample_ok,
+        'EXCESS_SOLDER': _sample_ok,
     }
 
     if defect_type not in samplers:
@@ -184,9 +188,9 @@ def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone):
 
 
 def _sample_tombstone(rng, _ok_shift, _ok_rot, tombstone_tilt_deg):
+    # Anywhere from the class threshold up to fully upright (real tombstones end up at all angles).
     tilt_min = tombstone_tilt_deg if tombstone_tilt_deg is not None else _DEFAULT_TOMBSTONE_TILT
-    tilt_max = min(90.0, tilt_min + 10.0)
-    tilt = rng.uniform(tilt_min, tilt_max)
+    tilt = rng.uniform(tilt_min, 90.0)
     sx = rng.uniform(-5.0, 5.0)
     sy = rng.uniform(-5.0, 5.0)
     rot = rng.uniform(-10.0, 10.0)

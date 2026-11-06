@@ -7,7 +7,7 @@ set -euo pipefail
 # Usage examples:
 #   ./run_render_debug.sh
 #   ./run_render_debug.sh --backend opencv_2d --all --non-interactive
-#   ./run_render_debug.sh --backend blender_3d --profiles chip_0603_resistor_3d@1 --non-interactive
+#   ./run_render_debug.sh --backend blender_3d --profiles chip_0603_resistor_3d@2 --non-interactive
 #   ./run_render_debug.sh --backend both --all --non-interactive
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -21,6 +21,7 @@ import numpy as np
 from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
+from simple_sim.generators.blender3d.bake import profile_job_fields
 from simple_sim.generators.filter_settings import normalize_image_filters
 from simple_sim.generators.opencv2d.geometry import sample_nominal_geometry
 from simple_sim.profile_hash import load_profile
@@ -434,6 +435,7 @@ def build_preview_jobs(
                 footprint=footprint,
                 component_height_mm=component_height_mm,
                 render_3d=render_3d,
+                bake=profile_job_fields(profile),
             )
         )
         previews.append((profile_id, backend, defect_type, rel_path))

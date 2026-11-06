@@ -10,7 +10,7 @@ Practical how-to guides for common tasks and workflows.
 | Document | Purpose |
 |----------|---------|
 | [Command Cheatsheet](guides/CHEATSHEET.md) | Quick reference for common commands and operations |
-| [3D Rendering Quickstart](guides/3D_RENDERING_QUICKSTART.md) | Guide to setting up and customizing 3D rendering with Blender |
+| [3D Rendering Quickstart](guides/3D_RENDERING_QUICKSTART.md) | How the Blender backend builds its scene (shared 2D board bake, fillets, ring light) and what to change where |
 | [Filter Settings](guides/FILTER_SETTINGS.md) | Guide to configuring filter settings for image processing |
 | [Photoreal 2D Rendering](guides/PHOTOREAL_RENDERING.md) | What the default `photoreal` render style draws, how to switch to `flat`, and the realism roadmap |
 | [Model Merge: Bundles vs Ensembles](guides/MODEL_MERGE_BUNDLES_ENSEMBLES.md) | Bundles vs ensembles, and what you need for unknown images (profile dispatch vs general models) |

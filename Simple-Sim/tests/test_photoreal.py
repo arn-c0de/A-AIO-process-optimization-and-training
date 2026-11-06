@@ -17,7 +17,7 @@ FOOTPRINTS = {
     "soic_16": {"pad_width": [10.0, 12.0], "pad_spacing": [120.0, 130.0], "component_length": [90.0, 100.0],
                 "component_width": [70.0, 80.0]},
 }
-CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE", "SOLDER_BRIDGE", "CORNER_LIFT"]
+CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE", "SOLDER_BRIDGE", "CORNER_LIFT", "SOLDER_BALL", "EXCESS_SOLDER"]
 
 
 def _render(footprint, defect_type, seed=1, **cfg):
@@ -66,3 +66,131 @@ def test_qfn_footprint_has_pad_rows_and_thermal_pad():
     pads = _compute_pad_positions("qfn_32", nominal, (256, 256))
     assert len(pads) == 33
     assert pads[-1]["w"] == pads[-1]["h"] == round(168 * 0.6)
+
+
+def test_texture_dir_replaces_substrate(tmp_path):
+    import cv2
+
+    tex = np.full((300, 400, 3), (200, 40, 160), dtype=np.uint8)  # magenta: impossible for the procedural mask
+    cv2.imwrite(str(tmp_path / "board.png"), tex)
+    (tmp_path / "notes.txt").write_text("ignored")
+    img = _render("chip_2pad", "MISSING", texture_dir=str(tmp_path))
+    corner = img[:10, :10].reshape(-1, 3).mean(axis=0)
+    assert corner[0] > 150 and corner[1] < 90 and corner[2] > 120
+
+
+def test_texture_dir_is_validated(tmp_path):
+    from simple_sim.config import _validate_render_2d
+
+    render = {"backend": "opencv_2d", "substrate_color": [40, 90, 40], "copper_color": [60, 120, 180],
+              "solder_mask_alpha": 0.3}
+    _validate_render_2d(render, 2)
+    with pytest.raises(ValueError, match="existing directory"):
+        _validate_render_2d({**render, "texture_dir": str(tmp_path / "nope")}, 2)
+    with pytest.raises(ValueError, match="no images"):
+        _validate_render_2d({**render, "texture_dir": str(tmp_path)}, 2)
+
+
+def test_tombstone_pose_shows_top_and_raised_end_face():
+    """Pivot about the anchored bottom edge: top face L*cos(t) starts H*sin(t) behind the anchor."""
+    from simple_sim.generators.opencv2d.photoreal import _THICKNESS_RATIO, _tombstone_pose
+
+    geo = {"length": 60.0, "width": 30.0, "tilt_deg": 80.0, "rotation_deg": 0.0, "center": (64, 64)}
+    pose = _tombstone_pose(geo, selector=0, img_shape=(128, 128))
+    t = np.radians(80.0)
+    assert pose["top_len"] == pytest.approx(60.0 * np.cos(t), rel=1e-5)
+    assert pose["end_len"] == pytest.approx(30.0 * _THICKNESS_RATIO * np.sin(t), rel=1e-5)
+    xs = pose["box"][:, 0]
+    anchor_x = pose["anchor"][0]  # raised towards +x for selector 0
+    assert xs.min() == pytest.approx(anchor_x - pose["end_len"], abs=1.0)
+    assert xs.max() == pytest.approx(anchor_x + pose["top_len"], abs=1.0)
+
+
+def test_tombstoned_chip_shows_bright_end_cap():
+    img = _render("chip_2pad", "TOMBSTONE", seed=1).astype(float)
+    ok = _render("chip_2pad", "OK", seed=1).astype(float)
+    centre = slice(40, 88)
+    # The upright tin end cap faces the camera: the part area is clearly brighter than a flat black resistor.
+    assert img[centre, centre].mean() > ok[centre, centre].mean()
+
+
+def test_tombstone_tilt_spans_threshold_to_upright():
+    from simple_sim.defects import classify_defect
+
+    rng = np.random.default_rng(0)
+    tol = {**TOL, "tombstone_tilt_deg": 30.0}
+    tilts = [sample_defect_params("TOMBSTONE", rng, tol)["tilt_deg"] for _ in range(400)]
+    assert min(tilts) >= 30.0 and max(tilts) <= 90.0
+    assert min(tilts) < 35.0 and max(tilts) > 85.0
+    assert all(classify_defect({}, {"type": "TOMBSTONE", "shift_x": 0.0, "shift_y": 0.0, "rotation_deg": 0.0,
+                                    "tilt_deg": t}, tol) == "TOMBSTONE" for t in tilts)
+
+
+def test_rework_residue_stays_out_of_the_keepout():
+    import cv2
+
+    from simple_sim.generators.opencv2d.photoreal import _rework
+
+    img = np.full((256, 256, 3), 100.0, dtype=np.float32)
+    keepout = (96, 112, 160, 144)
+    for seed in range(20):
+        _rework(img, keepout, 20.0, np.random.default_rng(seed), 1.0)
+    x0, y0, x1, y1 = keepout
+    assert np.all(img[y0:y1, x0:x1] == 100.0)  # label-relevant area untouched
+    assert np.abs(img - 100.0).max() > 20      # but residue was drawn elsewhere
+
+
+def test_rework_can_be_disabled():
+    a = _render("chip_2pad", "OK", seed=3, rework_artifacts=0.0)
+    b = _render("chip_2pad", "OK", seed=3, rework_artifacts=0.0)
+    assert np.array_equal(a, b)
+
+
+def test_solder_defect_layout():
+    from simple_sim.generators.opencv2d.photoreal import solder_defect_layout
+
+    pads = [{"x": 20, "y": 40, "w": 30, "h": 40}, {"x": 110, "y": 40, "w": 30, "h": 40}]
+    body = np.array([[35, 45], [125, 45], [125, 75], [35, 75]], dtype=np.float32)
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        assert 1 <= len(solder_defect_layout("EXCESS_SOLDER", pads, body, rng)["excess"]) <= 2
+        balls = solder_defect_layout("SOLDER_BALL", pads, body, rng)["balls"]
+        assert 1 <= len(balls) <= 4
+        for x, y, r in balls:  # never on a pad, never under the body
+            assert not any(p["x"] - r < x < p["x"] + p["w"] + r and p["y"] - r < y < p["y"] + p["h"] + r for p in pads)
+            assert cv2_point_outside(body, x, y, r)
+    assert solder_defect_layout("OK", pads, body, np.random.default_rng(0)) == {"excess": [], "balls": []}
+
+
+def cv2_point_outside(poly, x, y, r):
+    import cv2
+
+    return cv2.pointPolygonTest(poly, (x, y), True) <= -r
+
+
+def test_flat_style_draws_solder_defects():
+    ok = _render("chip_2pad", "OK", seed=4, style="flat")
+    ball = _render("chip_2pad", "SOLDER_BALL", seed=4, style="flat")
+    assert np.abs(ok.astype(int) - ball).sum() > 0
+
+
+def test_phone_camera_preset():
+    from simple_sim.config import _validate_camera
+    from simple_sim.generators.opencv2d.photoreal import apply_view, camera_settings, view_canvas
+
+    _validate_camera({"preset": "phone", "tilt_deg": [10.0, 30.0]})
+    cam = camera_settings({"preset": "phone", "jpeg_quality": [90, 90]})
+    assert cam["tilt_deg"] == [5.0, 40.0] and cam["jpeg_quality"] == [90, 90]
+    # AOI default: no extra canvas, view is the identity
+    flat = {"tilt": 0.0, "azimuth": 0.0, "zoom": 1.0}
+    assert view_canvas((128, 96), flat) == (128, 96)
+    img = np.random.default_rng(0).integers(0, 255, (96, 128, 3)).astype(np.uint8)
+    assert np.array_equal(apply_view(img, flat, (128, 96)), img)
+    # Zoomed out + oblique: larger canvas, output at ROI size
+    pose = {"tilt": 40.0, "azimuth": 30.0, "zoom": 2.0}
+    cw, ch = view_canvas((128, 96), pose)
+    assert cw > 2 * 128 and ch > 2 * 96
+    assert apply_view(np.zeros((ch, cw, 3), np.uint8), pose, (128, 96)).shape == (96, 128, 3)
+    phone = _render("chip_2pad", "OK", seed=2, camera={"preset": "phone"})
+    assert phone.shape == (128, 128, 3)
+    assert not np.array_equal(phone, _render("chip_2pad", "OK", seed=2))

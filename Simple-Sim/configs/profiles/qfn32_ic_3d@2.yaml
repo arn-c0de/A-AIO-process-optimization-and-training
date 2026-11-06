@@ -1,0 +1,59 @@
+# Component Profile (Schema v1, 3D)
+
+profile:
+  profile_id: "qfn32_ic_3d@2"
+  schema_version: 1
+  supported_render_backends: ["blender_3d"]
+  description: "QFN-32 3D (Blender/Cycles): simple PBR scene for AOI-style ROI"
+  created_at: "2026-11-06T00:00:00Z"
+
+component:
+  type: "qfn_ic"
+  footprint: "qfn_32"
+  package: "QFN-32"
+  nominal_dims_mm:
+    length: 5.0
+    width: 4.0
+    height: 0.85
+
+geometry_ranges:
+  # Same semantics as the 2D profile: the Blender backend uses the 2D pad layout (pixels at roi.mm_per_px).
+  pad_width: [15.0, 18.0]
+  pad_height: [37.0, 43.0]
+  pad_spacing: [173.0, 187.0]
+  pad_spacing_y: [173.0, 187.0]
+  component_length: [162.0, 172.0]
+  component_width: [162.0, 172.0]
+
+tolerances:
+  ok_shift_px: 2.0
+  ok_rotation_deg: 3.0
+  tombstone_tilt_deg: 70.0
+
+defect_set:
+  - "OK"
+  - "MISSING"
+  - "MISALIGNED"
+  - "TOMBSTONE"
+  - "SOLDER_BALL"
+  - "EXCESS_SOLDER"
+
+render_3d:
+  camera:
+    # AOI top camera: straight down (orthographic, framed to the ROI by the renderer).
+    location_mm: [0.0, 0.0, 40.0]
+    look_at_mm: [0.0, 0.0, 0.0]
+    focal_length_mm: 60.0
+  lighting:
+    # AOI ring light around the camera axis; defaults are calibrated to the baked board colours.
+    ring_light: {}
+  materials:
+    # Board (mask, copper, silkscreen) comes from the shared 2D generator; only the 3D parts are set here.
+    body:
+      base_color: [0.02, 0.02, 0.02]
+      roughness: 0.60
+      metallic: 0.0
+    solder:
+      base_color: [0.70, 0.70, 0.72]
+      roughness: 0.18
+      metallic: 1.0

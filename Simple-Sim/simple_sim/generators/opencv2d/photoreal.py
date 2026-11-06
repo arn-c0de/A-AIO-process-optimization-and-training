@@ -2,7 +2,8 @@
 
 Produces the un-augmented ROI (substrate, pads, solder fillets, component body) with
 procedural textures and simple physically motivated shading, rendered at 2x and
-downsampled for anti-aliasing. Every random choice is drawn from the passed ``rng``,
+downsampled for anti-aliasing, then passed through a simple camera model (lens blur, uneven
+illumination, highlight roll-off, sensor noise) so it does not look like a vector drawing. Every random choice is drawn from the passed ``rng``,
 so a sample is fully determined by its seed.
 
 Visual targets were calibrated against photos of real assembled boards: dark olive
@@ -13,6 +14,8 @@ molded SOT/SOIC/QFN bodies with laser markings and metallic gull-wing leads.
 
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -28,8 +31,11 @@ _LIGHT /= np.linalg.norm(_LIGHT)
 _HALF = _LIGHT + np.array([0.0, 0.0, 1.0], dtype=np.float32)
 _HALF /= np.linalg.norm(_HALF)
 
-# Solder-mask greens measured on real boards (BGR).
-_MASK_PALETTE = ((44, 86, 34), (50, 96, 40), (38, 76, 30), (56, 104, 46), (48, 90, 42), (42, 82, 38))
+# Solder-mask colours (BGR): median of bare mask pixels in 7 photos of the production boards. The
+# mask is teal-green (hue ~150-170 deg), not the yellow-green it reads as to the eye.
+_MASK_PALETTE = ((77, 94, 26), (71, 91, 33), (68, 98, 28), (113, 137, 36), (94, 118, 35), (81, 96, 55), (93, 109, 61))
+# Mask over copper (traces, pours) relative to mask over bare laminate, measured on the same photos.
+_COPPER_UNDER_MASK = np.array((1.29, 1.39, 1.40), dtype=np.float32)
 _SILKSCREEN = np.array((215, 228, 228), dtype=np.float32)
 _SOLDER = np.array((176, 180, 184), dtype=np.float32)
 _FINISHES = {"enig": np.array((70, 165, 205), dtype=np.float32), "hasl": np.array((165, 170, 175), dtype=np.float32)}
@@ -40,6 +46,8 @@ _END_CAP = np.array((168, 171, 174), dtype=np.float32)
 _RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
 _REFDES_PREFIX = {"resistor": "R", "capacitor": "C", "sot": "Q", "soic": "U", "qfn": "U"}
 _MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
+_FONTS = (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX)
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 def _family(footprint: str, component_type: str) -> str:
@@ -63,22 +71,35 @@ def _blend(img: np.ndarray, color: np.ndarray, alpha: np.ndarray) -> None:
     img += color * a
 
 
-def _shade_heightmap(hmap: np.ndarray, base: np.ndarray, spec_power: float = 40.0, spec_gain: float = 0.9) -> np.ndarray:
-    """Lambert + Blinn-Phong shading of a height map. Returns float BGR (H, W, 3)."""
+def _shade_solder(hmap: np.ndarray, base: np.ndarray, env: np.ndarray, spec_power: float, spec_gain: float) -> np.ndarray:
+    """Shade a solder height map as a rough mirror. Returns float BGR (H, W, 3).
+
+    Solder is metallic: little diffuse light, mostly a reflection of the surroundings. Flat areas
+    mirror the bright overhead illumination, slopes mirror the dark board (*env*), and slopes facing
+    the light catch a sharp highlight.
+    """
     gy, gx = np.gradient(hmap)
     n = np.dstack([-gx, -gy, np.ones_like(hmap)])
     n /= np.linalg.norm(n, axis=2, keepdims=True)
-    ndl = np.clip(n @ _LIGHT, 0.0, 1.0)
-    spec = np.where(ndl > 0, np.clip(n @ _HALF, 0.0, 1.0) ** spec_power, 0.0)
-    out = base * (0.38 + 0.62 * ndl)[..., None]
+    up = np.clip(2.0 * n[..., 2] ** 2 - 1.0, 0.0, 1.0)  # z of the reflected view ray
+    sky = up**3
+    spec = np.clip(n @ _HALF, 0.0, 1.0) ** spec_power
+    out = base * (0.12 + 0.18 * np.clip(n @ _LIGHT, 0.0, 1.0))[..., None]
+    out += base * (0.8 * sky)[..., None] + env * (0.45 * (1.0 - sky))[..., None]
     out += (255.0 * spec_gain * spec)[..., None]
     return out
 
 
+def _smooth_noise(shape: tuple[int, int], cell: float, rng: np.random.Generator) -> np.ndarray:
+    """Zero-mean, roughly unit-amplitude value noise with feature size *cell* pixels."""
+    h, w = shape
+    small = rng.normal(0.0, 1.0, (int(h / cell) + 2, int(w / cell) + 2)).astype(np.float32)
+    return cv2.resize(small, (w, h), interpolation=cv2.INTER_CUBIC)
+
+
 def _text_layer(shape: tuple[int, int], text: str, center: tuple[float, float], height_px: float,
-                angle_deg: float, thickness: int) -> np.ndarray:
+                angle_deg: float, thickness: int, font: int = cv2.FONT_HERSHEY_SIMPLEX) -> np.ndarray:
     """Anti-aliased text mask (0..1) rotated by *angle_deg* around *center*."""
-    font = cv2.FONT_HERSHEY_SIMPLEX
     scale = max(0.15, height_px / 22.0)
     (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
     canvas = np.zeros((th * 3, tw + th * 2), dtype=np.uint8)
@@ -93,6 +114,31 @@ def _text_layer(shape: tuple[int, int], text: str, center: tuple[float, float], 
 
 # --------------------------------------------------------------------------- substrate
 
+@lru_cache(maxsize=8)
+def texture_files(texture_dir: str) -> tuple[Path, ...]:
+    """Sorted image files in *texture_dir* (sorted so a seed always picks the same file)."""
+    return tuple(sorted(p for p in Path(texture_dir).iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS))
+
+
+def _texture_substrate(h: int, w: int, texture_dir: str, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    """Random crop of a real photo of empty board area, randomly flipped/rotated, scaled to (h, w)."""
+    files = texture_files(texture_dir)
+    path = files[int(rng.integers(len(files)))]
+    tex = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if tex is None:
+        raise OSError(f"Failed to read substrate texture: {path}")
+    tex = np.rot90(tex, int(rng.integers(4)))
+    if rng.random() < 0.5:
+        tex = tex[:, ::-1]
+    th, tw = tex.shape[:2]
+    rh, rw = h // SS, w // SS  # ROI size at camera resolution
+    if th >= rh and tw >= rw:  # same scale as the camera: crop a ROI-sized patch
+        y, x = int(rng.integers(th - rh + 1)), int(rng.integers(tw - rw + 1))
+        tex = tex[y:y + rh, x:x + rw]
+    img = cv2.resize(np.ascontiguousarray(tex), (w, h), interpolation=cv2.INTER_CUBIC).astype(np.float32)
+    return img, np.median(img.reshape(-1, 3), axis=0)
+
+
 def _substrate(h: int, w: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     base = np.array(_MASK_PALETTE[int(rng.integers(len(_MASK_PALETTE)))], dtype=np.float32)
     base *= float(rng.uniform(0.92, 1.08))
@@ -100,8 +146,7 @@ def _substrate(h: int, w: int, rng: np.random.Generator) -> tuple[np.ndarray, np
     img[:] = base
 
     # Low-frequency mottling (resin thickness) + fibre weave + fine grain.
-    coarse = rng.normal(0.0, 1.0, (h // (32 * SS) + 2, w // (32 * SS) + 2)).astype(np.float32)
-    coarse = cv2.resize(coarse, (w, h), interpolation=cv2.INTER_CUBIC)
+    coarse = _smooth_noise((h, w), 32 * SS, rng)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     period = float(rng.uniform(6.0, 9.0)) * SS
     weave = np.sin(2 * np.pi * xx / period) * np.sin(2 * np.pi * yy / period)
@@ -113,8 +158,23 @@ def _substrate(h: int, w: int, rng: np.random.Generator) -> tuple[np.ndarray, np
 def _traces_and_vias(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int]], keepout: tuple[int, int, int, int],
                      rng: np.random.Generator) -> None:
     h, w = img.shape[:2]
-    trace_col = np.clip(base * np.array((1.30, 1.33, 1.52), dtype=np.float32), 0, 255)
+    trace_col = np.clip(base * _COPPER_UNDER_MASK, 0, 255)
     mask = np.zeros((h, w), dtype=np.uint8)
+    x0, y0, x1, y1 = keepout
+
+    # Copper pours: large planes with straight, 45-degree chamfered edges, kept clear of the part.
+    if rng.random() < 0.6:
+        pour = np.zeros((h, w), dtype=np.uint8)
+        for _ in range(int(rng.integers(1, 3))):
+            pw_, ph_ = float(rng.uniform(0.4, 1.2)) * w, float(rng.uniform(0.4, 1.2)) * h
+            ax, ay = float(rng.uniform(-0.2 * w, w - 0.5 * pw_)), float(rng.uniform(-0.2 * h, h - 0.5 * ph_))
+            c = float(rng.uniform(0.05, 0.25)) * min(pw_, ph_)
+            poly = [(ax + c, ay), (ax + pw_ - c, ay), (ax + pw_, ay + c), (ax + pw_, ay + ph_ - c),
+                    (ax + pw_ - c, ay + ph_), (ax + c, ay + ph_), (ax, ay + ph_ - c), (ax, ay + c)]
+            cv2.fillPoly(pour, [np.round(poly).astype(np.int32)], 255)
+        gap = int(round(float(rng.uniform(3.0, 6.0)) * SS))
+        cv2.rectangle(pour, (x0 - gap, y0 - gap), (x1 + gap, y1 + gap), 0, -1)
+        mask = np.maximum(mask, pour)
 
     def _polyline(p0: tuple[int, int], p1: tuple[int, int], width: int) -> None:
         # Route with one 45-degree jog like real autorouted traces.
@@ -149,9 +209,8 @@ def _traces_and_vias(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
     alpha = cv2.GaussianBlur(mask, (0, 0), 0.6 * SS).astype(np.float32) / 255.0 * 0.7
     _blend(img, trace_col, alpha)
 
-    # Vias outside the footprint keep-out.
-    x0, y0, x1, y1 = keepout
-    for _ in range(int(rng.integers(0, 4))):
+    # Vias outside the footprint keep-out; most are tented (covered by mask), some open.
+    for _ in range(int(rng.integers(0, 13))):
         for _try in range(6):
             vx, vy = int(rng.integers(0, w)), int(rng.integers(0, h))
             if not (x0 <= vx <= x1 and y0 <= vy <= y1):
@@ -164,11 +223,12 @@ def _traces_and_vias(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
         _blend(img, trace_col, ring.astype(np.float32) / 255.0 * 0.9)
         hole = np.zeros((h, w), dtype=np.uint8)
         cv2.circle(hole, (vx, vy), max(1, int(r * 0.45)), 255, -1, lineType=cv2.LINE_AA)
-        _blend(img, np.array((22, 30, 24), dtype=np.float32), hole.astype(np.float32) / 255.0)
+        hole_col = base * 0.7 if rng.random() < 0.85 else np.array((22, 30, 24), dtype=np.float32)
+        _blend(img, hole_col, hole.astype(np.float32) / 255.0)
 
 
 def _silkscreen(img: np.ndarray, keepout: tuple[int, int, int, int], family: str, rng: np.random.Generator) -> None:
-    if rng.random() < 0.2:
+    if rng.random() < 0.45:  # dense production boards often have no print next to small parts
         return
     h, w = img.shape[:2]
     x0, y0, x1, y1 = keepout
@@ -195,19 +255,34 @@ def _silkscreen(img: np.ndarray, keepout: tuple[int, int, int, int], family: str
     layer = np.maximum(layer, _text_layer((h, w), refdes, (cx, cy), text_h, angle, max(1, SS)))
 
     layer = cv2.GaussianBlur(layer, (0, 0), 0.5 * SS)
-    _blend(img, _SILKSCREEN, np.clip(layer * 0.85, 0, 1))
+    ink = 0.85 + 0.12 * _smooth_noise((h, w), 2 * SS, rng)  # screen-printed ink is blotchy, not uniform
+    _blend(img, _SILKSCREEN, np.clip(layer * ink, 0, 1))
 
 
 # --------------------------------------------------------------------------- pads & solder
 
+def thermal_pad_index(pads: list[dict[str, int]]) -> int | None:
+    """Index of an exposed thermal pad (QFN): the largest pad, if clearly larger than the others."""
+    if len(pads) < 3:
+        return None
+    areas = [p["w"] * p["h"] for p in pads]
+    i = max(range(len(areas)), key=areas.__getitem__)
+    return i if areas[i] > 3 * sorted(areas)[len(areas) // 2] else None
+
+
 def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int]], body_mask: np.ndarray,
-                     rng: np.random.Generator) -> None:
+                     rng: np.random.Generator, finish: np.ndarray, *, with_solder: bool = True,
+                     excess: frozenset[int] = frozenset()) -> None:
+    """Pad finish and solder; pads in *excess* get a high, convex (bulging) joint instead of a fillet."""
     h, w = img.shape[:2]
-    finish = _FINISHES["enig" if rng.random() < 0.5 else "hasl"] * float(rng.uniform(0.92, 1.06))
     solder = _SOLDER * float(rng.uniform(0.9, 1.05))
     mask_edge = base * 0.65
+    env = base * 0.8 + 12.0  # what slopes of the solder mirror: the surrounding board
+    # Surface irregularity: real fillets are lumpy, not mathematically smooth.
+    lumps = _smooth_noise((h, w), 8 * SS, rng) * 0.06
+    thermal = thermal_pad_index(pads)
 
-    for pad in pads:
+    for i, pad in enumerate(pads):
         x0, y0 = max(0, pad["x"]), max(0, pad["y"])
         x1, y1 = min(w, pad["x"] + pad["w"]), min(h, pad["y"] + pad["h"])
         if x1 - x0 < 3 or y1 - y0 < 3:
@@ -216,6 +291,8 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
         cv2.rectangle(img, (x0 - SS, y0 - SS), (x1 + SS - 1, y1 + SS - 1), mask_edge.tolist(), SS)
         region = img[y0:y1, x0:x1]
         region[:] = finish
+        if not with_solder:
+            continue
 
         ph, pw = region.shape[:2]
         covered = body_mask[y0:y1, x0:x1] > 0
@@ -226,17 +303,210 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
         if covered.any():
             dist = cv2.distanceTransform((~covered).astype(np.uint8), cv2.DIST_L2, 3)
             t = 1.0 - dist / max(1.0, float(dist.max()))
-            hmap = np.where(covered, 1.0, t ** 1.8) * rim * amp  # concave fillet rising to the terminal
-            spec_power, spec_gain = 40.0, 0.9
+            if i in excess:  # too much solder: convex bulge, higher than the terminal
+                hmap = np.where(covered, 1.0, t ** 0.5) * rim * amp * 1.5
+            else:
+                hmap = np.where(covered, 1.0, t ** 1.8) * rim * amp  # concave fillet rising to the terminal
+            spec_power, spec_gain = 60.0, 0.85
         else:
-            u, v = (xx / (pw - 1)) * 2 - 1, (yy / (ph - 1)) * 2 - 1
-            dome = np.clip(1.0 - (np.abs(u) ** 3 + np.abs(v) ** 3) * 0.85, 0, 1)  # reflowed paste, no part
+            # Reflowed paste, no part. Thermal pads are printed through a window-pane stencil,
+            # so the solder pulls into separate flat islands with bare finish in between.
+            nx, ny = (max(2, round(3 * pw / min(pw, ph))), max(2, round(3 * ph / min(pw, ph)))) if i == thermal else (1, 1)
+            u, v = ((xx / pw * nx) % 1.0) * 2 - 1, ((yy / ph * ny) % 1.0) * 2 - 1
+            dome = np.clip(1.0 - (np.abs(u) ** 3 + np.abs(v) ** 3) * (0.85 if nx * ny == 1 else 1.2), 0, 1)
             hmap = dome * rim * min(amp * 0.35, 4.0 * SS)
-            spec_power, spec_gain = 25.0, 0.35
-        shaded = _shade_heightmap(hmap, solder, spec_power=spec_power, spec_gain=spec_gain)
+            spec_power, spec_gain = 40.0, 0.5
+        hmap = hmap * (1.0 + lumps[y0:y1, x0:x1])
+        shaded = _shade_solder(hmap, solder, env, spec_power, spec_gain)
         alpha = np.clip(hmap / (0.08 * amp), 0.0, 1.0)
         _blend(region, shaded, alpha)
         img[y0:y1, x0:x1] = region
+
+
+# --------------------------------------------------------------------------- solder defects
+
+def solder_defect_layout(defect_type: str, pads: list[dict[str, int]], body: np.ndarray | None,
+                         rng: np.random.Generator) -> dict[str, Any]:
+    """Where the inspected part's solder defects are; shared by the 2D renderer and the 3D bake.
+
+    ``excess``: indices of pads with too much (bulging) solder. ``balls``: ``(x, y, r)`` solder balls on
+    the mask next to the joints, never on a pad or under the body (*body*: its 4 corner points).
+    """
+    out: dict[str, Any] = {"excess": [], "balls": []}
+    thermal = thermal_pad_index(pads)
+    joints = [i for i in range(len(pads)) if i != thermal]
+    if defect_type == "EXCESS_SOLDER":
+        k = int(rng.integers(1, min(len(joints), 4) + 1))
+        out["excess"] = sorted(int(i) for i in rng.choice(joints, size=k, replace=False))
+    elif defect_type == "SOLDER_BALL":
+        ref = _pad_ref([pads[i] for i in joints])
+        for _ in range(int(rng.integers(1, 5))):
+            r = max(float(rng.uniform(0.12, 0.25)) * ref, float(rng.uniform(2.5, 4.5)) * SS)  # >= ~5-9 camera px across
+            for _try in range(30):
+                p = pads[joints[int(rng.integers(len(joints)))]]
+                a, d = float(rng.uniform(0, 2 * np.pi)), float(rng.uniform(0.6, 1.3)) * max(p["w"], p["h"])
+                x, y = p["x"] + p["w"] / 2.0 + d * np.cos(a), p["y"] + p["h"] / 2.0 + d * np.sin(a)
+                on_pad = any(q["x"] - r < x < q["x"] + q["w"] + r and q["y"] - r < y < q["y"] + q["h"] + r for q in pads)
+                under = body is not None and cv2.pointPolygonTest(body.astype(np.float32), (x, y), True) > -r
+                if not on_pad and not under:
+                    out["balls"].append((float(x), float(y), r))
+                    break
+    return out
+
+
+def _draw_solder_balls(img: np.ndarray, base: np.ndarray, balls: list[tuple[float, float, float]]) -> None:
+    """Small mirror-like solder spheres with a contact shadow."""
+    h, w = img.shape[:2]
+    env = base * 0.8 + 12.0
+    for x, y, r in balls:
+        x0, y0, x1, y1 = int(x - 2 * r), int(y - 2 * r), int(x + 2 * r) + 1, int(y + 2 * r) + 1
+        if x1 <= 0 or y1 <= 0 or x0 >= w or y0 >= h:
+            continue
+        cx0, cy0, cx1, cy1 = max(0, x0), max(0, y0), min(w, x1), min(h, y1)
+        yy, xx = np.mgrid[cy0:cy1, cx0:cx1].astype(np.float32)
+        d2 = ((xx - x) ** 2 + (yy - y) ** 2) / (r * r)
+        region = img[cy0:cy1, cx0:cx1]
+        shadow = np.clip(1.0 - (((xx - x - 0.4 * r) ** 2 + (yy - y - 0.4 * r) ** 2) / (r * r) - 0.6) / 0.8, 0, 1)
+        region *= (1.0 - 0.4 * shadow)[..., None]
+        hmap = np.sqrt(np.clip(1.0 - d2, 0.0, 1.0)) * r
+        _blend(region, _shade_solder(hmap, _SOLDER, env, 60.0, 0.9), np.clip((1.0 - d2) * r, 0.0, 1.0))
+
+
+def _solder_bulge(img: np.ndarray, base: np.ndarray, center, length: float, width: float, angle_deg: float) -> None:
+    """Shiny convex solder blob (too much solder), e.g. over a chip's end cap or a buried lead foot."""
+    h, w = img.shape[:2]
+    u, v, m = _rect_alpha(h, w, center, length, width, angle_deg)
+    bulge = np.clip(1.0 - (u / (length / 2.0)) ** 2 - (v / (width / 2.0)) ** 2, 0.0, 1.0)
+    hmap = np.sqrt(bulge) * 0.4 * min(length, width)
+    _blend(img, _shade_solder(hmap, _SOLDER, base * 0.8 + 12.0, 60.0, 0.85), np.clip(bulge * 4.0, 0, 1) * m)
+
+
+def _draw_excess(img: np.ndarray, base: np.ndarray, family: str, pads: list[dict[str, int]], excess: list[int],
+                 center: tuple[float, float], length: float, width: float, angle_deg: float) -> None:
+    """Too much solder on the pads in *excess*: chips get it over the end cap, leaded parts over the lead foot."""
+    a = np.radians(angle_deg)
+    axis = np.array([np.cos(a), np.sin(a)])
+    for i in excess:
+        p = pads[i]
+        pc = np.array([p["x"] + p["w"] / 2.0, p["y"] + p["h"] / 2.0])
+        if family in ("resistor", "capacitor"):
+            side = 1.0 if (pc - np.array(center)) @ axis >= 0 else -1.0
+            _solder_bulge(img, base, np.array(center) + axis * side * length * 0.42, length * 0.3, width * 1.06, angle_deg)
+        elif family in ("sot", "soic"):
+            _solder_bulge(img, base, pc, p["w"] * 0.95, p["h"] * 0.95, 0.0)
+        elif family == "qfn":  # bulges out beyond the package edge
+            out = pc - np.array(center)
+            out = np.where(np.abs(out) >= np.abs(out).max(), np.sign(out), 0.0)
+            _solder_bulge(img, base, pc + out * 0.35 * np.array([p["w"], p["h"]]), p["w"] * 1.1, p["h"] * 1.1, 0.0)
+
+
+# --------------------------------------------------------------------------- camera
+
+# Camera model parameters (``render.camera``); tools/calibrate_camera.py fits the AOI ones to real ROIs.
+# Ranges are sampled per image.
+CAMERA_DEFAULTS: dict[str, Any] = {
+    "blur_sigma": [0.55, 0.95],    # lens/optics blur (Gaussian sigma in camera pixels)
+    "read_noise": [1.0, 4.0],      # read noise variance (8-bit levels^2)
+    "shot_noise": 0.04,            # shot noise variance per intensity level
+    "tilt_deg": [0.0, 0.0],        # oblique view: angle between optical axis and board normal
+    "zoom": [1.0, 1.0],            # >1: camera farther away, the part appears this much smaller
+    "defocus": [0.0, 0.0],         # extra blur (sigma) at the far/near edge of a tilted view (depth of field)
+    "sharpen": [0.0, 0.0],         # phone ISP edge sharpening (unsharp mask amount)
+    "jpeg_quality": [100, 100],    # < 95 compresses
+}
+# ``render.camera.preset``: a fixed AOI camera (default) or handheld phone photos.
+CAMERA_PRESETS: dict[str, dict[str, Any]] = {
+    "aoi": {},
+    "phone": {"tilt_deg": [5.0, 40.0], "zoom": [1.0, 2.5], "blur_sigma": [0.8, 1.6], "defocus": [0.5, 2.5],
+              "read_noise": [4.0, 16.0], "shot_noise": 0.08, "sharpen": [0.3, 0.8], "jpeg_quality": [70, 92]},
+}
+
+
+def camera_settings(cfg: dict[str, Any] | None) -> dict[str, Any]:
+    """Effective camera parameters: defaults < preset < explicit ``render.camera`` keys."""
+    cfg = dict(cfg or {})
+    return {**CAMERA_DEFAULTS, **CAMERA_PRESETS[str(cfg.pop("preset", "aoi"))], **cfg}
+
+
+def sample_camera_pose(cam: dict[str, Any], rng: np.random.Generator) -> dict[str, float]:
+    """Viewing geometry for one image: tilt (deg), its azimuth in the image (deg), zoom."""
+    return {"tilt": float(rng.uniform(*cam["tilt_deg"])), "azimuth": float(rng.uniform(0.0, 360.0)),
+            "zoom": float(rng.uniform(*cam["zoom"]))}
+
+
+def view_canvas(size: tuple[int, int], pose: dict[str, float]) -> tuple[int, int]:
+    """Board area to render so that *size* is still covered after zooming out and foreshortening."""
+    grow = pose["zoom"] / max(np.cos(np.radians(pose["tilt"])), 0.5) * (1.1 if pose["tilt"] > 0 else 1.0)
+    return int(np.ceil(size[0] * grow)), int(np.ceil(size[1] * grow))
+
+
+def apply_view(img: np.ndarray, pose: dict[str, float], size: tuple[int, int]) -> np.ndarray:
+    """Look at a top-down render of the board (from :func:`view_canvas`) from farther away and at an angle.
+
+    The board plane is tilted by ``pose['tilt']`` about an in-plane axis perpendicular to
+    ``pose['azimuth']`` and projected with a pinhole camera; the output is centred on the part.
+    """
+    width, height = size
+    z = pose["zoom"]
+    small = cv2.resize(img, (max(1, int(round(img.shape[1] / z))), max(1, int(round(img.shape[0] / z)))),
+                       interpolation=cv2.INTER_AREA) if z > 1.0 else img
+    sh, sw = small.shape[:2]
+    if pose["tilt"] <= 0.0 and (sw, sh) == (width, height):
+        return small
+    t, a = np.radians(pose["tilt"]), np.radians(pose["azimuth"])
+    d = np.array([np.cos(a), np.sin(a)])                              # tilt direction in the image
+    corners = np.array([[0, 0], [sw, 0], [sw, sh], [0, sh]], dtype=np.float64) - [sw / 2.0, sh / 2.0]
+    along, across = corners @ d, corners @ np.array([-d[1], d[0]])
+    dist = 4.0 * max(width, height)                                   # pinhole distance: mild keystone
+    depth = along * np.sin(t)                                         # towards the camera on one side
+    scale = dist / (dist - depth)
+    proj = (np.outer(along * np.cos(t), d) + np.outer(across, [-d[1], d[0]])) * scale[:, None]
+    dst = (proj + [width / 2.0, height / 2.0]).astype(np.float32)
+    m = cv2.getPerspectiveTransform((corners + [sw / 2.0, sh / 2.0]).astype(np.float32), dst)
+    return cv2.warpPerspective(small, m, (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+
+
+def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] | None = None,
+                 pose: dict[str, float] | None = None) -> np.ndarray:
+    """Turn an ideal render (2D supersampled or 3D) into a camera image. BGR in, uint8 out.
+
+    Lens blur (plus depth-of-field falloff along the tilt of an oblique *pose*), uneven
+    illumination, soft highlight roll-off instead of hard clipping, signal-dependent sensor noise
+    that is slightly correlated by demosaicing, and for phones ISP sharpening and JPEG.
+    *cfg* is ``render.camera`` (see :func:`camera_settings`).
+    """
+    c = camera_settings(cfg)
+    h, w = img.shape[:2]
+    img = img.astype(np.float32)
+    sigma0 = max(1e-3, float(rng.uniform(*c["blur_sigma"])))
+    blurred = cv2.GaussianBlur(img, (0, 0), sigma0)
+    defocus = float(rng.uniform(*c["defocus"]))
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    if pose is not None and pose["tilt"] > 0.0 and defocus > 0.0:
+        a = np.radians(pose["azimuth"])  # focus on the part; sharpness falls off towards near/far edge
+        off = np.abs((xx - w / 2.0) * np.cos(a) + (yy - h / 2.0) * np.sin(a)) / (0.5 * max(h, w))
+        weight = np.clip(off * np.sin(np.radians(pose["tilt"])) / np.sin(np.radians(40.0)), 0.0, 1.0)[..., None]
+        far = cv2.GaussianBlur(img, (0, 0), float(np.hypot(sigma0, defocus)))
+        blurred = blurred * (1.0 - weight) + far * weight
+    img = blurred
+    a = float(rng.uniform(0.0, 2.0 * np.pi))
+    ramp = ((xx - w / 2.0) * np.cos(a) + (yy - h / 2.0) * np.sin(a)) / max(h, w)
+    img *= (1.0 + float(rng.uniform(0.04, 0.12)) * ramp + 0.03 * _smooth_noise((h, w), max(h, w) / 3.0, rng))[..., None]
+    knee = 205.0
+    img = np.where(img > knee, knee + (255.0 - knee) * (1.0 - np.exp(-(img - knee) / (255.0 - knee))), img)
+    sigma = np.sqrt(float(rng.uniform(*c["read_noise"])) + float(c["shot_noise"]) * np.clip(img, 0.0, None))
+    noise = rng.normal(0.0, 1.0, img.shape).astype(np.float32)
+    noise = cv2.GaussianBlur(noise, (0, 0), 0.5) * 1.6  # demosaic correlation, variance roughly kept
+    noise += rng.normal(0.0, 0.35, (h, w, 1)).astype(np.float32)  # luminance-dominated
+    img = img + sigma * noise
+    amount = float(rng.uniform(*c["sharpen"]))
+    if amount > 0.0:
+        img = img + amount * (img - cv2.GaussianBlur(img, (0, 0), 1.2))
+    out = _clip8(img)
+    quality = int(round(float(rng.uniform(*c["jpeg_quality"]))))
+    if quality < 95:
+        out = cv2.imdecode(cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, quality])[1], cv2.IMREAD_COLOR)
+    return out
 
 
 # --------------------------------------------------------------------------- component body
@@ -246,6 +516,12 @@ def _local_coords(h: int, w: int, center: tuple[float, float], angle_deg: float)
     a = np.radians(angle_deg)
     dx, dy = xx - center[0], yy - center[1]
     return dx * np.cos(a) + dy * np.sin(a), -dx * np.sin(a) + dy * np.cos(a)
+
+
+def _rect_alpha(h: int, w: int, center, length: float, width: float, angle_deg: float):
+    """Local coords (u along *length*) and an anti-aliased 0..1 mask of a rotated rectangle."""
+    u, v = _local_coords(h, w, center, angle_deg)
+    return u, v, np.clip(0.5 - np.maximum(np.abs(u) - length / 2.0, np.abs(v) - width / 2.0), 0.0, 1.0)
 
 
 def _contact_shadow(img: np.ndarray, mask: np.ndarray, strength: float, spread: float) -> None:
@@ -293,27 +569,32 @@ def _marking(img: np.ndarray, family: str, center: tuple[float, float], length: 
     layer = np.zeros((h, w), dtype=np.float32)
     a = np.radians(angle_deg)
     perp = np.array([-np.sin(a), np.cos(a)], dtype=np.float32)
+    along = np.array([np.cos(a), np.sin(a)], dtype=np.float32)
+    font = _FONTS[int(rng.integers(len(_FONTS)))]
     for i, text in enumerate(lines):
         off = (i - (len(lines) - 1) / 2.0) * text_h * 1.6
-        pos = np.array(center, dtype=np.float32) + perp * off
-        layer = np.maximum(layer, _text_layer((h, w), text, (float(pos[0]), float(pos[1])), text_h, angle_deg, max(1, SS)))
+        # Lines are left-aligned on real parts, so their centres wander a little.
+        pos = np.array(center, dtype=np.float32) + perp * off + along * float(rng.uniform(-0.15, 0.15)) * text_h
+        layer = np.maximum(layer, _text_layer((h, w), text, (float(pos[0]), float(pos[1])), text_h, angle_deg,
+                                              max(1, SS), font))
     color = np.array((225, 225, 220), dtype=np.float32) if family == "resistor" else np.array((190, 190, 188), dtype=np.float32)
     layer = cv2.GaussianBlur(layer, (0, 0), 0.4 * SS)
-    _blend(img, color, layer * (0.9 if family == "resistor" else 0.55))
+    # Printed ink (resistors) is blotchy, laser marking (ICs) is a grainy, partly etched matte surface.
+    grain = _smooth_noise((h, w), SS, rng)
+    texture = 0.85 + 0.15 * grain if family == "resistor" else 0.8 + 0.2 * grain
+    _blend(img, color, np.clip(layer * texture * (0.9 if family == "resistor" else float(rng.uniform(0.4, 0.65))), 0, 1))
 
 
 def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length: float, width: float, angle_deg: float,
-               base_color: np.ndarray, rng: np.random.Generator, *, raised_sign: float = 0.0) -> None:
+               base_color: np.ndarray, rng: np.random.Generator, *, marks: bool = True) -> None:
+    """Part body seen from above. ``marks=False``: no marking/pin-1 (tombstone top face, small neighbour parts)."""
     h, w = img.shape[:2]
-    u, v = _local_coords(h, w, center, angle_deg)
+    u, v, aa_body = _rect_alpha(h, w, center, length, width, angle_deg)
     hl, hw = length / 2.0, width / 2.0
     inset = max(1.0, 0.07 * min(length, width))
 
     inside = (np.abs(u) <= hl) & (np.abs(v) <= hw)
     top = (np.abs(u) <= hl - inset) & (np.abs(v) <= hw - inset)
-    # Soft anti-aliased edges via distance to the rectangle border.
-    d_out = np.maximum(np.abs(u) - hl, np.abs(v) - hw)
-    aa_body = np.clip(0.5 - d_out, 0.0, 1.0)
     d_top = np.maximum(np.abs(u) - (hl - inset), np.abs(v) - (hw - inset))
     aa_top = np.clip(0.5 - d_top, 0.0, 1.0)
 
@@ -349,11 +630,9 @@ def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length
         shade = 0.72 + 0.45 * ridge - 0.25 * np.clip(v / hw, 0, 1) * 0.5
         cap_img = cap_col * shade[..., None] * (1.0 + rng.normal(0.0, 0.02, (h, w, 1)).astype(np.float32))
         _blend(img, cap_img, cap.astype(np.float32) * aa_body)
-        if raised_sign:
+        if not marks:
             return
-    elif raised_sign:
-        wall = top & (u * raised_sign > hl - inset - 0.18 * length)  # raised side wall facing the camera
-        img *= np.where(wall, 1.6, 1.0)[..., None]
+    elif not marks:
         return
     else:
         # Pin-1 indicator (molded dimple / laser dot).
@@ -376,39 +655,316 @@ def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length
              angle_deg, rng)
 
 
+_THICKNESS_RATIO = 0.55  # body height / width of chip parts (0603: 0.45 / 0.8)
+
+
+def _draw_body_local(img: np.ndarray, family: str, center: tuple[float, float], length: float, width: float,
+                     angle_deg: float, base_color: np.ndarray, rng: np.random.Generator, *, marks: bool = True) -> None:
+    """:func:`_draw_body` on just the part's window (cost independent of the canvas size)."""
+    h, w = img.shape[:2]
+    r = 0.6 * float(np.hypot(length, width)) + 2 * SS
+    x0, y0 = max(0, int(center[0] - r)), max(0, int(center[1] - r))
+    x1, y1 = min(w, int(center[0] + r) + 1), min(h, int(center[1] + r) + 1)
+    if x1 > x0 and y1 > y0:
+        _draw_body(img[y0:y1, x0:x1], family, (center[0] - x0, center[1] - y0), length, width, angle_deg, base_color, rng,
+                   marks=marks)
+
+
 def _tombstone_pose(geo: dict[str, Any], selector: int, img_shape: tuple[int, int]) -> dict[str, Any]:
-    """Body raised on one end: foreshortened top anchored at the other end. Returns pose + footprint mask."""
-    length, width, tilt = float(geo["length"]), float(geo["width"]), float(geo["tilt_deg"])
+    """Part raised on one end, pivoting about the bottom edge of its anchored end.
+
+    Seen from above two faces are visible: the steep top face (length*cos(tilt)), which starts
+    thickness*sin(tilt) *behind* the anchor, and the raised end face (thickness*sin(tilt)), which
+    points almost straight up. Returns pose + footprint mask.
+    """
+    length, width = float(geo["length"]), float(geo["width"])
+    tilt = np.radians(float(geo["tilt_deg"]))
     angle = float(geo["rotation_deg"])
     a = np.radians(angle)
     raised_sign = 1.0 if selector % 2 == 0 else -1.0
     axis = np.array([np.cos(a), np.sin(a)], dtype=np.float32) * raised_sign
     anchor = np.array(geo["center"], dtype=np.float32) - axis * (length / 2.0)
-    thickness = width * 0.55
-    proj = length * np.cos(np.radians(tilt)) + thickness * np.sin(np.radians(tilt))
-    center = anchor + axis * (proj / 2.0)
-    box = cv2.boxPoints(((float(center[0]), float(center[1])), (float(proj), width), angle)).astype(np.int32)
+    top_len = length * np.cos(tilt)
+    end_len = width * _THICKNESS_RATIO * np.sin(tilt)
+    center = anchor + axis * ((top_len - end_len) / 2.0)
+    box = cv2.boxPoints(((float(center[0]), float(center[1])), (float(top_len + end_len), width), angle)).astype(np.int32)
     mask = np.zeros(img_shape, dtype=np.uint8)
     cv2.fillPoly(mask, [box], 255)
-    return {"center": center, "proj": proj, "angle": angle, "box": box, "mask": mask, "raised_sign": raised_sign,
-            "shadow_len": length * np.sin(np.radians(tilt)) * 0.7}
+    return {"center": center, "angle": angle, "box": box, "mask": mask, "raised_sign": raised_sign, "axis": axis,
+            "anchor": anchor, "tilt": tilt, "top_len": top_len, "end_len": end_len, "height": length * np.sin(tilt)}
 
 
 def _draw_tombstone(img: np.ndarray, family: str, pose: dict[str, Any], width: float, base_color: np.ndarray,
                     rng: np.random.Generator) -> None:
     h, w = img.shape[:2]
-    center, box = pose["center"], pose["box"]
-    # Long shadow cast away from the light, proportional to the raised height.
-    far = center + np.array([0.6, 0.8], dtype=np.float32) * pose["shadow_len"]
+    axis, anchor, tilt, angle = pose["axis"], pose["anchor"], pose["tilt"], pose["angle"]
+    perp = np.array([-axis[1], axis[0]], dtype=np.float32) * (width / 2.0)
+
+    # Shadow: projection of the standing part along the light onto the board.
+    light_xy = _LIGHT[:2] / np.linalg.norm(_LIGHT[:2])
+    shift = -light_xy * pose["height"] * np.linalg.norm(_LIGHT[:2]) / _LIGHT[2]
+    raised_end = anchor + axis * pose["top_len"]
+    pts = np.vstack([pose["box"], raised_end + perp + shift, raised_end - perp + shift]).astype(np.int32)
     sh = np.zeros((h, w), dtype=np.uint8)
-    for i, j in ((0, 1), (1, 2), (2, 3), (3, 0)):
-        quad = np.array([box[i], box[j], far + (box[j] - center) * 0.6, far + (box[i] - center) * 0.6], dtype=np.int32)
-        cv2.fillPoly(sh, [quad], 255)
-    sh = cv2.GaussianBlur(sh, (0, 0), 2.5 * SS).astype(np.float32) / 255.0
-    img *= (1.0 - 0.45 * sh)[..., None]
+    cv2.fillConvexPoly(sh, cv2.convexHull(pts), 255)
+    sh = cv2.GaussianBlur(sh, (0, 0), 2.0 * SS).astype(np.float32) / 255.0
+    img *= (1.0 - 0.4 * sh)[..., None]
     _contact_shadow(img, pose["mask"], 0.4, 3 * SS)
-    _draw_body(img, family, (float(center[0]), float(center[1])), pose["proj"], width, pose["angle"], base_color, rng,
-               raised_sign=pose["raised_sign"])
+
+    # Steep top face: the foreshortened body, shaded by how much it still faces the light.
+    top_c = anchor + axis * (pose["top_len"] / 2.0 - pose["end_len"])
+    _draw_body(img, family, (float(top_c[0]), float(top_c[1])), pose["top_len"], width, angle, base_color, rng,
+               marks=False)
+    n_top = np.array([*(-axis * np.sin(tilt)), np.cos(tilt)], dtype=np.float32)
+    _, _, m_top = _rect_alpha(h, w, top_c, pose["top_len"], width, angle)
+    img *= (1.0 + (0.35 + 0.65 * max(0.0, float(n_top @ _LIGHT)) - 1.0) * m_top)[..., None]
+
+    # Raised end face, pointing almost straight up: bare metal end cap on chips, mold wall on ICs.
+    end_c = anchor + axis * (pose["top_len"] - pose["end_len"] / 2.0)
+    u, v, m_end = _rect_alpha(h, w, end_c, pose["end_len"], width, angle)
+    n_end = np.array([*(axis * np.cos(tilt)), np.sin(tilt)], dtype=np.float32)
+    lit = 0.55 + 0.6 * max(0.0, float(n_end @ _LIGHT))
+    if family in ("resistor", "capacitor"):
+        # Tin-plated cap, slightly convex: shaded as metal like the solder, tilted with the part.
+        su = np.clip(np.abs(u) / (pose["end_len"] / 2.0), 0.0, 1.0)
+        sv = np.clip(np.abs(v) / (width / 2.0), 0.0, 1.0)
+        bulge = (1.0 - su**4) * (1.0 - sv**4) * 0.12 * min(pose["end_len"], width)
+        bulge += 0.04 * _smooth_noise((h, w), 3 * SS, rng)  # plating texture
+        face = _shade_solder(bulge, _END_CAP * float(rng.uniform(0.95, 1.08)), np.full(3, 70.0, dtype=np.float32),
+                             30.0, 0.45) * lit
+    else:
+        face = (np.maximum(base_color, 34.0) * 1.3 * lit)[None, None, :] * np.ones((h, w, 1), dtype=np.float32)
+    _blend(img, face, m_end)
+
+
+def _pad_ref(pads: list[dict[str, int]]) -> float:
+    """Smallest pad dimension: size reference for board details that must fit every package."""
+    return float(min(min(p["w"], p["h"]) for p in pads))
+
+
+def _neighbours(pads: list[dict[str, int]], keepout: tuple[int, int, int, int], shape: tuple[int, int],
+                rng: np.random.Generator, crowd: float = 1.0) -> list[dict[str, Any]]:
+    """Small chip parts around the inspected one: real ROIs are densely populated.
+
+    Sized from the target's pads (a neighbour is about a chip with pads of that size, so it fits
+    every package), at 0 or 90 degrees, possibly cut by the ROI border, never in the keep-out.
+    *crowd*: rendered area relative to the ROI (zoomed-out views show proportionally more parts).
+    """
+    h, w = shape
+    ref = 2.2 * _pad_ref(pads)
+    x0, y0, x1, y1 = keepout
+    gap = 0.35 * ref
+    taken = [(x0 - gap, y0 - gap, x1 + gap, y1 + gap)]
+    parts: list[dict[str, Any]] = []
+    for _ in range(int(rng.integers(0, int(round(6 * crowd)) + 1))):
+        length = float(rng.uniform(0.6, 1.1)) * ref
+        width = length * float(rng.uniform(0.45, 0.6))
+        vertical = bool(rng.random() < 0.5)
+        pad_l, pad_w, off = 0.45 * length, 1.15 * width, 0.45 * length  # pad size along/across, centre offset
+        ex, ey = off + pad_l / 2.0, pad_w / 2.0
+        if vertical:
+            ex, ey = ey, ex
+        for _try in range(8):
+            cx, cy = float(rng.uniform(-0.3 * ex, w + 0.3 * ex)), float(rng.uniform(-0.3 * ey, h + 0.3 * ey))
+            box = (cx - ex, cy - ey, cx + ex, cy + ey)
+            if all(box[2] + 0.15 * ref < t[0] or box[0] - 0.15 * ref > t[2] or box[3] + 0.15 * ref < t[1]
+                   or box[1] - 0.15 * ref > t[3] for t in taken):
+                break
+        else:
+            continue
+        taken.append(box)
+        part_pads = []
+        for s in (-1.0, 1.0):
+            px, py, pw_, ph_ = (cx, cy + s * off, pad_w, pad_l) if vertical else (cx + s * off, cy, pad_l, pad_w)
+            part_pads.append({"x": int(round(px - pw_ / 2)), "y": int(round(py - ph_ / 2)),
+                              "w": int(round(pw_)), "h": int(round(ph_))})
+        parts.append({"center": (cx, cy), "length": length, "width": width, "pads": part_pads,
+                      "angle": (90.0 if vertical else 0.0) + float(rng.uniform(-1.5, 1.5)),
+                      "family": "capacitor" if rng.random() < 0.55 else "resistor"})
+    return parts
+
+
+def _draw_neighbours(img: np.ndarray, base: np.ndarray, parts: list[dict[str, Any]], finish: np.ndarray,
+                     rng: np.random.Generator) -> None:
+    if not parts:
+        return
+    h, w = img.shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for p in parts:
+        box = cv2.boxPoints(((p["center"][0], p["center"][1]), (p["length"], p["width"]), p["angle"]))
+        cv2.fillPoly(mask, [np.round(box).astype(np.int32)], 255)
+    _pads_and_solder(img, base, [pad for p in parts for pad in p["pads"]], mask, rng, finish)
+    _contact_shadow(img, mask, 0.35, 3 * SS)
+    dark = np.array((20, 20, 20), dtype=np.float32)
+    for p in parts:
+        _draw_body_local(img, p["family"], p["center"], p["length"], p["width"], p["angle"], dark, rng, marks=False)
+
+
+REWORK_PROBABILITY = 0.3  # default share of images with rework residue (``render.rework_artifacts``)
+_FLUX = np.array((55, 105, 140), dtype=np.float32)   # amber, translucent
+_DIRT = np.array((43, 114, 131), dtype=np.float32)   # olive-yellow smeared contamination, unmixed from a board photo
+
+
+def _rework(img: np.ndarray, keepout: tuple[int, int, int, int], ref: float, rng: np.random.Generator,
+            probability: float) -> None:
+    """Residue seen on the production boards: flux residue, smeared yellow contamination, patch wires.
+
+    A nuisance, not a defect class: always kept clear of the inspected part (its keep-out plus a gap)
+    so the label is unaffected; the model learns to ignore it.
+    """
+    if rng.random() >= probability:
+        return
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = (int(np.clip(v, 0, lim)) for v, lim in zip(keepout, (w, h, w, h)))
+    protected = img[y0:y1, x0:x1].copy()
+
+    def clear(pts: np.ndarray, margin: float) -> bool:
+        m = 4 * SS + margin  # gap + stroke half-width + blur
+        return not np.any((pts[:, 0] > keepout[0] - m) & (pts[:, 0] < keepout[2] + m)
+                          & (pts[:, 1] > keepout[1] - m) & (pts[:, 1] < keepout[3] + m))
+
+    def stroke(margin: float) -> np.ndarray | None:
+        """Smooth curve (quadratic Bezier) clear of the keep-out, or None."""
+        for _try in range(10):
+            ctrl = np.stack([rng.uniform(-0.1 * w, 1.1 * w, 3), rng.uniform(-0.1 * h, 1.1 * h, 3)], axis=1)
+            t = np.linspace(0.0, 1.0, 60)[:, None]
+            curve = (1 - t) ** 2 * ctrl[0] + 2 * (1 - t) * t * ctrl[1] + t**2 * ctrl[2]
+            if clear(curve, margin):
+                return curve.astype(np.int32)
+        return None
+
+    for kind in rng.permutation(["flux", "dirt", "wire"])[: int(rng.integers(1, 3))]:
+        layer = np.zeros((h, w), dtype=np.uint8)
+        if kind == "flux":
+            r = float(rng.uniform(0.08, 0.2)) * min(h, w)
+            for _try in range(10):
+                c = np.array([rng.uniform(0, w), rng.uniform(0, h)])
+                ring = c + r * np.stack([np.cos(np.linspace(0, 2 * np.pi, 24)), np.sin(np.linspace(0, 2 * np.pi, 24))], 1)
+                if clear(ring, 6 * SS):
+                    break
+            else:
+                continue
+            cv2.ellipse(layer, (int(c[0]), int(c[1])), (int(r), int(r * rng.uniform(0.5, 1.0))),
+                        float(rng.uniform(0, 180)), 0, 360, 255, -1)
+            blob = (layer > 0) & (_smooth_noise((h, w), 0.6 * r, rng) > -0.7)  # irregular outline
+            a = cv2.GaussianBlur(blob.astype(np.float32), (0, 0), 2 * SS)
+            rim = np.clip(cv2.GaussianBlur(blob.astype(np.float32), (0, 0), 1.0 * SS) - a, 0, 1)  # dried edge
+            _blend(img, _FLUX * float(rng.uniform(0.85, 1.1)), a * float(rng.uniform(0.25, 0.45)))
+            img *= (1.0 - 0.5 * rim)[..., None]
+        elif kind == "dirt":
+            width = int(round(float(rng.uniform(0.35, 0.8)) * ref))
+            curve = stroke(width / 2 + 4 * SS)
+            if curve is None:
+                continue
+            cv2.polylines(layer, [curve], False, 255, width, lineType=cv2.LINE_AA)
+            a = cv2.GaussianBlur(layer, (0, 0), 1.5 * SS).astype(np.float32) / 255.0
+            _blend(img, _DIRT * float(rng.uniform(0.85, 1.1)), a * float(rng.uniform(0.5, 0.7)))
+        else:
+            wd = max(SS, int(round(float(rng.uniform(0.08, 0.15)) * ref)))
+            curve = stroke(wd + 5 * SS)  # incl. the offset shadow
+            if curve is None:
+                continue
+            shadow = np.zeros((h, w), dtype=np.uint8)
+            cv2.polylines(shadow, [curve + int(1.5 * SS)], False, 255, wd + SS, lineType=cv2.LINE_AA)
+            img *= (1.0 - 0.35 * cv2.GaussianBlur(shadow, (0, 0), SS).astype(np.float32)[..., None] / 255.0)
+            cv2.polylines(layer, [curve], False, 255, wd, lineType=cv2.LINE_AA)
+            col = np.array((215, 218, 220) if rng.random() < 0.7 else (70, 120, 200), dtype=np.float32)  # white / enamel
+            _blend(img, col, layer.astype(np.float32) / 255.0)
+            core = np.zeros((h, w), dtype=np.uint8)
+            cv2.polylines(core, [curve - int(0.3 * wd)], False, 255, max(1, wd // 3), lineType=cv2.LINE_AA)
+            _blend(img, np.full(3, 250.0, dtype=np.float32), core.astype(np.float32) / 255.0 * 0.6)  # highlight
+    img[y0:y1, x0:x1] = protected  # hard guarantee: the inspected part's area is never touched
+
+
+def _board(nom: dict[str, float], footprint: str, family: str, shape: tuple[int, int], config: dict[str, Any],
+           rng: np.random.Generator, crowd: float = 1.0) -> tuple[np.ndarray, np.ndarray, list[dict[str, int]], np.ndarray]:
+    """Board around the inspected part at supersampled *shape*: substrate, copper, silkscreen and
+    populated neighbour parts. Returns (float image, mask colour, target pads, pad finish colour).
+
+    The keep-out uses the *nominal* body, so nothing on the board follows a defect (a real board's
+    silkscreen and neighbours do not move when a part is misplaced).
+    """
+    h, w = shape
+    pads = _compute_pad_positions(footprint, nom, (h, w))
+    hl, hw = nom["component_length"] / 2.0, nom["component_width"] / 2.0
+    xs = [p["x"] for p in pads] + [p["x"] + p["w"] for p in pads] + [int(w // 2 - hl), int(w // 2 + hl)]
+    ys = [p["y"] for p in pads] + [p["y"] + p["h"] for p in pads] + [int(h // 2 - hw), int(h // 2 + hw)]
+    keepout = (min(xs), min(ys), max(xs), max(ys))
+
+    texture_dir = config.get("texture_dir")
+    if texture_dir:
+        img, base = _texture_substrate(h, w, str(texture_dir), rng)  # real board already has its own copper
+    else:
+        img, base = _substrate(h, w, rng)
+        _traces_and_vias(img, base, pads, keepout, rng)
+    _silkscreen(img, keepout, family, rng)
+    finish = _FINISHES["enig" if rng.random() < 0.5 else "hasl"] * float(rng.uniform(0.92, 1.06))
+    _draw_neighbours(img, base, _neighbours(pads, keepout, (h, w), rng, crowd), finish, rng)
+    _rework(img, keepout, _pad_ref(pads), rng, float(config.get("rework_artifacts", REWORK_PROBABILITY)))
+    return img, base, pads, finish
+
+
+def _scaled(nominal: dict[str, float], defect_params: dict[str, Any]) -> tuple[dict[str, float], dict[str, Any]]:
+    nom = {k: float(v) * SS for k, v in nominal.items()}
+    dp = dict(defect_params)
+    dp["shift_x"] = float(dp["shift_x"]) * SS
+    dp["shift_y"] = float(dp["shift_y"]) * SS
+    return nom, dp
+
+
+def render_board(
+    nominal: dict[str, float],
+    defect_params: dict[str, Any],
+    config: dict[str, Any],
+    tolerances: dict[str, Any] | None,
+    rng: np.random.Generator,
+    footprint: str,
+    size: tuple[int, int],
+    crowd: float = 1.0,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Board texture (substrate, copper, silkscreen, bare pad finish) for the 3D backend, plus the scene layout.
+
+    Returns ``(BGR uint8 image of *size*, scene)``. ``scene`` holds, in camera pixels relative to the image
+    centre (x right, y down): ``family``, ``pads`` as ``[cx, cy, w, h]``, ``body`` (``None`` when MISSING)
+    with the same pose semantics as the 2D renderer including the tombstone pivot, ``excess`` (pad
+    indices with too much solder) and ``balls`` (``[x, y, r]``), from :func:`solder_defect_layout`.
+    """
+    width, height = size
+    h, w = height * SS, width * SS
+    nom, dp = _scaled(nominal, defect_params)
+    family = _family(footprint, str(config.get("component_type", "")))
+    img, base, pads, finish = _board(nom, footprint, family, (h, w), config, rng, crowd)
+    _pads_and_solder(img, base, pads, np.zeros((h, w), dtype=np.uint8), rng, finish, with_solder=False)
+    if dp["type"] == "SOLDER_BRIDGE":  # flat solder between neighbouring pads
+        geo = body_geometry(nom, dp, tolerances, (h, w))
+        img8 = _clip8(img)
+        _draw_solder_bridge(img8, nom, footprint, geo["center"], (int(geo["length"]), int(geo["width"])),
+                            _param_selector(defect_params), geo["tilt_deg"])
+        img = img8.astype(np.float32)
+
+    scene: dict[str, Any] = {
+        "family": family,
+        "pads": [[(p["x"] + p["w"] / 2.0 - w / 2.0) / SS, (p["y"] + p["h"] / 2.0 - h / 2.0) / SS, p["w"] / SS, p["h"] / SS]
+                 for p in pads],
+        "thermal_pad": thermal_pad_index(pads),
+        "body": None,
+    }
+    geo_ss = body_geometry(nom, dp, tolerances, (h, w))
+    rect = cv2.boxPoints(((float(geo_ss["center"][0]), float(geo_ss["center"][1])),
+                          (float(geo_ss["length"]), float(geo_ss["width"])), geo_ss["rotation_deg"]))
+    solder = solder_defect_layout(dp["type"], pads, rect, rng)
+    scene["excess"] = solder["excess"]
+    scene["balls"] = [[(x - w / 2.0) / SS, (y - h / 2.0) / SS, r / SS] for x, y, r in solder["balls"]]
+    if dp["type"] != "MISSING":
+        geo = body_geometry(nominal, defect_params, tolerances, (height, width))
+        body = {"center": [geo["center"][0] - width // 2, geo["center"][1] - height // 2], "length": geo["length"],
+                "width": geo["width"], "rotation_deg": geo["rotation_deg"], "tilt_deg": geo["tilt_deg"],
+                "is_tombstone": bool(geo["is_tombstone"])}
+        if geo["is_tombstone"]:
+            pose = _tombstone_pose(geo, _param_selector(defect_params), (height, width))
+            body["raised_sign"] = pose["raised_sign"]
+        scene["body"] = body
+    return cv2.resize(_clip8(img), (width, height), interpolation=cv2.INTER_AREA), scene
 
 
 def render_photoreal_base(
@@ -421,30 +977,22 @@ def render_photoreal_base(
     roi_size: tuple[int, int],
 ) -> np.ndarray:
     """Render substrate + pads + solder + component for *defect_params* at *roi_size* (BGR uint8)."""
-    width, height = roi_size
+    view_pose = sample_camera_pose(camera_settings(config.get("camera")), rng)
+    canvas = view_canvas(roi_size, view_pose)  # larger board area for a zoomed-out / oblique view
+    width, height = canvas
     h, w = height * SS, width * SS
-    nom = {k: float(v) * SS for k, v in nominal.items()}
-    dp = dict(defect_params)
-    dp["shift_x"] = float(dp["shift_x"]) * SS
-    dp["shift_y"] = float(dp["shift_y"]) * SS
+    nom, dp = _scaled(nominal, defect_params)
     family = _family(footprint, str(config.get("component_type", "")))
     base_color = np.array(config.get("component_color", (20, 20, 20)), dtype=np.float32)
     defect_type = dp["type"]
 
-    pads = _compute_pad_positions(footprint, nom, (h, w))
+    crowd = canvas[0] * canvas[1] / float(roi_size[0] * roi_size[1])
+    img, base, pads, finish = _board(nom, footprint, family, (h, w), config, rng, crowd)
     geo = body_geometry(nom, dp, tolerances, (h, w))
     length, width_px = float(geo["length"]), float(geo["width"])
     cx, cy = geo["center"]
     rect = cv2.boxPoints(((float(cx), float(cy)), (length, width_px), geo["rotation_deg"]))
     selector = _param_selector(defect_params)
-
-    xs = [p["x"] for p in pads] + [p["x"] + p["w"] for p in pads] + [int(rect[:, 0].min()), int(rect[:, 0].max())]
-    ys = [p["y"] for p in pads] + [p["y"] + p["h"] for p in pads] + [int(rect[:, 1].min()), int(rect[:, 1].max())]
-    keepout = (min(xs), min(ys), max(xs), max(ys))
-
-    img, base = _substrate(h, w, rng)
-    _traces_and_vias(img, base, pads, keepout, rng)
-    _silkscreen(img, keepout, family, rng)
 
     body_mask = np.zeros((h, w), dtype=np.uint8)
     pose = None
@@ -457,7 +1005,8 @@ def render_photoreal_base(
             pts = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector)["lifted"]
         cv2.fillPoly(body_mask, [np.round(pts).astype(np.int32)], 255)
 
-    _pads_and_solder(img, base, pads, body_mask, rng)
+    solder = solder_defect_layout(defect_type, pads, rect, rng)
+    _pads_and_solder(img, base, pads, body_mask, rng, finish, excess=frozenset(solder["excess"]))
 
     if pose is not None:
         _draw_tombstone(img, family, pose, width_px, base_color, rng)
@@ -465,7 +1014,7 @@ def render_photoreal_base(
         _contact_shadow(img, body_mask, 0.35, 3 * SS)
         if family in ("sot", "soic"):
             _leads(img, pads, (float(cx), float(cy)), length, width_px, geo["rotation_deg"], rng)
-        _draw_body(img, family, (float(cx), float(cy)), length, width_px, geo["rotation_deg"], base_color, rng)
+        _draw_body_local(img, family, (float(cx), float(cy)), length, width_px, geo["rotation_deg"], base_color, rng)
         if defect_type == "CORNER_LIFT":
             lift = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector)
             extra = np.zeros((h, w), dtype=np.uint8)
@@ -480,5 +1029,8 @@ def render_photoreal_base(
             img8 = _clip8(img)
             _draw_solder_bridge(img8, nom, footprint, (int(cx), int(cy)), (int(length), int(width_px)), selector, geo["tilt_deg"])
             img = img8.astype(np.float32)
+        _draw_excess(img, base, family, pads, solder["excess"], (float(cx), float(cy)), length, width_px, geo["rotation_deg"])
+        _draw_solder_balls(img, base, solder["balls"])
 
-    return cv2.resize(_clip8(img), (width, height), interpolation=cv2.INTER_AREA)
+    view = apply_view(cv2.resize(img, canvas, interpolation=cv2.INTER_AREA), view_pose, roi_size)
+    return camera_model(view, rng, config.get("camera"), view_pose)

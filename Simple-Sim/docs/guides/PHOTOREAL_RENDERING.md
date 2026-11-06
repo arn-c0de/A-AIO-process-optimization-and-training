@@ -18,38 +18,120 @@ deterministic per seed.
 
 | Layer | Details |
 |---|---|
-| Substrate | Solder-mask green sampled from a palette measured on real boards, resin mottling, fibre weave, sensor grain |
-| Copper under mask | 1-3 autorouted traces with 45° jogs, traces leaving pads, 0-3 vias with annular ring and dark hole |
-| Silkscreen | White footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`) |
-| Pads | Mask-defined opening with dark rim, ENIG (gold) or HASL (silver) finish visible at the pad edge |
-| Solder | Height-map shaded (Lambert + Blinn-Phong). Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
-| Chip body | Resistor: dark body, metallic end caps, white value code (`103`, `4R7`, ...). Capacitor (`component.type` contains `cap`): tan ceramic, nickel caps, no marking |
-| IC body | SOT-23 / SOIC-16 / QFN: speckled mold compound, side walls, gloss, pin-1 dimple, laser marking; gull-wing leads for SOT/SOIC; QFN gets real pad rows (`qfn_<N>` -> N/4 per side) plus the exposed thermal pad |
-| Shadows | Contact shadow around every body, long cast shadow for tombstones, lit facet for corner lifts |
+| Substrate | Solder-mask colour sampled from a palette measured on photos of the production boards (teal-green), resin mottling, fibre weave, sensor grain |
+| Copper under mask | Copper pours (large planes with 45° chamfers, clearance around the part), 1-3 autorouted traces with 45° jogs, traces leaving pads, 0-12 vias (mostly tented). Brightness ratio mask-over-copper / mask-over-laminate measured on the photos |
+| Residue | In `render.rework_artifacts` of the samples (default 0.3, 0 = clean): amber flux residue with a dried rim, smeared yellow contamination (colour and width measured on a board photo), thin patch wires (white or enamel) with shadow. Always outside the inspected part, so the label is unaffected: the model learns to ignore it |
+| Neighbour parts | 0-6 chip resistors/capacitors around the inspected part (pads, fillets, bodies), sized from its pads, at 0/90°, possibly cut by the ROI border, never in its keep-out |
+| Silkscreen | In 55 % of samples: white footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`), placed around the *nominal* footprint so it never moves with a defect |
+| Pads | Mask-defined opening with dark rim, ENIG (gold) or HASL (silver) finish visible at the pad edge. Large (thermal) pads without a part show window-pane stencil islands |
+| Solder | Height map with slight lumpiness, shaded as a rough mirror: flat areas reflect the overhead light, slopes reflect the dark board, sharp highlight towards the light. Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
+| Chip body | Resistor: dark body, metallic end caps, white value code (`103`, `4R7`, ...). Capacitor (`component.type` contains `cap`): tan ceramic, nickel caps, no marking. Printed codes have blotchy ink |
+| IC body | SOT-23 / SOIC-16 / QFN: speckled mold compound, side walls, gloss, pin-1 dimple, grainy laser marking (two Hershey fonts, lines slightly offset); gull-wing leads for SOT/SOIC; QFN gets real pad rows (`qfn_<N>` -> N/4 per side) plus the exposed thermal pad |
+| Shadows | Contact shadow around every body, cast shadow of the standing part for tombstones, lit facet for corner lifts |
+| Camera | Applied after downsampling so the image is not vector-sharp: lens blur, uneven illumination, soft highlight roll-off, signal-dependent and slightly correlated sensor noise |
 
-Defect semantics are unchanged: `MISSING`, `MISALIGNED` (shift/rotation), `TOMBSTONE` (foreshortened
-body anchored on one end), `SOLDER_BRIDGE`, `CORNER_LIFT` are driven by the same `defect_params`
+Defect semantics are unchanged: `MISSING`, `MISALIGNED` (shift/rotation), `TOMBSTONE` (part pivoting about
+the bottom edge of its anchored end: from above the steep, foreshortened top face plus the upright
+metal end cap, with a shadow projected along the light), `SOLDER_BRIDGE`, `CORNER_LIFT`,
+`SOLDER_BALL` (1-4 shiny solder balls on the mask next to the joints, never on a pad or under the
+part) and `EXCESS_SOLDER` (high convex joints on 1-4 pads, over the end cap of chips, over the lead
+foot of SOT/SOIC, bulging past the package edge on QFN; the part itself is placed like OK) are driven by the same `defect_params`
 and `tolerances` as before. Realism-group and custom image filters are applied afterwards exactly as
 for the flat style.
 
 `render.component_type` (filled from the profile's `component.type` by the pipeline) selects the
 resistor/capacitor look for `chip_2pad`.
 
+## Real board backgrounds (`render.texture_dir`)
+
+Optional. Point `render.texture_dir` at a folder of photos of **empty board areas** taken with the
+production camera (PNG/JPG/BMP/TIFF). Each sample then uses a random crop of a random photo
+(random 90° rotation and flip) as substrate instead of the procedural solder mask, traces and vias.
+Pads, solder, silkscreen, parts and the camera model are drawn on top as usual.
+
+```yaml
+render:
+  backend: opencv_2d
+  texture_dir: data/board_textures
+```
+
+- Photos at least as large as the ROI are cropped at 1:1 camera scale; smaller ones are stretched.
+- Files are picked in sorted order by the sample's seed, so datasets stay reproducible as long as the
+  folder content does not change.
+- The run fails at config validation if the folder does not exist or contains no images.
+
 ## Calibration source
 
 Colours and proportions were taken from macro photos of real boards (dark olive solder mask, traces
 shimmering through the mask, white silkscreen, bright concave fillets, black 0603 resistors with
-white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings).
+white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings). Mask colours, the copper-under-mask
+brightness ratio, copper pours, tented vias and the density of neighbour parts come from 7 photos
+(JPEG and raw) of the production boards: median of bare mask pixels (hue 150-170°, i.e. teal-green
+although it reads as green) and of pour vs. laminate areas.
+
+## Camera model (`render.camera`) and calibration (`tools/calibrate_camera.py`)
+
+Every image (2D and 3D) passes through a camera model: viewing geometry, lens blur, uneven
+illumination, highlight roll-off, read + shot noise, optionally phone-style sharpening and JPEG.
+Two presets, every value can be overridden (ranges are sampled per image):
+
+```yaml
+render:
+  camera:
+    preset: aoi                # aoi (default): fixed top-down AOI camera | phone: handheld phone photos
+    blur_sigma: [0.55, 0.95]   # lens blur, Gaussian sigma in camera pixels
+    read_noise: [1.0, 4.0]     # read noise variance (8-bit levels^2)
+    shot_noise: 0.04           # shot noise variance per intensity level
+    tilt_deg: [0, 0]           # oblique view (0-60)
+    zoom: [1, 1]               # >= 1: farther away, the part appears this much smaller (more board around it)
+    defocus: [0, 0]            # extra blur towards the near/far edge of a tilted view (depth of field)
+    sharpen: [0, 0]            # phone ISP sharpening (unsharp mask amount)
+    jpeg_quality: [100, 100]   # < 95 compresses
+```
+
+`preset: phone` sets `tilt_deg: [5, 40]`, `zoom: [1, 2.5]`, `blur_sigma: [0.8, 1.6]`,
+`defocus: [0.5, 2.5]`, `read_noise: [4, 16]`, `shot_noise: 0.08`, `sharpen: [0.3, 0.8]`,
+`jpeg_quality: [70, 92]`; `configs/run_0001_phone.yaml` is `run_0001` with this preset. 2D renders a
+larger board area for zoomed-out/oblique views (more neighbour parts) and projects it; the Blender
+backend tilts its camera and widens its view accordingly. The part always stays centred, so labels
+are unchanged.
+
+To fit them to the production camera, put a few hundred real ROIs (same `roi.mm_per_px`, similar
+parts) in a folder, render a synthetic set with the run config and run:
+
+```bash
+python tools/calibrate_camera.py --real data/real_rois --synthetic data/run_0001/images --config configs/run_0001.yaml
+```
+
+It compares edge steepness (relative to contrast) and sensor noise (flat areas) and prints the
+`render.camera` block to use. Re-render and repeat until it reports an extra blur near 0 and a noise
+ratio near 1 (usually one or two rounds). Overview photos taken with a phone are not suitable: they
+have a different scale, optics and lighting than the AOI camera.
+
+## Measuring the sim-to-real gap (`tools/sim_to_real.py`)
+
+Compares a folder of synthetic ROIs with a folder of real camera ROIs (both searched recursively,
+no labels needed) using ResNet18 embeddings (ImageNet weights, or a trained checkpoint via
+`--weights`):
+
+```bash
+python tools/sim_to_real.py --synthetic data/run_0001/images --real data/real_rois --json gap.json
+```
+
+| Metric | Meaning |
+|---|---|
+| `one_nn_accuracy` | 1-NN two-sample test on equally many real/synthetic images. 0.5 = indistinguishable, 1.0 = fully separable |
+| `nn_distance_ratio` | Mean distance real -> nearest synthetic divided by real -> nearest other real. ~1 = synthetic covers the real images as well as they cover each other |
+
+Sanity check on renders: photoreal vs. photoreal (other seeds) gives 0.52 / 1.01, flat vs. photoreal
+1.00 / 9.8. Use the same real folder and `--seed` between releases so numbers are comparable;
+a few hundred real ROIs per package are enough.
 
 ## Roadmap towards "indistinguishable from the camera"
 
 1. **Done – procedural photoreal 2D** (this document).
-2. **Blender PBR upgrade** (`simple_sim/blender/render_batch.py`): texture the substrate with the same
-   trace/via/silkscreen generator baked to an image, add a solder-fillet mesh instead of flat pads,
-   marking decals, HDRI/ring-light rig matching the AOI box.
-3. **Real-photo texture bank**: optional `render.texture_dir` with ROI-sized crops of empty board
-   areas from the production camera, used as substrate background (domain randomisation + real
-   backgrounds is the cheapest way to close the remaining gap).
-4. **Sim-to-real check**: train on synthetic, measure on a small labelled set of real ROIs per
-   package; track feature-distance (e.g. kNN on ResNet embeddings) between synthetic and real images
-   per release so realism changes are measurable, not eyeballed.
+2. **Done – Blender upgrade**: the 3D backend bakes this generator's board as texture, models solder
+   fillets as meshes, adds markings, leads and an AOI ring light (see `3D_RENDERING_QUICKSTART.md`).
+3. **Done – real-photo texture bank**: `render.texture_dir` (see above).
+4. **Done – sim-to-real check**: `tools/sim_to_real.py` (see below). Still open: a small labelled
+   set of real ROIs per package to measure classifier accuracy on real data.

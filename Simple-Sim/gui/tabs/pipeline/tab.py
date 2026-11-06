@@ -65,6 +65,7 @@ from gui.utils.pipeline_helpers import (
     write_temp_yaml,
 )
 
+from simple_sim.config import DEFAULT_COMPONENT_PROFILE
 from simple_sim.io_utils import append_jsonl, rel_to
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
@@ -98,7 +99,7 @@ class PipelineControlTab(BaseTab):
         self._meta_by_sample: dict[str, MetaRow] = {}
         self._meta_by_image_rel: dict[str, MetaRow] = {}
         
-        self._last_profile_id: str = "chip_0603_resistor@1"
+        self._last_profile_id: str = DEFAULT_COMPONENT_PROFILE
         # Temp configs written under outputs/live for the current run; removed when the run ends.
         self._temp_cfg_paths: list[Path] = []
 
@@ -166,7 +167,7 @@ class PipelineControlTab(BaseTab):
             return
 
         placeholder = (runs / "run_placeholder_empty").resolve()
-        profile_id = "chip_0603_resistor@1"
+        profile_id = DEFAULT_COMPONENT_PROFILE
         cfg_info = self.logic.config_for_profile(profile_id, want_backend="opencv_2d")
         if not cfg_info:
             cfg_info = self.logic.config_for_profile(profile_id, want_backend=None)
@@ -1377,7 +1378,7 @@ class PipelineControlTab(BaseTab):
 
         cur = self.ui.var_profile.get().strip()
         if not cur or cur not in self.ui.profile_combo["values"]:
-            if "chip_0603_resistor@1" in self.ui.profile_combo["values"]: self.ui.var_profile.set("chip_0603_resistor@1")
+            if DEFAULT_COMPONENT_PROFILE in self.ui.profile_combo["values"]: self.ui.var_profile.set(DEFAULT_COMPONENT_PROFILE)
             elif self.ui.profile_combo["values"]: self.ui.var_profile.set(self.ui.profile_combo["values"][0])
 
         if bool(self.ui.var_profiles_multi.get()): self._set_profiles_multi(self._profiles_multi_list(available=self._profiles_multi_available_values()))

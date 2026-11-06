@@ -162,17 +162,18 @@ cd Simple-Sim
 
 ## Component Profiles
 
-Profiles live in `configs/profiles/` and are versioned via `profile_id` like `chip_0603_resistor@1`.
+Profiles live in `configs/profiles/` and are versioned via `profile_id` like `chip_0603_resistor@2`.
 
 Included profiles:
-- `chip_0603_resistor@1`: 2-pad 0603 chip resistor (OK/MISSING/MISALIGNED/TOMBSTONE)
+- `chip_0603_resistor@2` (default): 2-pad 0603 chip resistor (OK/MISSING/MISALIGNED/TOMBSTONE from 30 deg tilt/SOLDER_BALL/EXCESS_SOLDER)
+- `chip_0603_resistor@1`: same with TOMBSTONE from 75 deg (kept for existing datasets/models)
 - `sot23_transistor@1`: 3-pad SOT-23 transistor (OK/MISSING/MISALIGNED/TOMBSTONE)
 - `qfn32_ic@1`: 4-pad QFN-32 IC (OK/MISSING/MISALIGNED/TOMBSTONE)
 
 3D profiles are intentionally **separate profile IDs** to keep datasets distinct in the GUI:
-- `chip_0603_resistor_3d@1`
-- `sot23_transistor_3d@1`
-- `qfn32_ic_3d@1`
+- `chip_0603_resistor_3d@2`
+- `sot23_transistor_3d@2`
+- `qfn32_ic_3d@2`
 
 Reference run configs you can start from:
 - `configs/run_0001.yaml` (0603 resistor, 256×256 ROI)

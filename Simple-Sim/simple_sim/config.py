@@ -10,6 +10,7 @@ import yaml
 from simple_sim.config_schema import parse_config_typed
 
 RENDER_STYLES = {"photoreal", "flat"}
+DEFAULT_COMPONENT_PROFILE = "chip_0603_resistor@2"
 
 
 def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
@@ -21,7 +22,7 @@ def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any]) ->
     out.setdefault("component_type", str((profile.get("component") or {}).get("type", "")))
     return out
 
-VALID_CLASSES = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT'}
+VALID_CLASSES = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT', 'SOLDER_BALL', 'EXCESS_SOLDER'}
 
 _SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 _SUPPORTED_MODELS = {'resnet18'}
@@ -268,6 +269,31 @@ def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> 
         _validate_render_3d(render)
     else:
         raise ValueError(f"Unsupported render backend: {backend}")
+    _validate_camera(render.get('camera'))
+
+
+def _validate_camera(camera: Any) -> None:
+    """``render.camera`` (both backends): preset and overrides of the camera model (photoreal.CAMERA_DEFAULTS)."""
+    if camera is None:
+        return
+    from simple_sim.generators.opencv2d.photoreal import CAMERA_DEFAULTS, CAMERA_PRESETS
+
+    if not isinstance(camera, dict) or set(camera) - set(CAMERA_DEFAULTS) - {'preset'}:
+        raise ValueError(f"render.camera must be a mapping with keys from {sorted(set(CAMERA_DEFAULTS) | {'preset'})}")
+    if camera.get('preset', 'aoi') not in CAMERA_PRESETS:
+        raise ValueError(f"render.camera.preset must be one of {sorted(CAMERA_PRESETS)}")
+    limits = {'tilt_deg': 60.0, 'jpeg_quality': 100.0}
+    for key, default in CAMERA_DEFAULTS.items():
+        if key not in camera or not isinstance(default, list):
+            continue
+        rng = camera[key]
+        if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(v, (int, float)) for v in rng)
+                and 0 <= rng[0] <= rng[1] <= limits.get(key, float('inf'))):
+            raise ValueError(f"render.camera.{key} must be [min, max] with 0 <= min <= max <= {limits.get(key, 'inf')}")
+    if 'zoom' in camera and camera['zoom'][0] < 1:
+        raise ValueError("render.camera.zoom must be >= 1 (1 = profile scale, larger = farther away)")
+    if 'shot_noise' in camera and not (isinstance(camera['shot_noise'], (int, float)) and camera['shot_noise'] >= 0):
+        raise ValueError("render.camera.shot_noise must be a number >= 0")
 
 
 def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
@@ -297,6 +323,19 @@ def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
 
     if render.get('style', 'photoreal') not in RENDER_STYLES:
         raise ValueError(f"render.style must be one of {sorted(RENDER_STYLES)}")
+
+    rework = render.get('rework_artifacts')
+    if rework is not None and not (isinstance(rework, (int, float)) and 0 <= rework <= 1):
+        raise ValueError("render.rework_artifacts must be a probability in [0, 1]")
+
+    texture_dir = render.get('texture_dir')
+    if texture_dir is not None:
+        from simple_sim.generators.opencv2d.photoreal import texture_files
+
+        if not isinstance(texture_dir, str) or not Path(texture_dir).is_dir():
+            raise ValueError(f"render.texture_dir must be an existing directory: {texture_dir!r}")
+        if not texture_files(texture_dir):
+            raise ValueError(f"render.texture_dir contains no images: {texture_dir!r}")
 
 
 def _validate_render_3d(render: dict[str, Any]) -> None:

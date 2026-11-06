@@ -46,8 +46,13 @@ def blender_job(
     footprint: str,
     component_height_mm: float,
     render_3d: dict[str, Any],
+    bake: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """One ``render_batch.py`` job from a record with image_path/seed/nominal/defect/augment."""
+    """One ``render_batch.py`` job from a record with image_path/seed/nominal/defect/augment.
+
+    *bake*: fields for the shared board bake and camera model (``component_type``, ``tolerances``,
+    ``texture_dir``, ``camera``), see ``simple_sim.generators.blender3d.bake``.
+    """
     return {
         "image_path": record["image_path"],
         "seed": int(record["seed"]),
@@ -60,6 +65,7 @@ def blender_job(
         "defect": record["defect"],
         "augment": record["augment"],
         "render_3d": render_3d,
+        **(bake or {}),
     }
 
 
@@ -123,12 +129,17 @@ def render_blender_records(
     footprint: str,
     component_height_mm: float,
     profile_render_3d: dict[str, Any],
+    tolerances: dict[str, Any] | None,
     project_root: Path,
     output_root: Path,
     jobs_filename: str,
     expect_at_least: bool = False,
 ) -> None:
     """Render dataset *records* with Blender into ``output_root/images`` and verify the image count."""
+    render_cfg = config.get("render") or {}
+    bake = {"component_type": str(render_cfg.get("component_type", "")), "texture_dir": render_cfg.get("texture_dir"),
+            "tolerances": tolerances, "camera": render_cfg.get("camera"),
+            "rework_artifacts": render_cfg.get("rework_artifacts", 0.3)}
     jobs = [
         blender_job(
             r,
@@ -138,6 +149,7 @@ def render_blender_records(
             footprint=footprint,
             component_height_mm=component_height_mm,
             render_3d=profile_render_3d,
+            bake=bake,
         )
         for r in records
     ]

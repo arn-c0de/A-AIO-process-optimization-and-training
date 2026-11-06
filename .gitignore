@@ -66,3 +66,6 @@ Simple-Sim/.venv-wheelhouse/
 
 Simple-Sim.meta.json
 .claude
+
+# Temporary Blender board bakes (removed after each render)
+_board_textures/

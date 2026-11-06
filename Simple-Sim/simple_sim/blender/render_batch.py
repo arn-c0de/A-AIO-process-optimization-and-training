@@ -1,22 +1,22 @@
-"""Blender batch renderer for Simple-Sim (Cycles).
+"""Blender batch renderer for Simple-Sim (Cycles or EEVEE).
 
-Run via:
+Run via (normally through ``simple_sim.generators.blender3d.render_blender_batch``):
   blender --background --factory-startup --python render_batch.py -- --jobs jobs.jsonl --out_root <dir> --samples 64
 
-Jobs file format (JSONL), one per line:
-{
-  "image_path": "images/000123.png",
-  "seed": 123,
-  "mm_per_px": 0.01,
-  "roi_width_px": 256,
-  "roi_height_px": 256,
-  "footprint": "chip_2pad|sot23|qfn_32|soic_16",
-  "component_height_mm": 0.45,
-  "nominal": {...},
-  "defect": {...},
-  "augment": {...},     # optional (uses augment.rotation_deg for global orientation)
-  "render_3d": {...}   # optional profile defaults (camera/lighting/materials)
-}
+Each JSONL job carries the usual sample fields (``image_path``, ``seed``, ``mm_per_px``,
+``roi_width_px``, ``roi_height_px``, ``component_height_mm``, ``augment``, ``render_3d``) plus a
+``board`` entry added by the runner (see ``blender3d/bake.py``)::
+
+  "board": {"texture": "<png>", "scale": 2, "family": "resistor|capacitor|sot|soic|qfn",
+            "pads": [[cx, cy, w, h], ...], "thermal_pad": index | null,
+            "excess": [pad index, ...], "balls": [[x, y, r], ...], "pose": {"tilt", "azimuth", "zoom"},
+            "body": null | {"center": [x, y], "length", "width", "rotation_deg", "tilt_deg",
+                            "is_tombstone", "raised_sign"}}
+
+Layout values are camera pixels relative to the ROI centre, image convention (x right, y down),
+identical to the 2D renderer. The scene (1 Blender unit = 1 mm): board plane with the baked
+texture, a solder fillet mesh per pad, the part (body, end caps or gull-wing leads, pin-1 mark,
+marking text), an AOI ring light and an orthographic camera that frames exactly the ROI.
 """
 
 from __future__ import annotations
@@ -24,12 +24,19 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import sys
 from pathlib import Path
 from typing import Any
 
 import bpy
 from mathutils import Vector
+
+# Height / body-width ratios of real packages (0603: 0.45/0.8, SOT-23: 1.0/1.3, SOIC: 1.5/3.9, QFN: 0.9/5).
+_HEIGHT_RATIO = {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18}
+_RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
+_MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
+RING_STRENGTH, TOP_STRENGTH = 6.0, 0.9  # emission strengths, calibrated to the baked board colours
 
 
 def _parse_args() -> argparse.Namespace:
@@ -39,668 +46,422 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--samples", type=int, required=True)
     parser.add_argument("--device", default="CPU")
     parser.add_argument("--engine", default="BLENDER_EEVEE", help="Render engine (BLENDER_EEVEE or CYCLES)")
-    # Blender passes custom args after a `--` separator.
-    argv = sys.argv
-    if "--" in argv:
-        argv = argv[argv.index("--") + 1 :]
-    else:
-        argv = argv[1:]
+    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
     return parser.parse_args(argv)
 
 
-def _clean_scene() -> None:
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+# --------------------------------------------------------------------------- materials
 
-
-def _new_material(name: str, *, base_color=(0.5, 0.5, 0.5), roughness=0.5, metallic=0.0) -> bpy.types.Material:
+def _material(name: str, color, *, roughness: float, metallic: float = 0.0, bump: float = 0.0,
+              emission: float = 0.0) -> bpy.types.Material:
+    """Principled material; *bump* adds fine noise relief (mold speckle, solder grain)."""
     mat = bpy.data.materials.new(name=name)
     mat.use_nodes = True
-    nodes = mat.node_tree.nodes
-    nodes.clear()  # Clear any default nodes
-
-    # Create Principled BSDF explicitly
-    bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
-    bsdf.inputs["Base Color"].default_value = (float(base_color[0]), float(base_color[1]), float(base_color[2]), 1.0)
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    nodes.clear()
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.inputs["Base Color"].default_value = (*[float(c) for c in color[:3]], 1.0)
     bsdf.inputs["Roughness"].default_value = float(roughness)
     bsdf.inputs["Metallic"].default_value = float(metallic)
-
-    # Create output node
-    output = nodes.new(type='ShaderNodeOutputMaterial')
-
-    # Link them
-    links = mat.node_tree.links
-    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
-
+    if emission:
+        bsdf.inputs["Emission Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+        bsdf.inputs["Emission Strength"].default_value = float(emission)
+    if bump:
+        noise = nodes.new("ShaderNodeTexNoise")
+        noise.inputs["Scale"].default_value = 120.0
+        noise.inputs["Detail"].default_value = 4.0
+        bmp = nodes.new("ShaderNodeBump")
+        bmp.inputs["Strength"].default_value = float(bump)
+        links.new(noise.outputs["Fac"], bmp.inputs["Height"])
+        links.new(bmp.outputs["Normal"], bsdf.inputs["Normal"])
+    out = nodes.new("ShaderNodeOutputMaterial")
+    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
     return mat
 
 
-def _apply_material(obj: bpy.types.Object, mat: bpy.types.Material) -> None:
-    if obj is None or obj.data is None:
-        print("[ERROR] Object or data is None!")
-        return
+def _board_material(texture: str) -> bpy.types.Material:
+    """Solder mask carrying the baked 2D board (mask, copper, silkscreen, pad finish).
 
-    # FIX: Use obj.data directly, materials is a collection
-    if obj.type == 'MESH':
-        # Clear existing materials and add new one
-        obj.data.materials.clear()
-        obj.data.materials.append(mat)
+    The baked colours come from real photos and already include the mask's sheen, so the specular
+    part is kept low; with the default ring light the board renders at its baked colours.
+    """
+    mat = _material("mat_board", (1, 1, 1), roughness=0.4)
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    nodes["Principled BSDF"].inputs["Specular IOR Level"].default_value = 0.1
+    tex = nodes.new("ShaderNodeTexImage")
+    tex.image = bpy.data.images.load(texture)
+    tex.interpolation = "Cubic"
+    links.new(tex.outputs["Color"], nodes["Principled BSDF"].inputs["Base Color"])
+    return mat
 
 
-def _mk_box(name: str, *, size_xyz: tuple[float, float, float], loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc_xyz)
-    obj = bpy.context.active_object
-    obj.name = name
-    sx, sy, sz = size_xyz
-    obj.scale = (sx / 2.0, sy / 2.0, sz / 2.0)
+def _cfg_material(name: str, cfg: dict[str, Any], default_color, default_roughness: float, default_metallic: float,
+                  bump: float = 0.0) -> bpy.types.Material:
+    color = cfg.get("base_color", default_color)
+    if not isinstance(color, (list, tuple)) or len(color) != 3:
+        color = default_color
+    return _material(name, color, roughness=float(cfg.get("roughness", default_roughness)),
+                     metallic=float(cfg.get("metallic", default_metallic)), bump=bump)
+
+
+# --------------------------------------------------------------------------- geometry helpers
+
+def _mesh_object(name: str, verts, faces, mat: bpy.types.Material, *, smooth: bool = True) -> bpy.types.Object:
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    if smooth:
+        for poly in mesh.polygons:
+            poly.use_smooth = True
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+    obj.data.materials.append(mat)
     return obj
 
 
-def _mk_plane(name: str, *, size_xy: tuple[float, float], loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
-    bpy.ops.mesh.primitive_plane_add(size=1.0, location=loc_xyz)
+def _box(name: str, size, loc, mat: bpy.types.Material, *, parent=None, bevel: float = 0.0) -> bpy.types.Object:
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc)
     obj = bpy.context.active_object
     obj.name = name
-    sx, sy = size_xy
-    obj.scale = (sx / 2.0, sy / 2.0, 1.0)
+    obj.scale = tuple(float(s) for s in size)
+    obj.data.materials.append(mat)
+    if bevel > 0:
+        mod = obj.modifiers.new("Bevel", "BEVEL")
+        mod.width = bevel
+        mod.segments = 3
+        bpy.ops.object.shade_smooth()
+    if parent is not None:
+        obj.parent = parent
     return obj
 
 
-def _mk_chip_resistor(name: str, *, length: float, width: float, height: float, loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
-    """Create realistic chip resistor with rounded ends and end caps."""
-    # Main body (slightly smaller than total length for end caps)
-    body_length = length * 0.7
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc_xyz)
-    obj = bpy.context.active_object
-    obj.name = name
-    obj.scale = (body_length / 2.0, width / 2.0, height / 2.0)
-
-    # Add bevel modifier for rounded edges (realistic!)
-    bevel_mod = obj.modifiers.new(name="Bevel", type='BEVEL')
-    bevel_mod.width = min(width, height) * 0.15
-    bevel_mod.segments = 2
-
+def _box_between(name: str, p0: Vector, p1: Vector, width: float, thickness: float, mat) -> bpy.types.Object:
+    """Box whose length runs from p0 to p1 (lead segments)."""
+    d = p1 - p0
+    obj = _box(name, (d.length + thickness * 0.5, width, thickness), (p0 + p1) / 2.0, mat)
+    obj.rotation_mode = "QUATERNION"
+    obj.rotation_quaternion = d.normalized().to_track_quat("X", "Z")
     return obj
 
 
-def _mk_sot23_transistor(name: str, *, length: float, width: float, height: float, loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
-    """Create realistic SOT-23 transistor package with tapered shape."""
-    # Keep sharp edges (no bevel). AOI-style renders look wrong with rounded corners.
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc_xyz)
+def _rect_distance(x: float, y: float, rect: dict[str, float]) -> float:
+    """Chebyshev-style signed distance of (x, y) to a rotated rectangle (< 0 inside)."""
+    dx, dy = x - rect["cx"], y - rect["cy"]
+    c, s = math.cos(rect["angle"]), math.sin(rect["angle"])
+    return max(abs(dx * c + dy * s) - rect["hl"], abs(-dx * s + dy * c) - rect["hw"])
+
+
+def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big: bool, mat,
+            excess: bool = False) -> bpy.types.Object:
+    """Solder as a height-field mesh over the pad.
+
+    With a part terminal on the pad: concave fillet rising towards the terminal. Without one
+    (MISSING, raised tombstone end, part shifted off the pad): reflowed paste dome; large thermal
+    pads get window-pane islands like the stencil prints them.
+    """
+    cx, cy, pw, ph = pad
+    n = 48 if big else 24
+    xs = [cx - pw / 2 + pw * i / n for i in range(n + 1)]
+    ys = [cy - ph / 2 + ph * j / n for j in range(n + 1)]
+    rim_w = 0.12 * min(pw, ph)
+    dist = [[_rect_distance(x, y, contact) if contact else 1.0 for x in xs] for y in ys]
+    touched = contact is not None and min(min(row) for row in dist) <= 0.0
+    dmax = max(max(row) for row in dist) if touched else 1.0
+    nx = ny = 1
+    if big and not touched:
+        nx, ny = max(2, round(pw / (min(pw, ph) / 3))), max(2, round(ph / (min(pw, ph) / 3)))
+
+    dome_h = 0.1 * min(pw / nx, ph / ny)  # reflowed paste height scales with the paste deposit, as in 2D
+    verts = []
+    for j, y in enumerate(ys):
+        for i, x in enumerate(xs):
+            rim = min(1.0, min(x - xs[0], xs[-1] - x, y - ys[0], ys[-1] - y) / rim_w)
+            if touched:
+                t = 1.0 - max(0.0, dist[j][i]) / max(dmax, 1e-6)
+                z = h_term * (1.5 * t ** 0.5 if excess else t ** 1.8)  # too much solder: convex bulge
+            else:
+                u = ((i / n * nx) % 1.0) * 2 - 1
+                v = ((j / n * ny) % 1.0) * 2 - 1
+                z = dome_h * max(0.0, 1.0 - (abs(u) ** 3 + abs(v) ** 3) * (0.85 if nx * ny == 1 else 1.2))
+            verts.append((x, y, 0.001 + z * rim))
+    faces = [(j * (n + 1) + i, j * (n + 1) + i + 1, (j + 1) * (n + 1) + i + 1, (j + 1) * (n + 1) + i)
+             for j in range(n) for i in range(n)]
+    return _mesh_object(name, verts, faces, mat)
+
+
+def _text(name: str, text: str, size: float, loc, mat, parent) -> None:
+    bpy.ops.object.text_add(location=loc)
     obj = bpy.context.active_object
     obj.name = name
-    obj.scale = (length / 2.0, width / 2.0, height / 2.0)
-
-    return obj
-
-
-def _mk_qfn_package(name: str, *, length: float, width: float, height: float, loc_xyz: tuple[float, float, float]) -> bpy.types.Object:
-    """Create realistic QFN IC package."""
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc_xyz)
-    obj = bpy.context.active_object
-    obj.name = name
-    obj.scale = (length / 2.0, width / 2.0, height / 2.0)
-
-    return obj
+    obj.data.body = text
+    obj.data.size = size
+    obj.data.align_x = "CENTER"
+    obj.data.align_y = "CENTER"
+    obj.data.materials.append(mat)
+    obj.parent = parent
 
 
-def _add_solder_joint(name: str, *, pos_xyz: tuple[float, float, float], size: float, material: bpy.types.Material) -> bpy.types.Object:
-    """Create realistic solder fillet/joint."""
-    # Use UV sphere for smooth solder fillet appearance
-    bpy.ops.mesh.primitive_uv_sphere_add(radius=size, location=pos_xyz, segments=8, ring_count=6)
-    solder = bpy.context.active_object
-    solder.name = name
-
-    # Scale to create fillet shape (flattened sphere)
-    solder.scale = (1.0, 1.0, 0.4)
-
-    # Apply material
-    _apply_material(solder, material)
-
-    return solder
+def _look_at(obj: bpy.types.Object, target: Vector) -> None:
+    obj.rotation_euler = (target - obj.location).to_track_quat("-Z", "Y").to_euler()
 
 
-def _look_at(obj: bpy.types.Object, target: Vector, *, track_axis: str = "-Z", up_axis: str = "Y") -> None:
-    """Point an object at a target location."""
-    direction = target - obj.location
-    rot_quat = direction.to_track_quat(track_axis, up_axis)
-    obj.rotation_euler = rot_quat.to_euler()
+# --------------------------------------------------------------------------- part
+
+def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, Any], mmpp: float, comp_h_mm: float,
+                render_3d: dict[str, Any], rng: random.Random) -> tuple[list[bpy.types.Object], list, float]:
+    """Body, end caps / leads, pin-1 mark and marking.
+
+    Returns (objects, per-pad contact rect or None, solder height). The contact is what the solder
+    wets: the terminal / body edge for chips and QFN, the lead foot for SOT/SOIC.
+    """
+    family, body = board["family"], board["body"]
+    if body is None:
+        return [], [None] * len(pads), 0.0  # no contacts: every pad gets a paste dome
+
+    mats = render_3d.get("materials") or {}
+    L, W = float(body["length"]) * mmpp, float(body["width"]) * mmpp
+    H = min(comp_h_mm, _HEIGHT_RATIO[family] * min(L, W))
+    angle = -math.radians(float(body["rotation_deg"]))  # image y-down -> Blender y-up
+    cx, cy = float(body["center"][0]) * mmpp, -float(body["center"][1]) * mmpp
+    axis = Vector((math.cos(angle), math.sin(angle), 0.0))
+    standoff = 0.08 * H if family in ("sot", "soic") else 0.01 * H
+
+    root = bpy.data.objects.new("part_root", None)
+    bpy.context.collection.objects.link(root)
+    contact = {"cx": cx, "cy": cy, "hl": L / 2, "hw": W / 2, "angle": angle}
+    offset = 0.0
+    if body.get("is_tombstone"):
+        sign = float(body.get("raised_sign", 1.0))
+        tilt = math.radians(float(body["tilt_deg"]))
+        anchor = Vector((cx, cy, 0.0)) - axis * sign * (L / 2)
+        root.location = (anchor.x, anchor.y, standoff)
+        root.rotation_euler = (0.0, -tilt * sign, angle)
+        offset = sign * L / 2  # body extends from the anchored end towards the raised one
+        # Footprint seen from above, as in 2D: top face from H*sin behind the anchor to L*cos in front.
+        top_len, end_len = L * math.cos(tilt), H * math.sin(tilt)
+        mid = anchor + axis * sign * ((top_len - end_len) / 2)
+        contact = {"cx": mid.x, "cy": mid.y, "hl": (top_len + end_len) / 2, "hw": W / 2, "angle": angle}
+    else:
+        root.location = (cx, cy, standoff)
+        root.rotation_euler = (0.0, 0.0, angle)
+
+    if family == "capacitor":
+        m_body = _material("mat_ceramic", (0.42, 0.26, 0.14), roughness=0.55, bump=0.02)
+    else:
+        m_body = _cfg_material("mat_body", mats.get("body") or {}, (0.02, 0.02, 0.02), 0.5, 0.0, bump=0.03)
+    objs: list[bpy.types.Object] = [root]
+    objs.append(_box("body", (L, W, H), (offset, 0.0, H / 2), m_body, parent=root, bevel=0.06 * min(W, H)))
+
+    if family in ("resistor", "capacitor"):
+        # Tin plating is satin, not a mirror: it must catch the ring light when it faces the camera.
+        m_cap = _material("mat_endcap", (0.75, 0.75, 0.74), roughness=0.45, metallic=1.0, bump=0.05)
+        cap = (0.26 if family == "capacitor" else 0.22) * L
+        for s in (-1, 1):
+            # Caps wrap slightly beyond the body, so their end faces never coincide with the body's
+            # (an upright tombstone shows the cap's end face to the camera).
+            objs.append(_box(f"endcap_{s}", (cap + 0.02 * H, W * 1.02, H * 1.02),
+                             (offset + s * ((L - cap) / 2 + 0.01 * H), 0.0, H / 2), m_cap,
+                             parent=root, bevel=0.1 * min(W, H)))
+        if family == "resistor":
+            m_ink = _material("mat_ink", (0.85, 0.85, 0.82), roughness=0.8)
+            _text("marking", rng.choice(_RESISTOR_CODES), 0.42 * W, (offset, 0.0, H + 0.0005), m_ink, root)
+        return objs, [contact] * len(pads), 0.6 * H
+
+    # ICs: pin-1 dimple and laser marking.
+    m_dot = _material("mat_pin1", (0.01, 0.01, 0.01), roughness=0.25)
+    bpy.ops.mesh.primitive_cylinder_add(radius=max(0.035 * min(L, W), 0.01), depth=0.0004,
+                                        location=(offset - L / 2 + 0.12 * L, W / 2 - 0.15 * W, H + 0.0002))
+    dot = bpy.context.active_object
+    dot.data.materials.append(m_dot)
+    dot.parent = root
+    m_laser = _material("mat_laser", (0.22, 0.22, 0.21), roughness=0.9)
+    lines = 1 if family == "sot" else 3
+    size = 0.32 * W if family == "sot" else min(0.13 * W, 0.085 * L)
+    for i in range(lines):
+        text = "".join(rng.choice(_MARK_CHARS) for _ in range(rng.randint(3, 6)))
+        _text(f"marking_{i}", text, size, (offset, ((lines - 1) / 2 - i) * size * 1.6, H + 0.0005), m_laser, root)
+
+    if family in ("sot", "soic") and not body.get("is_tombstone"):
+        m_lead = _cfg_material("mat_lead", mats.get("solder") or {}, (0.7, 0.7, 0.72), 0.25, 1.0)
+        contacts, t = [], 0.0
+        for k, (px, py, pw, ph) in enumerate(pads):
+            rel = Vector((px - cx, py - cy, 0.0))
+            loc = Vector((rel.dot(axis), rel.x * -axis.y + rel.y * axis.x, 0.0))  # pad in body frame
+            edge = Vector((max(-L / 2, min(L / 2, loc.x)), max(-W / 2, min(W / 2, loc.y)), 0.0))
+            to_world = lambda v: Vector((cx, cy, 0.0)) + axis * v.x + Vector((-axis.y, axis.x, 0.0)) * v.y
+            start, foot = to_world(edge * 0.98), Vector((px, py, 0.0))
+            lw = min(0.55 * min(pw, ph), 0.15 * max(L, W))
+            t = 0.25 * lw
+            shoulder = start + Vector((0, 0, standoff + 0.45 * H))
+            knee = start + (foot - start) * 0.3 + Vector((0, 0, standoff + 0.45 * H))
+            ankle = start + (foot - start) * 0.55 + Vector((0, 0, t / 2))
+            for seg, (a, b) in enumerate(((shoulder, knee), (knee, ankle), (ankle, foot + Vector((0, 0, t / 2))))):
+                objs.append(_box_between(f"lead_{k}_{seg}", a, b, lw, t, m_lead))
+            d = foot - ankle
+            mid = (foot + ankle) / 2
+            contacts.append({"cx": mid.x, "cy": mid.y, "hl": d.length / 2, "hw": lw / 2, "angle": math.atan2(d.y, d.x)})
+        return objs, contacts, 0.9 * t
+    if family in ("sot", "soic"):
+        return objs, [None] * len(pads), 0.0  # tombstoned leaded part: leads lifted, paste only
+    return objs, [contact] * len(pads), 0.3 * H
 
 
-def _pad_positions_mm(footprint: str, nominal: dict[str, float], *, mm_per_px: float) -> list[tuple[float, float, float, float]]:
-    # Returns list of (cx_mm, cy_mm, w_mm, h_mm) in a local XY plane.
-    pad_w = float(nominal["pad_width"]) * mm_per_px
-    pad_h = float(nominal["pad_height"]) * mm_per_px
-    pad_spacing = float(nominal["pad_spacing"]) * mm_per_px
+# --------------------------------------------------------------------------- scene
 
-    if footprint == "sot23":
-        pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
-        small_h = pad_h * 0.8
-        # left-top, left-bottom, right-center
-        return [
-            (-pad_spacing / 2.0, -pad_spacing_y / 2.0, pad_w, small_h),
-            (-pad_spacing / 2.0, +pad_spacing_y / 2.0, pad_w, small_h),
-            (+pad_spacing / 2.0, 0.0, pad_w, pad_h),
-        ]
-    if footprint.startswith("qfn"):
-        pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
-        # QFN: treat pad_height as the *radial* pad length (towards/away from package),
-        # and pad_width as the *tangential* dimension along the package edge.
-        return [
-            # Left/right pads: radial along X, tangential along Y.
-            (-pad_spacing / 2.0, 0.0, pad_h, pad_w),
-            (+pad_spacing / 2.0, 0.0, pad_h, pad_w),
-            # Top/bottom pads: tangential along X, radial along Y.
-            (0.0, -pad_spacing_y / 2.0, pad_w, pad_h),
-            (0.0, +pad_spacing_y / 2.0, pad_w, pad_h),
-        ]
-    if footprint == "soic_16":
-        # SOIC-16: 8 pads on the left and 8 pads on the right side.
-        # Keep lead rows compact using pad width as reference.
-        y_span = pad_w * 7.0
-        pitch = y_span / 7.0
-        y0 = -y_span / 2.0
-        pads: list[tuple[float, float, float, float]] = []
-        for i in range(8):
-            cy = y0 + (i * pitch)
-            # Left/right pads: radial along X, tangential along Y.
-            pads.append((-pad_spacing / 2.0, cy, pad_h, pad_w))
-            pads.append((+pad_spacing / 2.0, cy, pad_h, pad_w))
-        return pads
-    # chip_2pad default
-    return [
-        (-pad_spacing / 2.0, 0.0, pad_w, pad_h),
-        (+pad_spacing / 2.0, 0.0, pad_w, pad_h),
-    ]
-
-
-def _normalize_engine(engine: str) -> str:
-    e = str(engine or "").strip().upper()
-    if e in ("", "EEVEE", "BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
-        return "BLENDER_EEVEE"
-    return e
-
-
-def _configure_cycles(
-    *, width_px: int, height_px: int, samples: int, seed: int, device: str, engine: str = "BLENDER_EEVEE"
-) -> bpy.types.Scene:
+def _configure_render(*, width_px: int, height_px: int, samples: int, seed: int, device: str, engine: str) -> None:
     scene = bpy.context.scene
-
-    # Honour the configured engine; EEVEE is the default (better color handling).
-    engine = _normalize_engine(engine)
-    if engine == "BLENDER_EEVEE":
+    engine = str(engine or "").strip().upper()
+    if engine in ("", "EEVEE", "BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
         try:
             scene.render.engine = "BLENDER_EEVEE"
         except TypeError:
-            # Blender 4.2+ renamed the enum to BLENDER_EEVEE_NEXT.
-            scene.render.engine = "BLENDER_EEVEE_NEXT"
-
-        # EEVEE settings for quality (some flags were removed in newer Blender versions)
+            scene.render.engine = "BLENDER_EEVEE_NEXT"  # Blender 4.2-4.x enum name
         scene.eevee.taa_render_samples = max(64, int(samples))
-        for attr, value in (("use_gtao", True), ("use_bloom", False), ("use_ssr", True)):
-            try:
-                setattr(scene.eevee, attr, value)  # AO on, bloom off (more realistic), SSR on
-            except AttributeError:
-                pass
     else:
         scene.render.engine = engine
         if engine == "CYCLES":
             scene.cycles.samples = int(samples)
-            # Per-job noise seed keeps Cycles renders deterministic.
-            scene.cycles.seed = int(seed) % (2**31)  # Blender IntProperty is 32-bit
+            scene.cycles.seed = int(seed) % (2**31)  # deterministic per job; IntProperty is 32-bit
+            scene.cycles.use_denoising = True
+            scene.cycles.device = "GPU" if str(device).upper() != "CPU" else "CPU"
 
-    # Disable compositor and sequencer
     scene.render.use_compositing = False
     scene.render.use_sequencer = False
     scene.render.resolution_x = int(width_px)
     scene.render.resolution_y = int(height_px)
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
-    scene.render.image_settings.color_mode = 'RGB'  # Force RGB, not grayscale!
-    scene.render.image_settings.color_depth = '8'
+    scene.render.image_settings.color_mode = "RGB"
+    scene.render.image_settings.color_depth = "8"
     scene.render.film_transparent = False
+    # Plain sRGB output: the baked board texture is sRGB and must come out unchanged where lit evenly.
+    scene.view_settings.view_transform = "Standard"
+    scene.view_settings.look = "None"
+    scene.display_settings.display_device = "sRGB"
 
-    # Color management: CRITICAL - override AgX (Blender 4.0+ default) with Raw
-    # AgX can desaturate colors significantly
-    scene.view_settings.view_transform = 'Raw'  # No tone mapping
-    scene.view_settings.look = 'None'
-    scene.view_settings.exposure = 0.0
-    scene.view_settings.gamma = 1.0
-    scene.view_settings.use_curve_mapping = False
-    scene.display_settings.display_device = 'sRGB'
-
-    # Determinism: keep device explicit. If GPU is requested but unavailable, Blender may error.
-    prefs = bpy.context.preferences
-    try:
-        cprefs = prefs.addons["cycles"].preferences
-        cprefs.compute_device_type = "NONE" if str(device).upper() == "CPU" else cprefs.compute_device_type
-        scene.cycles.device = "CPU" if str(device).upper() == "CPU" else "GPU"
-    except Exception:
-        scene.cycles.device = "CPU"
-
-    # Setup world environment for realistic lighting
-    world = scene.world
-    if world is None:
-        world = bpy.data.worlds.new("World")
-        scene.world = world
+    world = bpy.data.worlds.new("World")
+    scene.world = world
     world.use_nodes = True
-    world_nodes = world.node_tree.nodes
-    world_nodes.clear()
-
-    # Environment texture - realistic AOI booth lighting
-    node_bg = world_nodes.new(type="ShaderNodeBackground")
-    node_bg.inputs["Color"].default_value = (0.25, 0.25, 0.27, 1.0)  # Neutral inspection booth
-    node_bg.inputs["Strength"].default_value = 1.2  # Soft ambient like real AOI
-
-    node_output = world_nodes.new(type="ShaderNodeOutputWorld")
-    world.node_tree.links.new(node_bg.outputs["Background"], node_output.inputs["Surface"])
-
-    return scene
+    world.node_tree.nodes["Background"].inputs["Color"].default_value = (0.25, 0.25, 0.25, 1.0)  # dim AOI booth
+    world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.1
 
 
-def _as_rgb(v) -> tuple[float, float, float]:
-    if not isinstance(v, (list, tuple)) or len(v) != 3:
-        return (0.5, 0.5, 0.5)
-    return (float(v[0]), float(v[1]), float(v[2]))
+def _aoi_lights(render_3d: dict[str, Any], roi_mm: float) -> None:
+    """AOI lighting: low-angle ring light plus a diffuse top light around the optical axis.
+
+    ``render_3d.lighting.ring_light`` (strength, height_mm, radius_mm) and ``.top_light`` (strength).
+    The ring gives slopes and edges their highlights; the top light makes flat metal (solder tops,
+    upright end caps) bright as on real AOI images. Default strengths are calibrated so the board
+    renders at its baked (photo-calibrated) colours.
+    """
+    cfg = render_3d.get("lighting") or {}
+    ring_cfg, top_cfg = cfg.get("ring_light") or {}, cfg.get("top_light") or {}
+    height = float(ring_cfg.get("height_mm", 2.0 * roi_mm))
+    radius = float(ring_cfg.get("radius_mm", height * math.tan(math.radians(35.0))))
+    bpy.ops.mesh.primitive_torus_add(major_radius=radius, minor_radius=0.06 * radius, location=(0.0, 0.0, height))
+    ring = bpy.context.active_object
+    ring.name = "ring_light"
+    ring.data.materials.append(_material("mat_ring", (0, 0, 0), roughness=1.0,
+                                         emission=float(ring_cfg.get("strength", RING_STRENGTH))))
+    ring.visible_camera = False
+
+    bpy.ops.mesh.primitive_circle_add(vertices=48, radius=2.0 * radius, fill_type="NGON",
+                                      location=(0.0, 0.0, 1.2 * height), rotation=(math.pi, 0.0, 0.0))
+    top = bpy.context.active_object
+    top.name = "top_light"
+    top.data.materials.append(_material("mat_top", (0, 0, 0), roughness=1.0,
+                                        emission=float(top_cfg.get("strength", TOP_STRENGTH))))
+    top.visible_camera = False
 
 
-def _build_material_set(render_3d: dict[str, Any]) -> tuple[bpy.types.Material, bpy.types.Material, bpy.types.Material, bpy.types.Material]:
-    mats_cfg = (render_3d.get("materials") or {})
-
-    solder_col_raw = _as_rgb(mats_cfg.get("solder", {}).get("base_color", [0.7, 0.7, 0.72]))
-    solder_col = (
-        min(1.0, solder_col_raw[0] * 1.0),
-        min(1.0, solder_col_raw[1] * 1.0),
-        min(1.0, solder_col_raw[2] * 1.0),
-    )
-    m_solder = _new_material(
-        "mat_solder",
-        base_color=solder_col,
-        roughness=float(mats_cfg.get("solder", {}).get("roughness", 0.15)),
-        metallic=float(mats_cfg.get("solder", {}).get("metallic", 1.0)),
-    )
-
-    sub_col_raw = _as_rgb(mats_cfg.get("substrate", {}).get("base_color", [0.05, 0.2, 0.05]))
-    sub_col = (
-        min(0.6, sub_col_raw[0] * 1.8),
-        min(0.6, sub_col_raw[1] * 2.8),
-        min(0.6, sub_col_raw[2] * 1.6),
-    )
-    m_sub = _new_material(
-        "mat_substrate",
-        base_color=sub_col,
-        roughness=float(mats_cfg.get("substrate", {}).get("roughness", 0.8)),
-        metallic=float(mats_cfg.get("substrate", {}).get("metallic", 0.0)),
-    )
-
-    cu_col_raw = _as_rgb(mats_cfg.get("copper", {}).get("base_color", [0.8, 0.45, 0.1]))
-    cu_col = (
-        min(0.9, cu_col_raw[0] * 1.0),
-        min(0.7, cu_col_raw[1] * 1.0),
-        min(0.3, cu_col_raw[2] * 0.5),
-    )
-    m_cu = _new_material(
-        "mat_copper",
-        base_color=cu_col,
-        roughness=float(mats_cfg.get("copper", {}).get("roughness", 0.15)),
-        metallic=float(mats_cfg.get("copper", {}).get("metallic", 0.9)),
-    )
-
-    body_col_raw = _as_rgb(mats_cfg.get("body", {}).get("base_color", [0.02, 0.02, 0.02]))
-    body_col = (
-        min(0.15, body_col_raw[0] * 4.0),
-        min(0.15, body_col_raw[1] * 4.0),
-        min(0.15, body_col_raw[2] * 4.0),
-    )
-    m_body = _new_material(
-        "mat_body",
-        base_color=body_col,
-        roughness=float(mats_cfg.get("body", {}).get("roughness", 0.75)),
-        metallic=float(mats_cfg.get("body", {}).get("metallic", 0.0)),
-    )
-    return m_solder, m_sub, m_cu, m_body
-
-
-def _normalize_qfn_pad_spacing(footprint: str, nominal: dict[str, Any]) -> dict[str, Any]:
-    nominal_pads = dict(nominal)
-    if not footprint.startswith("qfn"):
-        return nominal_pads
-    pad_spacing_px = float(nominal_pads["pad_spacing"])
-    pad_spacing_y_px = float(nominal_pads.get("pad_spacing_y", pad_spacing_px))
-    pad_radial_px = float(nominal_pads["pad_height"])
-    comp_l_px = float(nominal_pads["component_length"])
-    comp_w_px = float(nominal_pads["component_width"])
-    desired_spacing_px = comp_l_px - pad_radial_px
-    desired_spacing_y_px = comp_w_px - pad_radial_px
-    nominal_pads["pad_spacing"] = min(pad_spacing_px, desired_spacing_px)
-    nominal_pads["pad_spacing_y"] = min(pad_spacing_y_px, desired_spacing_y_px)
-    print(f"[QFN] YAML pad_spacing={pad_spacing_px:.1f}px, desired={desired_spacing_px:.1f}px, FINAL={nominal_pads['pad_spacing']:.1f}px")
-    print(f"[QFN] YAML pad_spacing_y={pad_spacing_y_px:.1f}px, desired={desired_spacing_y_px:.1f}px, FINAL={nominal_pads['pad_spacing_y']:.1f}px")
-    return nominal_pads
-
-
-def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engine: str = "BLENDER_EEVEE") -> None:
+def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engine: str) -> None:
     seed = int(job.get("seed", 0))
-
-    mm_per_px = float(job["mm_per_px"])
-    width_px = int(job["roi_width_px"])
-    height_px = int(job["roi_height_px"])
-    footprint = str(job.get("footprint", "chip_2pad"))
-    nominal = job["nominal"]
-    defect = job["defect"]
-    augment = job.get("augment") or {}
+    rng = random.Random(seed)
+    mmpp = float(job["mm_per_px"])
+    w_px, h_px = int(job["roi_width_px"]), int(job["roi_height_px"])
+    roi_w, roi_h = w_px * mmpp, h_px * mmpp
+    board = job["board"]
     render_3d = job.get("render_3d") or {}
+    _configure_render(width_px=w_px, height_px=h_px, samples=samples, seed=seed, device=device, engine=engine)
 
-    _configure_cycles(
-        width_px=width_px, height_px=height_px, samples=samples, seed=seed, device=device, engine=engine
-    )
+    scale = float(board.get("scale", 2))
+    bpy.ops.mesh.primitive_plane_add(size=1.0, location=(0.0, 0.0, 0.0))
+    plane = bpy.context.active_object
+    plane.name = "board"
+    plane.scale = (roi_w * scale, roi_h * scale, 1.0)
+    plane.data.materials.append(_board_material(board["texture"]))
+    scene_objs = [plane]
 
-    m_solder, m_sub, m_cu, m_body = _build_material_set(render_3d)
+    pads = [(p[0] * mmpp, -p[1] * mmpp, p[2] * mmpp, p[3] * mmpp) for p in board["pads"]]
+    part, contacts, h_solder = _build_part(pads, board, mmpp, float(job.get("component_height_mm") or 0.45),
+                                           render_3d, rng)
+    scene_objs += [o for o in part if o.parent is None]
+    m_solder = _cfg_material("mat_solder", (render_3d.get("materials") or {}).get("solder") or {},
+                             (0.7, 0.7, 0.72), 0.18, 1.0, bump=0.02)
+    for i, (pad, contact) in enumerate(zip(pads, contacts)):
+        big = i == board.get("thermal_pad")  # window-pane stencil, as in 2D
+        scene_objs.append(_fillet(f"solder_{i}", pad, contact, h_solder, big, m_solder, excess=i in board.get("excess", [])))
+    for k, (bx, by, br) in enumerate(board.get("balls", [])):  # solder balls on the mask
+        r = br * mmpp
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=r, location=(bx * mmpp, -by * mmpp, 0.7 * r), segments=16, ring_count=8)
+        ball = bpy.context.active_object
+        ball.name = f"solder_ball_{k}"
+        ball.data.materials.append(m_solder)
+        bpy.ops.object.shade_smooth()
+        scene_objs.append(ball)
 
-    # Pad thickness and component dims (used for sizing + placement)
-    pad_th = 0.05
-    comp_h = float(job.get("component_height_mm") or 0.45)
-
-    # Compute base geometry in mm.
-    pad_w = float(nominal["pad_width"]) * mm_per_px
-    pad_h = float(nominal["pad_height"]) * mm_per_px
-    comp_l_raw = float(nominal["component_length"]) * mm_per_px
-    comp_w_raw = float(nominal["component_width"]) * mm_per_px
-
-    # For QFN, keep pads close to the body. Some configs sample pad_spacing larger than
-    # the body size, which looks like pads "floating away".
-    nominal_pads = _normalize_qfn_pad_spacing(footprint, nominal)
-
-    # Pre-compute pad positions and ensure the board (substrate) is large enough.
-    # Some profiles use large geometry ranges relative to ROI; if we keep the board
-    # fixed to ROI size, pads/components can overhang and look wrong.
-    pad_positions = _pad_positions_mm(footprint, nominal_pads, mm_per_px=mm_per_px)
-
-    # Use the actual spacing used for pad placement.
-    pad_spacing = float(nominal_pads["pad_spacing"]) * mm_per_px
-
-    # Component sizing rules:
-    # - 2-pad parts need generous overlap so they read as soldered.
-    # - QFN and SOIC should NOT be stretched to cover the pads; keep nominal body size.
-    if footprint.startswith("qfn") or footprint == "soic_16":
-        comp_l = comp_l_raw
-        comp_w = comp_w_raw
-    else:
-        # Component must span far enough to visually reach the pad copper.
-        # Pad outer-edge distance (left-to-right) is: pad_spacing + pad_w.
-        # Use a generous overlap so the part looks soldered even with small jitter.
-        # (pad_spacing + 2.5*pad_w) means ~0.75*pad_w overhang beyond each outer pad edge.
-        required_length = pad_spacing + (2.5 * pad_w)
-        comp_l = max(comp_l_raw, required_length)
-        comp_w = comp_w_raw
-
-    # SOT-23 has 2 pads on one side separated in Y; ensure the body isn't narrower
-    # than the pad cluster, otherwise it can look "not connected" even in OK.
-    if footprint == "sot23":
-        pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
-        required_width = (pad_spacing_y + pad_h) * 1.05
-        comp_w = max(comp_w, required_width)
-
-    print(
-        f"[COMP] Length={comp_l:.3f}mm (pad_spacing={pad_spacing:.3f}mm, pad_w={pad_w:.3f}mm) "
-        f"Width={comp_w:.3f}mm (raw={comp_w_raw:.3f}mm)"
-    )
-
-    # Substrate plane
-    board_w_mm = max(1e-6, float(width_px) * mm_per_px)
-    board_h_mm = max(1e-6, float(height_px) * mm_per_px)
-    if pad_positions:
-        min_x = min((cx - pw / 2.0) for (cx, cy, pw, ph) in pad_positions)
-        max_x = max((cx + pw / 2.0) for (cx, cy, pw, ph) in pad_positions)
-        min_y = min((cy - ph / 2.0) for (cx, cy, pw, ph) in pad_positions)
-        max_y = max((cy + ph / 2.0) for (cx, cy, pw, ph) in pad_positions)
-        pad_span_x = max(1e-6, max_x - min_x)
-        pad_span_y = max(1e-6, max_y - min_y)
-    else:
-        pad_span_x = pad_span_y = 1e-6
-
-    # Size around the larger of pad cluster and component, with margin.
-    # Use a generous margin (or full ROI size) so pads are well within the PCB, not at edges.
-    needed_span_x = max(pad_span_x, comp_l)
-    needed_span_y = max(pad_span_y, comp_w)
-    margin = max(3.0, max(pad_w, pad_h, 0.8) * 3.0)  # Much larger margin for realistic PCB
-    board_w_mm = max(board_w_mm, needed_span_x + 2.0 * margin)
-    board_h_mm = max(board_h_mm, needed_span_y + 2.0 * margin)
-
-    sub = _mk_plane("substrate", size_xy=(board_w_mm, board_h_mm), loc_xyz=(0.0, 0.0, 0.0))
-    _apply_material(sub, m_sub)
-    rotate_group: list[bpy.types.Object] = [sub]
-
-    # Pads (thin boxes)
-    for i, (cx, cy, pw, ph) in enumerate(pad_positions, 1):
-        pad = _mk_box(f"pad_{i}", size_xyz=(pw, ph, pad_th), loc_xyz=(cx, cy, pad_th / 2.0))
-        _apply_material(pad, m_cu)
-        rotate_group.append(pad)
-
-    # Component body
-    comp_type = str(defect.get("type", "OK"))
-
-    comp_obj = None
-    if comp_type != "MISSING":
-        # Create realistic 3D component based on footprint type
-        comp_z = pad_th + comp_h / 2.0
-
-        # Place the body over the pad cluster.
-        base_x, base_y = 0.0, 0.0
-        if footprint == "sot23":
-            if pad_positions:
-                # Use bounding-box center instead of centroid.
-                # SOT-23 has 2 pads on the left and 1 on the right; centroid shifts left
-                # and can make the body miss the right pad in OK samples.
-                min_cx = min(p[0] for p in pad_positions)
-                max_cx = max(p[0] for p in pad_positions)
-                min_cy = min(p[1] for p in pad_positions)
-                max_cy = max(p[1] for p in pad_positions)
-                base_x = (min_cx + max_cx) / 2.0
-                base_y = (min_cy + max_cy) / 2.0
-
-        if footprint == "chip_2pad":
-            # Chip resistor/capacitor with realistic rounded shape
-            comp_obj = _mk_chip_resistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
-
-            # Add one solder fillet per pad, centered on the copper pads.
-            # This keeps solder visible without creating floating corner artifacts.
-            solder_size = min(pad_w, pad_h, comp_h) * 0.28
-            solder_z = pad_th + solder_size * 0.10
-            for i, (cx, cy, _pw, _ph) in enumerate(pad_positions[:2], 1):
-                solder_obj = _add_solder_joint(
-                    f"solder_pad{i}",
-                    pos_xyz=(cx, cy, solder_z),
-                    size=solder_size,
-                    material=m_solder,
-                )
-                rotate_group.append(solder_obj)
-
-        elif footprint == "sot23":
-            # SOT-23 transistor package
-            comp_obj = _mk_sot23_transistor("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
-
-            # Add solder joints at the 3 SOT-23 pins
-            # SOT-23: 2 pins on one side (left), 1 pin on other side (right)
-            pad_w = float(nominal["pad_width"]) * mm_per_px
-            pad_spacing_val = float(nominal["pad_spacing"]) * mm_per_px
-            pad_spacing_y = float(nominal.get("pad_spacing_y", 0.0)) * mm_per_px
-
-            solder_size = min(pad_w, comp_h) * 0.3
-            solder_z = pad_th + solder_size * 0.3
-
-            # Left side: 2 pins
-            for y_pos in [-pad_spacing_y / 2.0, pad_spacing_y / 2.0]:
-                solder_obj = _add_solder_joint(f"solder_L_{y_pos}", pos_xyz=(-pad_spacing_val / 2.0, y_pos, solder_z), size=solder_size, material=m_solder)
-                rotate_group.append(solder_obj)
-
-            # Right side: 1 pin (center)
-            solder_obj = _add_solder_joint("solder_R", pos_xyz=(pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
-            rotate_group.append(solder_obj)
-        elif footprint.startswith("qfn"):
-            # QFN IC package
-            comp_obj = _mk_qfn_package("component", length=comp_l, width=comp_w, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
-
-            # Add solder joints at the 4 QFN pads (left, right, top, bottom)
-            pad_w = float(nominal["pad_width"]) * mm_per_px
-            pad_spacing_val = float(nominal_pads["pad_spacing"]) * mm_per_px
-            pad_spacing_y = float(nominal_pads.get("pad_spacing_y", pad_spacing_val)) * mm_per_px
-
-            solder_size = min(pad_w, comp_h) * 0.25
-            solder_z = pad_th + solder_size * 0.3
-
-            # Left and right pads (along X axis)
-            solder_obj = _add_solder_joint("solder_L", pos_xyz=(-pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
-            rotate_group.append(solder_obj)
-            solder_obj = _add_solder_joint("solder_R", pos_xyz=(pad_spacing_val / 2.0, 0.0, solder_z), size=solder_size, material=m_solder)
-            rotate_group.append(solder_obj)
-
-            # Top and bottom pads (along Y axis)
-            solder_obj = _add_solder_joint("solder_T", pos_xyz=(0.0, -pad_spacing_y / 2.0, solder_z), size=solder_size, material=m_solder)
-            rotate_group.append(solder_obj)
-            solder_obj = _add_solder_joint("solder_B", pos_xyz=(0.0, pad_spacing_y / 2.0, solder_z), size=solder_size, material=m_solder)
-            rotate_group.append(solder_obj)
-        elif footprint == "soic_16":
-            # SOIC-16: swap length/width because pads run along Y-axis
-            comp_obj = _mk_qfn_package("component", length=comp_w, width=comp_l, height=comp_h, loc_xyz=(base_x, base_y, comp_z))
-
-            solder_size = min(pad_w, comp_h) * 0.22
-            solder_z = pad_th + solder_size * 0.3
-            for i, (cx, cy, _pw, _ph) in enumerate(pad_positions, 1):
-                solder_obj = _add_solder_joint(
-                    f"solder_{i}",
-                    pos_xyz=(cx, cy, solder_z),
-                    size=solder_size,
-                    material=m_solder,
-                )
-                rotate_group.append(solder_obj)
-        else:
-            # Fallback: simple box
-            comp_obj = _mk_box("component", size_xyz=(comp_l, comp_w, comp_h), loc_xyz=(base_x, base_y, comp_z))
-
-        _apply_material(comp_obj, m_body)
-        rotate_group.append(comp_obj)
-
-        # Apply misalignment / rotation
-        sx = float(defect.get("shift_x", 0.0)) * mm_per_px
-        sy = float(defect.get("shift_y", 0.0)) * mm_per_px
-        rz = math.radians(float(defect.get("rotation_deg", 0.0)))
-        comp_obj.location.x += sx
-        comp_obj.location.y += sy
-        comp_obj.rotation_euler[2] = rz
-
-        # Tombstone: rotate around X axis (tilt), crude but gives shadow cue.
-        tilt = float(defect.get("tilt_deg", 0.0))
-        if tilt != 0.0:
-            comp_obj.rotation_euler[0] = math.radians(tilt)
-
-    # Apply global in-plane orientation from augment params (matches 2D global rotation intent).
-    global_rot_deg = float(augment.get("rotation_deg", 0.0))
-    if abs(global_rot_deg) > 1e-6 and rotate_group:
-        bpy.ops.object.empty_add(type="PLAIN_AXES", location=(0.0, 0.0, 0.0))
-        root = bpy.context.active_object
-        root.name = "global_rotation_root"
-        for obj in rotate_group:
+    # Global in-plane orientation (cardinal 0/90/180/270 + jitter), like the 2D rotation.
+    rot = float((job.get("augment") or {}).get("rotation_deg", 0.0))
+    if abs(rot) > 1e-6:
+        root = bpy.data.objects.new("global_rotation_root", None)
+        bpy.context.collection.objects.link(root)
+        for obj in scene_objs:
             obj.parent = root
-        root.rotation_euler[2] = math.radians(global_rot_deg)
+        root.rotation_euler[2] = math.radians(rot)
 
-    # Lights - boost power for small-scale scenes
-    light_cfg = (render_3d.get("lighting") or {})
-    key = light_cfg.get("key_light") or {}
-    fill = light_cfg.get("fill_light") or {}
+    roi_mm = max(roi_w, roi_h)
+    _aoi_lights(render_3d, roi_mm)
 
-    # EEVEE lighting: AOI inspection lighting (bright but natural)
-    power_boost = 8.0
-
-    def add_area(name: str, loc_mm, power_w: float, size_mm: float, target_mm=(0.0, 0.0, 0.0)) -> None:
-        bpy.ops.object.light_add(type="AREA", location=(float(loc_mm[0]), float(loc_mm[1]), float(loc_mm[2])))
-        l = bpy.context.active_object
-        l.name = name
-        l.data.energy = float(power_w) * power_boost
-        l.data.size = float(size_mm) * 0.5  # Smaller area lights for focused illumination
-        l.data.shape = 'SQUARE'
-        # Point the light at the target
-        _look_at(l, Vector(target_mm), track_axis="-Z", up_axis="Y")
-
-    # Component centre (or pad surface when there is no component); shared by lights and camera.
-    target_z = pad_th + (comp_h / 2.0 if comp_obj else 0.0)
-    target = Vector((0.0, 0.0, target_z))
-    add_area(
-        "key_light",
-        key.get("location_mm", [4.0, -4.0, 10.0]),
-        float(key.get("power_w", 300.0)),
-        float(key.get("size_mm", 10.0)),
-        target,
-    )
-    add_area(
-        "fill_light",
-        fill.get("location_mm", [-4.0, 4.0, 8.0]),
-        float(fill.get("power_w", 120.0)),
-        float(fill.get("size_mm", 12.0)),
-        target,
-    )
-
-    # Camera - use orthographic for AOI-style top-down inspection
-    cam_cfg = (render_3d.get("camera") or {})
-    bpy.ops.object.camera_add(location=(0.0, -7.0, 9.0))
-    cam = bpy.context.active_object
-
-    # Set orthographic projection with scale matching ROI
-    cam.data.type = 'ORTHO'
-    cam.data.ortho_scale = max(board_w_mm, board_h_mm) * 1.2  # 20% margin
-
-    # Position from config
+    # Orthographic camera framing exactly the ROI (top-down unless the profile tilts it).
+    cam_cfg = render_3d.get("camera") or {}
     loc = cam_cfg.get("location_mm")
-    if isinstance(loc, (list, tuple)) and len(loc) == 3:
-        cam.location = (float(loc[0]), float(loc[1]), float(loc[2]))
-
-    # Point camera at scene center (slightly above substrate)
+    loc = tuple(float(v) for v in loc) if isinstance(loc, (list, tuple)) and len(loc) == 3 else (0.0, 0.0, 9.0)
+    bpy.ops.object.camera_add(location=loc)
+    cam = bpy.context.active_object
+    cam.data.type = "ORTHO"
+    pose = board.get("pose") or {"tilt": 0.0, "azimuth": 0.0, "zoom": 1.0}
+    cam.data.ortho_scale = roi_mm * float(pose["zoom"])  # zoomed out: farther away (render.camera.zoom)
+    cam.data.clip_end = 1000.0
     look = cam_cfg.get("look_at_mm")
-    if isinstance(look, (list, tuple)) and len(look) == 3:
-        _look_at(cam, Vector((float(look[0]), float(look[1]), float(look[2]))))
-    else:
-        # Default: look at component center
-        _look_at(cam, target)
-
+    look = Vector(tuple(float(v) for v in look)) if isinstance(look, (list, tuple)) and len(look) == 3 else Vector()
+    if float(pose["tilt"]) > 0.0:  # oblique view (render.camera.tilt_deg); azimuth is in image coords (y down)
+        t, a = math.radians(float(pose["tilt"])), math.radians(float(pose["azimuth"]))
+        dist = max((Vector(loc) - look).length, 1.0)
+        cam.location = look + Vector((math.sin(t) * math.cos(a), -math.sin(t) * math.sin(a), math.cos(t))) * dist
+    _look_at(cam, look)
     bpy.context.scene.camera = cam
 
 
 def main() -> None:
     args = _parse_args()
-    jobs_path = Path(args.jobs)
     out_root = Path(args.out_root)
     out_root.mkdir(parents=True, exist_ok=True)
+    jobs = [json.loads(line) for line in Path(args.jobs).read_text(encoding="utf-8").splitlines() if line.strip()]
 
-    # Load jobs
-    jobs: list[dict[str, Any]] = []
-    with open(jobs_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            jobs.append(json.loads(line))
-
-    # One blender process; rebuild a minimal scene per job.
-    errors = 0
     for i, job in enumerate(jobs, 1):
+        out_path = out_root / str(job["image_path"])
         try:
-            _clean_scene()
+            bpy.ops.wm.read_factory_settings(use_empty=True)
             _build_scene_for_job(job, samples=int(args.samples), device=str(args.device), engine=str(args.engine))
-            out_path = out_root / str(job["image_path"])
             out_path.parent.mkdir(parents=True, exist_ok=True)
             bpy.context.scene.render.filepath = str(out_path)
             bpy.ops.render.render(write_still=True)
         except Exception as exc:
-            errors += 1
+            # Fail fast with a non-zero exit; a partially rendered dataset is worse than stopping.
             print(f"[render][error] job {i}/{len(jobs)} failed: {exc}")
-            # Fail fast; leaving a partially-rendered dataset is worse than stopping.
-            break
-
-        # Flush stdout-ish progress for long runs.
+            raise SystemExit(2) from exc
         if i == 1 or i % 50 == 0 or i == len(jobs):
             print(f"[render] {i}/{len(jobs)} -> {out_path}")
-
-    if errors:
-        # Ensure Blender returns non-zero so upstream can abort.
-        raise SystemExit(2)
 
 
 if __name__ == "__main__":
