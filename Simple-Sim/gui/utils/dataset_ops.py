@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 from collections.abc import Iterable
 
+from simple_sim.io_utils import atomic_write_json, atomic_write_text
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, write_jsonl
 
 
@@ -232,10 +233,7 @@ def recompute_manifest_stats(dataset_dir: Path) -> None:
         "classes": class_counts,
     }
 
-    tmp_path = manifest_path.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
-    tmp_path.replace(manifest_path)
+    atomic_write_json(manifest_path, manifest)
 
 
 def _read_split_files(dataset_dir: Path) -> dict[str, list[str]]:
@@ -259,12 +257,7 @@ def _write_split_files(dataset_dir: Path, splits: dict[str, list[str]]) -> None:
     splits_dir = Path(dataset_dir) / "splits"
     splits_dir.mkdir(parents=True, exist_ok=True)
     for split_name, ids in splits.items():
-        split_file = splits_dir / f"{split_name}.txt"
-        tmp_path = split_file.with_suffix(".txt.tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            for sid in ids:
-                f.write(sid + "\n")
-        tmp_path.replace(split_file)
+        atomic_write_text(splits_dir / f"{split_name}.txt", "".join(sid + "\n" for sid in ids))
 
 
 def _read_rows(dataset_dir: Path) -> tuple[list[MetaRow], list[LabelRow]]:

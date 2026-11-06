@@ -13,11 +13,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from gui.utils.checkpoint_meta import checkpoint_class_names
 from gui.utils.dataset_catalog import dataset_display_name, sorted_dataset_dirs
-from gui.utils.paths import model_root
+from gui.utils.paths import model_root, newest_file
 from gui.utils.process import run_streaming, terminate_process
+from simple_sim.io_utils import atomic_write_json, read_json, rel_to
 from simple_sim.model_bundle import bundle_checkpoint_path
-import torch
+from simple_sim.models import load_checkpoint
+from simple_sim.reports import load_reports, report_search_dirs
 import yaml
 
 
@@ -54,10 +57,7 @@ class WeightsLogic:
         return list(uniq.values())
 
     def rel_path(self, p: Path) -> str:
-        try:
-            return str(p.resolve().relative_to(self.sim_root.resolve()))
-        except Exception:
-            return str(p)
+        return rel_to(self.sim_root, p)
 
     def _favorites_path(self) -> Path:
         return self.sim_root / "outputs" / "models" / "favorites.json"
@@ -65,65 +65,33 @@ class WeightsLogic:
     def _arena_path(self) -> Path:
         return self.sim_root / "outputs" / "models" / "arena.json"
 
+    @staticmethod
+    def _load_path_items(p: Path, list_key: str) -> dict[str, dict[str, Any]]:
+        """``{path: item}`` from a ``{list_key: [{"path": ...}, ...]}`` JSON file (``{}`` if missing/invalid)."""
+        obj = read_json(p)
+        items = obj.get(list_key) if isinstance(obj, dict) else None
+        out: dict[str, dict[str, Any]] = {}
+        for it in items if isinstance(items, list) else []:
+            if isinstance(it, dict) and (rp := str(it.get("path") or "").strip()):
+                out[rp] = it
+        return out
+
+    @staticmethod
+    def _save_path_items(p: Path, list_key: str, items: dict[str, dict[str, Any]]) -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(p, {list_key: sorted(items.values(), key=lambda it: str(it.get("path") or ""))})
+
     def load_favorites(self) -> dict[str, dict[str, Any]]:
-        p = self._favorites_path()
-        favorites: dict[str, dict[str, Any]] = {}
-        if not p.exists():
-            return favorites
-        try:
-            obj = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            return favorites
-        if not isinstance(obj, dict):
-            return favorites
-        favs = obj.get("favorites")
-        if isinstance(favs, list):
-            for it in favs:
-                if not isinstance(it, dict):
-                    continue
-                rp = str(it.get("path") or "").strip()
-                if not rp:
-                    continue
-                favorites[rp] = it
-        return favorites
+        return self._load_path_items(self._favorites_path(), "favorites")
 
     def save_favorites(self, favorites: dict[str, dict[str, Any]]) -> None:
-        p = self._favorites_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        favs = list(favorites.values())
-        favs.sort(key=lambda it: str(it.get("path") or ""))
-        obj = {"favorites": favs}
-        p.write_text(json.dumps(obj, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        self._save_path_items(self._favorites_path(), "favorites", favorites)
 
     def load_arena(self) -> dict[str, dict[str, Any]]:
-        p = self._arena_path()
-        arena: dict[str, dict[str, Any]] = {}
-        if not p.exists():
-            return arena
-        try:
-            obj = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            return arena
-        if not isinstance(obj, dict):
-            return arena
-        items = obj.get("arena_models")
-        if isinstance(items, list):
-            for it in items:
-                if not isinstance(it, dict):
-                    continue
-                rp = str(it.get("path") or "").strip()
-                if not rp:
-                    continue
-                arena[rp] = it
-        return arena
+        return self._load_path_items(self._arena_path(), "arena_models")
 
     def save_arena(self, arena: dict[str, dict[str, Any]]) -> None:
-        p = self._arena_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        items = list(arena.values())
-        items.sort(key=lambda it: str(it.get("path") or ""))
-        obj = {"arena_models": items}
-        p.write_text(json.dumps(obj, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        self._save_path_items(self._arena_path(), "arena_models", arena)
 
     def add_to_arena(self, paths: list[Path], arena: dict[str, dict[str, Any]]) -> None:
         for p in paths:
@@ -272,7 +240,7 @@ class WeightsLogic:
 
     def show_model_profile_info(self, p: Path) -> tuple[str, str | None]:
         try:
-            checkpoint = torch.load(p, map_location="cpu", weights_only=False)
+            checkpoint = load_checkpoint(p)
             profile_data = checkpoint.get('component_profile')
 
             if not profile_data:
@@ -385,10 +353,7 @@ class WeightsLogic:
             except Exception as e: self.log_q.put(f"\n[error] Failed to run predict.sh: {e}\n")
             finally:
                 if report_path is None and out_dir is not None:
-                    try:
-                        cand = sorted(out_dir.glob("batch_report_*.json"), key=lambda p: p.stat().st_mtime)
-                        report_path = cand[-1] if cand else None
-                    except Exception: pass
+                    report_path = newest_file(out_dir, "batch_report_*.json")
                 on_complete(report_path, self.stop_evt.is_set())
 
         threading.Thread(target=worker, daemon=True).start()
@@ -428,71 +393,24 @@ class WeightsLogic:
             return None
 
         if report_path is None:
-            try:
-                cand = sorted(out_dir.glob("batch_report_*.json"), key=lambda p: p.stat().st_mtime)
-                report_path = cand[-1] if cand else None
-            except Exception: pass
+            report_path = newest_file(out_dir, "batch_report_*.json")
         if not report_path or not report_path.exists(): return None
-
-        try: return json.loads(report_path.read_text(encoding="utf-8"))
-        except Exception: return None
+        return read_json(report_path)
 
     _RE_SNAP_RUN = re.compile(r"_run(?P<run>\d+)(?:_|\.|$)")
 
     def runs_for_model(self, p: Path) -> str:
-        meta = self._read_model_meta(p)
-        if meta is not None:
+        """Pipeline run count of a checkpoint: ``<ckpt>.meta.json`` run_iteration, else ``_runNNN`` in the name."""
+        meta = read_json(Path(str(p) + ".meta.json"))
+        if isinstance(meta, dict):
             try: return str(int(meta.get("run_iteration")))
-            except Exception: pass
-        m = self._RE_SNAP_RUN.search(p.name)
-        if m:
-            try: return str(int(m.group("run")))
-            except Exception: pass
-        sib = Path(str(p) + ".meta.json")
-        if sib.exists():
-            try: return str(int(json.loads(sib.read_text(encoding="utf-8")).get("run_iteration")))
-            except Exception: pass
+            except (TypeError, ValueError): pass
+        if m := self._RE_SNAP_RUN.search(p.name):
+            return str(int(m.group("run")))
         return "-"
 
-    def _read_model_meta(self, p: Path) -> dict[str, Any] | None:
-        mp = Path(str(p) + ".meta.json")
-        if not mp.exists(): return None
-        try: obj = json.loads(mp.read_text(encoding="utf-8"))
-        except Exception: return None
-        return obj if isinstance(obj, dict) else None
-
-    def _report_search_dirs(self) -> list[Path]:
-        dirs: list[Path] = [self.sim_root / "outputs" / "models", self.sim_root / "outputs" / "models" / "history"]
-        sim_data = self.sim_root / "outputs" / "sim_data"
-        runs = sim_data / "runs"
-        versions = sim_data / "versions"
-        
-        def add_dataset_prediction_dirs(ds: Path) -> None:
-            dirs.append(ds / "predictions")
-            dirs.append(ds / "predictions" / "weights_tab")
-        
-        for root_dir in [runs, versions]:
-            if root_dir.exists():
-                for ds in (root_dir.iterdir() if root_dir == runs else root_dir.glob("*/*")):
-                    if ds.is_dir(): add_dataset_prediction_dirs(ds)
-        
-        seen = set()
-        return [d for d in dirs if (rp := str(d.resolve())) not in seen and not seen.add(rp)]
-
     def load_reports(self) -> list[dict[str, Any]]:
-        reports: list[dict[str, Any]] = []
-        seen_paths = set()
-        for d in self._report_search_dirs():
-            if not d.exists(): continue
-            for p in sorted(list(d.glob("report_*.json")) + list(d.glob("batch_report_*.json")), key=lambda x: x.stat().st_mtime, reverse=True):
-                if (sp := str(p)) in seen_paths: continue
-                seen_paths.add(sp)
-                try: obj = json.loads(p.read_text(encoding="utf-8"))
-                except Exception: continue
-                if not isinstance(obj, dict) or "metrics" not in obj: continue
-                obj["_path"] = sp
-                reports.append(obj)
-        return reports
+        return load_reports(report_search_dirs(self.sim_root))
 
     def short_report(self, report_path: Path) -> str:
         obj = json.loads(report_path.read_text(encoding="utf-8"))
@@ -616,17 +534,4 @@ class WeightsLogic:
         return sorted(classes)
 
     def get_model_classes(self, model_path: Path) -> list[str]:
-        try:
-            p = model_path
-            if p.is_dir():
-                candidates = sorted(p.glob("*.pt"), key=lambda x: x.name)
-                if not candidates:
-                    return []
-                p = candidates[0]
-            ckpt = torch.load(p, map_location="cpu", weights_only=False)
-            classes = ckpt.get("class_names")
-            if isinstance(classes, list):
-                return [str(c) for c in classes]
-        except Exception:
-            pass
-        return []
+        return checkpoint_class_names(model_path)

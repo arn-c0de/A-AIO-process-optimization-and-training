@@ -7,16 +7,18 @@ import os
 import queue
 import threading
 import tkinter as tk
-
-import torch
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from pathlib import Path
 from typing import Any
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
+from gui.utils.checkpoint_meta import profile_label_suffix
 from gui.utils.dataset_catalog import sim_data_roots, unique_dataset_labels
 from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
+from simple_sim.io_utils import path_size_bytes
+from simple_sim.models import load_checkpoint
+from simple_sim.reports import metric_value, report_timestamp
 from .ui import WeightsUI
 from .logic import WeightsLogic
 from datetime import datetime
@@ -252,7 +254,7 @@ class WeightsTab(BaseTab):
             for p in group_members.get(group, []):
                 st = p.stat()
                 is_bundle = p.is_dir()
-                size_s = self.ui.fmt_bytes(int(sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) if is_bundle else st.st_size))
+                size_s = self.ui.fmt_bytes(path_size_bytes(p) if is_bundle else st.st_size)
                 display_name = f"[Bundle] {p.name}" if is_bundle else p.name
                 if self._is_arena_tracked(p): display_name = f"[A] {display_name}"
                 mt = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
@@ -398,15 +400,7 @@ class WeightsTab(BaseTab):
         try: key: tuple[str, float] = (str(p.resolve()), p.stat().st_mtime)
         except Exception: key = (str(p), -1.0)
         if (cached := self._profile_info_cache.get(key)) is not None: return cached
-        try:
-            checkpoint = torch.load(p, map_location="cpu", weights_only=False)
-            profile_data = checkpoint.get('component_profile')
-            if profile_data:
-                profile_id = profile_data.get('profile_id', 'unknown')
-                profile_hash = profile_data.get('profile_hash', '')
-                hash_short = profile_hash.split(':')[1][:12] if ':' in profile_hash else profile_hash[:12]
-                profile_info = f" | Profile: {profile_id} ({hash_short}...)"
-            else: profile_info = " | Profile: ⚠ No profile (legacy)"
+        try: profile_info = profile_label_suffix(load_checkpoint(p))
         except Exception: profile_info = " | Profile: ⚠ Error loading"
         self._profile_info_cache[key] = profile_info
         return profile_info
@@ -727,17 +721,8 @@ class WeightsTab(BaseTab):
                 if not ds_dir or str(r.get("dataset_path") or "") != str(ds_dir): continue
             filtered.append(r)
         
-        def ts_of(rr: dict[str, Any]) -> float:
-            s = rr.get("timestamp") or ""
-            try: return datetime.fromisoformat(str(s)).timestamp()
-            except Exception: return os.path.getmtime(str(rr.get("_path") or ""))
-        def metric(rr: dict[str, Any], k: str) -> float:
-            try: return float((rr.get("metrics") or {}).get(k) or 0.0)
-            except Exception: return 0.0
-
-        if sort_key == "accuracy": filtered.sort(key=lambda rr: metric(rr, "accuracy"), reverse=True)
-        elif sort_key == "macro_f1": filtered.sort(key=lambda rr: metric(rr, "macro_f1"), reverse=True)
-        else: filtered.sort(key=ts_of, reverse=True)
+        if sort_key in ("accuracy", "macro_f1"): filtered.sort(key=lambda rr: metric_value(rr, sort_key) or 0.0, reverse=True)
+        else: filtered.sort(key=report_timestamp, reverse=True)
         
         reports_data = []
         self._report_by_iid.clear()

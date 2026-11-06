@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from gui.utils.dataset_catalog import list_dataset_dirs
+from gui.utils.paths import newest_file
 from gui.utils.process import run_streaming, terminate_process
 from simple_sim.model_bundle import bundle_checkpoint_path
 
@@ -185,15 +186,10 @@ class PredictionsLogic:
                         self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
                         continue
                     
-                    try:
-                        if report_path is None:
-                            cand = [p for p in out_dir.glob("batch_report_*.json") if p.stat().st_mtime >= started_s - 0.5]
-                            report_path = sorted(cand, key=lambda p: p.stat().st_mtime)[-1] if cand else None
-                        if save_preds and preds_path is None:
-                            cand = [p for p in out_dir.glob("batch_preds_*.jsonl") if p.stat().st_mtime >= started_s - 0.5]
-                            preds_path = sorted(cand, key=lambda p: p.stat().st_mtime)[-1] if cand else None
-                    except Exception:
-                        pass
+                    if report_path is None:
+                        report_path = newest_file(out_dir, "batch_report_*.json", min_mtime=started_s - 0.5)
+                    if save_preds and preds_path is None:
+                        preds_path = newest_file(out_dir, "batch_preds_*.jsonl", min_mtime=started_s - 0.5)
                     
                     try:
                         key = str(data_dir.resolve())

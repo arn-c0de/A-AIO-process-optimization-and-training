@@ -146,6 +146,23 @@ class DatasetCatalog:
     def category_for(self, dataset_dir: Path) -> str:
         return self.category_assignments.get(dataset_relative_key(self.sim_root, dataset_dir), DEFAULT_CATEGORY)
 
+    def display_label(self, dataset_dir: Path, *, runs_root: Path, versions_root: Path) -> str:
+        """Display name prefixed with ``[category] `` unless the dataset is uncategorized."""
+        base = dataset_display_name(dataset_dir, runs_root=runs_root, versions_root=versions_root)
+        category = self.category_for(dataset_dir)
+        return f"[{category}] {base}" if category and category != DEFAULT_CATEGORY else base
+
+    def unique_labels(self, dataset_dirs: Iterable[Path], *, runs_root: Path, versions_root: Path) -> dict[str, Path]:
+        """Map category-prefixed labels to dataset dirs, suffixing duplicates as ``name (2)``..."""
+        out: dict[str, Path] = {}
+        seen: dict[str, int] = {}
+        for p in dataset_dirs:
+            base = self.display_label(p, runs_root=runs_root, versions_root=versions_root)
+            n = seen.get(base, 0) + 1
+            seen[base] = n
+            out[base if n == 1 else f"{base} ({n})"] = p
+        return out
+
     def is_archived(self, dataset_dir: Path) -> bool:
         return dataset_relative_key(self.sim_root, dataset_dir) in self.archived_paths
 

@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Union
 from collections.abc import Iterable, Sequence
 
+from simple_sim.io_utils import atomic_write_json
+
 
 @dataclass
 class SettingsStore:
@@ -59,9 +61,7 @@ class SettingsStore:
             return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-            tmp.replace(self.path)
+            atomic_write_json(self.path, self.data)
             self._dirty = False
         except Exception:
             # best-effort

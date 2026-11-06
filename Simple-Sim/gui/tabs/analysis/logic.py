@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 from pathlib import Path
-import torch
-import json
 import numpy as np
 
-from gui.utils.dataset_catalog import list_dataset_dirs, sim_data_roots
+from gui.utils.checkpoint_meta import read_checkpoint_dict
+from gui.utils.dataset_catalog import sim_data_roots, sorted_dataset_dirs
 from gui.utils.model_inference import load_model, ModelWrapper
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from simple_sim.manifest import hash_file
+from simple_sim.io_utils import atomic_write_json
 from simple_sim.metrics import compute_metrics
 
 
@@ -22,7 +22,8 @@ class AnalysisLogic:
         return sim_data_roots(self.sim_root)
 
     def get_datasets(self) -> list[Path]:
-        return list_dataset_dirs(self.sim_root)
+        """Dataset dirs sorted for display (runs by name, then snapshots newest-first)."""
+        return sorted_dataset_dirs(self.sim_root)
 
     def load_dataset(self, dataset_dir: Path) -> tuple[dict[str, MetaRow], dict[str, str], dict[str, str], list[str]]:
         meta_rows = read_jsonl(dataset_dir / "meta.jsonl", MetaRow)
@@ -88,8 +89,7 @@ class AnalysisLogic:
 
     def _checkpoint_manifest_hash(self, path: Path) -> str | None:
         try:
-            checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-            return checkpoint.get("dataset_manifest_hash")
+            return read_checkpoint_dict(path).get("dataset_manifest_hash")
         except Exception as exc:
             print(f"Failed to read checkpoint metadata {path}: {exc}")
             return None
@@ -162,9 +162,7 @@ class AnalysisLogic:
         if feedback_summary:
             results['feedback_summary'] = feedback_summary
 
-        output_path = dataset_dir / "analysis_results.json"
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2)
+        atomic_write_json(dataset_dir / "analysis_results.json", results)
         return results
 
     def _ordered_class_names(self, classes: set[str]) -> list[str]:
