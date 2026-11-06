@@ -71,12 +71,13 @@ class ProfileRegistry:
 
     def _signature(self, snap: RegistrySnapshot) -> tuple:
         entries: list[tuple] = []
-        for pid, p in snap.profile_files.items():
-            st = p.stat()
-            entries.append(("p", pid, str(p), int(st.st_mtime_ns), st.st_size))
-        for rid, p in snap.run_files.items():
-            st = p.stat()
-            entries.append(("r", rid, str(p), int(st.st_mtime_ns), st.st_size))
+        for kind, files in (("p", snap.profile_files), ("r", snap.run_files)):
+            for fid, p in files.items():
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue  # file removed between snapshot and stat
+                entries.append((kind, fid, str(p), int(st.st_mtime_ns), st.st_size))
         entries.sort()
         return tuple(entries)
 

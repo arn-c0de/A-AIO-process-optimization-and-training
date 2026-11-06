@@ -15,6 +15,7 @@ from .filters import (
     apply_motion_blur,
     apply_noise,
     apply_perspective_transform,
+    apply_post_filters,
     apply_reflection,
     apply_saturation,
     apply_shadow,
@@ -50,6 +51,7 @@ __all__ = [
     "apply_reflection",
     "apply_dust_particles",
     "apply_color_temperature",
+    "apply_post_filters",
     "render_roi",
     "normalize_image_filters",
 ]

@@ -76,7 +76,6 @@ class MonitorAppTabbed:
         store = SettingsStore(settings_path)
         store.load()
         self.state.settings_store = store
-        self.state.settings = dict(store.data)
 
         geom = store.get("app.geometry")
         if isinstance(geom, str) and geom:
@@ -224,7 +223,10 @@ class MonitorAppTabbed:
         """Notify all tabs that dataset has changed."""
         for tab in self.tabs.values():
             if tab.initialized:  # Only notify initialized tabs
-                tab.on_dataset_changed()
+                try:
+                    tab.on_dataset_changed()
+                except Exception:
+                    pass
 
     def _notify_dataset_catalog_changed(self) -> None:
         """Notify initialized tabs that dataset catalog metadata changed."""

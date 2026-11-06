@@ -10,7 +10,7 @@ from typing import Any
 
 import torch
 
-from gui.utils.paths import model_root
+from gui.utils.paths import list_model_paths, model_root
 from simple_sim.model_bundle import (
     bundle_checkpoint_path,
     upsert_bundle_meta,
@@ -32,26 +32,13 @@ class MergeLogic:
             return str(p)
             
     def scan_models(self) -> dict[str, list[tuple[str, Path]]]:
-        root = self._model_root()
-        root.mkdir(parents=True, exist_ok=True)
+        # Merge works on individual checkpoints: expand bundle dirs into their *.pt files.
+        paths = list_model_paths(self._model_root())
+        cand: list[Path] = [p for p in paths if p.is_file()]
+        for bd in paths:
+            if bd.is_dir() and is_bundle_dir(bd):
+                cand.extend(sorted(bd.glob("*.pt")))
 
-        cand: list[Path] = []
-        cand.extend(sorted(root.glob("*.pt")))
-        cand.extend(sorted((root / "versions").glob("**/*.pt")))
-        cand.extend(sorted((root / "imports").glob("*.pt")))
-        
-        bundle_dirs: list[Path] = []
-        for p in sorted(root.glob("*.bundle")):
-            if is_bundle_dir(p):
-                bundle_dirs.append(p)
-        bundles_subdir = root / "bundles"
-        if bundles_subdir.exists():
-            for p in sorted(bundles_subdir.iterdir()):
-                if is_bundle_dir(p):
-                    bundle_dirs.append(p)
-        for bd in bundle_dirs:
-            cand.extend(sorted(bd.glob("*.pt")))
-            
         uniq: dict[str, Path] = {str(p.resolve()): p for p in cand if p.is_file()}
 
         profile_models: dict[str, list[tuple[str, Path]]] = {}

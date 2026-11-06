@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from gui.utils.dataset_catalog import dataset_display_name, sorted_dataset_dirs
-from gui.utils.paths import model_root
+from gui.utils.paths import list_model_paths, model_root
 from gui.utils.process import run_streaming, terminate_process
 from simple_sim.model_bundle import bundle_checkpoint_path
 import torch
@@ -32,26 +32,7 @@ class WeightsLogic:
         return model_root(self.sim_root)
 
     def get_models(self) -> list[Path]:
-        root = self._model_root()
-        root.mkdir(parents=True, exist_ok=True)
-
-        cand: list[Path] = []
-        cand.extend(sorted(root.glob("*.pt")))
-        cand.extend(sorted((root / "versions").glob("**/*.pt")))
-        cand.extend(sorted((root / "imports").glob("*.pt")))
-        cand.extend([p for p in sorted(root.glob("*.bundle")) if p.is_dir()])
-        bundles_subdir = root / "bundles"
-        if bundles_subdir.exists():
-            cand.extend([p for p in sorted(bundles_subdir.iterdir()) if p.is_dir()])
-
-        uniq: dict[str, Path] = {}
-        for p in cand:
-            try:
-                if p.is_file() or p.is_dir():
-                    uniq[str(p.resolve())] = p
-            except Exception:
-                continue
-        return list(uniq.values())
+        return list_model_paths(self._model_root())
 
     def rel_path(self, p: Path) -> str:
         try:

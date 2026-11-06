@@ -208,6 +208,7 @@ def _run_checks(data_dir: Path, seed_mismatch_log_limit: int) -> bool:
 
     manifest_version = None
     extend_len = 0
+    generator_script = "scripts/generate.py"
     manifest_path = data_dir / "dataset_manifest.json"
     if manifest_path.exists():
         try:
@@ -216,12 +217,14 @@ def _run_checks(data_dir: Path, seed_mismatch_log_limit: int) -> bool:
             extend_hist = manifest.get("extend_history") or []
             if isinstance(extend_hist, list):
                 extend_len = len(extend_hist)
+            generator_script = str((manifest.get("generator") or {}).get("script") or generator_script)
         except Exception:
             pass
 
-    # Extended and/or multi-profile datasets can contain historical rows generated
-    # with previous configs/seeds, so strict per-row seed replay can yield false negatives.
-    strict_determinism = not ((manifest_version == 2) or (extend_len > 1))
+    # Extended, multi-profile and merged datasets (other generator scripts) can contain
+    # historical rows generated with previous configs/seeds, so strict per-row seed replay
+    # can yield false negatives.
+    strict_determinism = not ((manifest_version == 2) or (extend_len > 1) or (generator_script != "scripts/generate.py"))
 
     logged_mismatch_examples = 0
     for meta_row in (meta_rows[:20] if run_seed is not None else []):  # Check first 20 samples

@@ -13,7 +13,7 @@ import torch
 
 from simple_sim.data_loader import preprocess_bgr
 from simple_sim.model_bundle import bundle_checkpoint_path
-from simple_sim.models import model_from_checkpoint
+from simple_sim.models import load_checkpoint_model
 
 
 @dataclass
@@ -26,17 +26,6 @@ class TwoStageResult:
     defect_confidence: float
     defect_probabilities: dict[str, float]
     review_flag: bool  # True if profile_confidence < threshold
-
-
-def _load_model(checkpoint_path: Path, device: torch.device):
-    """Load a ResNet18 checkpoint and return (model, class_names, checkpoint)."""
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    return model_from_checkpoint(checkpoint, device), checkpoint['class_names'], checkpoint
-
-
-def _preprocess(img_bgr: np.ndarray) -> torch.Tensor:
-    """Preprocess a BGR image to a normalized tensor."""
-    return preprocess_bgr(img_bgr)
 
 
 class TwoStageClassifier:
@@ -61,7 +50,7 @@ class TwoStageClassifier:
         self.defect_bundle_path = Path(defect_bundle_path)
 
         # Load profile classifier
-        self.profile_model, self.profile_names, _ = _load_model(
+        self.profile_model, self.profile_names, _ = load_checkpoint_model(
             Path(profile_model_path), self.device
         )
 
@@ -77,7 +66,7 @@ class TwoStageClassifier:
                     f"No defect model for profile '{profile_id}' in bundle: {self.defect_bundle_path}\n"
                     f"Expected: {ckpt_path}"
                 )
-            model, class_names, _ = _load_model(ckpt_path, self.device)
+            model, class_names, _ = load_checkpoint_model(ckpt_path, self.device)
             self._defect_models[profile_id] = (model, class_names)
         return self._defect_models[profile_id]
 
@@ -90,7 +79,7 @@ class TwoStageClassifier:
         Returns:
             TwoStageResult with profile and defect predictions
         """
-        x = _preprocess(img_bgr).unsqueeze(0).to(self.device)
+        x = preprocess_bgr(img_bgr).unsqueeze(0).to(self.device)
 
         # Stage 1: Profile classification
         with torch.no_grad():

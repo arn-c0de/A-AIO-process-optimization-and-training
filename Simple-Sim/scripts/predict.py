@@ -33,10 +33,6 @@ def load_image_bgr(image_path: Path) -> np.ndarray:
     return img_bgr
 
 
-def preprocess(img_bgr: np.ndarray) -> torch.Tensor:
-    return preprocess_bgr(img_bgr)
-
-
 def maybe_get_ground_truth(data_dir: Path | None, sample_id: str | None):
     if not data_dir or not sample_id:
         return None
@@ -120,14 +116,17 @@ def main():
             manifest = read_dataset_manifest(manifest_path)
             dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
 
-            # HARD FAIL on profile ID mismatch (no override flag here).
-            check_checkpoint_profile(
-                checkpoint, dataset_profile_id, dataset_profile_hash,
-                action="predict on",
-            )
+            # HARD FAIL on profile ID mismatch (no override flag here). Ensemble checkpoints
+            # (profile_id "multi") span several profiles and are not checked.
+            ckpt_profile_id = (checkpoint.get('component_profile') or {}).get('profile_id')
+            if ckpt_profile_id != "multi":
+                check_checkpoint_profile(
+                    checkpoint, dataset_profile_id, dataset_profile_hash,
+                    action="predict on",
+                )
 
     img_bgr = load_image_bgr(image_path)
-    x = preprocess(img_bgr).unsqueeze(0).to(device)
+    x = preprocess_bgr(img_bgr).unsqueeze(0).to(device)
 
     with torch.no_grad():
         logits = model(x)

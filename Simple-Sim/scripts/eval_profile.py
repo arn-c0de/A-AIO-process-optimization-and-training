@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import ProfileDataset
 from simple_sim.metrics import check_success_criteria, format_metrics
-from simple_sim.models import build_resnet18
+from simple_sim.models import load_checkpoint_model
 from scripts.eval import evaluate
 
 
@@ -40,24 +40,15 @@ def main():
 
     # Load checkpoint
     print("\nLoading model checkpoint...")
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    model, profile_names, checkpoint = load_checkpoint_model(model_path, device)
 
     if checkpoint.get('checkpoint_type') != 'profile_classifier':
         print(f"WARNING: checkpoint_type is '{checkpoint.get('checkpoint_type')}', expected 'profile_classifier'")
 
-    profile_names = checkpoint['class_names']
-    num_classes = len(profile_names)
-
     print(f"  Profiles: {profile_names}")
-    print(f"  Trained epoch: {checkpoint['epoch']}")
-    print(f"  Val accuracy: {checkpoint['val_accuracy']:.4f}")
-    print(f"  Val F1: {checkpoint['val_f1']:.4f}")
-
-    # Create model
-    print("\nInitializing model...")
-    model = build_resnet18(num_classes)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(device)
+    print(f"  Trained epoch: {checkpoint.get('epoch', '-')}")
+    print(f"  Val accuracy: {float(checkpoint.get('val_accuracy') or 0.0):.4f}")
+    print(f"  Val F1: {float(checkpoint.get('val_f1') or 0.0):.4f}")
 
     # Load test dataset
     print("\nLoading test dataset...")
@@ -103,7 +94,7 @@ def main():
     print(f"\nReport saved to: {report_path}")
 
     # Success criteria
-    check_success_criteria(checkpoint['val_accuracy'], metrics, entity="profile", ascii_only=True)
+    check_success_criteria(float(checkpoint.get('val_accuracy') or 0.0), metrics, entity="profile", ascii_only=True)
 
 
 if __name__ == '__main__':

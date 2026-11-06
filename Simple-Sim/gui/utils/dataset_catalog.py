@@ -88,16 +88,43 @@ def sorted_dataset_dirs(sim_root: Path) -> list[Path]:
     return sorted(list_dataset_dirs(sim_root), key=lambda p: dataset_sort_key(sim_root, p))
 
 
-def unique_dataset_labels(dataset_dirs: Iterable[Path], *, runs_root: Path, versions_root: Path) -> dict[str, Path]:
-    """Map display labels to dataset dirs, suffixing duplicates as ``name (2)``, ``name (3)``..."""
+def _unique_labels(labeled: Iterable[tuple[str, Path]]) -> dict[str, Path]:
+    """Suffix duplicate labels as ``name (2)``, ``name (3)``..."""
     out: dict[str, Path] = {}
     seen: dict[str, int] = {}
-    for p in dataset_dirs:
-        base = dataset_display_name(p, runs_root=runs_root, versions_root=versions_root)
+    for base, p in labeled:
         n = seen.get(base, 0) + 1
         seen[base] = n
         out[base if n == 1 else f"{base} ({n})"] = p
     return out
+
+
+def unique_dataset_labels(dataset_dirs: Iterable[Path], *, runs_root: Path, versions_root: Path) -> dict[str, Path]:
+    """Map display labels to dataset dirs, suffixing duplicates as ``name (2)``, ``name (3)``..."""
+    return _unique_labels(
+        (dataset_display_name(p, runs_root=runs_root, versions_root=versions_root), p) for p in dataset_dirs
+    )
+
+
+def catalog_labels(sim_root: Path, catalog: "DatasetCatalog", *, save_widget=None) -> dict[str, Path]:
+    """Unique ``[Category] name`` labels -> dataset dir for every non-archived dataset.
+
+    Reloads ``catalog``, prunes entries for datasets that no longer exist and
+    saves it (debounced via ``save_widget`` when given). Order follows
+    ``sorted_dataset_dirs``.
+    """
+    catalog.reload()
+    cand = sorted_dataset_dirs(sim_root)
+    catalog.prune_unknown(cand)
+    catalog.save(save_widget)
+    runs, versions = sim_data_roots(sim_root, create=False)
+
+    def _label(p: Path) -> str:
+        base = dataset_display_name(p, runs_root=runs, versions_root=versions)
+        cat = catalog.category_for(p)
+        return f"[{cat}] {base}" if cat and cat != DEFAULT_CATEGORY else base
+
+    return _unique_labels((_label(p), p) for p in cand if not catalog.is_archived(p))
 
 
 class DatasetCatalog:

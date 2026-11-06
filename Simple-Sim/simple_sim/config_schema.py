@@ -58,29 +58,36 @@ def parse_config_typed(cfg: dict[str, Any]) -> SimulationConfig:
     except Exception as exc:
         raise ValueError(f"Missing required top-level section: {exc}") from exc
 
-    run = RunConfig(
-        run_id=str(run_raw.get("run_id", "")),
-        seed=int(run_raw.get("seed", -1)),
-        schema_version=int(run_raw.get("schema_version", -1)),
-        mode=str(run_raw.get("mode", "")),
-    )
-    roi = RoiConfig(
-        width_px=float(roi_raw.get("width_px", 0)),
-        height_px=float(roi_raw.get("height_px", 0)),
-        mm_per_px=float(roi_raw.get("mm_per_px", 0)),
-    )
-    train = TrainConfig(
-        model=str(train_raw.get("model", "")),
-        epochs=int(train_raw.get("epochs", 0)),
-        batch_size=int(train_raw.get("batch_size", 0)),
-        lr=float(train_raw.get("lr", 0.0)),
-        optimizer=str(train_raw.get("optimizer", "")),
-        weight_decay=float(train_raw.get("weight_decay", 0.0)),
-        pretrained=train_raw.get("pretrained", None),
-        num_workers=train_raw.get("num_workers", None),
-    )
-    eval_cfg = EvalConfig(
-        batch_size=int(eval_raw.get("batch_size", 0)),
-        num_workers=eval_raw.get("num_workers", None),
-    )
+    section = "run"
+    try:
+        run = RunConfig(
+            run_id=str(run_raw.get("run_id", "")),
+            seed=int(run_raw.get("seed", -1)),
+            schema_version=int(run_raw.get("schema_version", -1)),
+            mode=str(run_raw.get("mode", "")),
+        )
+        section = "roi"
+        roi = RoiConfig(
+            width_px=float(roi_raw.get("width_px", 0)),
+            height_px=float(roi_raw.get("height_px", 0)),
+            mm_per_px=float(roi_raw.get("mm_per_px", 0)),
+        )
+        section = "train"
+        train = TrainConfig(
+            model=str(train_raw.get("model", "")),
+            epochs=int(train_raw.get("epochs", 0)),
+            batch_size=int(train_raw.get("batch_size", 0)),
+            lr=float(train_raw.get("lr", 0.0)),
+            optimizer=str(train_raw.get("optimizer", "")),
+            weight_decay=float(train_raw.get("weight_decay", 0.0)),
+            pretrained=train_raw.get("pretrained", None),
+            num_workers=train_raw.get("num_workers", None),
+        )
+        section = "eval"
+        eval_cfg = EvalConfig(
+            batch_size=int(eval_raw.get("batch_size", 0)),
+            num_workers=eval_raw.get("num_workers", None),
+        )
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError(f"Invalid value in config section '{section}': {exc}") from exc
     return SimulationConfig(run=run, roi=roi, train=train, eval=eval_cfg)

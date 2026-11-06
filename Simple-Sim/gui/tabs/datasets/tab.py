@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import tkinter as tk
 from collections import Counter
 from datetime import datetime
@@ -16,6 +15,8 @@ from gui.utils.dataset_catalog import (
     DEFAULT_CATEGORY,
     DatasetCatalog,
     dataset_display_name,
+    sim_data_roots,
+    sorted_dataset_dirs,
 )
 
 
@@ -84,7 +85,7 @@ class DatasetsTab(BaseTab):
 
     def refresh(self) -> None:
         self.catalog.reload()
-        datasets = self._scan_datasets()
+        datasets = sorted_dataset_dirs(self.sim_root)
         self.catalog.prune_unknown(datasets)
         self.catalog.save(self.frame)
 
@@ -99,7 +100,7 @@ class DatasetsTab(BaseTab):
             self.var_category_filter.set("All")
         active_filter = self.var_category_filter.get().strip() or "All"
 
-        runs, versions = self._sim_data_roots()
+        runs, versions = sim_data_roots(self.sim_root)
         for idx, ds in enumerate(datasets):
             cat = self.catalog.category_for(ds)
             archived = self.catalog.is_archived(ds)
@@ -125,23 +126,6 @@ class DatasetsTab(BaseTab):
         for iid, ds in self._dataset_by_iid.items():
             if self._path_key_for(ds) in selected_keys:
                 self.tree.selection_add(iid)
-
-    def _scan_datasets(self) -> list[Path]:
-        runs, versions = self._sim_data_roots()
-        runs.mkdir(parents=True, exist_ok=True)
-        versions.mkdir(parents=True, exist_ok=True)
-        cand: list[Path] = [p for p in runs.iterdir() if p.is_dir()]
-        cand.extend([p for p in versions.glob("*/*") if p.is_dir()])
-        cand.sort(
-            key=lambda p: (1, -p.stat().st_mtime, p.name)
-            if str(p.resolve()).startswith(str(versions.resolve()) + os.sep)
-            else (0, p.name)
-        )
-        return cand
-
-    def _sim_data_roots(self) -> tuple[Path, Path]:
-        base = self.sim_root / "outputs" / "sim_data"
-        return base / "runs", base / "versions"
 
     def _dataset_created_display(self, ds: Path) -> str:
         manifest_path = ds / "dataset_manifest.json"

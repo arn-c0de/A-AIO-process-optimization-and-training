@@ -35,17 +35,13 @@ def generate_splits(
     # Create ID to profile mapping (empty for single-profile / v1 labels)
     id_to_profile = {row.id: getattr(row, 'profile_id', '') or '' for row in label_rows}
 
-    # Create ID to domain mapping
-    id_to_domain = {row.id: row.domain for row in meta_rows}
-
     # Group samples by (domain, profile, class)
     groups = defaultdict(list)
     for meta_row in meta_rows:
         sample_id = meta_row.id
-        domain = id_to_domain[sample_id]
         profile_id = id_to_profile.get(sample_id, '')
         class_name = id_to_label[sample_id]
-        groups[(domain, profile_id, class_name)].append(sample_id)
+        groups[(meta_row.domain, profile_id, class_name)].append(sample_id)
 
     # Extract split fractions
     train_frac = config['splits']['train_frac']

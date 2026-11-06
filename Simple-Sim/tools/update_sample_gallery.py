@@ -28,7 +28,7 @@ import yaml
 # Ensure project imports work
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gui.components.overlay_renderer import draw_defect_overlay
-from simple_sim.config import load_config, validate_config
+from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generators.opencv_2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
@@ -118,16 +118,6 @@ def _profile_defect_set(profile: dict[str, Any]) -> list[str]:
     return list(STANDARD_CLASSES)
 
 
-def _merge_component_color(render_cfg: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
-    # Match the pipeline behavior: schema v2 run configs can omit component_color and pull from the profile.
-    out = dict(render_cfg or {})
-    if "component_color" not in out:
-        prof_render = profile.get("render") or {}
-        if "component_color_bgr" in prof_render:
-            out["component_color"] = prof_render["component_color_bgr"]
-    return out
-
-
 def _render_one_2d(
     *,
     profile_id: str,
@@ -150,7 +140,7 @@ def _render_one_2d(
     nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
 
-    render_cfg = _merge_component_color(cfg.get("render") or {}, profile)
+    render_cfg = merge_profile_render(cfg.get("render") or {}, profile)
     # Gallery should be stable and "clean": no blur/noise/brightness jitter.
     augment = {
         "blur_sigma": 0.0,

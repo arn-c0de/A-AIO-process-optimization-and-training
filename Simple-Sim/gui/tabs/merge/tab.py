@@ -15,7 +15,6 @@ from typing import Any
 
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.settings_store import SettingsStore
 from simple_sim.model_bundle import read_bundle_meta
 from .ui import MergeUI
 from .logic import MergeLogic
@@ -70,8 +69,10 @@ class MergeTab(BaseTab):
 
         self._group_assignments.clear()
         self._custom_groups.clear()
+        st = self.state.settings_store
+        if st is None:
+            return
         try:
-            st = SettingsStore(self.sim_root)
             custom_raw = st.get("weights.custom_groups")
             if isinstance(custom_raw, str):
                 parsed = json.loads(custom_raw)

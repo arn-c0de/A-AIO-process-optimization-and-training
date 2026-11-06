@@ -106,10 +106,9 @@ def apply_hue_shift(img: np.ndarray, shift_deg: float) -> np.ndarray:
 def apply_sharpen(img: np.ndarray, strength: float) -> np.ndarray:
     if strength <= 0:
         return img
-    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
-    kernel = (kernel - 1) * strength + 1
-    kernel[1, 1] = 5 * strength
-    kernel = kernel / kernel.sum() * 5
+    # Identity + strength * Laplacian; kernel sums to 1 so uniform regions keep their mean.
+    kernel = np.array([[0, -1, 0], [-1, 4, -1], [0, -1, 0]], dtype=np.float32) * float(strength)
+    kernel[1, 1] += 1.0
     return cv2.filter2D(img, -1, kernel)
 
 
@@ -204,3 +203,35 @@ def apply_color_temperature(img: np.ndarray, kelvin: int) -> np.ndarray:
     g = np.clip(g * g_scale, 0, 255)
     r = np.clip(r * r_scale, 0, 255)
     return cv2.merge([b, g, r]).astype(np.uint8)
+
+
+def apply_post_filters(img: np.ndarray, augment: dict, rng: np.random.Generator) -> np.ndarray:
+    """Apply the full post-processing filter chain (everything except rotation) in canonical order."""
+    img = apply_blur(img, augment.get("blur_sigma", 0.0))
+    img = apply_noise(img, augment.get("noise_stddev", 0.0), rng)
+    img = apply_brightness(img, augment.get("brightness_factor", 1.0))
+    img = apply_contrast(img, augment.get("contrast_factor", 1.0))
+
+    img = apply_saturation(img, augment.get("saturation_factor", 1.0))
+    img = apply_hue_shift(img, augment.get("hue_shift_deg", 0.0))
+    img = apply_color_temperature(img, augment.get("color_temperature_kelvin", 5500))
+
+    img = apply_vignetting(img, augment.get("vignetting_strength", 0.0))
+    img = apply_chromatic_aberration(img, augment.get("chromatic_strength", 0.0))
+    img = apply_lens_distortion(img, augment.get("distortion_k1", 0.0), augment.get("distortion_k2", 0.0))
+
+    img = apply_motion_blur(img, augment.get("motion_blur_strength", 0.0), augment.get("motion_blur_angle", 0.0))
+    img = apply_sharpen(img, augment.get("sharpen_strength", 0.0))
+
+    img = apply_shadow(img, augment.get("shadow_strength", 0.0), augment.get("shadow_size", 0.2), rng)
+    img = apply_reflection(img, augment.get("reflection_strength", 0.0), augment.get("reflection_size", 0.15), rng)
+    img = apply_dust_particles(img, augment.get("dust_density", 0.0), augment.get("dust_size", 2.0), rng)
+
+    img = apply_jpeg_compression(img, augment.get("jpeg_quality", 100))
+
+    return apply_perspective_transform(
+        img,
+        augment.get("perspective_strength", 0.0),
+        augment.get("perspective_angle_x", 0.0),
+        augment.get("perspective_angle_y", 0.0),
+    )

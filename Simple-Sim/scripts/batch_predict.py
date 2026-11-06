@@ -110,26 +110,6 @@ def _unique_path(p: Path) -> Path:
     return parent / f"{stem}_{time.time_ns()}{suf}"
 
 
-def load_previous_reports(search_dirs: list[Path], model_stem: str) -> list[dict[str, Any]]:
-    reports: list[dict[str, Any]] = []
-    for d in search_dirs:
-        if not d.exists():
-            continue
-        # Include:
-        # - eval.py outputs: report_<stem>.json
-        # - this script outputs: batch_report_<stem>_*.json
-        for p in sorted(list(d.glob(f"report_{model_stem}.json")) + list(d.glob(f"batch_report_{model_stem}_*.json"))):
-            try:
-                obj = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if not isinstance(obj, dict) or "metrics" not in obj:
-                continue
-            obj["_path"] = str(p)
-            reports.append(obj)
-    return reports
-
-
 def load_all_reports(search_dirs: list[Path]) -> list[dict[str, Any]]:
     """Load any eval/batch reports from the given directories."""
     reports: list[dict[str, Any]] = []

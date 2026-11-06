@@ -85,9 +85,11 @@ def sample_defect_params(
     Returns:
         Dictionary with defect parameters
     """
-    ok_shift_px = float(tolerances['ok_shift_px']) if tolerances else None
-    ok_rotation_deg = float(tolerances['ok_rotation_deg']) if tolerances else None
-    tombstone_tilt_deg = float(tolerances['tombstone_tilt_deg']) if tolerances else None
+    # Same fallbacks as classify_defect() so partial/missing tolerances still sample consistently.
+    tolerances = tolerances or {}
+    ok_shift_px = float(tolerances.get('ok_shift_px', _DEFAULT_OK_SHIFT_PX))
+    ok_rotation_deg = float(tolerances.get('ok_rotation_deg', _DEFAULT_OK_ROT_DEG))
+    tombstone_tilt_deg = float(tolerances.get('tombstone_tilt_deg', _DEFAULT_TOMBSTONE_TILT))
 
     samplers = {
         'OK':           _sample_ok,

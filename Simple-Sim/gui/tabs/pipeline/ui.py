@@ -417,9 +417,6 @@ class PipelineUI:
         self.btn_stop.configure(state="normal" if running else "disabled")
         self.btn_filters.configure(state="disabled" if running else "normal")
 
-    def update_stats_bar(self, cpu_pct: float | None, ram_info: tuple[float, int, int] | None, gpu_pct: float | None):
-        return
-
     fmt_bytes = staticmethod(fmt_bytes)
 
     def refresh_thumbnails(self, recent_imgs: list[str], dataset_dir: Path | None, label_dict: dict[str, str], image_to_sample: dict[str, str], meta_by_sample: dict[str, MetaRow], meta_by_image_rel: dict[str, MetaRow], draw_defect_overlay_func: Callable[..., Any]) -> None:
@@ -507,7 +504,7 @@ class PipelineUI:
     def set_dataset_combo_values(self, values: list[str]) -> None:
         self.dataset_combo["values"] = values
 
-    def toggle_dataset_multi_widgets(self, enabled: bool, tooltip_text_func: Callable[[], str]) -> None:
+    def toggle_dataset_multi_widgets(self, enabled: bool) -> None:
         if enabled:
             self.dataset_combo.pack_forget()
             self.dataset_multi_entry.pack(side="left", fill="x", expand=True)
@@ -516,4 +513,3 @@ class PipelineUI:
             self.dataset_multi_entry.pack_forget()
             self.btn_dataset_multi_pick.pack_forget()
             self.dataset_combo.pack(side="left", fill="x", expand=True)
-        ToolTip(self.dataset_multi_entry, text_func=tooltip_text_func)

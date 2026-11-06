@@ -238,3 +238,17 @@ def test_move_samples_uses_deduped_id_in_destination_split(tmp_path: Path) -> No
     assert dst_splits["train"] == [conflict_id]
     assert dst_splits["test"] == [f"{conflict_id}__moved2"]
     assert _read_splits(src)["test"] == []
+
+
+def test_move_samples_without_destination_splits_dir_does_not_create_it(tmp_path: Path) -> None:
+    src = tmp_path / "runs" / "src"
+    dst = tmp_path / "runs" / "dst"
+    a = "run_a/sim/train/0001"
+    _write_dataset(src, [(a, "OK", "train")])
+    _write_splits(src, {"train": [a], "val": [], "test": []})
+    _write_dataset(dst, [("run_b/sim/train/1001", "OK", "train")])
+
+    move_samples(src, dst, [a])
+
+    assert not (dst / "splits").exists()
+    assert _read_splits(src) == {"train": [], "val": [], "test": []}

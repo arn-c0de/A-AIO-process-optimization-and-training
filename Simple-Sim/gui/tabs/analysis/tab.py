@@ -12,7 +12,7 @@ from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 from gui.utils.dataset_ops import delete_samples, move_samples
-from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, dataset_display_name, dataset_sort_key
+from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, catalog_labels, dataset_display_name
 from gui.utils.feedback_manager import (
     FeedbackManager,
     VERDICT_THUMBS_DOWN,
@@ -79,7 +79,7 @@ class AnalysisTab(BaseTab):
     def _load_persisted_settings(self) -> None:
         st = self._store()
         if st is None: return
-        if v := st.get("analysis.dataset_selection"):
+        if self.state.dataset_dir is None and (v := st.get("analysis.dataset_selection")):
             try:
                 self.ui.var_dataset.set(v)
                 self._on_dataset_selected()
@@ -115,27 +115,8 @@ class AnalysisTab(BaseTab):
         return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
     def _refresh_datasets(self) -> None:
-        self._dataset_catalog.reload()
-        cand = self.logic.get_datasets()
-        cand.sort(key=lambda p: dataset_sort_key(self.sim_root, p))
-        self._dataset_catalog.prune_unknown(cand)
-        self._dataset_catalog.save(self.frame)
-        cand = [p for p in cand if not self._dataset_catalog.is_archived(p)]
-        
-        self._dataset_by_display.clear()
-        displays: list[str] = []
-        seen: dict[str, int] = {}
-        for p in cand:
-            base = self._display_for_dataset(p)
-            category = self._dataset_catalog.category_for(p)
-            if category and category != DEFAULT_CATEGORY:
-                base = f"[{category}] {base}"
-            n = seen.get(base, 0) + 1
-            seen[base] = n
-            disp = base if n == 1 else f"{base} ({n})"
-            self._dataset_by_display[disp] = p
-            displays.append(disp)
-        
+        self._dataset_by_display = catalog_labels(self.sim_root, self._dataset_catalog, save_widget=self.frame)
+        displays = list(self._dataset_by_display)
         self.ui.dataset_combo["values"] = displays
         if (cur := self.ui.var_dataset.get().strip()) and cur in self._dataset_by_display: return
         

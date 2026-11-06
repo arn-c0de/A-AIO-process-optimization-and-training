@@ -82,28 +82,52 @@ _REALISM_FLOAT_RANGES: dict[str, tuple[float, float, float]] = {
     "realism_group_G8_prob": (0.08, 0.0, 1.0),
 }
 
+# Secondary parameters (angles/sizes/k2) are fixed values, not randomizable strengths.
+_NON_RANDOMIZABLE_FLOATS = {
+    "perspective_angle_x",
+    "perspective_angle_y",
+    "motion_blur_angle",
+    "shadow_size",
+    "reflection_size",
+    "distortion_k2",
+    "dust_size",
+}
+
 _RANDOMIZABLE_FLOAT_RANGES: dict[str, tuple[float, float]] = {
-    "rotation_strength": (0.0, 4.0),
-    "blur_strength": (0.0, 4.0),
-    "grain_strength": (0.0, 4.0),
-    "brightness_strength": (0.0, 4.0),
-    "contrast_strength": (0.0, 4.0),
-    "perspective_strength": (0.0, 2.0),
-    "motion_blur_strength": (0.0, 3.0),
-    "saturation_factor": (0.5, 1.5),
-    "hue_shift_deg": (-30.0, 30.0),
-    "shadow_strength": (0.0, 0.8),
-    "reflection_strength": (0.0, 1.0),
-    "vignetting_strength": (0.0, 2.0),
-    "chromatic_strength": (0.0, 2.0),
-    "distortion_k1": (-0.3, 0.3),
-    "dust_density": (0.0, 1.0),
-    "sharpen_strength": (0.0, 2.0),
+    key: (lo, hi) for key, (_default, lo, hi) in _FLOAT_RANGES.items() if key not in _NON_RANDOMIZABLE_FLOATS
 }
 
 _RANDOMIZABLE_INT_RANGES: dict[str, tuple[int, int]] = {
-    "jpeg_quality": (50, 95),
-    "color_temperature_kelvin": (2500, 7500),
+    key: (lo, hi) for key, (_default, lo, hi) in _INT_RANGES.items()
+}
+
+# Augment values that leave the image untouched (no-op for every apply_* filter).
+NEUTRAL_AUGMENT: dict[str, float] = {
+    "blur_sigma": 0.0,
+    "noise_stddev": 0.0,
+    "brightness_factor": 1.0,
+    "contrast_factor": 1.0,
+    "rotation_deg": 0.0,
+    "perspective_strength": 0.0,
+    "perspective_angle_x": 0.0,
+    "perspective_angle_y": 0.0,
+    "motion_blur_strength": 0.0,
+    "motion_blur_angle": 0.0,
+    "saturation_factor": 1.0,
+    "hue_shift_deg": 0.0,
+    "shadow_strength": 0.0,
+    "shadow_size": 0.2,
+    "reflection_strength": 0.0,
+    "reflection_size": 0.15,
+    "vignetting_strength": 0.0,
+    "chromatic_strength": 0.0,
+    "jpeg_quality": 100,
+    "color_temperature_kelvin": 5500,
+    "distortion_k1": 0.0,
+    "distortion_k2": 0.0,
+    "dust_density": 0.0,
+    "dust_size": 2.0,
+    "sharpen_strength": 0.0,
 }
 
 
@@ -217,26 +241,13 @@ def clean_filter_values_for_popup() -> dict[str, Any]:
         if key.startswith("enable_") or key == "cardinal_rotation_90":
             clean[key] = False
 
-    neutral_values = {
-        "rotation_strength": "0.00",
-        "blur_strength": "0.00",
-        "grain_strength": "0.00",
-        "brightness_strength": "1.00",
-        "contrast_strength": "1.00",
-        "perspective_strength": "0.00",
-        "motion_blur_strength": "0.00",
-        "saturation_factor": "1.00",
-        "hue_shift_deg": "0.00",
-        "shadow_strength": "0.00",
-        "reflection_strength": "0.00",
-        "vignetting_strength": "0.00",
-        "chromatic_strength": "0.00",
-        "jpeg_quality": "100",
-        "color_temperature_kelvin": "5500",
-        "distortion_k1": "0.00",
-        "dust_density": "0.00",
-        "sharpen_strength": "0.00",
-    }
+    # Multipliers (*_strength scaling a sampled value) are neutral at 1.0 for brightness/contrast
+    # and 0.0 otherwise; every other randomizable key is an augment value with a NEUTRAL_AUGMENT entry.
+    neutral_multipliers = {"brightness_strength": 1.0, "contrast_strength": 1.0}
+    neutral_values: dict[str, str] = {}
+    for key in list(_RANDOMIZABLE_FLOAT_RANGES) + list(_RANDOMIZABLE_INT_RANGES):
+        value = NEUTRAL_AUGMENT.get(key, neutral_multipliers.get(key, 0.0))
+        neutral_values[key] = str(value) if isinstance(value, int) else f"{value:.2f}"
     clean.update(neutral_values)
 
     for key, value in neutral_values.items():

@@ -25,16 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from simple_sim.data_loader import preprocess_bgr
-from simple_sim.models import load_checkpoint_model as _load_checkpoint_model
-
-
-def load_checkpoint_model(model_path: Path, device: torch.device):
-    model, class_names, _ = _load_checkpoint_model(model_path, device)
-    return model, class_names
-
-
-def preprocess(img_bgr: np.ndarray) -> torch.Tensor:
-    return preprocess_bgr(img_bgr)
+from simple_sim.models import load_checkpoint_model
 
 
 def main() -> None:
@@ -52,7 +43,7 @@ def main() -> None:
     data_dir = Path(args.data)
     device = torch.device(args.device)
 
-    model, class_names = load_checkpoint_model(model_path, device)
+    model, class_names, _ = load_checkpoint_model(model_path, device)
 
     # Load meta/labels and build maps.
     meta_rows = read_jsonl(data_dir / "meta.jsonl", MetaRow)
@@ -112,7 +103,7 @@ def main() -> None:
             img_bgr = cv2.imread(str(img_path))
             if img_bgr is None:
                 raise OSError(f"Failed to load image: {img_path}")
-            xs.append(preprocess(img_bgr))
+            xs.append(preprocess_bgr(img_bgr))
             ids.append(sid)
             gts.append(gt)
             img_names.append(Path(meta.image_path).name)

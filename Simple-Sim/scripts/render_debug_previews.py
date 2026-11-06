@@ -36,7 +36,7 @@ import numpy as np
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.config import load_config, validate_config
+from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generators.blender_3d import write_jobs_jsonl, render_blender_batch
 from simple_sim.generators.filter_settings import default_filter_values_for_popup, normalize_image_filters
@@ -521,10 +521,7 @@ def _render_2d_previews(
     w, h, mpp = _resolve_2d_roi(cfg, roi_override)
     roi_cfg = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
 
-    render_cfg = dict(cfg["render"])
-    # schema v2: allow render.component_color to come from profile.
-    if "component_color" not in render_cfg and "render" in profile:
-        render_cfg["component_color"] = profile["render"]["component_color_bgr"]
+    render_cfg = merge_profile_render(cfg["render"], profile)
 
     footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
     geometry_ranges = profile.get("geometry_ranges") or {}

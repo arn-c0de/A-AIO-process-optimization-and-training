@@ -138,22 +138,11 @@ def _basename(p: Any) -> str:
         return str(p)
 
 
-def _resolve_model_path(sim_root: Path, model_path: str) -> Path | None:
-    if not model_path:
+def _resolve_path(sim_root: Path, raw_path: str) -> Path | None:
+    """Resolve a (possibly sim_root-relative) model/dataset path from a report; None when empty."""
+    if not raw_path:
         return None
-    p = Path(model_path)
-    if not p.is_absolute():
-        p = sim_root / p
-    try:
-        return p.resolve()
-    except Exception:
-        return p
-
-
-def _resolve_dataset_path(sim_root: Path, dataset_path: str) -> Path | None:
-    if not dataset_path:
-        return None
-    p = Path(dataset_path)
+    p = Path(raw_path)
     if not p.is_absolute():
         p = sim_root / p
     try:
@@ -191,7 +180,7 @@ def _load_arena(sim_root: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
         rp = str(it.get("path") or "").strip()
         if not rp:
             continue
-        abs_p = _resolve_model_path(sim_root, rp)
+        abs_p = _resolve_path(sim_root, rp)
         if abs_p is None:
             continue
         if not abs_p.exists():
@@ -240,7 +229,7 @@ def _critical_fn_summary(report: dict[str, Any]) -> str:
         return "-"
 
 
-def _arena_type(sim_root: Path, model_abs: Path) -> str:
+def _arena_type(model_abs: Path) -> str:
     try:
         return "Bundle" if model_abs.is_dir() else "Single"
     except Exception:
@@ -795,7 +784,7 @@ def _render(
 
     for r in reports:
         mp = str(r.get("model_path") or "").strip()
-        abs_mp = _resolve_model_path(sim_root, mp)
+        abs_mp = _resolve_path(sim_root, mp)
         if abs_mp is None:
             continue
         k_model = str(abs_mp)
@@ -842,7 +831,7 @@ def _render(
         last_ts = max(_ts(rr) for rr in rs) if rs else 0.0
         ds_path_s = str(rr_best.get("dataset_path") or "")
         ds_size_b: int | None = None
-        ds_abs = _resolve_dataset_path(sim_root, ds_path_s)
+        ds_abs = _resolve_path(sim_root, ds_path_s)
         if ds_abs is not None:
             ds_key = str(ds_abs)
             if ds_key not in ds_size_cache:
@@ -888,7 +877,7 @@ def _render(
                 "model_abs": model_abs,
                 "model_rel": _rel(sim_root, Path(model_abs)),
                 "model_name": Path(model_abs).name,
-                "type": _arena_type(sim_root, Path(model_abs)),
+                "type": _arena_type(Path(model_abs)),
                 "avg_acc": avg_acc,
                 "avg_f1": avg_f1,
                 "datasets": len({r.dataset_name for r in rows}),

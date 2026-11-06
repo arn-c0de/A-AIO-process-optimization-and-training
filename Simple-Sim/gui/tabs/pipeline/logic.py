@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import signal
 import subprocess
 import threading
 import time
@@ -20,6 +19,8 @@ import torch
 import cv2
 import yaml
 
+from gui.utils.paths import list_model_paths, model_root
+from gui.utils.process import terminate_process
 from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
 from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
@@ -67,7 +68,7 @@ class PipelineLogic:
         return False
 
     def _model_root(self) -> Path:
-        return self.sim_root / "outputs" / "models"
+        return model_root(self.sim_root)
 
     def _resolve_out_dir(self, out_dir: str) -> Path:
         p = Path(out_dir)
@@ -257,25 +258,7 @@ class PipelineLogic:
 
     def stop_pipeline(self) -> None:
         self.stop_evt.set()
-        p = self.proc
-        if p is not None:
-            if p.poll() is not None:
-                self.proc = None
-                return
-            try: os.killpg(p.pid, signal.SIGTERM)
-            except Exception:
-                try: p.terminate()
-                except Exception: pass
-            
-            # Escalate to SIGKILL after a grace period.
-            def _kill_later() -> None:
-                p = self.proc
-                if p is None: return
-                try:
-                    if p.poll() is None: os.killpg(p.pid, signal.SIGKILL)
-                except Exception: pass
-            
-            threading.Timer(2.0, _kill_later).start()
+        terminate_process(self.proc)
 
     def _read_process_output_thread(self, proc: subprocess.Popen[str], log_callback: Callable[[str], None], *,
                                     done: threading.Event | None = None, on_exit: Callable[[int | None], None] | None = None) -> None:
@@ -400,7 +383,7 @@ class PipelineLogic:
             if self._last_snap_sig == sig: return None
             self._last_snap_sig = sig
             
-            dst_root = self.sim_root / "outputs" / "models" / "versions" / model_path.stem
+            dst_root = self._model_root() / "versions" / model_path.stem
             dst_root.mkdir(parents=True, exist_ok=True)
             tag = time.strftime("%Y%m%d_%H%M%S")
             base = dst_root / f"{model_path.stem}_{tag}_run{int(run_i):03d}.pt"
@@ -511,18 +494,10 @@ class PipelineLogic:
         return meta
 
     def get_all_model_paths(self) -> list[Path]:
-        root = self.sim_root / "outputs" / "models"
-        root.mkdir(parents=True, exist_ok=True)
-        cand: list[Path] = []
-        cand.extend(sorted(root.glob("*.pt")))
-        cand.extend([p for p in sorted(root.glob("*.bundle")) if p.is_dir()])
-        cand.extend([p for p in sorted((root / "bundles").glob("*")) if p.is_dir()])
-        cand.extend(sorted((root / "imports").glob("*.pt")))
-        cand.extend(sorted((root / "versions").glob("**/*.pt")))
-        return list({str(p.resolve()): p for p in cand if p.is_file() or p.is_dir()}.values())
+        return list_model_paths(self._model_root())
 
     def get_profile_classifier_models(self) -> list[Path]:
-        root = self.sim_root / "outputs" / "models"
+        root = self._model_root()
         cand: list[Path] = []
         if root.exists():
             cand.extend(sorted(root.glob("profile_classifier_*.pt")))
@@ -533,11 +508,11 @@ class PipelineLogic:
         if preset == "full":
             cfg = self.sim_root / "configs" / "run_profile_cls.yaml"
             out_ds = self.sim_root / "outputs" / "sim_data" / "runs" / "run_profile_cls"
-            out_model = self.sim_root / "outputs" / "models" / "profile_classifier_v1.pt"
+            out_model = self._model_root() / "profile_classifier_v1.pt"
         else:
             cfg = self.sim_root / "configs" / "run_profile_cls_quick.yaml"
             out_ds = self.sim_root / "outputs" / "sim_data" / "runs" / "run_profile_cls_quick"
-            out_model = self.sim_root / "outputs" / "models" / "profile_classifier_quick.pt"
+            out_model = self._model_root() / "profile_classifier_quick.pt"
 
         if not cfg.exists(): raise FileNotFoundError(f"Config not found:\n{cfg}")
         
@@ -622,7 +597,8 @@ class PipelineLogic:
             try:
                 data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
             except Exception: continue
-            
+            if not isinstance(data, dict): continue
+
             run_block = data.get("run") or {}
             if run_block.get("component_profile") != profile_id: continue
             if want_backend:
@@ -687,7 +663,8 @@ class PipelineLogic:
                 raise FileNotFoundError(f"Missing dataset_manifest.json in {ds}")
             manifest = read_dataset_manifest(manifest_path)
             mver = int(manifest.get("manifest_version", 1) or 1)
-            run_id = str(manifest.get("run_id") or run_id)
+            if ds is sources[0]:
+                run_id = str(manifest.get("run_id") or run_id)
             if mver == 1:
                 comp = manifest.get("component_profile") or {}
                 pid = str(comp.get("profile_id") or "")
@@ -817,7 +794,7 @@ class PipelineLogic:
                 )
                 pid = str(getattr(label_row, "profile_id", "") or default_pid)
                 label_out.append(LabelRow(schema_version=2, id=new_id, class_name=class_name, profile_id=pid))
-                splits[split].append(new_id)
+                splits.setdefault(split, []).append(new_id)
 
         return meta_out, label_out, splits
 

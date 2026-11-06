@@ -14,7 +14,7 @@ import json
 import re
 import warnings
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -134,7 +134,7 @@ def scan_bundle_checkpoints(bundle_dir: Path) -> dict[str, str]:
 
 def _quarantine_corrupt_meta(meta_path: Path) -> Path | None:
     """Move an unreadable ``bundle.json`` aside so it is not silently overwritten."""
-    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup = meta_path.with_name(f"{meta_path.name}.corrupt-{stamp}")
     try:
         meta_path.replace(backup)
@@ -156,7 +156,7 @@ def upsert_bundle_meta(bundle_dir: Path, profile_id: str, ckpt_path: Path) -> No
     bundle_dir = Path(bundle_dir)
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds") + "Z"
     meta_path = bundle_dir / BUNDLE_META_NAME
     meta = read_bundle_meta(bundle_dir)
     checkpoints: dict[str, str]

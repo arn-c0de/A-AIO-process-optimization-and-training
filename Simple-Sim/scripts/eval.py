@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import ROIDataset
 from simple_sim.metrics import check_success_criteria, compute_metrics, format_metrics
-from simple_sim.models import build_resnet18
+from simple_sim.models import load_checkpoint_model
 from simple_sim.telemetry import emit
 from simple_sim.manifest import check_checkpoint_profile, read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
@@ -143,16 +143,14 @@ def main():
             )
         model_path = resolved
 
-    # Load checkpoint
+    # Load checkpoint (single model or ensemble)
     print("\nLoading model checkpoint...")
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-    class_names = checkpoint['class_names']
-    num_classes = len(class_names)
+    model, class_names, checkpoint = load_checkpoint_model(model_path, device)
 
     print(f"  Classes: {class_names}")
-    print(f"  Trained epoch: {checkpoint['epoch']}")
-    print(f"  Val accuracy: {checkpoint['val_accuracy']:.4f}")
-    print(f"  Val F1: {checkpoint['val_f1']:.4f}")
+    print(f"  Trained epoch: {checkpoint.get('epoch', '-')}")
+    print(f"  Val accuracy: {float(checkpoint.get('val_accuracy') or 0.0):.4f}")
+    print(f"  Val F1: {float(checkpoint.get('val_f1') or 0.0):.4f}")
 
     # GUARD: Validate component profile match
     ckpt_profile_id = check_checkpoint_profile(
@@ -166,12 +164,6 @@ def main():
 
     emit("eval_start", dataset_dir=str(data_dir), model_path=str(model_path), device=str(device))
 
-    # Create model
-    print("\nInitializing model...")
-    model = build_resnet18(num_classes)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(device)
-
     # Load test dataset
     print("\nLoading test dataset...")
     test_dataset = ROIDataset(data_dir, 'test', class_names, return_id=True)
@@ -183,8 +175,10 @@ def main():
         print(f"  {class_name}: {count}")
 
     # Create data loader
-    batch_size = checkpoint['config']['eval']['batch_size']
-    num_workers = checkpoint['config']['eval'].get('num_workers', 0)
+    # Ensemble checkpoints carry no top-level config; fall back to sane defaults.
+    eval_cfg = (checkpoint.get('config') or {}).get('eval') or {}
+    batch_size = int(eval_cfg.get('batch_size', 64))
+    num_workers = eval_cfg.get('num_workers', 0)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     # Evaluate
@@ -192,7 +186,7 @@ def main():
     print("EVALUATION ON TEST SET")
     print("="*60)
 
-    critical_classes = checkpoint['config'].get('eval', {}).get('critical_classes')
+    critical_classes = eval_cfg.get('critical_classes')
     metrics, seen = evaluate(model, test_loader, device, class_names, critical_classes=critical_classes)
 
     # Print formatted metrics
@@ -205,11 +199,14 @@ def main():
         macro_f1=float(metrics["macro_f1"]),
     )
 
-    # Save report
+    # Save report next to the *requested* model path (a bundle dir resolves to a checkpoint
+    # inside it); batch_predict/arena_report look the report up by that path.
+    requested_model_path = Path(args.model)
     report = {
         'timestamp': datetime.now().isoformat(),
         'dataset_path': str(data_dir),
-        'model_path': str(model_path),
+        'model_path': str(requested_model_path),
+        'resolved_model_path': str(model_path) if model_path != requested_model_path else None,
         'split': 'test',
         'metrics': metrics,
         'test_size': len(test_dataset),
@@ -217,14 +214,14 @@ def main():
         'class_distribution': test_dist
     }
 
-    report_path = model_path.parent / f'report_{model_path.stem}.json'
+    report_path = requested_model_path.parent / f'report_{requested_model_path.stem}.json'
     with open(report_path, 'w') as f:
         json.dump(report, f, indent=2)
 
     print(f"\nReport saved to: {report_path}")
 
     # Check success criteria
-    check_success_criteria(checkpoint['val_accuracy'], metrics, entity="class")
+    check_success_criteria(float(checkpoint.get('val_accuracy') or 0.0), metrics, entity="class")
 
 
 if __name__ == '__main__':

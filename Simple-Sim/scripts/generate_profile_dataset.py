@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.config import load_config, validate_config
+from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.schema import MetaRow, LabelRow
 from simple_sim.rng import derive_sample_seed, make_sample_id
 from simple_sim.defects import sample_defect_params, classify_defect
@@ -98,10 +98,7 @@ def generate_profile_dataset(
         geometry_ranges = profile.get('geometry_ranges')
         tolerances = profile.get('tolerances')
 
-        # Merge component_color from profile into render config
-        render_config = dict(config['render'])
-        if 'component_color' not in render_config and 'render' in profile:
-            render_config['component_color'] = profile['render']['component_color_bgr']
+        render_config = merge_profile_render(config['render'], profile)
 
         print(f"\nGenerating samples for profile: {pid}")
 
