@@ -22,7 +22,7 @@ from .filters import (
     apply_vignetting,
 )
 from .geometry import sample_nominal_geometry
-from .render import render_roi
+from .render import apply_augment_filters, render_roi
 from simple_sim.generators.filter_settings import normalize_image_filters
 
 __all__ = [
@@ -50,6 +50,7 @@ __all__ = [
     "apply_reflection",
     "apply_dust_particles",
     "apply_color_temperature",
+    "apply_augment_filters",
     "render_roi",
     "normalize_image_filters",
 ]

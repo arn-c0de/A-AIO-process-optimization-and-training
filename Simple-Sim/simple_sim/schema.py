@@ -11,6 +11,7 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any, TypeVar
 from simple_sim.config import VALID_CLASSES
+from simple_sim.io_utils import append_jsonl
 
 T = TypeVar('T')
 
@@ -122,6 +123,15 @@ def write_jsonl(path: Path, rows: list[Any]) -> None:
 
     # Atomic rename
     temp_path.replace(path)
+
+
+def append_jsonl_rows(path: Path, rows: list[Any]) -> None:
+    """Re-validate dataclass rows (``__post_init__``) and append them to a JSONL file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        row.__post_init__()
+    append_jsonl(path, (asdict(row) for row in rows))
 
 
 def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:

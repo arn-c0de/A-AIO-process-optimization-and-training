@@ -29,27 +29,12 @@ from .filters import (
 )
 
 
-def render_roi(
-    nominal: dict[str, float],
-    defect_params: dict[str, Any],
-    augment: dict[str, float],
-    roi_size: tuple[int, int],
-    config: dict[str, Any],
-    tolerances: dict[str, Any] | None,
-    rng: np.random.Generator,
-    footprint: str = "chip_2pad",
-) -> np.ndarray:
-    """Render complete ROI with defects and augmentation."""
-    width, height = roi_size
-    img = np.zeros((height, width, 3), dtype=np.uint8)
+def apply_augment_filters(img: np.ndarray, augment: dict[str, Any], rng: np.random.Generator) -> np.ndarray:
+    """Apply the post-render image filter chain (everything except rotation) in a fixed order.
 
-    draw_substrate(img, config)
-    draw_pads(img, nominal, tuple(config["copper_color"]), footprint=footprint)
-    draw_solder(img, nominal, footprint=footprint)
-    draw_component(
-        img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances, footprint=footprint
-    )
-
+    Shared by :func:`render_roi` and the Blender post-processing so 2D and 3D images get
+    identical filters for the same augment values.
+    """
     img = apply_blur(img, augment.get("blur_sigma", 0.0))
     img = apply_noise(img, augment.get("noise_stddev", 0.0), rng)
     img = apply_brightness(img, augment.get("brightness_factor", 1.0))
@@ -78,6 +63,31 @@ def render_roi(
         augment.get("perspective_angle_x", 0.0),
         augment.get("perspective_angle_y", 0.0),
     )
+    return img
+
+
+def render_roi(
+    nominal: dict[str, float],
+    defect_params: dict[str, Any],
+    augment: dict[str, float],
+    roi_size: tuple[int, int],
+    config: dict[str, Any],
+    tolerances: dict[str, Any] | None,
+    rng: np.random.Generator,
+    footprint: str = "chip_2pad",
+) -> np.ndarray:
+    """Render complete ROI with defects and augmentation."""
+    width, height = roi_size
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+
+    draw_substrate(img, config)
+    draw_pads(img, nominal, tuple(config["copper_color"]), footprint=footprint)
+    draw_solder(img, nominal, footprint=footprint)
+    draw_component(
+        img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances, footprint=footprint
+    )
+
+    img = apply_augment_filters(img, augment, rng)
 
     if abs(augment.get("rotation_deg", 0.0)) > 0.1:
         center = (width // 2, height // 2)
