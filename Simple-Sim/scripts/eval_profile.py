@@ -5,76 +5,59 @@ Usage:
     .venv/bin/python scripts/eval_profile.py --data outputs/sim_data/runs/run_profile_cls --model outputs/models/profile_classifier_v1.pt
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
-import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from typing import Any
+
 import torch
-from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ProfileDataset
+from simple_sim.eval_utils import checkpoint_val_accuracy, eval_loader, metrics_summary, print_checkpoint_info, print_distribution
+from simple_sim.io_utils import atomic_write_json
 from simple_sim.metrics import check_success_criteria, format_metrics
 from simple_sim.models import load_checkpoint_model
 from scripts.eval import evaluate
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Evaluate profile classifier on test set')
-    parser.add_argument('--data', type=str, required=True, help='Path to mixed-profile dataset directory')
-    parser.add_argument('--model', type=str, required=True, help='Path to trained profile classifier checkpoint')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                       help='Device (cuda/cpu)')
-    args = parser.parse_args()
-
-    data_dir = Path(args.data)
-    model_path = Path(args.model)
-    device = torch.device(args.device)
+def run_eval_profile(data_dir: Path, model_path: Path, device: str | torch.device = "cpu") -> dict[str, Any]:
+    """Evaluate a profile classifier on the test split and write ``report_profile_classifier_<stem>.json``."""
+    data_dir = Path(data_dir)
+    model_path = Path(model_path)
+    device = torch.device(device)
 
     print("Profile classifier evaluation")
     print(f"  Dataset: {data_dir}")
     print(f"  Model: {model_path}")
     print(f"  Device: {device}")
 
-    # Load checkpoint
     print("\nLoading model checkpoint...")
     model, profile_names, checkpoint = load_checkpoint_model(model_path, device)
-
     if checkpoint.get('checkpoint_type') != 'profile_classifier':
         print(f"WARNING: checkpoint_type is '{checkpoint.get('checkpoint_type')}', expected 'profile_classifier'")
+    print_checkpoint_info(checkpoint, label="Profiles")
 
-    print(f"  Profiles: {profile_names}")
-    print(f"  Trained epoch: {checkpoint.get('epoch', '-')}")
-    print(f"  Val accuracy: {float(checkpoint.get('val_accuracy') or 0.0):.4f}")
-    print(f"  Val F1: {float(checkpoint.get('val_f1') or 0.0):.4f}")
-
-    # Load test dataset
     print("\nLoading test dataset...")
     test_dataset = ProfileDataset(data_dir, 'test', profile_names, return_id=True)
     print(f"Test samples: {len(test_dataset)}")
-
     test_dist = test_dataset.get_class_distribution()
-    print("\nTest profile distribution:")
-    for name, count in test_dist.items():
-        print(f"  {name}: {count}")
+    print_distribution("Test profile distribution", test_dist)
 
-    batch_size = checkpoint['config']['eval']['batch_size']
-    num_workers = checkpoint['config']['eval'].get('num_workers', 0)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-
-    # Evaluate
     print("\n" + "=" * 60)
     print("PROFILE CLASSIFIER EVALUATION ON TEST SET")
     print("=" * 60)
 
-    metrics, seen = evaluate(model, test_loader, device, profile_names)
+    metrics, seen = evaluate(model, eval_loader(test_dataset, checkpoint), device, profile_names)
 
     print("\n" + format_metrics(metrics, profile_names))
     print(f"\nSeen samples: {seen}")
 
-    # Save report
     report = {
         'timestamp': datetime.now().isoformat(),
         'checkpoint_type': 'profile_classifier',
@@ -86,15 +69,33 @@ def main():
         'seen_samples': int(seen),
         'profile_distribution': test_dist,
     }
-
     report_path = model_path.parent / f'report_profile_classifier_{model_path.stem}.json'
-    with open(report_path, 'w') as f:
-        json.dump(report, f, indent=2)
-
+    atomic_write_json(report_path, report)
     print(f"\nReport saved to: {report_path}")
 
-    # Success criteria
-    check_success_criteria(float(checkpoint.get('val_accuracy') or 0.0), metrics, entity="profile", ascii_only=True)
+    passed = check_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="profile", ascii_only=True)
+    return {
+        "model_path": str(model_path),
+        "dataset_path": str(data_dir),
+        "report_path": str(report_path),
+        "profiles": profile_names,
+        "test_size": len(test_dataset),
+        "seen_samples": int(seen),
+        **metrics_summary(metrics),
+        "success_criteria_passed": passed,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Evaluate profile classifier on test set')
+    parser.add_argument('--data', type=str, required=True, help='Path to mixed-profile dataset directory')
+    parser.add_argument('--model', type=str, required=True, help='Path to trained profile classifier checkpoint')
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
+                        help='Device (cuda/cpu)')
+    add_json_flag(parser)
+    args = parser.parse_args()
+
+    run_cli("eval_profile", lambda: run_eval_profile(Path(args.data), Path(args.model), args.device), args.json)
 
 
 if __name__ == '__main__':

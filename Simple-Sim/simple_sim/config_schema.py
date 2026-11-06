@@ -47,7 +47,6 @@ class SimulationConfig:
     eval: EvalConfig
 
 
-
 def parse_config_typed(cfg: dict[str, Any]) -> SimulationConfig:
     """Parse minimal typed config view used for strict baseline checks."""
     try:
@@ -55,7 +54,7 @@ def parse_config_typed(cfg: dict[str, Any]) -> SimulationConfig:
         roi_raw = cfg["roi"]
         train_raw = cfg["train"]
         eval_raw = cfg["eval"]
-    except Exception as exc:
+    except (KeyError, TypeError) as exc:
         raise ValueError(f"Missing required top-level section: {exc}") from exc
 
     section = "run"

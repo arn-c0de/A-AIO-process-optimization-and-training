@@ -5,102 +5,76 @@ Usage:
     .venv/bin/python scripts/train_profile.py --data outputs/sim_data/runs/run_profile_cls --out outputs/models/profile_classifier_v1.pt
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
-import yaml
-import time
+from typing import Any
+
 import torch
-import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ProfileDataset, make_loader_kwargs
-from simple_sim.models import build_resnet18
+from simple_sim.eval_utils import print_distribution, require_manifest
+from simple_sim.manifest import hash_file, read_dataset_manifest
 from simple_sim.rng import resolve_train_seed, seed_everything
+from simple_sim.schema import LabelRow, read_jsonl
 from simple_sim.telemetry import emit
-from simple_sim.manifest import read_dataset_manifest, hash_file
-from simple_sim.schema import read_jsonl, LabelRow
-from scripts.train import train_epoch, validate
+from scripts.train import build_training, fit_epoch, load_dataset_config
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Train profile classifier')
-    parser.add_argument('--data', type=str, required=True, help='Path to mixed-profile dataset directory')
-    parser.add_argument('--out', type=str, required=True, help='Output path for trained model (.pt)')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                       help='Device (cuda/cpu)')
-    amp_group = parser.add_mutually_exclusive_group()
-    amp_group.add_argument('--amp', dest='amp', action='store_true', help='Enable mixed precision on CUDA (default).')
-    amp_group.add_argument('--no-amp', dest='amp', action='store_false', help='Disable mixed precision.')
-    parser.set_defaults(amp=True)
-    args = parser.parse_args()
+def dataset_profile_names(data_dir: Path, manifest: dict[str, Any]) -> list[str]:
+    """Sorted profile IDs of a dataset: from a v2 manifest, else scanned from labels.jsonl."""
+    if manifest.get('manifest_version', 1) == 2:
+        return sorted(p['profile_id'] for p in manifest['component_profiles'])
+    label_rows = read_jsonl(Path(data_dir) / 'labels.jsonl', LabelRow)
+    return sorted({r.profile_id for r in label_rows if r.profile_id})
 
-    data_dir = Path(args.data)
-    output_path = Path(args.out)
-    device = torch.device(args.device)
-    use_amp = bool(args.amp and device.type == "cuda")
 
-    # Load config from dataset
-    config_path = data_dir / 'config.yaml'
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
+def train_profile_model(
+    data_dir: Path, out: Path, *, device: str | torch.device = "cpu", amp: bool = True
+) -> dict[str, Any]:
+    """Train a profile classifier on a mixed-profile dataset; return a summary dict."""
+    data_dir = Path(data_dir)
+    output_path = Path(out)
+    device = torch.device(device)
+    use_amp = bool(amp and device.type == "cuda")
+
+    config = load_dataset_config(data_dir)
 
     # Reproducibility: seed Python/NumPy/PyTorch from the dataset config.
     train_seed = resolve_train_seed(config)
     seed_everything(train_seed)
 
-    # Load manifest and get profile list
-    manifest_path = data_dir / 'dataset_manifest.json'
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
-
-    manifest = read_dataset_manifest(manifest_path)
-
-    # Get profile names from manifest (v2) or from labels
-    if manifest.get('manifest_version', 1) == 2:
-        profile_names = sorted([p['profile_id'] for p in manifest['component_profiles']])
-    else:
-        # Fallback: scan labels for unique profile_ids
-        label_rows = read_jsonl(data_dir / 'labels.jsonl', LabelRow)
-        profile_names = sorted(set(r.profile_id for r in label_rows if r.profile_id))
-
+    manifest_path = require_manifest(data_dir)
+    profile_names = dataset_profile_names(data_dir, read_dataset_manifest(manifest_path))
     if len(profile_names) < 2:
         raise ValueError(f"Profile classifier requires 2+ profiles, found: {profile_names}")
 
-    num_classes = len(profile_names)
     print("Profile classifier training")
     print(f"  Dataset: {data_dir}")
-    print(f"  Profiles ({num_classes}): {profile_names}")
+    print(f"  Profiles ({len(profile_names)}): {profile_names}")
     print(f"  Device: {device}")
     print(f"  AMP: {use_amp}")
     print(f"  Seed: {train_seed}")
 
-    # Extract training parameters
     train_config = config['train']
-    epochs = train_config['epochs']
+    epochs = int(train_config['epochs'])
     batch_size = train_config['batch_size']
-    lr = train_config['lr']
-    weight_decay = train_config['weight_decay']
-    pretrained = train_config.get('pretrained', True)
     loader_kwargs = make_loader_kwargs(train_config.get('num_workers', 0), device)
 
-    # Create datasets
     print("\nLoading datasets...")
     train_dataset = ProfileDataset(data_dir, 'train', profile_names, return_id=True)
     val_dataset = ProfileDataset(data_dir, 'val', profile_names, return_id=True)
-
     print(f"Train samples: {len(train_dataset)}")
     print(f"Val samples: {len(val_dataset)}")
 
     train_dist = train_dataset.get_class_distribution()
-    print("\nTrain profile distribution:")
-    for name, count in train_dist.items():
-        print(f"  {name}: {count}")
-
-    # Validate distribution
+    print_distribution("Train profile distribution", train_dist)
     for name, count in train_dist.items():
         if count == 0:
             raise ValueError(f"Profile '{name}' has 0 training samples. Check dataset generation.")
@@ -108,46 +82,26 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
-    # Create model
-    print("\nInitializing ResNet18...")
-    model = build_resnet18(num_classes, pretrained=pretrained)
-    if device.type == "cuda":
-        torch.backends.cudnn.benchmark = True
-    model = model.to(device)
-
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    model, criterion, optimizer, scaler = build_training(len(profile_names), train_config, device, use_amp)
 
     best_val_f1 = 0.0
+    best_val_acc: float | None = None
     best_epoch = 0
+    last_path = output_path.with_name(output_path.stem + "_last.pt")
 
     print("\n" + "=" * 60)
     print("PROFILE CLASSIFIER TRAINING")
     print("=" * 60)
     emit("train_profile_start", dataset_dir=str(data_dir), out_model=str(output_path),
-         epochs=int(epochs), profiles=profile_names)
+         epochs=epochs, profiles=profile_names)
 
+    stats: dict[str, Any] = {}
     for epoch in range(epochs):
-        print(f"\nEpoch {epoch + 1}/{epochs}")
-
-        t_epoch = time.perf_counter()
-        train_loss, train_seen = train_epoch(
-            model, train_loader, criterion, optimizer, device, use_amp=use_amp, scaler=scaler
+        stats = fit_epoch(
+            model, train_loader, val_loader, criterion, optimizer, device, profile_names,
+            epoch=epoch, total_epochs=epochs, use_amp=use_amp, scaler=scaler, emit_events=False,
         )
-        val_loss, val_metrics, val_seen = validate(
-            model, val_loader, criterion, device, profile_names, use_amp=use_amp
-        )
-
-        val_acc = val_metrics['accuracy']
-        val_f1 = val_metrics['macro_f1']
-        epoch_s = max(1e-9, time.perf_counter() - t_epoch)
-
-        print(f"  Train Loss: {train_loss:.4f}")
-        print(f"  Val Loss: {val_loss:.4f}")
-        print(f"  Val Accuracy: {val_acc:.4f}")
-        print(f"  Val Macro F1: {val_f1:.4f}")
-        print(f"  Seen: train={train_seen} val={val_seen}  Epoch time: {epoch_s:.1f}s")
+        val_f1 = stats['val_macro_f1']
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         ckpt = {
@@ -155,19 +109,19 @@ def main():
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'val_f1': val_f1,
-            'val_accuracy': val_acc,
+            'val_accuracy': stats['val_accuracy'],
             'class_names': profile_names,
             'config': config,
             'checkpoint_type': 'profile_classifier',
             'dataset_manifest_hash': hash_file(manifest_path),
             'trained_on_dataset': str(data_dir),
         }
-
-        last_path = output_path.with_name(output_path.stem + "_last.pt")
         torch.save(ckpt, last_path)
 
-        if val_f1 > best_val_f1:
+        # Always write --out at least once, even if val F1 never rises above 0.
+        if val_f1 > best_val_f1 or not output_path.exists():
             best_val_f1 = float(val_f1)
+            best_val_acc = float(stats['val_accuracy'])
             best_epoch = int(epoch + 1)
             print(f"  New best model (F1: {best_val_f1:.4f})")
             torch.save(ckpt, output_path)
@@ -178,6 +132,35 @@ def main():
     print(f"Best model: Epoch {best_epoch}, Val F1: {best_val_f1:.4f}")
     print(f"Model saved to: {output_path}")
     print("=" * 60)
+    return {
+        "dataset_path": str(data_dir),
+        "best_checkpoint": str(output_path),
+        "last_checkpoint": str(last_path),
+        "profiles": profile_names,
+        "epochs_run": epochs,
+        "best_epoch": best_epoch,
+        "best_val_f1": best_val_f1,
+        "best_val_accuracy": best_val_acc,
+        "last_epoch": stats,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Train profile classifier')
+    parser.add_argument('--data', type=str, required=True, help='Path to mixed-profile dataset directory')
+    parser.add_argument('--out', type=str, required=True, help='Output path for trained model (.pt)')
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
+                        help='Device (cuda/cpu)')
+    amp_group = parser.add_mutually_exclusive_group()
+    amp_group.add_argument('--amp', dest='amp', action='store_true', help='Enable mixed precision on CUDA (default).')
+    amp_group.add_argument('--no-amp', dest='amp', action='store_false', help='Disable mixed precision.')
+    parser.set_defaults(amp=True)
+    add_json_flag(parser)
+    args = parser.parse_args()
+
+    run_cli("train_profile", lambda: train_profile_model(
+        Path(args.data), Path(args.out), device=args.device, amp=args.amp,
+    ), args.json)
 
 
 if __name__ == '__main__':

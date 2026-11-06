@@ -10,12 +10,13 @@ Convention:
 
 from __future__ import annotations
 
-import json
 import re
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from simple_sim.io_utils import atomic_write_json, read_json
 
 
 BUNDLE_META_NAME = "bundle.json"
@@ -82,13 +83,7 @@ def read_bundle_meta(bundle_dir: Path) -> BundleMeta | None:
     Returns:
         Parsed :class:`BundleMeta`, or ``None`` if the file is absent or invalid
     """
-    p = Path(bundle_dir) / BUNDLE_META_NAME
-    if not p.exists():
-        return None
-    try:
-        obj = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+    obj = read_json(Path(bundle_dir) / BUNDLE_META_NAME)
     if not isinstance(obj, dict):
         return None
     cps = obj.get("checkpoints")
@@ -101,7 +96,7 @@ def read_bundle_meta(bundle_dir: Path) -> BundleMeta | None:
             updated_at=str(obj.get("updated_at") or ""),
             checkpoints={str(k): str(v) for k, v in cps.items()},
         )
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -113,7 +108,7 @@ def _checkpoint_profile_id(ckpt_path: Path) -> str | None:
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         pid = (ckpt.get("component_profile") or {}).get("profile_id")
         return str(pid) if pid else None
-    except Exception:
+    except Exception:  # noqa: BLE001 - torch.load can raise many error types on bad files
         return None
 
 
@@ -156,7 +151,7 @@ def upsert_bundle_meta(bundle_dir: Path, profile_id: str, ckpt_path: Path) -> No
     bundle_dir = Path(bundle_dir)
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds") + "Z"
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     meta_path = bundle_dir / BUNDLE_META_NAME
     meta = read_bundle_meta(bundle_dir)
     checkpoints: dict[str, str]
@@ -181,7 +176,7 @@ def upsert_bundle_meta(bundle_dir: Path, profile_id: str, ckpt_path: Path) -> No
 
     try:
         rel = str(Path(ckpt_path).resolve().relative_to(bundle_dir.resolve()))
-    except Exception:
+    except (OSError, ValueError):
         rel = Path(ckpt_path).name
 
     checkpoints[str(profile_id)] = rel
@@ -191,5 +186,5 @@ def upsert_bundle_meta(bundle_dir: Path, profile_id: str, ckpt_path: Path) -> No
         "updated_at": now,
         "checkpoints": checkpoints,
     }
-    (bundle_dir / BUNDLE_META_NAME).write_text(json.dumps(out, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    atomic_write_json(meta_path, out)
 

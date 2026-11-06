@@ -1,19 +1,22 @@
 """Classification metrics computation."""
 
-import numpy as np
-from sklearn.metrics import (
-    accuracy_score,
-    precision_recall_fscore_support,
-    confusion_matrix as sklearn_confusion_matrix
-)
+from __future__ import annotations
+
+from collections.abc import Sequence
 from typing import Any
+
+import numpy as np
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.metrics import confusion_matrix as sklearn_confusion_matrix
+
+DEFAULT_CRITICAL_CLASSES = ('MISSING', 'MISALIGNED', 'TOMBSTONE')
 
 
 def compute_metrics(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
+    y_true: np.ndarray | Sequence[int],
+    y_pred: np.ndarray | Sequence[int],
     class_names: list[str],
-    critical_classes: list[str] | None = None
+    critical_classes: Sequence[str] | None = None
 ) -> dict[str, Any]:
     """Compute comprehensive classification metrics.
 
@@ -21,10 +24,15 @@ def compute_metrics(
         y_true: True labels (class indices)
         y_pred: Predicted labels (class indices)
         class_names: List of class names
+        critical_classes: Classes whose false-negative rate is reported
+            (default: ``DEFAULT_CRITICAL_CLASSES``)
 
     Returns:
-        Dictionary with all metrics
+        Dictionary with accuracy, macro_f1, per_class, confusion_matrix, critical_fn_rates
     """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+
     # Overall accuracy
     accuracy = accuracy_score(y_true, y_pred)
 
@@ -41,20 +49,20 @@ def compute_metrics(
     # Confusion matrix
     cm = sklearn_confusion_matrix(y_true, y_pred, labels=range(len(class_names)))
 
-    # Per-class metrics dictionary
-    per_class_metrics = {}
-    for i, class_name in enumerate(class_names):
-        per_class_metrics[class_name] = {
+    per_class_metrics = {
+        class_name: {
             'precision': float(precision[i]),
             'recall': float(recall[i]),
             'f1': float(f1[i]),
-            'support': int(support[i])
+            'support': int(support[i]),
         }
+        for i, class_name in enumerate(class_names)
+    }
 
     # Compute false negative rate for critical defects
     # Critical defects are configurable to match the problem definition.
     if critical_classes is None:
-        critical_classes = ['MISSING', 'MISALIGNED', 'TOMBSTONE']
+        critical_classes = DEFAULT_CRITICAL_CLASSES
     critical_fn_rates = {}
 
     for class_name in critical_classes:

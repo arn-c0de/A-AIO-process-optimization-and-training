@@ -53,6 +53,11 @@ class EnsembleModel(nn.Module):
         return out / float(len(self.parts))
 
 
+def load_checkpoint(model_path: Path, map_location: str | torch.device = "cpu") -> Any:
+    """Raw ``torch.load`` of a Simple-Sim checkpoint (trusted local file, full unpickling)."""
+    return torch.load(model_path, map_location=map_location, weights_only=False)
+
+
 def load_checkpoint_model(
     model_path: Path, device: str | torch.device
 ) -> tuple[nn.Module, list[str], dict[str, Any]]:
@@ -61,7 +66,7 @@ def load_checkpoint_model(
     Returns ``(model, class_names, checkpoint)`` with the model in eval mode on ``device``.
     """
     # Always load to CPU first to avoid accidentally loading a large ensemble onto GPU.
-    checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
+    checkpoint = load_checkpoint(model_path)
 
     if isinstance(checkpoint, dict) and checkpoint.get("format") == ENSEMBLE_FORMAT:
         class_names = list(checkpoint.get("class_names") or [])

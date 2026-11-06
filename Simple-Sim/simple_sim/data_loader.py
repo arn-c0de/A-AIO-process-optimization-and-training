@@ -2,10 +2,11 @@
 
 import os
 import warnings
-import cv2
-import numpy as np
 from pathlib import Path
 from typing import Any
+
+import cv2
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -22,7 +23,14 @@ IMAGENET_TRANSFORM = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
 ])
-_IMAGENET_TRANSFORM = IMAGENET_TRANSFORM  # backward-compatible alias
+
+
+def load_image_bgr(image_path: Path) -> np.ndarray:
+    """Read an image with OpenCV (BGR); raise OSError if it cannot be loaded."""
+    img_bgr = cv2.imread(str(image_path))
+    if img_bgr is None:
+        raise OSError(f"Failed to load image: {image_path}")
+    return img_bgr
 
 
 def preprocess_bgr(img_bgr: np.ndarray) -> torch.Tensor:
@@ -110,13 +118,8 @@ class _BaseROIDataset(Dataset):
         return len(self.samples)
 
     def _load_tensor(self, sample_id: str) -> torch.Tensor:
-        meta = self.id_to_meta[sample_id]
-        image_path = self.data_dir / meta.image_path
-        img_bgr = cv2.imread(str(image_path))
-        if img_bgr is None:
-            raise OSError(f"Failed to load image: {image_path}")
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        return self.transform(img_rgb)
+        img_bgr = load_image_bgr(self.data_dir / self.id_to_meta[sample_id].image_path)
+        return self.transform(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | tuple[torch.Tensor, int, str, str]:
         sample_id = self.samples[idx]

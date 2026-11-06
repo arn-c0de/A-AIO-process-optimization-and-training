@@ -131,7 +131,6 @@ NEUTRAL_AUGMENT: dict[str, float] = {
 }
 
 
-
 def _to_bool(src: dict[str, Any], name: str, default: bool) -> bool:
     v = src.get(name, default)
     if isinstance(v, bool):
@@ -143,23 +142,20 @@ def _to_bool(src: dict[str, Any], name: str, default: bool) -> bool:
     return default
 
 
-
 def _to_float(src: dict[str, Any], name: str, default: float, lo: float, hi: float) -> float:
     try:
         v = float(src.get(name, default))
-    except Exception:
+    except (TypeError, ValueError):
         v = default
     return max(lo, min(hi, v))
-
 
 
 def _to_int(src: dict[str, Any], name: str, default: int, lo: int, hi: int) -> int:
     try:
         v = int(src.get(name, default))
-    except Exception:
+    except (TypeError, ValueError):
         v = default
     return max(lo, min(hi, v))
-
 
 
 def normalize_image_filters(image_filters: dict[str, Any] | None) -> dict[str, Any]:
@@ -216,7 +212,6 @@ def normalize_image_filters(image_filters: dict[str, Any] | None) -> dict[str, A
     return out
 
 
-
 def default_filter_values_for_popup() -> dict[str, Any]:
     """Default values encoded as popup-friendly strings/bools."""
     normalized = normalize_image_filters(None)
@@ -231,7 +226,6 @@ def default_filter_values_for_popup() -> dict[str, Any]:
         else:
             out[key] = value
     return out
-
 
 
 def clean_filter_values_for_popup() -> dict[str, Any]:
@@ -265,7 +259,7 @@ def load_image_filters_env(var_name: str = "IMAGE_FILTERS") -> dict[str, Any]:
         return normalize_image_filters(None)
     try:
         parsed = json.loads(raw)
-    except Exception:
+    except ValueError:
         print(f"[warn] Invalid {var_name} JSON, using defaults.")
         return normalize_image_filters(None)
     return normalize_image_filters(parsed if isinstance(parsed, dict) else None)

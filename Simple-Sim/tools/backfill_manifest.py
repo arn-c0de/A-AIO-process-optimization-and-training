@@ -15,18 +15,23 @@ Usage:
     .venv/bin/python tools/backfill_manifest.py --data outputs/sim_data/runs/run_0001 --profile chip_0603_resistor@1
 """
 
+from __future__ import annotations
+
 import argparse
-import json
-import yaml
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import yaml
 
-from simple_sim.profile_hash import hash_profile
-from simple_sim.schema import read_jsonl, MetaRow, LabelRow
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
+from simple_sim.io_utils import atomic_write_json  # noqa: E402
+from simple_sim.manifest import dataset_stats  # noqa: E402
+from simple_sim.profile_hash import hash_profile  # noqa: E402
+from simple_sim.schema import LabelRow, MetaRow, read_jsonl  # noqa: E402
 
 STATUS_OK = "ok"
 STATUS_SKIPPED = "skipped"
@@ -68,9 +73,8 @@ def backfill_dataset(
 
     # Load config
     try:
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-    except Exception as e:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as e:
         print(f"  ✗ Failed to load config: {e}")
         return STATUS_FAILED
 
@@ -81,8 +85,7 @@ def backfill_dataset(
 
     # Locate profiles directory if not provided
     if profiles_dir is None:
-        # Try to find it relative to the script
-        profiles_dir = Path(__file__).parent.parent / "configs" / "profiles"
+        profiles_dir = ROOT / "configs" / "profiles"
 
     profile_path = profiles_dir / f"{profile_id}.yaml"
 
@@ -94,7 +97,7 @@ def backfill_dataset(
     # Load profile and compute hash
     try:
         profile_hash_str = hash_profile(profile_path)
-    except Exception as e:
+    except (OSError, yaml.YAMLError) as e:
         print(f"  ✗ Failed to hash profile: {e}")
         return STATUS_FAILED
 
@@ -102,18 +105,14 @@ def backfill_dataset(
     try:
         meta_rows = read_jsonl(meta_path, MetaRow)
         label_rows = read_jsonl(labels_path, LabelRow)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - any parse error means the dataset is unusable
         print(f"  ✗ Failed to load dataset: {e}")
         return STATUS_FAILED
 
-    # Compute stats
-    splits = {'train': [], 'val': [], 'test': []}
+    splits: dict[str, list[str]] = {'train': [], 'val': [], 'test': []}
     for meta in meta_rows:
         splits.setdefault(meta.split, []).append(meta.id)
-
-    class_counts = {}
-    for label in label_rows:
-        class_counts[label.class_name] = class_counts.get(label.class_name, 0) + 1
+    stats = dataset_stats(meta_rows, label_rows, splits)
 
     # Get file modification time as a proxy for creation time
     creation_time = datetime.fromtimestamp(meta_path.stat().st_mtime)
@@ -136,11 +135,7 @@ def backfill_dataset(
             'script': 'scripts/generate.py'
         },
 
-        'dataset_stats': {
-            'total_samples': len(meta_rows),
-            'splits': {k: len(v) for k, v in splits.items()},
-            'classes': class_counts
-        },
+        'dataset_stats': stats,
 
         'extend_history': [{
             'timestamp': creation_time.isoformat(),
@@ -152,9 +147,8 @@ def backfill_dataset(
 
     # Write manifest
     try:
-        with open(manifest_path, 'w') as f:
-            json.dump(manifest, f, indent=2)
-    except Exception as e:
+        atomic_write_json(manifest_path, manifest)
+    except OSError as e:
         print(f"  ✗ Failed to write manifest: {e}")
         return STATUS_FAILED
 
@@ -162,12 +156,12 @@ def backfill_dataset(
     print(f"     Profile: {profile_id}")
     print(f"     Hash: {profile_hash_str[:48]}...")
     print(f"     Samples: {len(meta_rows)}")
-    print(f"     Classes: {class_counts}")
+    print(f"     Classes: {stats['classes']}")
 
     return STATUS_OK
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description='Backfill dataset manifests for legacy datasets',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -190,6 +184,7 @@ Examples:
                        help='Default profile ID (default: chip_0603_resistor@1)')
     parser.add_argument('--profiles-dir', type=str, default=None,
                        help='Directory containing profile YAML files (default: configs/profiles)')
+    add_json_flag(parser)
 
     args = parser.parse_args()
 
@@ -198,28 +193,29 @@ Examples:
 
     profiles_dir = Path(args.profiles_dir) if args.profiles_dir else None
 
-    counts = {STATUS_OK: 0, STATUS_SKIPPED: 0, STATUS_FAILED: 0}
+    def fail(msg: str) -> int:
+        print(msg)
+        if args.json:
+            emit_result("backfill-manifest", ok=False, error=msg)
+        return 1
 
     if args.data:
-        # Single dataset
-        counts[backfill_dataset(Path(args.data), args.profile, profiles_dir)] += 1
-
-    elif args.data_root:
-        # Batch process
+        datasets = [Path(args.data)]
+    else:
         root_dir = Path(args.data_root)
         if not root_dir.exists():
-            print(f"Error: Directory not found: {root_dir}")
-            return 1
-
-        datasets = sorted([d for d in root_dir.iterdir() if d.is_dir()])
+            return fail(f"Error: Directory not found: {root_dir}")
+        datasets = sorted(d for d in root_dir.iterdir() if d.is_dir())
         if not datasets:
-            print(f"No datasets found in: {root_dir}")
-            return 1
-
+            return fail(f"No datasets found in: {root_dir}")
         print(f"Found {len(datasets)} dataset(s) in: {root_dir}")
 
-        for data_dir in datasets:
-            counts[backfill_dataset(data_dir, args.profile, profiles_dir)] += 1
+    counts = {STATUS_OK: 0, STATUS_SKIPPED: 0, STATUS_FAILED: 0}
+    results: dict[str, str] = {}
+    for data_dir in datasets:
+        status = backfill_dataset(data_dir, args.profile, profiles_dir)
+        counts[status] += 1
+        results[str(data_dir)] = status
 
     # Summary
     print("\n" + "="*60)
@@ -230,7 +226,15 @@ Examples:
     print(f"Failed:  {counts[STATUS_FAILED]}")
     print("="*60)
 
-    return 0 if counts[STATUS_FAILED] == 0 else 1
+    ok = counts[STATUS_FAILED] == 0
+    if args.json:
+        emit_result(
+            "backfill-manifest",
+            {"counts": counts, "datasets": results},
+            ok=ok,
+            error=None if ok else f"{counts[STATUS_FAILED]} dataset(s) failed",
+        )
+    return 0 if ok else 1
 
 
 if __name__ == '__main__':

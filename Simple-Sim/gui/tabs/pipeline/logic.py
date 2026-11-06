@@ -15,12 +15,13 @@ from datetime import datetime
 import re
 import shlex
 
-import torch
 import cv2
 import yaml
 
+from gui.utils.checkpoint_meta import CheckpointMetaCache
 from gui.utils.paths import list_model_paths, model_root
 from gui.utils.process import terminate_process
+from simple_sim.io_utils import atomic_write_json, path_size_bytes, read_json, rel_to
 from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
 from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
@@ -48,9 +49,7 @@ class PipelineLogic:
         # Done-event of the currently active events.jsonl tailer (only one tailer at a time).
         self._tail_done: threading.Event | None = None
         self._tail_lock = threading.Lock()
-        # Checkpoint metadata cache keyed by (resolved path, mtime_ns, size).
-        self._ckpt_meta_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
-        self._ckpt_meta_lock = threading.Lock()
+        self._ckpt_meta = CheckpointMetaCache()
 
     def is_busy(self) -> bool:
         return self.loop_running or self.is_process_running()
@@ -372,7 +371,7 @@ class PipelineLogic:
             "dataset_mode": dataset_mode, "dataset_dir": str(dataset_dir) if dataset_dir else None,
             "out_dir": str(out_dir), "model_path": str(model_path),
         }
-        Path(str(model_path) + ".meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        atomic_write_json(Path(str(model_path) + ".meta.json"), meta)
 
     def _snapshot_model_checkpoint(self, model_path: Path, *, run_i: int, snap_every: int, snap_keep: int) -> Path | None:
         try:
@@ -405,7 +404,7 @@ class PipelineLogic:
             "timestamp": datetime.now().isoformat(timespec="seconds"), "run_iteration": int(run_i),
             "snapshot_path": str(snapshot_path), "source_model_path": str(src),
         }
-        Path(str(snapshot_path) + ".meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        atomic_write_json(Path(str(snapshot_path) + ".meta.json"), meta)
 
     def _prune_model_snapshots(self, dst_root: Path, snap_keep: int) -> None:
         if snap_keep == 0: return
@@ -414,28 +413,16 @@ class PipelineLogic:
             for p in snaps[snap_keep:]: p.unlink()
         except Exception: pass
 
-    def _compute_dir_size_bytes(self, root: Path) -> int:
-        total = 0
-        try:
-            for dirpath, _, filenames in os.walk(root):
-                for fn in filenames:
-                    try: total += int(os.stat(Path(dirpath) / fn, follow_symlinks=False).st_size)
-                    except Exception: pass
-        except Exception: pass
-        return total
-
     def start_dataset_size_calc(self, ds: Path, update_callback: Callable[[int], None]) -> None:
         def worker() -> None:
-            size_b = self._compute_dir_size_bytes(ds)
-            update_callback(size_b)
+            update_callback(path_size_bytes(ds))
         threading.Thread(target=worker, daemon=True).start()
 
     def get_dataset_profile_id(self, ds: Path) -> str | None:
         if not ds: return None
-        manifest_path = ds / "dataset_manifest.json"
-        if not manifest_path.exists(): return None
+        manifest = read_json(ds / "dataset_manifest.json")
+        if manifest is None: return None
         try:
-            with open(manifest_path, encoding="utf-8") as f: manifest = json.load(f)
             mver = int(manifest.get("manifest_version", 1) or 1)
             if mver == 1: return manifest.get("component_profile", {}).get("profile_id")
             if mver == 2: return "multi"
@@ -444,10 +431,9 @@ class PipelineLogic:
 
     def get_dataset_profile_hash(self, ds: Path) -> str | None:
         if not ds: return None
-        manifest_path = ds / "dataset_manifest.json"
-        if not manifest_path.exists(): return None
+        manifest = read_json(ds / "dataset_manifest.json")
+        if manifest is None: return None
         try:
-            with open(manifest_path, encoding="utf-8") as f: manifest = json.load(f)
             mver = int(manifest.get("manifest_version", 1) or 1)
             if mver == 1: return manifest.get("component_profile", {}).get("profile_hash")
             return None
@@ -464,34 +450,13 @@ class PipelineLogic:
         except Exception: pass
         return None, None
 
-    @staticmethod
-    def _ckpt_cache_key(p: Path) -> tuple[str, int, int] | None:
-        try: st = (rp := Path(p).resolve()).stat(); return (str(rp), int(st.st_mtime_ns), int(st.st_size))
-        except Exception: return None
-
     def cached_checkpoint_meta(self, p: Path) -> dict[str, Any] | None:
         """Cached metadata for a checkpoint file, or None if not cached (or the file changed)."""
-        if (key := self._ckpt_cache_key(p)) is None: return {"error": "missing"}
-        with self._ckpt_meta_lock: return self._ckpt_meta_cache.get(key)
+        return self._ckpt_meta.cached(p)
 
     def read_checkpoint_meta(self, p: Path) -> dict[str, Any]:
         """{component_profile, class_names[, error]} of a .pt checkpoint; cached by (path, mtime, size). Slow when uncached."""
-        if (key := self._ckpt_cache_key(p)) is None: return {"error": "missing"}
-        with self._ckpt_meta_lock:
-            if (hit := self._ckpt_meta_cache.get(key)) is not None: return hit
-        meta: dict[str, Any]
-        try:
-            ckpt = torch.load(key[0], map_location="cpu", weights_only=False)
-            if not isinstance(ckpt, dict): ckpt = {}
-            comp = ckpt.get("component_profile")
-            names = ckpt.get("class_names")
-            meta = {"component_profile": dict(comp) if isinstance(comp, dict) else None, "class_names": list(names) if isinstance(names, (list, tuple)) else None}
-            del ckpt
-        except Exception as e: meta = {"component_profile": None, "class_names": None, "error": str(e)}
-        with self._ckpt_meta_lock:
-            for k in [k for k in self._ckpt_meta_cache if k[0] == key[0] and k != key]: self._ckpt_meta_cache.pop(k, None)  # drop stale versions
-            self._ckpt_meta_cache[key] = meta
-        return meta
+        return self._ckpt_meta.read(p)
 
     def get_all_model_paths(self) -> list[Path]:
         return list_model_paths(self._model_root())
@@ -505,25 +470,11 @@ class PipelineLogic:
         return list({str(p.resolve()): p for p in cand if p.is_file()}.values())
 
     def build_profile_model(self, preset: str, config_path_str: str, out_ds_str: str, out_model_str: str, log_callback: Callable[[str], None], run_simple_cmd_callback: Callable[[list[str], dict[str, str] | None], None]) -> None:
-        if preset == "full":
-            cfg = self.sim_root / "configs" / "run_profile_cls.yaml"
-            out_ds = self.sim_root / "outputs" / "sim_data" / "runs" / "run_profile_cls"
-            out_model = self._model_root() / "profile_classifier_v1.pt"
-        else:
-            cfg = self.sim_root / "configs" / "run_profile_cls_quick.yaml"
-            out_ds = self.sim_root / "outputs" / "sim_data" / "runs" / "run_profile_cls_quick"
-            out_model = self._model_root() / "profile_classifier_quick.pt"
-
+        """Generate a profile dataset and train a profile classifier on it (paths from ``profile_model_paths``)."""
+        cfg, out_ds, out_model = Path(config_path_str), Path(out_ds_str), Path(out_model_str)
         if not cfg.exists(): raise FileNotFoundError(f"Config not found:\n{cfg}")
-        
-        tag = time.strftime("%Y%m%d_%H%M%S")
-        if out_ds.exists(): out_ds = out_ds.parent / f"{out_ds.name}_{tag}"
-        if out_model.exists(): out_model = out_model.with_name(f"{out_model.stem}_{tag}{out_model.suffix}")
+        rel_cfg, rel_out_ds, rel_out_model = (rel_to(self.sim_root, p) for p in (cfg, out_ds, out_model))
 
-        rel_cfg = str(cfg.resolve().relative_to(self.sim_root.resolve()) if str(cfg).startswith(str(self.sim_root)) else str(cfg))
-        rel_out_ds = str(out_ds.resolve().relative_to(self.sim_root.resolve()) if str(out_ds).startswith(str(self.sim_root)) else str(out_ds))
-        rel_out_model = str(out_model.resolve().relative_to(self.sim_root.resolve()) if str(out_model).startswith(str(self.sim_root)) else str(out_model))
-        
         # "&&" must stay a shell operator, so quote each command separately.
         gen = ["./.venv/bin/python", "scripts/generate_profile_dataset.py", "--config", rel_cfg, "--out", rel_out_ds]
         train = ["./.venv/bin/python", "scripts/train_profile.py", "--data", rel_out_ds, "--out", rel_out_model]

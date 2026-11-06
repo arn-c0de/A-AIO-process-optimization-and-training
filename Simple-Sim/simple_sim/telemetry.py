@@ -6,34 +6,24 @@ can emit JSON events for a GUI/monitor to consume. If not set, emit() is a no-op
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from typing import Any
 
+from simple_sim.io_utils import append_jsonl
 
-def _event_path() -> str | None:
-    return os.environ.get("SIMPLE_SIM_EVENT_LOG") or None
+EVENT_LOG_ENV = "SIMPLE_SIM_EVENT_LOG"
 
 
 def emit(event: str, **fields: Any) -> None:
-    """Append a single JSON event line to SIMPLE_SIM_EVENT_LOG."""
-    path = _event_path()
+    """Append a single JSON event line to ``$SIMPLE_SIM_EVENT_LOG`` (no-op if unset)."""
+    path = os.environ.get(EVENT_LOG_ENV)
     if not path:
         return
-
-    payload: dict[str, Any] = {
-        "ts": time.time(),
-        "event": event,
-        **fields,
-    }
-
     # Best-effort: never crash the pipeline due to telemetry.
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
-            f.flush()
-    except Exception:
+        append_jsonl(path, [{"ts": time.time(), "event": event, **fields}])
+    except (OSError, TypeError, ValueError):
         return
 

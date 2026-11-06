@@ -1,7 +1,6 @@
 """Logic for the Merge Tab."""
 
 from __future__ import annotations
-import json
 import queue
 import shutil
 from datetime import datetime
@@ -10,7 +9,10 @@ from typing import Any
 
 import torch
 
+from gui.utils.checkpoint_meta import checkpoint_profile, read_checkpoint_dict
 from gui.utils.paths import list_model_paths, model_root
+from simple_sim.io_utils import atomic_write_json, read_json, rel_to
+from simple_sim.models import load_checkpoint
 from simple_sim.model_bundle import (
     bundle_checkpoint_path,
     upsert_bundle_meta,
@@ -26,10 +28,7 @@ class MergeLogic:
         return model_root(self.sim_root)
 
     def _rel(self, p: Path) -> str:
-        try:
-            return str(p.resolve().relative_to(self.sim_root.resolve()))
-        except Exception:
-            return str(p)
+        return rel_to(self.sim_root, p)
             
     def scan_models(self) -> dict[str, list[tuple[str, Path]]]:
         # Merge works on individual checkpoints: expand bundle dirs into their *.pt files.
@@ -67,9 +66,8 @@ class MergeLogic:
 
         result: tuple[str | None, str | None, float | None, float | None] = (None, None, None, None)
         try:
-            checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
-            comp = checkpoint.get("component_profile")
-            pid, phash = (comp.get("profile_id"), comp.get("profile_hash")) if isinstance(comp, dict) else (None, None)
+            checkpoint = read_checkpoint_dict(model_path)
+            pid, phash = checkpoint_profile(checkpoint)
             val_acc = float(checkpoint.get("val_accuracy")) if checkpoint.get("val_accuracy") is not None else None
             val_f1 = float(checkpoint.get("val_f1")) if checkpoint.get("val_f1") is not None else None
             result = (pid, phash, val_acc, val_f1)
@@ -145,13 +143,10 @@ class MergeLogic:
         details_path = bundle_dir / "bundle_details.json"
         now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         obj = {"created_at": now, "models": model_details, "sources": sources or {}}
-        details_path.write_text(json.dumps(obj, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        atomic_write_json(details_path, obj)
 
     def _read_bundle_details(self, bundle_dir: Path) -> dict[str, Any] | None:
-        details_path = bundle_dir / "bundle_details.json"
-        if not details_path.exists(): return None
-        try: return json.loads(details_path.read_text(encoding="utf-8"))
-        except Exception: return None
+        return read_json(bundle_dir / "bundle_details.json")
 
     def get_existing_bundles(self) -> list[Path]:
         root = self._model_root()
@@ -171,7 +166,7 @@ class MergeLogic:
 
         for profile_id, src_path in sorted(selected_weights.items()):
             log_q.put(f"[ensemble] loading {profile_id}: {src_path}\n")
-            ckpt = torch.load(src_path, map_location="cpu", weights_only=False)
+            ckpt = load_checkpoint(src_path)
             cn = list(ckpt.get("class_names") or [])
             if not cn: raise ValueError(f"Checkpoint missing class_names: {src_path}")
             if class_names is None: class_names = cn

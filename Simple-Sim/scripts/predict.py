@@ -8,57 +8,139 @@ Usage examples:
   .venv/bin/python scripts/predict.py --model outputs/models/run_0001.pt --data outputs/sim_data/runs/run_0001 --id run_0001/domain_A/test/000042
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
-import cv2
 import numpy as np
 import torch
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.schema import read_jsonl, MetaRow, LabelRow
-from simple_sim.data_loader import preprocess_bgr
-from simple_sim.manifest import check_checkpoint_profile, read_dataset_manifest, resolve_dataset_profile
-from simple_sim.model_bundle import bundle_checkpoint_path
+from simple_sim.cli_utils import UsageError, add_json_flag, run_cli
+from simple_sim.data_loader import load_image_bgr, preprocess_bgr
+from simple_sim.eval_utils import (
+    MANIFEST_NAME,
+    dataset_profile,
+    predict_probs,
+    resolve_bundle_checkpoint,
+)
+from simple_sim.manifest import check_checkpoint_profile
 from simple_sim.models import load_checkpoint_model
+from simple_sim.schema import LabelRow, MetaRow, read_jsonl
 
-
-def load_image_bgr(image_path: Path) -> np.ndarray:
-    img_bgr = cv2.imread(str(image_path))
-    if img_bgr is None:
-        raise OSError(f"Failed to load image: {image_path}")
-    return img_bgr
-
-
-def maybe_get_ground_truth(data_dir: Path | None, sample_id: str | None):
+def maybe_get_ground_truth(data_dir: Path | None, sample_id: str | None) -> str | None:
+    """Ground-truth class of *sample_id* from ``labels.jsonl`` (None if unknown)."""
     if not data_dir or not sample_id:
         return None
-    label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
-    id_to_label = {r.id: r.class_name for r in label_rows}
-    return id_to_label.get(sample_id)
+    label_rows = read_jsonl(Path(data_dir) / "labels.jsonl", LabelRow)
+    return {r.id: r.class_name for r in label_rows}.get(sample_id)
 
 
 def maybe_get_image_from_id(data_dir: Path, sample_id: str) -> Path:
-    meta_rows = read_jsonl(data_dir / "meta.jsonl", MetaRow)
-    id_to_meta = {r.id: r for r in meta_rows}
-    if sample_id not in id_to_meta:
-        # Helpful fallback: allow passing a bare numeric index like "42" or "000042".
-        try:
-            idx = int(str(sample_id).strip())
-        except Exception:
-            idx = None
-        if idx is not None:
-            image_path = data_dir / "images" / f"{idx:06d}.png"
-            if image_path.exists():
-                return image_path
-        raise ValueError(f"Sample ID not found in meta.jsonl: {sample_id}")
-    return data_dir / id_to_meta[sample_id].image_path
+    """Image path of *sample_id* via ``meta.jsonl``; a bare index like ``42`` maps to ``images/000042.png``."""
+    data_dir = Path(data_dir)
+    id_to_meta = {r.id: r for r in read_jsonl(data_dir / "meta.jsonl", MetaRow)}
+    if sample_id in id_to_meta:
+        return data_dir / id_to_meta[sample_id].image_path
+    try:
+        image_path = data_dir / "images" / f"{int(str(sample_id).strip()):06d}.png"
+    except ValueError:
+        image_path = None
+    if image_path is not None and image_path.exists():
+        return image_path
+    raise ValueError(f"Sample ID not found in meta.jsonl: {sample_id}")
 
 
-def main():
+def predict_image(
+    model_path: Path,
+    *,
+    image_path: Path | None = None,
+    data_dir: Path | None = None,
+    sample_id: str | None = None,
+    device: str | torch.device = "cpu",
+    topk: int = 4,
+) -> dict[str, Any]:
+    """Classify one image (given directly or as a dataset sample ID).
+
+    Returns ``model_path``, ``image_path``, ``id``, ``pred``, ``confidence``, ``probs``
+    (class -> prob), ``topk`` (list of ``[class, prob]``), ``gt`` and ``match`` (None without GT).
+    """
+    model_path = Path(model_path)
+    data_dir = Path(data_dir) if data_dir else None
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model not found: {model_path}")
+
+    if image_path:
+        image_path = Path(image_path)
+    elif data_dir and sample_id:
+        image_path = maybe_get_image_from_id(data_dir, sample_id)
+    else:
+        raise UsageError("Provide --image OR (--data and --id).")
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image not found: {image_path}")
+
+    device = torch.device(device)
+    # Multi-model bundle support: if --model is a directory, require --data to resolve profile.
+    if model_path.is_dir():
+        if not data_dir:
+            raise UsageError(
+                "When --model points to a multi-model bundle directory, pass --data so the profile can be resolved.\n"
+                "Example:\n"
+                "  scripts/predict.py --model outputs/models/my_multi.bundle --data outputs/sim_data/runs/run_0001 --id <sample_id>"
+            )
+        model_path = resolve_bundle_checkpoint(model_path, dataset_profile(data_dir)[0])
+
+    model, class_names, checkpoint = load_checkpoint_model(model_path, device)
+
+    # GUARD: Validate profile compatibility if using dataset (hard fail, no override flag here).
+    # Ensemble checkpoints (profile_id "multi") span several profiles and are not checked.
+    ckpt_profile_id = (checkpoint.get("component_profile") or {}).get("profile_id")
+    if data_dir and ckpt_profile_id != "multi" and (data_dir / MANIFEST_NAME).exists():
+        profile_id, profile_hash = dataset_profile(data_dir)
+        check_checkpoint_profile(checkpoint, profile_id, profile_hash, action="predict on")
+
+    x = preprocess_bgr(load_image_bgr(image_path)).unsqueeze(0).to(device)
+    probs = predict_probs(model, x)[0]
+    order = np.argsort(-probs)[:min(topk, len(class_names))]
+
+    pred = class_names[int(order[0])]
+    gt = maybe_get_ground_truth(data_dir, sample_id)
+    return {
+        "model_path": str(model_path),
+        "image_path": str(image_path),
+        "id": sample_id,
+        "pred": pred,
+        "confidence": float(probs[int(order[0])]),
+        "probs": {n: float(probs[i]) for i, n in enumerate(class_names)},
+        "topk": [[class_names[int(i)], float(probs[int(i)])] for i in order],
+        "gt": gt,
+        "match": (pred == gt) if gt is not None else None,
+    }
+
+
+def print_prediction(result: dict[str, Any]) -> None:
+    """Human-readable output of :func:`predict_image`."""
+    print("Prediction")
+    print(f"  Model:  {result['model_path']}")
+    print(f"  Image:  {result['image_path']}")
+    if result["id"]:
+        print(f"  ID:     {result['id']}")
+    if result["gt"] is not None:
+        print(f"  GT:     {result['gt']}")
+    print(f"  Pred:   {result['pred']}")
+    if result["gt"] is not None:
+        print(f"  Match:  {result['match']}")
+    print("\nTop-k:")
+    for name, prob in result["topk"]:
+        print(f"  {name:<12} {prob:.4f}")
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(description="Predict defect class for an image")
     parser.add_argument("--model", required=True, help="Path to trained model checkpoint (.pt)")
     parser.add_argument("--image", help="Path to image file (png/jpg)")
@@ -66,93 +148,22 @@ def main():
     parser.add_argument("--id", help="Optional: sample ID (to load image from dataset + show ground truth label)")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="cuda/cpu")
     parser.add_argument("--topk", type=int, default=4, help="How many classes to show")
+    add_json_flag(parser)
     args = parser.parse_args()
 
-    model_path = Path(args.model)
-    if not model_path.exists():
-        raise FileNotFoundError(f"Model not found: {model_path}")
+    def run() -> dict[str, Any]:
+        result = predict_image(
+            Path(args.model),
+            image_path=Path(args.image) if args.image else None,
+            data_dir=Path(args.data) if args.data else None,
+            sample_id=args.id,
+            device=args.device,
+            topk=args.topk,
+        )
+        print_prediction(result)
+        return result
 
-    data_dir = Path(args.data) if args.data else None
-
-    if args.image:
-        image_path = Path(args.image)
-    elif data_dir and args.id:
-        image_path = maybe_get_image_from_id(data_dir, args.id)
-    else:
-        raise SystemExit("Provide --image OR (--data and --id).")
-
-    if not image_path.exists():
-        raise FileNotFoundError(f"Image not found: {image_path}")
-
-    device = torch.device(args.device)
-    # Multi-model bundle support: if --model is a directory, require --data to resolve profile.
-    if model_path.exists() and model_path.is_dir():
-        if not data_dir:
-            raise SystemExit(
-                "When --model points to a multi-model bundle directory, pass --data so the profile can be resolved.\n"
-                "Example:\n"
-                "  scripts/predict.py --model outputs/models/my_multi.bundle --data outputs/sim_data/runs/run_0001 --id <sample_id>"
-            )
-        manifest_path = data_dir / 'dataset_manifest.json'
-        if not manifest_path.exists():
-            raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
-        manifest = read_dataset_manifest(manifest_path)
-        dataset_profile_id, _ = resolve_dataset_profile(manifest)
-        resolved = bundle_checkpoint_path(model_path, dataset_profile_id, kind="best")
-        if not resolved.exists():
-            raise FileNotFoundError(
-                f"Multi-model bundle has no checkpoint for profile '{dataset_profile_id}':\n"
-                f"  bundle: {model_path}\n"
-                f"  expected: {resolved}"
-            )
-        model_path = resolved
-
-    model, class_names, checkpoint = load_checkpoint_model(model_path, device)
-
-    # GUARD: Validate profile compatibility if using dataset
-    if data_dir:
-        manifest_path = data_dir / 'dataset_manifest.json'
-        if manifest_path.exists():
-            manifest = read_dataset_manifest(manifest_path)
-            dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
-
-            # HARD FAIL on profile ID mismatch (no override flag here). Ensemble checkpoints
-            # (profile_id "multi") span several profiles and are not checked.
-            ckpt_profile_id = (checkpoint.get('component_profile') or {}).get('profile_id')
-            if ckpt_profile_id != "multi":
-                check_checkpoint_profile(
-                    checkpoint, dataset_profile_id, dataset_profile_hash,
-                    action="predict on",
-                )
-
-    img_bgr = load_image_bgr(image_path)
-    x = preprocess_bgr(img_bgr).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        logits = model(x)
-        probs = torch.softmax(logits, dim=1).squeeze(0).cpu().numpy()
-
-    topk = min(args.topk, len(class_names))
-    order = np.argsort(-probs)[:topk]
-
-    print("Prediction")
-    print(f"  Model:  {model_path}")
-    print(f"  Image:  {image_path}")
-    if args.id:
-        print(f"  ID:     {args.id}")
-
-    gt = maybe_get_ground_truth(data_dir, args.id) if data_dir else None
-    if gt is not None:
-        print(f"  GT:     {gt}")
-
-    pred = class_names[int(order[0])]
-    print(f"  Pred:   {pred}")
-    if gt is not None:
-        print(f"  Match:  {pred == gt}")
-
-    print("\nTop-k:")
-    for idx in order:
-        print(f"  {class_names[int(idx)]:<12} {probs[int(idx)]:.4f}")
+    run_cli("predict", run, args.json)
 
 
 if __name__ == "__main__":

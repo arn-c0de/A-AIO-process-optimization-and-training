@@ -118,13 +118,9 @@ def catalog_labels(sim_root: Path, catalog: "DatasetCatalog", *, save_widget=Non
     catalog.prune_unknown(cand)
     catalog.save(save_widget)
     runs, versions = sim_data_roots(sim_root, create=False)
-
-    def _label(p: Path) -> str:
-        base = dataset_display_name(p, runs_root=runs, versions_root=versions)
-        cat = catalog.category_for(p)
-        return f"[{cat}] {base}" if cat and cat != DEFAULT_CATEGORY else base
-
-    return _unique_labels((_label(p), p) for p in cand if not catalog.is_archived(p))
+    return _unique_labels(
+        (catalog.display_label(p, runs_root=runs, versions_root=versions), p) for p in cand if not catalog.is_archived(p)
+    )
 
 
 class DatasetCatalog:
@@ -172,6 +168,12 @@ class DatasetCatalog:
 
     def category_for(self, dataset_dir: Path) -> str:
         return self.category_assignments.get(dataset_relative_key(self.sim_root, dataset_dir), DEFAULT_CATEGORY)
+
+    def display_label(self, dataset_dir: Path, *, runs_root: Path, versions_root: Path) -> str:
+        """Display name prefixed with ``[category] `` unless the dataset is uncategorized."""
+        base = dataset_display_name(dataset_dir, runs_root=runs_root, versions_root=versions_root)
+        category = self.category_for(dataset_dir)
+        return f"[{category}] {base}" if category and category != DEFAULT_CATEGORY else base
 
     def is_archived(self, dataset_dir: Path) -> bool:
         return dataset_relative_key(self.sim_root, dataset_dir) in self.archived_paths

@@ -13,14 +13,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-PYTHON=".venv/bin/python"
-if [[ ! -x "${PYTHON}" ]]; then
-  echo "Missing ${PYTHON}."
-  echo "Run the pipeline once (./run_pipeline.sh) or install deps:"
-  echo "  python3 -m venv .venv"
-  echo "  .venv/bin/python -m pip install -r requirements.txt"
-  exit 1
-fi
+# shellcheck source=tools/_common.sh
+source "${SCRIPT_DIR}/tools/_common.sh"
+sim_require_python
 
 exec "${PYTHON}" scripts/batch_predict.py "$@"
-

@@ -12,7 +12,7 @@ from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 from gui.utils.dataset_ops import delete_samples, move_samples
-from gui.utils.dataset_catalog import DEFAULT_CATEGORY, DatasetCatalog, catalog_labels, dataset_display_name
+from gui.utils.dataset_catalog import DatasetCatalog, catalog_labels
 from gui.utils.feedback_manager import (
     FeedbackManager,
     VERDICT_THUMBS_DOWN,
@@ -57,9 +57,6 @@ class AnalysisTab(BaseTab):
     def on_dataset_changed(self) -> None:
         if not self.state.dataset_dir: return
         display = self._display_for_dataset(self.state.dataset_dir)
-        cat = self._dataset_catalog.category_for(self.state.dataset_dir)
-        if cat and cat != DEFAULT_CATEGORY:
-            display = f"[{cat}] {display}"
         if display in self._dataset_by_display:
             self.ui.var_dataset.set(display)
         else:
@@ -111,20 +108,18 @@ class AnalysisTab(BaseTab):
         wire_vars_autosave(self._store(), self._persisted_var_bindings(), self.frame)
 
     def _display_for_dataset(self, p: Path) -> str:
+        """Category-prefixed display label (before duplicate suffixing)."""
         runs, versions = self.logic.sim_data_roots()
-        return dataset_display_name(p, runs_root=runs, versions_root=versions)
+        return self._dataset_catalog.display_label(p, runs_root=runs, versions_root=versions)
 
     def _refresh_datasets(self) -> None:
         self._dataset_by_display = catalog_labels(self.sim_root, self._dataset_catalog, save_widget=self.frame)
         displays = list(self._dataset_by_display)
         self.ui.dataset_combo["values"] = displays
         if (cur := self.ui.var_dataset.get().strip()) and cur in self._dataset_by_display: return
-        
+
         if self.state.dataset_dir:
             want = self._display_for_dataset(self.state.dataset_dir)
-            cat = self._dataset_catalog.category_for(self.state.dataset_dir)
-            if cat and cat != DEFAULT_CATEGORY:
-                want = f"[{cat}] {want}"
             for d, pp in self._dataset_by_display.items():
                 if pp == self.state.dataset_dir or d == want:
                     self.ui.var_dataset.set(d)

@@ -56,7 +56,6 @@ gui/
 │   └── validation_tab.py    # Quality validation
 │   └── predictions_tab.py   # Batch predictions / scoring
 ├── components/
-│   ├── image_cache.py       # LRU cache for performance
 │   ├── overlay_renderer.py  # Defect visualization
 │   └── chart_widgets.py     # Matplotlib charts
 └── utils/

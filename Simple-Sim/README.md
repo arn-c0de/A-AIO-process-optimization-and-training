@@ -16,6 +16,8 @@ See [`Changelog`](CHANGELOG.md) for a version-by-version overview of changes.
 
 See latest Arena stats: [`ARENA_REPORT.md`](ARENA_REPORT.md)
 
+AI agents / automation: see [`AGENTS.md`](AGENTS.md) (`python -m simple_sim` entrypoint, `--json` result lines).
+
 ## Contents
 
 - [Completed Testing Research](#completed-testing-research)

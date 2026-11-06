@@ -27,6 +27,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from simple_sim.cli_utils import add_json_flag, run_cli  # noqa: E402
 from simple_sim.config import load_config  # noqa: E402
 from simple_sim.manifest import (  # noqa: E402
     read_dataset_manifest,
@@ -35,6 +36,7 @@ from simple_sim.manifest import (  # noqa: E402
 )
 from simple_sim.profile_hash import hash_profile  # noqa: E402
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, write_jsonl  # noqa: E402
+from simple_sim.splits import write_splits  # noqa: E402
 
 SCRIPT_NAME = "tools/create_multi_dataset.py"
 
@@ -45,15 +47,11 @@ def _profile_entry(profile_id: str, profile_hash: str = "", profile_path: str = 
 
 def _profile_from_config(ds: Path, profiles_dir: Path) -> dict[str, str] | None:
     """Fallback for sources without a manifest: use config.yaml run.component_profile."""
-    cfg_path = ds / "config.yaml"
-    if not cfg_path.exists():
-        return None
     try:
-        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    except Exception:
+        run = _load_source_config(ds).get("run")
+    except (OSError, yaml.YAMLError):
         return None
-    run = cfg.get("run") if isinstance(cfg, dict) else None
-    pid = str((run or {}).get("component_profile") or "").strip() if isinstance(run, dict) else ""
+    pid = str(run.get("component_profile") or "").strip() if isinstance(run, dict) else ""
     if not pid:
         return None
     profile_path = profiles_dir / f"{pid}.yaml"
@@ -164,7 +162,8 @@ def create_multi_dataset(
     config_path: Path | None = None,
     run_id: str | None = None,
     profiles_dir: Path | None = None,
-) -> None:
+) -> dict[str, Any]:
+    """Merge *datasets* into *out_dir*; return a summary (out, run_id, samples, splits, profiles)."""
     datasets = [Path(d) for d in datasets]
     out_dir = Path(out_dir)
     profiles_dir = Path(profiles_dir) if profiles_dir is not None else ROOT / "configs" / "profiles"
@@ -196,7 +195,6 @@ def create_multi_dataset(
     out_dir.mkdir(parents=True)
     images_dir = out_dir / "images"
     images_dir.mkdir()
-    (out_dir / "splits").mkdir()
 
     meta_rows: list[MetaRow] = []
     label_rows: list[LabelRow] = []
@@ -224,10 +222,7 @@ def create_multi_dataset(
     write_jsonl(out_dir / "meta.jsonl", meta_rows)
     write_jsonl(out_dir / "labels.jsonl", label_rows)
 
-    for split in ["train", "val", "test"]:
-        with open(out_dir / "splits" / f"{split}.txt", "w") as f_split:
-            for sample_id in splits[split]:
-                f_split.write(sample_id + "\n")
+    write_splits(out_dir, splits)
 
     if config_path is not None:
         shutil.copy2(config_path, out_dir / "config.yaml")
@@ -262,6 +257,14 @@ def create_multi_dataset(
     else:
         print("WARNING: no samples merged; no dataset_manifest.json written")
 
+    return {
+        "out": str(out_dir),
+        "run_id": run_id,
+        "samples": len(meta_rows),
+        "splits": {k: len(v) for k, v in splits.items()},
+        "profiles": [p["profile_id"] for p in used_profiles],
+    }
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create a multi-profile dataset.")
@@ -279,14 +282,15 @@ def main() -> None:
         "Defaults to the first source dataset's config.yaml.",
     )
     parser.add_argument("--run-id", default=None, help="Run ID for merged samples (default: --config run_id, else the --out folder name).")
+    add_json_flag(parser)
     args = parser.parse_args()
 
-    create_multi_dataset(
+    run_cli("create-multi-dataset", lambda: create_multi_dataset(
         [Path(d) for d in args.datasets],
         Path(args.out),
         config_path=Path(args.config) if args.config else None,
         run_id=args.run_id,
-    )
+    ), args.json)
 
 
 if __name__ == "__main__":

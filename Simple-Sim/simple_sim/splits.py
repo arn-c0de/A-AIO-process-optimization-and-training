@@ -1,16 +1,20 @@
 """Stratified dataset splitting."""
 
+from __future__ import annotations
+
 import itertools
 import random
 from collections import defaultdict
 from pathlib import Path
+from typing import Any, Sequence
+
 from simple_sim.schema import MetaRow, LabelRow
 
 
 def generate_splits(
     meta_rows: list[MetaRow],
     label_rows: list[LabelRow],
-    config: dict,
+    config: dict[str, Any],
     run_seed: int
 ) -> dict[str, list[str]]:
     """Generate stratified train/val/test splits.
@@ -36,7 +40,7 @@ def generate_splits(
     id_to_profile = {row.id: getattr(row, 'profile_id', '') or '' for row in label_rows}
 
     # Group samples by (domain, profile, class)
-    groups = defaultdict(list)
+    groups: defaultdict[tuple[str, str, str], list[str]] = defaultdict(list)
     for meta_row in meta_rows:
         sample_id = meta_row.id
         profile_id = id_to_profile.get(sample_id, '')
@@ -49,11 +53,7 @@ def generate_splits(
     test_frac = config['splits']['test_frac']
 
     # Initialize splits
-    splits = {
-        'train': [],
-        'val': [],
-        'test': []
-    }
+    splits: dict[str, list[str]] = {'train': [], 'val': [], 'test': []}
 
     # Create RNG for splitting
     rng = random.Random(run_seed)
@@ -83,7 +83,7 @@ def generate_splits(
     return splits
 
 
-def _split_counts(n: int, fracs) -> list[int]:
+def _split_counts(n: int, fracs: Sequence[float]) -> list[int]:
     """Largest-remainder allocation of n samples over split fractions.
 
     Fractions are normalised so the counts always sum to n. For n >= 3 every
@@ -147,7 +147,7 @@ def write_splits(output_dir: Path, splits: dict[str, list[str]]) -> None:
 
     for split_name, sample_ids in splits.items():
         split_file = splits_dir / f"{split_name}.txt"
-        with open(split_file, 'w') as f:
+        with open(split_file, 'w', encoding='utf-8') as f:
             for sample_id in sample_ids:
                 f.write(sample_id + '\n')
 
@@ -165,7 +165,7 @@ def read_split(split_file: Path) -> list[str]:
     if not split_file.exists():
         raise FileNotFoundError(f"Split file not found: {split_file}")
 
-    with open(split_file) as f:
+    with open(split_file, encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
 
 

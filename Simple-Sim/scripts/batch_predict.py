@@ -17,28 +17,31 @@ Example:
 from __future__ import annotations
 
 import argparse
-import json
+import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import ConcatDataset, DataLoader
+from torch.utils.data import ConcatDataset, DataLoader, Dataset
 from tqdm import tqdm
 
-import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ROIDataset
-from simple_sim.metrics import compute_metrics, format_metrics
-from simple_sim.schema import read_jsonl, MetaRow, LabelRow
+from simple_sim.io_utils import append_jsonl, atomic_write_json, now_tag, unique_path
 from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
+from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.model_bundle import bundle_checkpoint_path
 from simple_sim.models import load_checkpoint_model
+from simple_sim.reports import load_reports, metric_value
+from simple_sim.schema import LabelRow, MetaRow, read_jsonl
+
+COMMAND = "batch_predict"
 
 
 @dataclass
@@ -49,6 +52,17 @@ class RunInfo:
     split_sizes: dict[str, int]
     class_distribution: dict[str, int]
     class_list: list[str]
+
+
+@dataclass
+class PredictResult:
+    y_true: list[int] = field(default_factory=list)
+    y_pred: list[int] = field(default_factory=list)
+    profile_gt: list[str] = field(default_factory=list)
+    profile_pred: list[str] = field(default_factory=list)
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    seen: int = 0
+    elapsed: float = 0.0
 
 
 def dataset_info(data_dir: Path) -> RunInfo:
@@ -80,201 +94,280 @@ def dataset_info(data_dir: Path) -> RunInfo:
     )
 
 
-def build_dataset(data_dir: Path, split: str, class_names: list[str], return_id: bool = True):
+def build_dataset(data_dir: Path, split: str, class_names: list[str], return_id: bool = True) -> Dataset:
     if split in ("train", "val", "test"):
         return ROIDataset(data_dir, split, class_names, return_id=return_id)
     if split == "all":
-        parts = [ROIDataset(data_dir, s, class_names, return_id=return_id) for s in ("train", "val", "test")]
-        return ConcatDataset(parts)
+        return ConcatDataset([ROIDataset(data_dir, s, class_names, return_id=return_id) for s in ("train", "val", "test")])
     raise ValueError(f"Unknown split: {split}")
 
 
-def _now_tag() -> str:
-    # Include microseconds so repeated runs within the same second never collide.
-    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-
-
-def _unique_path(p: Path) -> Path:
-    """Return a non-existing path by appending an incrementing suffix if needed."""
-    p = Path(p)
-    if not p.exists():
-        return p
-    stem = p.stem
-    suf = p.suffix
-    parent = p.parent
-    for i in range(1, 10000):
-        cand = parent / f"{stem}_{i:03d}{suf}"
-        if not cand.exists():
-            return cand
-    # Extremely unlikely; fall back to ns timestamp.
-    return parent / f"{stem}_{time.time_ns()}{suf}"
-
-
-def load_all_reports(search_dirs: list[Path]) -> list[dict[str, Any]]:
-    """Load any eval/batch reports from the given directories."""
-    reports: list[dict[str, Any]] = []
-    seen_paths = set()
-    for d in search_dirs:
-        if not d.exists():
-            continue
-        cand = []
-        cand.extend(d.glob("report_*.json"))
-        cand.extend(d.glob("batch_report_*.json"))
-        for p in sorted(cand):
-            sp = str(p)
-            if sp in seen_paths:
-                continue
-            seen_paths.add(sp)
-            try:
-                obj = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if not isinstance(obj, dict) or "metrics" not in obj:
-                continue
-            obj["_path"] = sp
-            reports.append(obj)
-    return reports
-
-
-def metric_value(report: dict[str, Any], key: str, critical_class: str | None) -> float | None:
-    """Extract a comparable scalar value from a report."""
-    try:
-        metrics = report["metrics"]
-    except Exception:
-        return None
-
-    if key in ("accuracy", "macro_f1"):
-        try:
-            return float(metrics[key])
-        except Exception:
-            return None
-
-    if key == "critical_fn_rate":
-        if not critical_class:
-            return None
-        try:
-            return float(metrics["critical_fn_rates"].get(critical_class))
-        except Exception:
-            return None
-
-    return None
-
-
-def parse_iso_ts(s: str) -> float:
-    # Best-effort; unknown formats sort last.
-    try:
-        return datetime.fromisoformat(s).timestamp()
-    except Exception:
-        return 0.0
-
-
 def _basename(p: str | None) -> str:
-    if not p:
-        return "-"
+    return Path(p).name if p else "-"
+
+
+def resolve_model_path(requested: Path, data_dir: Path) -> tuple[Path, str | None]:
+    """Return ``(checkpoint_path, bundle_profile_id)``; a bundle dir resolves via the dataset's profile."""
+    if not requested.is_dir():
+        return requested, None
+    manifest_path = data_dir / "dataset_manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
+    profile_id, _ = resolve_dataset_profile(read_dataset_manifest(manifest_path))
+    resolved = bundle_checkpoint_path(requested, profile_id, kind="best")
+    if not resolved.exists():
+        # Help users diagnose what's actually inside the bundle dir.
+        avail = sorted(p.name for p in requested.glob("*.pt"))
+        raise FileNotFoundError(
+            f"Multi-model bundle has no checkpoint for profile '{profile_id}':\n"
+            f"  bundle: {requested}\n"
+            f"  expected: {resolved}\n"
+            f"  available: {', '.join(avail[:12]) if avail else '(none)'}\n\n"
+            f"To add it, train this dataset into the same bundle:\n"
+            f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {requested}"
+        )
+    return resolved, profile_id
+
+
+def _gt_profile_map(data_dir: Path) -> dict[str, str]:
+    """Sample id -> GT profile_id from v2 labels (empty for legacy datasets)."""
     try:
-        return Path(p).name
-    except Exception:
-        return str(p)
+        return {lr.id: lr.profile_id for lr in read_jsonl(data_dir / "labels.jsonl", LabelRow) if lr.profile_id}
+    except (OSError, ValueError, TypeError, KeyError):
+        return {}
 
 
-def best_report(reports: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
-    best = None
-    best_v = None
-    for r in reports:
+def _is_cuda_oom(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return ("out of memory" in msg) and ("cuda" in msg or "cudnn" in msg)
+
+
+def predict_once(
+    ds: Dataset,
+    *,
+    device: torch.device,
+    model: torch.nn.Module,
+    class_names: list[str],
+    batch_size: int,
+    num_workers: int,
+    split: str,
+    max_samples: int | None,
+    save_preds: bool,
+    topk: int,
+    gt_profile_map: dict[str, str],
+    profile_model: torch.nn.Module | None,
+    profile_class_names: list[str],
+    ckpt_profile_id: str,
+) -> PredictResult:
+    """One pass over *ds*; collects labels/preds, profile labels and (optionally) per-sample rows."""
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    res = PredictResult()
+    t0 = time.perf_counter()
+    ema_ips: float | None = None
+
+    progress = tqdm(loader, desc=f"Predict({split})")
+    for images, labels, sample_ids, image_paths in progress:
+        if max_samples is not None:
+            # Truncate the last batch so exactly --max-samples samples are evaluated.
+            remaining = int(max_samples) - res.seen
+            if remaining < int(images.shape[0]):
+                images, labels = images[:remaining], labels[:remaining]
+                sample_ids, image_paths = sample_ids[:remaining], image_paths[:remaining]
+
+        bt0 = time.perf_counter()
+        images = images.to(device)
+        labels = labels.to(device)
+
+        with torch.no_grad():
+            logits = model(images)
+            pred_idx = torch.argmax(logits, dim=1)
+            probs = torch.softmax(logits, dim=1)
+
+        profile_pred_idx_np = None
+        profile_probs_np = None
+        if profile_model is not None:
+            with torch.no_grad():
+                profile_logits = profile_model(images)
+                profile_probs_np = torch.softmax(profile_logits, dim=1).cpu().numpy()
+                profile_pred_idx_np = torch.argmax(profile_logits, dim=1).cpu().numpy()
+
+        bs = int(images.shape[0])
+        ips = bs / max(1e-9, time.perf_counter() - bt0)
+        ema_ips = ips if ema_ips is None else (0.9 * ema_ips + 0.1 * ips)
+        progress.set_postfix({"img/s": f"{ema_ips:.1f}", "last_img": str(image_paths[-1]).split("/")[-1]})
+
+        res.y_true.extend(labels.cpu().numpy().tolist())
+        res.y_pred.extend(pred_idx.cpu().numpy().tolist())
+        res.seen += bs
+
+        def pred_profile(i: int) -> str:
+            if profile_pred_idx_np is not None:
+                return profile_class_names[int(profile_pred_idx_np[i])]
+            return ckpt_profile_id
+
+        # Profile metrics are collected independently of --save-preds.
+        if profile_model is not None or ckpt_profile_id:
+            for i in range(bs):
+                gt_prof = str(gt_profile_map.get(str(sample_ids[i]), "") or "")
+                if gt_prof:
+                    res.profile_pred.append(pred_profile(i))
+                    res.profile_gt.append(gt_prof)
+
+        if save_preds:
+            k = min(topk, len(class_names))
+            top_vals, top_inds = (t.cpu().numpy() for t in torch.topk(probs, k=k, dim=1))
+            pred_idx_np = pred_idx.cpu().numpy()
+            labels_np = labels.cpu().numpy()
+            for i in range(bs):
+                tid = str(sample_ids[i])
+                gt_name = class_names[int(labels_np[i])]
+                pred_name = class_names[int(pred_idx_np[i])]
+                row: dict[str, Any] = {
+                    "id": tid,
+                    "image_path": str(image_paths[i]),
+                    "gt": gt_name,
+                    "pred": pred_name,
+                    "correct": bool(pred_name == gt_name),
+                    "topk": [{"class": class_names[int(top_inds[i, j])], "prob": float(top_vals[i, j])} for j in range(k)],
+                }
+                gt_prof = str(gt_profile_map.get(tid, "") or "")
+                if gt_prof:
+                    row["gt_profile"] = gt_prof
+                if profile_model is not None or ckpt_profile_id:
+                    pred_prof = pred_profile(i)
+                    row["pred_profile"] = pred_prof
+                    row["gt_profile"] = gt_prof
+                    row["profile_correct"] = bool(pred_prof == gt_prof) if gt_prof else None
+                    row["profile_confidence"] = (
+                        float(profile_probs_np[i, int(profile_pred_idx_np[i])]) if profile_probs_np is not None else 1.0
+                    )
+                res.rows.append(row)
+
+        if max_samples is not None and res.seen >= max_samples:
+            break
+
+    res.elapsed = max(1e-9, time.perf_counter() - t0)
+    return res
+
+
+def predict_with_oom_retry(device: torch.device, batch_size: int, **kwargs: Any) -> PredictResult:
+    """Run :func:`predict_once`, halving the batch size on CUDA OOM down to 1."""
+    bs = max(1, int(batch_size))
+    while True:
         try:
-            v = float(r["metrics"][key])
-        except Exception:
-            continue
-        if best is None or v > float(best_v):
-            best = r
-            best_v = v
-    return best
+            return predict_once(device=device, batch_size=bs, **kwargs)
+        except RuntimeError as e:
+            if device.type != "cuda" or not _is_cuda_oom(e):
+                raise
+            if bs == 1:
+                raise RuntimeError(
+                    "CUDA OOM even at batch_size=1. Keep GPU selected but reduce memory pressure "
+                    "(close other GPU jobs, use a smaller model, or lower input size)."
+                ) from e
+            new_bs = max(1, bs // 2)
+            print(f"[warn] CUDA OOM at batch_size={bs}. Retrying on GPU with batch_size={new_bs}.")
+            bs = new_bs
+            torch.cuda.empty_cache()
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description="Batch predict and evaluate on a dataset split")
-    ap.add_argument("--model", required=True, help="Path to checkpoint (.pt)")
-    ap.add_argument("--data", required=True, help="Dataset dir (has meta.jsonl/labels.jsonl/splits/)")
-    ap.add_argument("--split", default="test", choices=["train", "val", "test", "all"], help="Which split to evaluate")
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--batch-size", type=int, default=None, help="Override batch size (default: from checkpoint.eval.batch_size or 64)")
-    ap.add_argument("--num-workers", type=int, default=None, help="Override num_workers (default: from checkpoint.eval.num_workers or 0)")
-    ap.add_argument("--max-samples", type=int, default=None, help="Optional cap for quick checks")
-    ap.add_argument("--out-dir", default=None, help="Output dir for reports (default: outputs/models/history)")
-    ap.add_argument("--save-preds", action="store_true", help="Write per-sample predictions JSONL")
-    ap.add_argument("--topk", type=int, default=4, help="Top-k probabilities to store if --save-preds")
-    ap.add_argument("--history-scope", default="model", choices=["model", "dataset", "all"],
-                    help="Which previous reports to compare against (default: model)")
-    ap.add_argument("--history-metric", default="macro_f1", choices=["accuracy", "macro_f1", "critical_fn_rate"],
-                    help="Metric to rank reports by")
-    ap.add_argument("--history-critical-class", default="MISALIGNED",
-                    help="Used when --history-metric=critical_fn_rate (default: MISALIGNED)")
-    ap.add_argument("--history-split", default="same", choices=["same", "any"],
-                    help="Compare only same split as current or any split")
-    ap.add_argument("--history-limit", type=int, default=10, help="How many history rows to print")
-    ap.add_argument("--history-dirs", default=None,
-                    help="Comma-separated list of dirs to search for reports (default: outputs/models and outputs/models/history)")
-    ap.add_argument("--profile-model", default=None,
-                    help="Optional path to profile classifier checkpoint (.pt) for two-stage evaluation")
-    args = ap.parse_args()
+def profile_classification_metrics(gt: list[str], pred: list[str]) -> tuple[dict[str, Any], list[str]]:
+    names = sorted(set(gt) | set(pred))
+    idx = {n: i for i, n in enumerate(names)}
+    m = compute_metrics(np.array([idx[n] for n in gt]), np.array([idx[n] for n in pred]), names, critical_classes=[])
+    return m, names
 
+
+def print_profile_metrics(profile_metrics: dict[str, Any], names: list[str]) -> None:
+    print("")
+    print("=" * 60)
+    print("PROFILE CLASSIFICATION")
+    print("=" * 60)
+    print(f"Profile Accuracy: {profile_metrics['accuracy']:.4f}")
+    print(f"Profile Macro F1: {profile_metrics['macro_f1']:.4f}")
+    pc = profile_metrics.get("per_class") or {}
+    if pc:
+        print(f"{'Profile':<30} {'Prec':>8} {'Rec':>8} {'F1':>8} {'N':>6}")
+        for pn in names:
+            m = pc.get(pn, {})
+            print(f"{pn:<30} {m.get('precision',0):.4f}   {m.get('recall',0):.4f}   {m.get('f1',0):.4f}   {m.get('support',0):>5}")
+
+
+def history_rows(
+    compare_dirs: list[Path],
+    *,
+    scope: str,
+    split_mode: str,
+    metric: str,
+    critical_class: str | None,
+    model_path: Path,
+    data_dir: Path,
+    split: str,
+    exclude_path: Path,
+) -> list[tuple[float, dict[str, Any]]]:
+    """Previous reports matching the filters as ``(value, report)``, best first (FN rate: lowest first)."""
+    reports = load_reports(compare_dirs)
+    if scope == "model":
+        reports = [
+            r for r in reports
+            if r.get("model_stem") == model_path.stem or _basename(r.get("model_path")) == model_path.name
+        ]
+    elif scope == "dataset":
+        reports = [r for r in reports if r.get("dataset_path") == str(data_dir)]
+    if split_mode == "same":
+        reports = [r for r in reports if r.get("split") == split]
+    reports = [r for r in reports if r.get("_path") != str(exclude_path)]
+
+    rows = [(v, r) for r in reports if (v := metric_value(r, metric, critical_class)) is not None]
+    rows.sort(key=lambda t: t[0], reverse=(metric != "critical_fn_rate"))
+    return rows
+
+
+def print_history(rows: list[tuple[float, dict[str, Any]]], *, scope: str, split_mode: str, metric: str, crit: str | None, limit: int) -> None:
+    print("\n" + "=" * 60)
+    title = f"HISTORY (scope={scope}, split={split_mode}, metric={metric}"
+    if crit:
+        title += f", class={crit}"
+    print(title + ")")
+    print("=" * 60)
+
+    if not rows:
+        print("No previous reports found for the chosen filters.")
+        return
+
+    print(f"{'rank':>4}  {'value':>8}  {'when':<19}  {'split':<5}  {'seen':>5}  {'ds_total':>7}  {'model':<12}  {'dataset':<12}  {'report'}")
+    for i, (v, r) in enumerate(rows[: max(1, int(limit))], 1):
+        when = (r.get("timestamp") or "-")[:19]
+        split = str(r.get("split") or "-")
+        seen_s = str(r.get("seen_samples") or r.get("test_size") or "-")
+        ds_total = str(r.get("dataset_total_samples") or "-")
+        mstem = str(r.get("model_stem") or _basename(r.get("model_path")))
+        dsname = _basename(r.get("dataset_path"))
+        path = str(r.get("_path") or "-")
+        print(f"{i:>4}  {v:>8.4f}  {when:<19}  {split:<5}  {seen_s:>5}  {ds_total:>7}  {mstem:<12.12}  {dsname:<12.12}  {path}")
+
+
+def run(args: argparse.Namespace) -> dict[str, Any]:
     requested_model_path = Path(args.model)
     data_dir = Path(args.data)
     device = torch.device(args.device)
 
     # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
-    effective_model_path = requested_model_path
-    dataset_profile_id: str | None = None
-    if requested_model_path.exists() and requested_model_path.is_dir():
-        manifest_path = data_dir / "dataset_manifest.json"
-        if not manifest_path.exists():
-            raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
-        manifest = read_dataset_manifest(manifest_path)
-        dataset_profile_id, _ = resolve_dataset_profile(manifest)
-        resolved = bundle_checkpoint_path(requested_model_path, dataset_profile_id, kind="best")
-        if not resolved.exists():
-            # Help users diagnose what's actually inside the bundle dir.
-            try:
-                avail = sorted([p.name for p in requested_model_path.glob("*.pt")])
-            except Exception:
-                avail = []
-            raise FileNotFoundError(
-                f"Multi-model bundle has no checkpoint for profile '{dataset_profile_id}':\n"
-                f"  bundle: {requested_model_path}\n"
-                f"  expected: {resolved}\n"
-                f"  available: {', '.join(avail[:12]) if avail else '(none)'}\n\n"
-                f"To add it, train this dataset into the same bundle:\n"
-                f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {requested_model_path}"
-            )
-        effective_model_path = resolved
+    effective_model_path, dataset_profile_id = resolve_model_path(requested_model_path, data_dir)
 
     model, class_names, checkpoint = load_checkpoint_model(effective_model_path, device)
     cfg = checkpoint.get("config", {}) or {}
     eval_cfg = (cfg.get("eval") or {}) if isinstance(cfg, dict) else {}
-    ckpt_profile_id = ""
-    try:
-        ckpt_profile_id = str((checkpoint.get("component_profile") or {}).get("profile_id") or "")
-    except Exception:
-        ckpt_profile_id = ""
+    component_profile = checkpoint.get("component_profile")
+    ckpt_profile_id = str(component_profile.get("profile_id") or "") if isinstance(component_profile, dict) else ""
 
     batch_size = args.batch_size if args.batch_size is not None else int(eval_cfg.get("batch_size", 64))
     num_workers = args.num_workers if args.num_workers is not None else int(eval_cfg.get("num_workers", 0))
     critical_classes = eval_cfg.get("critical_classes")
 
-    # --- GT profile mapping (from v2 labels, if available) ---
-    # We build this regardless of --profile-model so reports/preds can still carry GT profile metadata.
-    gt_profile_map: dict[str, str] = {}  # sample id -> GT profile_id
-    try:
-        label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
-        for lr in label_rows:
-            if lr.profile_id:
-                gt_profile_map[lr.id] = lr.profile_id
-    except Exception:
-        # Legacy datasets may not have labels.jsonl or may not include profile_id; ignore.
-        gt_profile_map = {}
+    # GT profile mapping is built regardless of --profile-model so reports/preds carry GT profile metadata.
+    gt_profile_map = _gt_profile_map(data_dir)
 
-    # --- Profile classifier (optional two-stage) ---
-    profile_model_path: Path | None = None
+    # Profile classifier (optional two-stage)
     profile_model = None
     profile_class_names: list[str] = []
     if args.profile_model:
@@ -293,151 +386,25 @@ def main() -> None:
             "Train a checkpoint on this dataset before running batch_predict."
         )
 
-    ds = build_dataset(data_dir, args.split, class_names, return_id=True)
+    pr = predict_with_oom_retry(
+        device,
+        batch_size,
+        ds=build_dataset(data_dir, args.split, class_names, return_id=True),
+        model=model,
+        class_names=class_names,
+        num_workers=num_workers,
+        split=args.split,
+        max_samples=args.max_samples,
+        save_preds=bool(args.save_preds),
+        topk=int(args.topk),
+        gt_profile_map=gt_profile_map,
+        profile_model=profile_model,
+        profile_class_names=profile_class_names,
+        ckpt_profile_id=ckpt_profile_id,
+    )
+    seen, elapsed = pr.seen, pr.elapsed
 
-    def _is_cuda_oom(exc: Exception) -> bool:
-        msg = str(exc).lower()
-        return ("out of memory" in msg) and ("cuda" in msg or "cudnn" in msg)
-
-    def _run_predict_once(curr_device: torch.device, curr_model: torch.nn.Module, curr_profile_model: torch.nn.Module | None, curr_batch_size: int):
-        loader = DataLoader(ds, batch_size=curr_batch_size, shuffle=False, num_workers=num_workers)
-        y_true_local: list[int] = []
-        y_pred_local: list[int] = []
-        profile_gt_local: list[str] = []
-        profile_pred_local: list[str] = []
-        preds_rows_local: list[dict[str, Any]] = []
-
-        t0_local = time.perf_counter()
-        ema_ips_local = None
-        seen_local = 0
-
-        progress = tqdm(loader, desc=f"Predict({args.split})")
-        for batch in progress:
-            images, labels, sample_ids, image_paths = batch
-            if args.max_samples is not None:
-                # Truncate the last batch so exactly --max-samples samples are evaluated.
-                remaining = int(args.max_samples) - seen_local
-                if remaining < int(images.shape[0]):
-                    images, labels = images[:remaining], labels[:remaining]
-                    sample_ids, image_paths = sample_ids[:remaining], image_paths[:remaining]
-
-            bt0 = time.perf_counter()
-            images = images.to(curr_device)
-            labels = labels.to(curr_device)
-
-            with torch.no_grad():
-                logits = curr_model(images)
-                pred_idx = torch.argmax(logits, dim=1)
-                probs = torch.softmax(logits, dim=1)
-
-            profile_pred_idx_np = None
-            profile_probs_np = None
-            if curr_profile_model is not None:
-                with torch.no_grad():
-                    profile_logits = curr_profile_model(images)
-                    profile_probs_t = torch.softmax(profile_logits, dim=1)
-                    profile_pred_idx_t = torch.argmax(profile_logits, dim=1)
-                profile_pred_idx_np = profile_pred_idx_t.detach().cpu().numpy()
-                profile_probs_np = profile_probs_t.detach().cpu().numpy()
-
-            dt = max(1e-9, time.perf_counter() - bt0)
-            bs = int(images.shape[0])
-            ips = bs / dt
-            ema_ips_local = ips if ema_ips_local is None else (0.9 * ema_ips_local + 0.1 * ips)
-            progress.set_postfix({"img/s": f"{ema_ips_local:.1f}", "last_img": str(image_paths[-1]).split("/")[-1]})
-
-            y_true_local.extend(labels.detach().cpu().numpy().tolist())
-            y_pred_local.extend(pred_idx.detach().cpu().numpy().tolist())
-            seen_local += bs
-
-            # Profile metrics are collected independently of --save-preds.
-            if curr_profile_model is not None or ckpt_profile_id:
-                for i in range(bs):
-                    gt_prof = str(gt_profile_map.get(str(sample_ids[i]), "") or "")
-                    if not gt_prof:
-                        continue
-                    if curr_profile_model is not None and profile_pred_idx_np is not None:
-                        profile_pred_local.append(profile_class_names[int(profile_pred_idx_np[i])])
-                    else:
-                        profile_pred_local.append(ckpt_profile_id)
-                    profile_gt_local.append(gt_prof)
-
-            if args.save_preds:
-                topk = min(args.topk, len(class_names))
-                top_vals, top_inds = torch.topk(probs, k=topk, dim=1)
-                top_vals = top_vals.detach().cpu().numpy()
-                top_inds = top_inds.detach().cpu().numpy()
-                pred_idx_np = pred_idx.detach().cpu().numpy()
-                labels_np = labels.detach().cpu().numpy()
-                for i in range(bs):
-                    tid = str(sample_ids[i])
-                    gt_name = class_names[int(labels_np[i])]
-                    pred_name = class_names[int(pred_idx_np[i])]
-                    row = {
-                        "id": tid,
-                        "image_path": str(image_paths[i]),
-                        "gt": gt_name,
-                        "pred": pred_name,
-                        "correct": bool(pred_name == gt_name),
-                    }
-                    row["topk"] = [
-                        {"class": class_names[int(top_inds[i, j])], "prob": float(top_vals[i, j])}
-                        for j in range(topk)
-                    ]
-
-                    if gt_profile_map:
-                        gt_prof = gt_profile_map.get(tid, "")
-                        if gt_prof:
-                            row["gt_profile"] = gt_prof
-
-                    if curr_profile_model is not None and profile_pred_idx_np is not None:
-                        pred_prof = profile_class_names[int(profile_pred_idx_np[i])]
-                        gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
-                        prof_conf = float(profile_probs_np[i, int(profile_pred_idx_np[i])])
-                        row["pred_profile"] = pred_prof
-                        row["gt_profile"] = gt_prof
-                        row["profile_correct"] = bool(pred_prof == gt_prof) if gt_prof else None
-                        row["profile_confidence"] = prof_conf
-                    elif ckpt_profile_id:
-                        gt_prof = str(row.get("gt_profile") or gt_profile_map.get(tid, "") or "")
-                        row["pred_profile"] = ckpt_profile_id
-                        row["gt_profile"] = gt_prof
-                        row["profile_correct"] = bool(ckpt_profile_id == gt_prof) if gt_prof else None
-                        row["profile_confidence"] = 1.0
-
-                    preds_rows_local.append(row)
-
-            if args.max_samples is not None and seen_local >= args.max_samples:
-                break
-
-        elapsed_local = max(1e-9, time.perf_counter() - t0_local)
-        return y_true_local, y_pred_local, profile_gt_local, profile_pred_local, preds_rows_local, seen_local, elapsed_local
-
-    run_batch_size = max(1, int(batch_size))
-    while True:
-        try:
-            y_true, y_pred, profile_gt_labels, profile_pred_labels, preds_rows, seen, elapsed = _run_predict_once(
-                device, model, profile_model, run_batch_size
-            )
-            break
-        except Exception as e:
-            if device.type == "cuda" and _is_cuda_oom(e) and run_batch_size > 1:
-                new_bs = max(1, run_batch_size // 2)
-                print(f"[warn] CUDA OOM at batch_size={run_batch_size}. Retrying on GPU with batch_size={new_bs}.")
-                run_batch_size = new_bs
-                try:
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
-                continue
-            if device.type == "cuda" and _is_cuda_oom(e):
-                raise RuntimeError(
-                    "CUDA OOM even at batch_size=1. Keep GPU selected but reduce memory pressure "
-                    "(close other GPU jobs, use a smaller model, or lower input size)."
-                ) from e
-            raise
-
-    metrics = compute_metrics(np.array(y_true), np.array(y_pred), class_names, critical_classes=critical_classes)
+    metrics = compute_metrics(np.array(pr.y_true), np.array(pr.y_pred), class_names, critical_classes=critical_classes)
 
     print("\n" + "=" * 60)
     print("BATCH PREDICT REPORT")
@@ -453,38 +420,22 @@ def main() -> None:
     print("")
     print(format_metrics(metrics, class_names))
 
-    # Profile metrics (when profile preds were available and GT labels were available)
+    # Profile metrics (when profile preds and GT labels were available)
     profile_metrics: dict[str, Any] | None = None
-    if profile_gt_labels:
-        # Build index arrays for profile metrics
-        all_profile_names = sorted(set(profile_gt_labels) | set(profile_pred_labels))
-        prof_name_to_idx = {n: i for i, n in enumerate(all_profile_names)}
-        prof_y_true = np.array([prof_name_to_idx[n] for n in profile_gt_labels])
-        prof_y_pred = np.array([prof_name_to_idx[n] for n in profile_pred_labels])
-        profile_metrics = compute_metrics(prof_y_true, prof_y_pred, all_profile_names, critical_classes=[])
-        print("")
-        print("=" * 60)
-        print("PROFILE CLASSIFICATION")
-        print("=" * 60)
-        print(f"Profile Accuracy: {profile_metrics['accuracy']:.4f}")
-        print(f"Profile Macro F1: {profile_metrics['macro_f1']:.4f}")
-        pc = profile_metrics.get("per_class") or {}
-        if pc:
-            print(f"{'Profile':<30} {'Prec':>8} {'Rec':>8} {'F1':>8} {'N':>6}")
-            for pn in all_profile_names:
-                m = pc.get(pn, {})
-                print(f"{pn:<30} {m.get('precision',0):.4f}   {m.get('recall',0):.4f}   {m.get('f1',0):.4f}   {m.get('support',0):>5}")
+    if pr.profile_gt:
+        profile_metrics, profile_names = profile_classification_metrics(pr.profile_gt, pr.profile_pred)
+        print_profile_metrics(profile_metrics, profile_names)
 
     # Write outputs
     out_dir = Path(args.out_dir) if args.out_dir else (requested_model_path.parent / "history")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    tag = _now_tag()
+    tag = now_tag()
     model_stem = requested_model_path.stem
-    report_path = _unique_path(out_dir / f"batch_report_{model_stem}_{args.split}_{tag}.json")
-    preds_path = _unique_path(out_dir / f"batch_preds_{model_stem}_{args.split}_{tag}.jsonl")
+    report_path = unique_path(out_dir / f"batch_report_{model_stem}_{args.split}_{tag}.json")
+    preds_path = unique_path(out_dir / f"batch_preds_{model_stem}_{args.split}_{tag}.jsonl")
 
-    report = {
+    report: dict[str, Any] = {
         "timestamp": datetime.now().isoformat(),
         "mode": "batch_predict",
         # Persist the *requested* model path for history grouping.
@@ -509,13 +460,11 @@ def main() -> None:
     if profile_metrics is not None:
         report["profile_accuracy"] = profile_metrics["accuracy"]
         report["profile_metrics"] = profile_metrics
-    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    atomic_write_json(report_path, report)
     print(f"\nReport saved to: {report_path}")
 
     if args.save_preds:
-        with open(preds_path, "w", encoding="utf-8") as f:
-            for row in preds_rows:
-                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+        append_jsonl(preds_path, pr.rows)
         print(f"Predictions saved to: {preds_path}")
 
     # Compare to previous rounds (reports)
@@ -523,66 +472,71 @@ def main() -> None:
         compare_dirs = [Path(p.strip()) for p in args.history_dirs.split(",") if p.strip()]
     else:
         compare_dirs = [requested_model_path.parent, requested_model_path.parent / "history"]
+    crit = args.history_critical_class if args.history_metric == "critical_fn_rate" else None
+    hist = history_rows(
+        compare_dirs,
+        scope=args.history_scope,
+        split_mode=args.history_split,
+        metric=args.history_metric,
+        critical_class=crit,
+        model_path=requested_model_path,
+        data_dir=data_dir,
+        split=args.split,
+        exclude_path=report_path,
+    )
+    print_history(hist, scope=args.history_scope, split_mode=args.history_split, metric=args.history_metric, crit=crit, limit=args.history_limit)
 
-    all_prev = load_all_reports(compare_dirs)
-    # Scope filters
-    if args.history_scope == "model":
-        all_prev = [
-            r for r in all_prev
-            if r.get("model_stem") == model_stem or _basename(r.get("model_path")) == requested_model_path.name
-        ]
-    elif args.history_scope == "dataset":
-        all_prev = [r for r in all_prev if r.get("dataset_path") == str(data_dir)]
+    n_mismatch = int(sum(1 for t, p in zip(pr.y_true, pr.y_pred) if t != p))
+    return {
+        "report_path": str(report_path),
+        "preds_path": str(preds_path) if args.save_preds else None,
+        "model_path": str(requested_model_path),
+        "resolved_model_path": report["resolved_model_path"],
+        "dataset_path": str(data_dir),
+        "split": args.split,
+        "n_samples": int(seen),
+        "n_mismatches": n_mismatch,
+        "metrics": {k: metrics.get(k) for k in ("accuracy", "macro_f1", "critical_fn_rates")},
+        "profile_accuracy": report.get("profile_accuracy"),
+        "history_count": len(hist),
+        "history_best": (
+            {"value": hist[0][0], "report": hist[0][1].get("_path")} if hist else None
+        ),
+    }
 
-    if args.history_split == "same":
-        all_prev = [r for r in all_prev if r.get("split") == args.split]
 
-    # Remove the current report itself
-    all_prev = [r for r in all_prev if r.get("_path") != str(report_path)]
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description="Batch predict and evaluate on a dataset split")
+    ap.add_argument("--model", required=True, help="Path to checkpoint (.pt)")
+    ap.add_argument("--data", required=True, help="Dataset dir (has meta.jsonl/labels.jsonl/splits/)")
+    ap.add_argument("--split", default="test", choices=["train", "val", "test", "all"], help="Which split to evaluate")
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--batch-size", type=int, default=None, help="Override batch size (default: from checkpoint.eval.batch_size or 64)")
+    ap.add_argument("--num-workers", type=int, default=None, help="Override num_workers (default: from checkpoint.eval.num_workers or 0)")
+    ap.add_argument("--max-samples", type=int, default=None, help="Optional cap for quick checks")
+    ap.add_argument("--out-dir", default=None, help="Output dir for reports (default: outputs/models/history)")
+    ap.add_argument("--save-preds", action="store_true", help="Write per-sample predictions JSONL")
+    ap.add_argument("--topk", type=int, default=4, help="Top-k probabilities to store if --save-preds")
+    ap.add_argument("--history-scope", default="model", choices=["model", "dataset", "all"],
+                    help="Which previous reports to compare against (default: model)")
+    ap.add_argument("--history-metric", default="macro_f1", choices=["accuracy", "macro_f1", "critical_fn_rate"],
+                    help="Metric to rank reports by")
+    ap.add_argument("--history-critical-class", default="MISALIGNED",
+                    help="Used when --history-metric=critical_fn_rate (default: MISALIGNED)")
+    ap.add_argument("--history-split", default="same", choices=["same", "any"],
+                    help="Compare only same split as current or any split")
+    ap.add_argument("--history-limit", type=int, default=10, help="How many history rows to print")
+    ap.add_argument("--history-dirs", default=None,
+                    help="Comma-separated list of dirs to search for reports (default: outputs/models and outputs/models/history)")
+    ap.add_argument("--profile-model", default=None,
+                    help="Optional path to profile classifier checkpoint (.pt) for two-stage evaluation")
+    add_json_flag(ap)
+    return ap
 
-    key = args.history_metric
-    crit = args.history_critical_class if key == "critical_fn_rate" else None
 
-    rows = []
-    for r in all_prev:
-        v = metric_value(r, key=key, critical_class=crit)
-        if v is None:
-            continue
-        rows.append((v, r))
-
-    # Sorting direction: higher is better except FN rate where lower is better.
-    reverse = True
-    if key == "critical_fn_rate":
-        reverse = False
-    rows.sort(key=lambda t: t[0], reverse=reverse)
-
-    print("\n" + "=" * 60)
-    title = f"HISTORY (scope={args.history_scope}, split={args.history_split}, metric={key}"
-    if crit:
-        title += f", class={crit}"
-    title += ")"
-    print(title)
-    print("=" * 60)
-
-    if not rows:
-        print("No previous reports found for the chosen filters.")
-        return
-
-    limit = max(1, int(args.history_limit))
-    show = rows[:limit]
-
-    # Header
-    print(f"{'rank':>4}  {'value':>8}  {'when':<19}  {'split':<5}  {'seen':>5}  {'ds_total':>7}  {'model':<12}  {'dataset':<12}  {'report'}")
-    for i, (v, r) in enumerate(show, 1):
-        when = r.get("timestamp") or "-"
-        when = when[:19]
-        split = str(r.get("split") or "-")
-        seen_s = str(r.get("seen_samples") or r.get("test_size") or "-")
-        ds_total = str(r.get("dataset_total_samples") or "-")
-        mstem = str(r.get("model_stem") or _basename(r.get("model_path")))
-        dsname = _basename(r.get("dataset_path"))
-        path = str(r.get("_path") or "-")
-        print(f"{i:>4}  {v:>8.4f}  {when:<19}  {split:<5}  {seen_s:>5}  {ds_total:>7}  {mstem:<12.12}  {dsname:<12.12}  {path}")
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    run_cli(COMMAND, lambda: run(args), args.json)
 
 
 if __name__ == "__main__":

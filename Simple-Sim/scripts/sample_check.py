@@ -13,19 +13,111 @@ from __future__ import annotations
 
 import argparse
 import random
-from pathlib import Path
-
-import cv2
-import numpy as np
-import torch
-
 import sys
+from pathlib import Path
+from typing import Any
+
+import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.schema import read_jsonl, MetaRow, LabelRow
-from simple_sim.data_loader import preprocess_bgr
+from simple_sim.cli_utils import UsageError, add_json_flag, run_cli
+from simple_sim.data_loader import load_image_bgr, preprocess_bgr
+from simple_sim.eval_utils import predict_probs
 from simple_sim.models import load_checkpoint_model
+from simple_sim.schema import LabelRow, MetaRow, read_jsonl
+
+
+def choose_samples(
+    data_dir: Path, class_names: list[str], split: str, per_class: int, seed: int
+) -> tuple[list[tuple[str, str]], dict[str, MetaRow]]:
+    """Pick up to *per_class* random sample IDs per class from *split*.
+
+    Returns ``([(sample_id, gt_class), ...] sorted by id, id_to_meta)``.
+    """
+    id_to_meta = {r.id: r for r in read_jsonl(data_dir / "meta.jsonl", MetaRow)}
+    id_to_label = {r.id: r.class_name for r in read_jsonl(data_dir / "labels.jsonl", LabelRow)}
+
+    candidates: dict[str, list[str]] = {c: [] for c in class_names}
+    want_token = f"/{split}/"
+    for sid, cls in id_to_label.items():
+        if want_token in sid and cls in candidates and sid in id_to_meta:
+            candidates[cls].append(sid)
+
+    rng = random.Random(seed)
+    chosen: list[tuple[str, str]] = []
+    for cls in class_names:
+        arr = candidates[cls]
+        rng.shuffle(arr)
+        chosen.extend((sid, cls) for sid in arr[:per_class])
+    # Deterministic order for output readability.
+    chosen.sort(key=lambda t: t[0])
+    return chosen, id_to_meta
+
+
+def sample_check(
+    model_path: Path,
+    data_dir: Path,
+    *,
+    split: str = "test",
+    per_class: int = 5,
+    seed: int = 42,
+    batch_size: int = 32,
+    device: str | torch.device = "cpu",
+) -> dict[str, Any]:
+    """Predict a random per-class sample of *split* and compare with GT.
+
+    Returns ``rows`` (dicts with id/img/gt/pred/ok), ``correct``, ``seen`` and ``accuracy``.
+    """
+    model_path = Path(model_path)
+    data_dir = Path(data_dir)
+    device = torch.device(device)
+
+    model, class_names, _ = load_checkpoint_model(model_path, device)
+    chosen, id_to_meta = choose_samples(data_dir, class_names, split, int(per_class), seed)
+    if not chosen:
+        raise UsageError("No samples found for the requested split/classes.")
+
+    print("Sample Check")
+    print(f"  Model:   {model_path}")
+    print(f"  Dataset: {data_dir}")
+    print(f"  Split:   {split}")
+    print(f"  Per cls: {per_class}")
+    print(f"  Seed:    {seed}")
+    print("")
+
+    rows: list[dict[str, Any]] = []
+    bs = max(1, int(batch_size))
+    for start in range(0, len(chosen), bs):
+        batch = chosen[start:start + bs]
+        x = torch.stack(
+            [preprocess_bgr(load_image_bgr(data_dir / id_to_meta[sid].image_path)) for sid, _ in batch]
+        ).to(device)
+        pred_idx = predict_probs(model, x).argmax(axis=1)
+        for (sid, gt), pi in zip(batch, pred_idx, strict=True):
+            pred = class_names[int(pi)]
+            rows.append({"id": sid, "img": Path(id_to_meta[sid].image_path).name, "gt": gt, "pred": pred, "ok": pred == gt})
+
+    correct = sum(r["ok"] for r in rows)
+    seen = len(rows)
+    return {
+        "model_path": str(model_path),
+        "dataset_path": str(data_dir),
+        "split": split,
+        "rows": rows,
+        "correct": correct,
+        "seen": seen,
+        "accuracy": correct / max(1, seen),
+    }
+
+
+def print_sample_check(result: dict[str, Any]) -> None:
+    """Human-readable table + summary of :func:`sample_check`."""
+    print(f"{'id':<34} {'img':<12} {'gt':<10} {'pred':<10} {'ok'}")
+    for r in result["rows"]:
+        print(f"{r['id']:<34} {r['img']:<12} {r['gt']:<10} {r['pred']:<10} {str(r['ok'])}")
+    print("")
+    print(f"Summary: {result['correct']}/{result['seen']} correct  (acc={result['accuracy']:.4f})")
 
 
 def main() -> None:
@@ -37,99 +129,19 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42, help="Sampling RNG seed")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    add_json_flag(ap)
     args = ap.parse_args()
 
-    model_path = Path(args.model)
-    data_dir = Path(args.data)
-    device = torch.device(args.device)
+    def run() -> dict[str, Any]:
+        result = sample_check(
+            Path(args.model), Path(args.data), split=args.split, per_class=args.per_class,
+            seed=args.seed, batch_size=args.batch_size, device=args.device,
+        )
+        print_sample_check(result)
+        return result
 
-    model, class_names, _ = load_checkpoint_model(model_path, device)
-
-    # Load meta/labels and build maps.
-    meta_rows = read_jsonl(data_dir / "meta.jsonl", MetaRow)
-    label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
-    id_to_meta = {r.id: r for r in meta_rows}
-    id_to_label = {r.id: r.class_name for r in label_rows}
-
-    # Collect candidates per class for the requested split.
-    candidates: dict[str, list[str]] = {c: [] for c in class_names}
-    want_token = f"/{args.split}/"
-    for sid, cls in id_to_label.items():
-        if want_token not in sid:
-            continue
-        if cls in candidates and sid in id_to_meta:
-            candidates[cls].append(sid)
-
-    rng = random.Random(args.seed)
-    chosen: list[tuple[str, str]] = []  # (id, gt)
-    for cls in class_names:
-        arr = candidates.get(cls, [])
-        if not arr:
-            continue
-        rng.shuffle(arr)
-        take = min(int(args.per_class), len(arr))
-        for sid in arr[:take]:
-            chosen.append((sid, cls))
-
-    if not chosen:
-        raise SystemExit("No samples found for the requested split/classes.")
-
-    # Deterministic order for output readability.
-    chosen.sort(key=lambda t: t[0])
-
-    print("Sample Check")
-    print(f"  Model:   {model_path}")
-    print(f"  Dataset: {data_dir}")
-    print(f"  Split:   {args.split}")
-    print(f"  Per cls: {args.per_class}")
-    print(f"  Seed:    {args.seed}")
-    print("")
-
-    # Run inference in mini-batches.
-    rows = []
-    correct = 0
-    seen = 0
-
-    bs = max(1, int(args.batch_size))
-    for start in range(0, len(chosen), bs):
-        batch = chosen[start : start + bs]
-        xs = []
-        ids = []
-        gts = []
-        img_names = []
-        for sid, gt in batch:
-            meta = id_to_meta[sid]
-            img_path = data_dir / meta.image_path
-            img_bgr = cv2.imread(str(img_path))
-            if img_bgr is None:
-                raise OSError(f"Failed to load image: {img_path}")
-            xs.append(preprocess_bgr(img_bgr))
-            ids.append(sid)
-            gts.append(gt)
-            img_names.append(Path(meta.image_path).name)
-
-        x = torch.stack(xs, dim=0).to(device)
-        with torch.no_grad():
-            logits = model(x)
-            pred_idx = torch.argmax(logits, dim=1).detach().cpu().numpy()
-
-        for sid, gt, img_name, pi in zip(ids, gts, img_names, pred_idx):
-            pred = class_names[int(pi)]
-            ok = pred == gt
-            rows.append((sid, img_name, gt, pred, ok))
-            seen += 1
-            correct += 1 if ok else 0
-
-    # Print table
-    print(f"{'id':<34} {'img':<12} {'gt':<10} {'pred':<10} {'ok'}")
-    for sid, img_name, gt, pred, ok in rows:
-        print(f"{sid:<34} {img_name:<12} {gt:<10} {pred:<10} {str(ok)}")
-
-    acc = correct / max(1, seen)
-    print("")
-    print(f"Summary: {correct}/{seen} correct  (acc={acc:.4f})")
+    run_cli("sample_check", run, args.json)
 
 
 if __name__ == "__main__":
     main()
-

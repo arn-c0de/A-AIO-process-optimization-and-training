@@ -14,6 +14,7 @@ Testing/prototyping repository for AOI/AI concepts, focused on reproducible pipe
 ## Quick Links
 
 - Main project: [`Simple-Sim`](Simple-Sim/README.md)
+- AI agent guide: [`Simple-Sim/AGENTS.md`](Simple-Sim/AGENTS.md)
 - Documentation index: [`Simple-Sim/docs/INDEX.md`](Simple-Sim/docs/INDEX.md)
 - Latest arena report: [`Simple-Sim/ARENA_REPORT.md`](Simple-Sim/ARENA_REPORT.md)
 - Training logs index: [`Simple-Sim/docs/training_logs/INDEX.md`](Simple-Sim/docs/training_logs/INDEX.md)

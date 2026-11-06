@@ -1,98 +1,149 @@
 #!/usr/bin/env python3
 """Evaluate trained model on frozen test set."""
 
+from __future__ import annotations
+
 import argparse
 import sys
-import json
-from pathlib import Path
 from datetime import datetime
-import time
+from pathlib import Path
+from typing import Any
+
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
-from tqdm import tqdm
-import numpy as np
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ROIDataset
+from simple_sim.eval_utils import (
+    checkpoint_eval_config,
+    checkpoint_val_accuracy,
+    dataset_profile,
+    eval_loader,
+    metrics_summary,
+    print_checkpoint_info,
+    print_distribution,
+    resolve_bundle_checkpoint,
+    run_inference,
+)
+from simple_sim.io_utils import atomic_write_json
+from simple_sim.manifest import check_checkpoint_profile
 from simple_sim.metrics import check_success_criteria, compute_metrics, format_metrics
 from simple_sim.models import load_checkpoint_model
 from simple_sim.telemetry import emit
-from simple_sim.manifest import check_checkpoint_profile, read_dataset_manifest, resolve_dataset_profile
-from simple_sim.model_bundle import bundle_checkpoint_path
 
 
-def evaluate(model, loader, device, class_names, critical_classes=None):
-    """Evaluate model on test set.
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    class_names: list[str],
+    critical_classes: list[str] | None = None,
+) -> tuple[dict[str, Any], int]:
+    """Evaluate *model* on *loader*; return ``(metrics, num_samples)``."""
+    res = run_inference(model, loader, device, desc="Evaluating", event="eval_batch")
+    metrics = compute_metrics(res.y_true, res.y_pred, class_names, critical_classes=critical_classes)
+    return metrics, res.num_samples
 
-    Args:
-        model: Neural network model
-        loader: DataLoader
-        device: Device (cuda/cpu)
-        class_names: List of class names
 
-    Returns:
-        Metrics dictionary
+def run_eval(
+    data_dir: Path,
+    model_path: Path,
+    device: str | torch.device = "cpu",
+    *,
+    allow_profile_mismatch: bool = False,
+) -> dict[str, Any]:
+    """Evaluate a checkpoint, ensemble or bundle dir on the dataset's test split.
+
+    ``report_<stem>.json`` is written next to the *requested* model path (for a bundle dir:
+    next to the dir, not the resolved checkpoint inside it), which is where
+    batch_predict / arena_report look it up.
+
+    Returns a summary dict (report path, metrics, success-criteria result, ...).
     """
-    model.eval()
+    data_dir = Path(data_dir)
+    requested_model_path = model_path = Path(model_path)
+    device = torch.device(device)
 
-    all_preds = []
-    all_labels = []
-    ema_ips = None
-    num_samples = 0
+    print("Evaluation configuration:")
+    print(f"  Dataset: {data_dir}")
+    print(f"  Model: {model_path}")
+    print(f"  Device: {device}")
 
-    with torch.no_grad():
-        progress = tqdm(loader, desc='Evaluating')
-        last_img = None
-        for batch in progress:
-            if len(batch) == 4:
-                images, labels, _, image_paths = batch
-                last_img = image_paths[-1]
-            elif len(batch) == 3:
-                images, labels, _ = batch
-            else:
-                images, labels = batch
-
-            t0 = time.perf_counter()
-            images = images.to(device)
-            labels = labels.to(device)
-
-            outputs = model(images)
-
-            dt = max(1e-9, time.perf_counter() - t0)
-            bs = int(images.shape[0])
-            num_samples += bs
-            ips = bs / dt
-            ema_ips = ips if ema_ips is None else (0.9 * ema_ips + 0.1 * ips)
-            postfix = {'img/s': f'{ema_ips:.1f}'}
-            if last_img is not None:
-                postfix['last_img'] = str(last_img).split('/')[-1]
-            progress.set_postfix(postfix)
-            emit(
-                "eval_batch",
-                img_per_s=float(ema_ips),
-                last_image_path=str(last_img) if last_img is not None else None,
-                batch_size=int(images.shape[0]),
-            )
-
-            # Collect predictions
-            _, predicted = torch.max(outputs, 1)
-            all_preds.extend(predicted.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-
-    # Compute metrics
-    metrics = compute_metrics(
-        np.array(all_labels),
-        np.array(all_preds),
-        class_names,
-        critical_classes=critical_classes
+    dataset_profile_id, dataset_profile_hash = dataset_profile(data_dir)
+    # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
+    model_path = resolve_bundle_checkpoint(
+        model_path, dataset_profile_id, hint="Train this profile into the bundle first."
     )
 
-    return metrics, num_samples
+    print("\nLoading model checkpoint (single model or ensemble)...")
+    model, class_names, checkpoint = load_checkpoint_model(model_path, device)
+    print_checkpoint_info(checkpoint)
+
+    # GUARD: Validate component profile match
+    ckpt_profile_id = check_checkpoint_profile(
+        checkpoint, dataset_profile_id, dataset_profile_hash,
+        action="evaluate model on",
+        allow_mismatch=bool(allow_profile_mismatch),
+        override_verb="Evaluating",
+    )
+    if ckpt_profile_id is not None:
+        print(f"  Profile: {ckpt_profile_id}")
+
+    emit("eval_start", dataset_dir=str(data_dir), model_path=str(model_path), device=str(device))
+
+    print("\nLoading test dataset...")
+    test_dataset = ROIDataset(data_dir, 'test', class_names, return_id=True)
+    print(f"Test samples: {len(test_dataset)}")
+    test_dist = test_dataset.get_class_distribution()
+    print_distribution("Test class distribution", test_dist)
+
+    print("\n" + "=" * 60)
+    print("EVALUATION ON TEST SET")
+    print("=" * 60)
+
+    critical_classes = checkpoint_eval_config(checkpoint).get('critical_classes')
+    metrics, seen = evaluate(
+        model, eval_loader(test_dataset, checkpoint), device, class_names, critical_classes=critical_classes
+    )
+
+    print("\n" + format_metrics(metrics, class_names))
+    print(f"\nSeen samples: {seen}")
+    emit("eval_done", seen_samples=int(seen), accuracy=float(metrics["accuracy"]), macro_f1=float(metrics["macro_f1"]))
+
+    resolved_model_path = str(model_path) if model_path != requested_model_path else None
+    report = {
+        'timestamp': datetime.now().isoformat(),
+        'dataset_path': str(data_dir),
+        'model_path': str(requested_model_path),
+        'resolved_model_path': resolved_model_path,
+        'split': 'test',
+        'metrics': metrics,
+        'test_size': len(test_dataset),
+        'seen_samples': int(seen),
+        'class_distribution': test_dist,
+    }
+    report_path = requested_model_path.parent / f'report_{requested_model_path.stem}.json'
+    atomic_write_json(report_path, report)
+    print(f"\nReport saved to: {report_path}")
+
+    passed = check_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="class")
+    return {
+        "model_path": str(requested_model_path),
+        "resolved_model_path": resolved_model_path,
+        "dataset_path": str(data_dir),
+        "report_path": str(report_path),
+        "test_size": len(test_dataset),
+        "seen_samples": int(seen),
+        **metrics_summary(metrics),
+        "success_criteria_passed": passed,
+    }
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description='Evaluate trained model on test set')
     parser.add_argument('--data', type=str, required=True, help='Path to dataset directory')
     parser.add_argument('--model', type=str, required=True, help='Path to trained model checkpoint')
@@ -105,123 +156,13 @@ def main():
         ),
     )
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                       help='Device (cuda/cpu)')
-
+                        help='Device (cuda/cpu)')
+    add_json_flag(parser)
     args = parser.parse_args()
 
-    data_dir = Path(args.data)
-    model_path = Path(args.model)
-    device = torch.device(args.device)
-
-    print("Evaluation configuration:")
-    print(f"  Dataset: {data_dir}")
-    print(f"  Model: {model_path}")
-    print(f"  Device: {device}")
-
-    # GUARD: Load dataset manifest
-    manifest_path = data_dir / 'dataset_manifest.json'
-    if not manifest_path.exists():
-        raise FileNotFoundError(
-            f"Dataset manifest not found: {manifest_path}\n"
-            f"This dataset was created before profile support.\n"
-            f"Regenerate or use backfill tool:\n"
-            f"  .venv/bin/python tools/backfill_manifest.py --data {data_dir}"
-        )
-
-    manifest = read_dataset_manifest(manifest_path)
-    dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
-
-    # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
-    if model_path.exists() and model_path.is_dir():
-        resolved = bundle_checkpoint_path(model_path, dataset_profile_id, kind="best")
-        if not resolved.exists():
-            raise FileNotFoundError(
-                f"Multi-model bundle has no checkpoint for profile '{dataset_profile_id}':\n"
-                f"  bundle: {model_path}\n"
-                f"  expected: {resolved}\n"
-                f"Train this profile into the bundle first."
-            )
-        model_path = resolved
-
-    # Load checkpoint (single model or ensemble)
-    print("\nLoading model checkpoint...")
-    model, class_names, checkpoint = load_checkpoint_model(model_path, device)
-
-    print(f"  Classes: {class_names}")
-    print(f"  Trained epoch: {checkpoint.get('epoch', '-')}")
-    print(f"  Val accuracy: {float(checkpoint.get('val_accuracy') or 0.0):.4f}")
-    print(f"  Val F1: {float(checkpoint.get('val_f1') or 0.0):.4f}")
-
-    # GUARD: Validate component profile match
-    ckpt_profile_id = check_checkpoint_profile(
-        checkpoint, dataset_profile_id, dataset_profile_hash,
-        action="evaluate model on",
-        allow_mismatch=bool(args.allow_profile_mismatch),
-        override_verb="Evaluating",
-    )
-    if ckpt_profile_id is not None:
-        print(f"  Profile: {ckpt_profile_id}")
-
-    emit("eval_start", dataset_dir=str(data_dir), model_path=str(model_path), device=str(device))
-
-    # Load test dataset
-    print("\nLoading test dataset...")
-    test_dataset = ROIDataset(data_dir, 'test', class_names, return_id=True)
-    print(f"Test samples: {len(test_dataset)}")
-
-    test_dist = test_dataset.get_class_distribution()
-    print("\nTest class distribution:")
-    for class_name, count in test_dist.items():
-        print(f"  {class_name}: {count}")
-
-    # Create data loader
-    # Ensemble checkpoints carry no top-level config; fall back to sane defaults.
-    eval_cfg = (checkpoint.get('config') or {}).get('eval') or {}
-    batch_size = int(eval_cfg.get('batch_size', 64))
-    num_workers = eval_cfg.get('num_workers', 0)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-
-    # Evaluate
-    print("\n" + "="*60)
-    print("EVALUATION ON TEST SET")
-    print("="*60)
-
-    critical_classes = eval_cfg.get('critical_classes')
-    metrics, seen = evaluate(model, test_loader, device, class_names, critical_classes=critical_classes)
-
-    # Print formatted metrics
-    print("\n" + format_metrics(metrics, class_names))
-    print(f"\nSeen samples: {seen}")
-    emit(
-        "eval_done",
-        seen_samples=int(seen),
-        accuracy=float(metrics["accuracy"]),
-        macro_f1=float(metrics["macro_f1"]),
-    )
-
-    # Save report next to the *requested* model path (a bundle dir resolves to a checkpoint
-    # inside it); batch_predict/arena_report look the report up by that path.
-    requested_model_path = Path(args.model)
-    report = {
-        'timestamp': datetime.now().isoformat(),
-        'dataset_path': str(data_dir),
-        'model_path': str(requested_model_path),
-        'resolved_model_path': str(model_path) if model_path != requested_model_path else None,
-        'split': 'test',
-        'metrics': metrics,
-        'test_size': len(test_dataset),
-        'seen_samples': int(seen),
-        'class_distribution': test_dist
-    }
-
-    report_path = requested_model_path.parent / f'report_{requested_model_path.stem}.json'
-    with open(report_path, 'w') as f:
-        json.dump(report, f, indent=2)
-
-    print(f"\nReport saved to: {report_path}")
-
-    # Check success criteria
-    check_success_criteria(float(checkpoint.get('val_accuracy') or 0.0), metrics, entity="class")
+    run_cli("eval", lambda: run_eval(
+        Path(args.data), Path(args.model), args.device, allow_profile_mismatch=args.allow_profile_mismatch,
+    ), args.json)
 
 
 if __name__ == '__main__':

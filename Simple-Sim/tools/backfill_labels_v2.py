@@ -9,14 +9,18 @@ Usage:
     .venv/bin/python tools/backfill_labels_v2.py --data outputs/sim_data/runs/run_0001
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-from simple_sim.schema import LabelRow, read_jsonl, write_jsonl
-from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
+from simple_sim.cli_utils import add_json_flag, run_cli  # noqa: E402
+from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile  # noqa: E402
+from simple_sim.schema import LabelRow, read_jsonl, write_jsonl  # noqa: E402
 
 
 def backfill_labels(data_dir: Path) -> int:
@@ -79,15 +83,13 @@ def backfill_labels(data_dir: Path) -> int:
     return filled
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill labels.jsonl to v2 with profile_id")
     parser.add_argument("--data", required=True, help="Path to dataset directory")
+    add_json_flag(parser)
     args = parser.parse_args()
 
-    try:
-        backfill_labels(Path(args.data))
-    except (FileNotFoundError, ValueError) as exc:
-        raise SystemExit(f"ERROR: {exc}") from exc
+    run_cli("backfill-labels", lambda: {"dataset": args.data, "rows_filled": backfill_labels(Path(args.data))}, args.json)
 
 
 if __name__ == "__main__":

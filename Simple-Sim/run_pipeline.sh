@@ -5,6 +5,8 @@ set -e  # Exit on error
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
+# shellcheck source=tools/_common.sh
+source "${SCRIPT_DIR}/tools/_common.sh"
 
 # Ensure torch/torchvision caches are writable (pretrained weights, etc.).
 export TORCH_HOME="${TORCH_HOME:-${SCRIPT_DIR}/outputs/torch_cache}"
@@ -24,36 +26,9 @@ DATA_DIR="${DATA_DIR:-outputs/sim_data/runs/run_0001}"
 MODEL_PATH="${MODEL_PATH:-outputs/models/run_0001.pt}"
 DATASET_MODE="${DATASET_MODE:-new}"
 
-# Virtualenv bootstrap (non-interactive).
-#
-# Network-free installs:
-#   export WHEELHOUSE=/path/to/wheels
-#   ./run_pipeline.sh
-VENV_DIR="${VENV_DIR:-.venv}"
-PYTHON="${VENV_DIR}/bin/python"
-
-if [[ ! -x "${PYTHON}" ]]; then
-    echo "Creating venv at ${VENV_DIR}"
-    python3 -m venv "${VENV_DIR}"
-fi
-
-PIP_FLAGS=()
-if [[ -n "${WHEELHOUSE:-}" ]]; then
-    PIP_FLAGS+=(--no-index --find-links "${WHEELHOUSE}")
-fi
-if [[ -n "${PIP_FLAGS_EXTRA:-}" ]]; then
-    # shellcheck disable=SC2206
-    PIP_FLAGS+=(${PIP_FLAGS_EXTRA})
-fi
-
-echo "Installing dependencies from requirements.txt"
-if ! "${PYTHON}" -m pip install "${PIP_FLAGS[@]}" -r requirements.txt; then
-    echo ""
-    echo "Dependency install failed."
-    echo "If you are offline, set WHEELHOUSE to a directory of pre-downloaded wheels:"
-    echo "  WHEELHOUSE=/path/to/wheelhouse ./run_pipeline.sh"
-    exit 1
-fi
+# Virtualenv bootstrap (non-interactive): creates ${VENV_DIR:-.venv} and installs requirements.
+# Network-free installs: WHEELHOUSE=/path/to/wheels ./run_pipeline.sh
+sim_bootstrap_venv
 
 # Step 1: Generate dataset
 echo "============================================================"

@@ -1,8 +1,11 @@
 """Configuration loading and validation."""
 
-import yaml
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from simple_sim.config_schema import parse_config_typed
 
@@ -42,7 +45,7 @@ def load_config(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     if config is None:
@@ -162,7 +165,7 @@ def validate_tolerances(cfg: dict[str, Any]) -> None:
 # Private helpers
 # ---------------------------------------------------------------------------
 
-def _validate_run(cfg: dict[str, Any]):
+def _validate_run(cfg: dict[str, Any]) -> tuple[int, str]:
     """Validate run section; return (schema_version, mode)."""
     if 'run' not in cfg:
         raise ValueError("Missing required section: run")

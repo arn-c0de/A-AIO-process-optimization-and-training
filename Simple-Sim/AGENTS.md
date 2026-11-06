@@ -1,0 +1,130 @@
+# AGENTS.md - Simple-Sim for AI agents
+
+Synthetic PCB-defect ROI generator + ResNet18 train/eval pipeline. This page is the short,
+machine-oriented guide; humans start with [README.md](README.md).
+
+All commands below run from the `Simple-Sim/` directory.
+
+## Setup
+
+```bash
+python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+# or reuse an existing interpreter that has torch (CPU is fine), torchvision, opencv-python, PyYAML, numpy
+```
+
+Blender is only needed for `render.backend: blender_3d` configs; tkinter only for the GUI
+(`./run.sh`) and the profile editor. Neither is needed for the CLI workflow below.
+
+## Entrypoint: `python -m simple_sim`
+
+```bash
+python -m simple_sim commands            # human-readable list
+python -m simple_sim commands --json     # name, script, description, supports_json, exists
+python -m simple_sim status --json       # profiles, run configs, datasets (+manifest), models, reports
+python -m simple_sim <command> --help    # options of a command
+```
+
+Every other command (`generate`, `validate`, `train`, `eval`, `batch-predict`, `arena-report`, ...)
+runs the matching script in `scripts/` or `tools/` with the same Python and passes all
+arguments through unchanged, so `python -m simple_sim train --data D --out M` equals
+`python scripts/train.py --data D --out M`. `commands --json` is generated from the script
+sources and is the authoritative list.
+
+`status` is tk-free and torch-free; use `--root DIR` to inspect another checkout.
+
+## The `--json` result convention
+
+Commands whose `supports_json` is true accept `--json`. They then print exactly one line,
+the **last line of stdout**:
+
+```
+SIMPLE_SIM_RESULT {"ok": true, "command": "...", ...}
+```
+
+- `ok` (bool) and `command` (str, the `python -m simple_sim` subcommand name, e.g. `batch-predict`) are always present; on failure `error` (str) is set and
+  the exit code is non-zero.
+- All other keys are command-specific - inspect the result line instead of assuming them.
+- Other output (progress, tables) is human-oriented; do not parse it.
+
+Read it back in Python:
+
+```python
+import subprocess, sys
+from simple_sim.cli_utils import parse_result
+
+proc = subprocess.run([sys.executable, "-m", "simple_sim", "validate", "--data", ds, "--json"],
+                      capture_output=True, text=True)
+res = parse_result(proc.stdout)   # dict or None
+```
+
+or in the shell: `... --json | grep '^SIMPLE_SIM_RESULT ' | tail -1 | cut -d' ' -f2-`.
+
+## Typical workflow
+
+```bash
+CFG=configs/run_0001.yaml               # see `status --json` -> run_configs
+DS=outputs/sim_data/runs/run_0001
+M=outputs/models/run_0001.pt
+
+python -m simple_sim generate      --config "$CFG" --out "$DS"            # add --extend to append
+python -m simple_sim validate      --data "$DS" --json
+python -m simple_sim train         --data "$DS" --out "$M" --device cpu --json
+python -m simple_sim eval          --data "$DS" --model "$M" --device cpu --json
+python -m simple_sim batch-predict --data "$DS" --model "$M" --split test --device cpu --json
+python -m simple_sim arena-report  --json
+```
+
+For a quick experiment copy a run config and shrink it: small `classes:` counts (e.g. 4 per
+class), `train.epochs: 1`, `train.pretrained: false` (avoids downloading weights). Write
+scratch outputs outside the repo (e.g. `/tmp/...`); `outputs/` is git-ignored.
+
+Other commands: `generate-profile-dataset` / `train-profile` / `eval-profile` (component
+type classifier), `predict` (single image), `predict-two-stage`, `sample-check`,
+`create-multi-dataset` (merge datasets), `backfill-manifest` / `backfill-labels` (legacy
+datasets), `render-debug-previews`, `update-sample-gallery`.
+
+## Where outputs land
+
+| What | Path |
+|---|---|
+| Datasets | `outputs/sim_data/runs/<run>/` (`meta.jsonl`, `labels.jsonl`, `images/`, `splits/{train,val,test}.txt`, `config.yaml`, `dataset_manifest.json`) |
+| Dataset snapshots | `outputs/sim_data/versions/<name>/<version>/` |
+| Checkpoints | path given to `train --out` (plus `<stem>_last.pt`); multi-profile bundles are `*.bundle/` dirs |
+| Eval report | `report_<model_stem>.json` next to the checkpoint |
+| Batch-predict reports | `<model_dir>/history/batch_report_<stem>_<split>_<timestamp>.json` (or `--out-dir`) |
+| Arena | `outputs/models/arena.json` -> `ARENA_REPORT.md` |
+| Telemetry (optional) | JSONL events at `$SIMPLE_SIM_EVENT_LOG` if set |
+
+The exact report path is also in the command's result line.
+
+## Evaluating results
+
+- **Datasets:** `validate --json` returns `checks` (each `{name, status: pass|fail|warn, detail}`)
+  plus `failed` / `warnings` name lists. `ok` is false iff any check failed.
+- **Models:** report JSON files (`report_*.json`, `batch_report_*.json`) share these keys:
+  `timestamp`, `model_path`, `dataset_path`, `split`, `seen_samples`, and `metrics` with
+  `accuracy`, `macro_f1`, `per_class` (`{class: {precision, recall, f1, support}}`),
+  `confusion_matrix`, `critical_fn_rates` (`{class: fn_rate}`).
+  Batch reports add `mode: "batch_predict"`, `model_stem`, `elapsed_s`, `img_per_s`,
+  `dataset_class_distribution`, `checkpoint_val_accuracy`, ... (and `profile_accuracy` /
+  `profile_metrics` with `--profile-model`).
+- **Comparing runs:** `status --json` -> `reports.latest` and `reports.best_accuracy`; in
+  Python use `simple_sim.reports` (`report_search_dirs`, `load_reports`, `best_report`,
+  `metric_value`).
+- Built-in success criteria (printed by `eval`): test accuracy > 70 %, see `simple_sim/metrics.py`.
+
+## Tests
+
+```bash
+python -m pytest -q --ignore=tests/test_tab_registry.py   # test_tab_registry needs tkinter
+```
+
+`tests/test_pipeline_e2e.py` runs a tiny generate -> validate -> train -> eval on CPU.
+
+## Code map
+
+- `simple_sim/` - library (no CLI side effects). Shared helpers: `io_utils` (atomic writes,
+  JSON), `cli_utils` (`--json` convention), `reports`, `manifest`, `config`, `schema`.
+- `scripts/` - pipeline CLIs; `tools/` - dataset maintenance CLIs, `tools/_common.sh`
+  (venv/python detection for the `*.sh` launchers), `tools/profile_editor/` (Tk GUI).
+- `gui/` - Tk monitor GUI (`./run.sh`). `configs/` - run configs and `profiles/`.
