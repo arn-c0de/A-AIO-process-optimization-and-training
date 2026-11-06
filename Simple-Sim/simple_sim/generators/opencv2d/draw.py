@@ -42,20 +42,30 @@ def _compute_pad_positions(footprint: str, nominal: dict[str, float], img_shape:
 
     if footprint.startswith("qfn"):
         pad_spacing_y = int(nominal["pad_spacing_y"])
+        # qfn_<N>: N/4 pads per side on a span of ~70% of the body edge, plus the exposed thermal pad.
+        try:
+            pins = max(4, int(footprint.split("_", 1)[1]))
+        except (IndexError, ValueError):
+            pins = 32
+        per_side = pins // 4
+        body = int(nominal.get("component_length", pad_spacing))
+        span = 0.7 * body
+        pitch = span / max(1, per_side - 1)
+        across = max(2, int(round(pitch * 0.5)))
         left_x = center_x - pad_spacing // 2 - pad_width // 2
-        left_y = center_y - pad_height // 2
         right_x = center_x + pad_spacing // 2 - pad_width // 2
-        right_y = center_y - pad_height // 2
-        top_x = center_x - pad_height // 2
         top_y = center_y - pad_spacing_y // 2 - pad_width // 2
-        bot_x = center_x - pad_height // 2
         bot_y = center_y + pad_spacing_y // 2 - pad_width // 2
-        return [
-            {"x": left_x, "y": left_y, "w": pad_width, "h": pad_height},
-            {"x": right_x, "y": right_y, "w": pad_width, "h": pad_height},
-            {"x": top_x, "y": top_y, "w": pad_height, "h": pad_width},
-            {"x": bot_x, "y": bot_y, "w": pad_height, "h": pad_width},
-        ]
+        pads: list[dict[str, int]] = []
+        for i in range(per_side):
+            c = int(round(-span / 2.0 + i * pitch))
+            pads.append({"x": left_x, "y": center_y + c - across // 2, "w": pad_width, "h": across})
+            pads.append({"x": right_x, "y": center_y + c - across // 2, "w": pad_width, "h": across})
+            pads.append({"x": center_x + c - across // 2, "y": top_y, "w": across, "h": pad_width})
+            pads.append({"x": center_x + c - across // 2, "y": bot_y, "w": across, "h": pad_width})
+        thermal = int(round(body * 0.6))
+        pads.append({"x": center_x - thermal // 2, "y": center_y - thermal // 2, "w": thermal, "h": thermal})
+        return pads
 
     if footprint == "soic_16":
         comp_w = int(nominal.get("component_width", 0))
@@ -184,16 +194,14 @@ def _draw_solder_bridge(
     cv2.line(img, q0, q1, highlight, max(1, thickness // 4), lineType=cv2.LINE_AA)
 
 
-def _draw_corner_lift(
-    img: np.ndarray,
+def lifted_corner_geometry(
     box: np.ndarray,
     center: tuple[int, int],
     comp_width: int,
-    color: tuple[int, int, int],
     tilt_deg: float,
     selector: int,
-) -> None:
-    """Draw the body with one corner raised: shadow under it, skewed quad, lit corner."""
+) -> dict[str, Any]:
+    """Geometry of a body with one corner raised (shared by flat and photoreal styles)."""
     pts = box.astype(np.float32)
     k = selector % 4
     corner = pts[k]
@@ -213,13 +221,31 @@ def _draw_corner_lift(
     # Contact shadow cast onto the substrate under the lifted corner (light from top-left).
     shadow_shift = diag * lift * 0.9 + np.array([lift * 0.4, lift * 0.4], dtype=np.float32)
     shadow = np.array([corner, mid_prev, mid_next], dtype=np.float32) + shadow_shift
-    _darken_poly(img, np.vstack([shadow, [mid_prev, mid_next]]), 0.5)
+    return {
+        "lifted": lifted,
+        "facet": np.array([lifted[k], mid_prev, mid_next], dtype=np.float32),
+        "shadow": np.vstack([shadow, [mid_prev, mid_next]]),
+    }
 
-    body = np.round(lifted).astype(np.int32)
+
+def _draw_corner_lift(
+    img: np.ndarray,
+    box: np.ndarray,
+    center: tuple[int, int],
+    comp_width: int,
+    color: tuple[int, int, int],
+    tilt_deg: float,
+    selector: int,
+) -> None:
+    """Draw the body with one corner raised: shadow under it, skewed quad, lit corner."""
+    geo = lifted_corner_geometry(box, center, comp_width, tilt_deg, selector)
+    _darken_poly(img, geo["shadow"], 0.5)
+
+    body = np.round(geo["lifted"]).astype(np.int32)
     cv2.fillPoly(img, [body], color)
 
     # Highlight on the raised (tilted towards the light) corner facet.
-    facet = np.round(np.array([lifted[k], mid_prev, mid_next])).astype(np.int32)
+    facet = np.round(geo["facet"]).astype(np.int32)
     bright = tuple(int(min(255, c * 1.45 + 20)) for c in color)
     overlay = img.copy()
     cv2.fillPoly(overlay, [facet], bright)
@@ -228,6 +254,31 @@ def _draw_corner_lift(
 
     edge = tuple(int(min(255, max(0, c * 1.2))) for c in color)
     cv2.polylines(img, [body], True, edge, 1)
+
+
+def body_geometry(
+    nominal: dict[str, float],
+    defect_params: dict[str, Any],
+    tolerances: dict[str, Any] | None,
+    img_shape: tuple[int, int],
+) -> dict[str, Any]:
+    """Resolve body center, size (length, width), rotation and tombstone state from defect params."""
+    h, w = img_shape
+    # round() (not int()) so shifts just past tolerance do not truncate back inside it.
+    cx = w // 2 + int(round(defect_params["shift_x"]))
+    cy = h // 2 + int(round(defect_params["shift_y"]))
+    tilt_deg = abs(defect_params["tilt_deg"])
+    thresh = float(tolerances["tombstone_tilt_deg"]) if tolerances is not None else 75.0
+    # SOLDER_BRIDGE / CORNER_LIFT carry tilt but are never tombstones.
+    is_tombstone = tilt_deg >= thresh and defect_params["type"] not in ("SOLDER_BRIDGE", "CORNER_LIFT")
+    return {
+        "center": (cx, cy),
+        "length": int(nominal["component_length"]),
+        "width": int(nominal["component_width"]),
+        "rotation_deg": float(defect_params["rotation_deg"]),
+        "tilt_deg": tilt_deg,
+        "is_tombstone": is_tombstone,
+    }
 
 
 def draw_component(
@@ -242,31 +293,19 @@ def draw_component(
     if defect_type == "MISSING":
         return
 
-    h, w = img.shape[:2]
-    center_x, center_y = w // 2, h // 2
-
-    # round() (not int()) so shifts just past tolerance do not truncate back inside it.
-    comp_center_x = center_x + int(round(defect_params["shift_x"]))
-    comp_center_y = center_y + int(round(defect_params["shift_y"]))
-
-    tilt_deg = abs(defect_params["tilt_deg"])
-    tombstone_thresh = float(tolerances["tombstone_tilt_deg"]) if tolerances is not None else 75.0
-
-    # SOLDER_BRIDGE / CORNER_LIFT carry tilt but are never tombstones.
-    if tilt_deg >= tombstone_thresh and defect_type not in ("SOLDER_BRIDGE", "CORNER_LIFT"):
-        comp_width = int(nominal["component_width"] * 0.2)
-        comp_height = int(nominal["component_length"] * 1.5)
+    geo = body_geometry(nominal, defect_params, tolerances, img.shape[:2])
+    center = geo["center"]
+    if geo["is_tombstone"]:
+        comp_width = int(geo["width"] * 0.2)
+        comp_height = int(geo["length"] * 1.5)
     else:
-        comp_width = int(nominal["component_width"])
-        comp_height = int(nominal["component_length"])
+        comp_width, comp_height = geo["width"], geo["length"]
 
     rect_size = (comp_height, comp_width)
-    box = cv2.boxPoints(((comp_center_x, comp_center_y), rect_size, defect_params["rotation_deg"]))
+    box = cv2.boxPoints((center, rect_size, geo["rotation_deg"]))
 
     if defect_type == "CORNER_LIFT":
-        _draw_corner_lift(
-            img, box, (comp_center_x, comp_center_y), comp_width, color, tilt_deg, _param_selector(defect_params)
-        )
+        _draw_corner_lift(img, box, center, comp_width, color, geo["tilt_deg"], _param_selector(defect_params))
         return
 
     box = box.astype(np.int32)
@@ -278,6 +317,5 @@ def draw_component(
     if defect_type == "SOLDER_BRIDGE":
         # Drawn on top of the body so a bridge routed along the body edge stays visible.
         _draw_solder_bridge(
-            img, nominal, footprint, (comp_center_x, comp_center_y), rect_size,
-            _param_selector(defect_params), tilt_deg,
+            img, nominal, footprint, center, rect_size, _param_selector(defect_params), geo["tilt_deg"],
         )

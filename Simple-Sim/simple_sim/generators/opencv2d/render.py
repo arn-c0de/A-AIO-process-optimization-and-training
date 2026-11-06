@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from .draw import draw_component, draw_pads, draw_solder, draw_substrate
+from .photoreal import render_photoreal_base
 from .filters import (
     apply_blur,
     apply_brightness,
@@ -41,14 +42,16 @@ def render_roi(
 ) -> np.ndarray:
     """Render complete ROI with defects and augmentation."""
     width, height = roi_size
-    img = np.zeros((height, width, 3), dtype=np.uint8)
-
-    draw_substrate(img, config)
-    draw_pads(img, nominal, tuple(config["copper_color"]), footprint=footprint)
-    draw_solder(img, nominal, footprint=footprint)
-    draw_component(
-        img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances, footprint=footprint
-    )
+    if str(config.get("style", "photoreal")) == "photoreal":
+        img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size)
+    else:
+        img = np.zeros((height, width, 3), dtype=np.uint8)
+        draw_substrate(img, config)
+        draw_pads(img, nominal, tuple(config["copper_color"]), footprint=footprint)
+        draw_solder(img, nominal, footprint=footprint)
+        draw_component(
+            img, nominal, defect_params, tuple(config["component_color"]), tolerances=tolerances, footprint=footprint
+        )
 
     img = apply_blur(img, augment.get("blur_sigma", 0.0))
     img = apply_noise(img, augment.get("noise_stddev", 0.0), rng)
