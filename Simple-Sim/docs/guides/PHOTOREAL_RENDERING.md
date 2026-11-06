@@ -59,7 +59,33 @@ render:
 
 Colours and proportions were taken from macro photos of real boards (dark olive solder mask, traces
 shimmering through the mask, white silkscreen, bright concave fillets, black 0603 resistors with
-white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings).
+white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings). The mask palette also contains the
+brighter, more saturated greens of the production boards (estimated from overview photos).
+
+## Camera model (`render.camera`) and calibration (`tools/calibrate_camera.py`)
+
+Every image (2D and 3D) passes through a camera model: lens blur, uneven illumination, highlight
+roll-off, read + shot noise. Its parameters can be set per run config:
+
+```yaml
+render:
+  camera:
+    blur_sigma: [0.55, 0.95]   # lens blur, Gaussian sigma in camera pixels (sampled per image)
+    read_noise: [1.0, 4.0]     # read noise variance (8-bit levels^2, sampled per image)
+    shot_noise: 0.04           # shot noise variance per intensity level
+```
+
+To fit them to the production camera, put a few hundred real ROIs (same `roi.mm_per_px`, similar
+parts) in a folder, render a synthetic set with the run config and run:
+
+```bash
+python tools/calibrate_camera.py --real data/real_rois --synthetic data/run_0001/images --config configs/run_0001.yaml
+```
+
+It compares edge steepness (relative to contrast) and sensor noise (flat areas) and prints the
+`render.camera` block to use. Re-render and repeat until it reports an extra blur near 0 and a noise
+ratio near 1 (usually one or two rounds). Overview photos taken with a phone are not suitable: they
+have a different scale, optics and lighting than the AOI camera.
 
 ## Measuring the sim-to-real gap (`tools/sim_to_real.py`)
 

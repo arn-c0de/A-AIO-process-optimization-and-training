@@ -31,8 +31,10 @@ _LIGHT /= np.linalg.norm(_LIGHT)
 _HALF = _LIGHT + np.array([0.0, 0.0, 1.0], dtype=np.float32)
 _HALF /= np.linalg.norm(_HALF)
 
-# Solder-mask greens measured on real boards (BGR).
-_MASK_PALETTE = ((44, 86, 34), (50, 96, 40), (38, 76, 30), (56, 104, 46), (48, 90, 42), (42, 82, 38))
+# Solder-mask greens (BGR): dark olive from macro photos of real boards, plus the brighter, more
+# saturated greens (one teal-ish) of the production boards (estimated from photos).
+_MASK_PALETTE = ((44, 86, 34), (50, 96, 40), (38, 76, 30), (56, 104, 46), (48, 90, 42), (42, 82, 38),
+                 (52, 128, 22), (60, 145, 30), (70, 135, 25), (75, 125, 20))
 _SILKSCREEN = np.array((215, 228, 228), dtype=np.float32)
 _SOLDER = np.array((176, 180, 184), dtype=np.float32)
 _FINISHES = {"enig": np.array((70, 165, 205), dtype=np.float32), "hasl": np.array((165, 170, 175), dtype=np.float32)}
@@ -303,21 +305,31 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
 
 # --------------------------------------------------------------------------- camera
 
-def camera_model(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+# Camera model parameters (``render.camera``); tools/calibrate_camera.py fits them to real ROIs.
+CAMERA_DEFAULTS: dict[str, Any] = {
+    "blur_sigma": [0.55, 0.95],  # lens/optics blur (Gaussian sigma in camera pixels), sampled per image
+    "read_noise": [1.0, 4.0],    # read noise variance (8-bit levels^2), sampled per image
+    "shot_noise": 0.04,          # shot noise variance per intensity level
+}
+
+
+def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] | None = None) -> np.ndarray:
     """Turn an ideal render (2D supersampled or 3D) into a camera image. BGR in, uint8 out.
 
     Lens blur, uneven illumination, soft highlight roll-off instead of hard clipping, and
-    signal-dependent sensor noise that is slightly correlated by demosaicing.
+    signal-dependent sensor noise that is slightly correlated by demosaicing. *cfg* overrides
+    :data:`CAMERA_DEFAULTS` (``render.camera``).
     """
+    c = {**CAMERA_DEFAULTS, **(cfg or {})}
     h, w = img.shape[:2]
-    img = cv2.GaussianBlur(img.astype(np.float32), (0, 0), float(rng.uniform(0.55, 0.95)))
+    img = cv2.GaussianBlur(img.astype(np.float32), (0, 0), max(1e-3, float(rng.uniform(*c["blur_sigma"]))))
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     a = float(rng.uniform(0.0, 2.0 * np.pi))
     ramp = ((xx - w / 2.0) * np.cos(a) + (yy - h / 2.0) * np.sin(a)) / max(h, w)
     img *= (1.0 + float(rng.uniform(0.04, 0.12)) * ramp + 0.03 * _smooth_noise((h, w), max(h, w) / 3.0, rng))[..., None]
     knee = 205.0
     img = np.where(img > knee, knee + (255.0 - knee) * (1.0 - np.exp(-(img - knee) / (255.0 - knee))), img)
-    sigma = np.sqrt(float(rng.uniform(1.0, 4.0)) + 0.04 * np.clip(img, 0.0, None))  # read + shot noise
+    sigma = np.sqrt(float(rng.uniform(*c["read_noise"])) + float(c["shot_noise"]) * np.clip(img, 0.0, None))
     noise = rng.normal(0.0, 1.0, img.shape).astype(np.float32)
     noise = cv2.GaussianBlur(noise, (0, 0), 0.5) * 1.6  # demosaic correlation, variance roughly kept
     noise += rng.normal(0.0, 0.35, (h, w, 1)).astype(np.float32)  # luminance-dominated
@@ -678,4 +690,4 @@ def render_photoreal_base(
             _draw_solder_bridge(img8, nom, footprint, (int(cx), int(cy)), (int(length), int(width_px)), selector, geo["tilt_deg"])
             img = img8.astype(np.float32)
 
-    return camera_model(cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA), rng)
+    return camera_model(cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA), rng, config.get("camera"))

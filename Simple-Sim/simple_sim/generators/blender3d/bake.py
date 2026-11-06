@@ -49,5 +49,5 @@ def apply_camera(jobs: list[dict[str, Any]], output_root: Path) -> None:
         if img is None:
             raise OSError(f"Missing Blender output image: {path}")
         rng = np.random.default_rng([int(job.get("seed", 0)), 1])  # own stream, independent of the bake
-        if not cv2.imwrite(str(path), camera_model(img, rng)):
+        if not cv2.imwrite(str(path), camera_model(img, rng, job.get("camera"))):
             raise OSError(f"Failed to write camera-processed image: {path}")

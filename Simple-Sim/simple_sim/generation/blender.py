@@ -50,8 +50,8 @@ def blender_job(
 ) -> dict[str, Any]:
     """One ``render_batch.py`` job from a record with image_path/seed/nominal/defect/augment.
 
-    *bake*: fields for the shared board bake (``component_type``, ``tolerances``, ``texture_dir``),
-    see ``simple_sim.generators.blender3d.bake``.
+    *bake*: fields for the shared board bake and camera model (``component_type``, ``tolerances``,
+    ``texture_dir``, ``camera``), see ``simple_sim.generators.blender3d.bake``.
     """
     return {
         "image_path": record["image_path"],
@@ -138,7 +138,7 @@ def render_blender_records(
     """Render dataset *records* with Blender into ``output_root/images`` and verify the image count."""
     render_cfg = config.get("render") or {}
     bake = {"component_type": str(render_cfg.get("component_type", "")), "texture_dir": render_cfg.get("texture_dir"),
-            "tolerances": tolerances}
+            "tolerances": tolerances, "camera": render_cfg.get("camera")}
     jobs = [
         blender_job(
             r,

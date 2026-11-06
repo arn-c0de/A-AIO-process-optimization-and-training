@@ -269,6 +269,25 @@ def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> 
         _validate_render_3d(render)
     else:
         raise ValueError(f"Unsupported render backend: {backend}")
+    _validate_camera(render.get('camera'))
+
+
+def _validate_camera(camera: Any) -> None:
+    """``render.camera`` (both backends): overrides of the camera model, see photoreal.CAMERA_DEFAULTS."""
+    if camera is None:
+        return
+    from simple_sim.generators.opencv2d.photoreal import CAMERA_DEFAULTS
+
+    if not isinstance(camera, dict) or set(camera) - set(CAMERA_DEFAULTS):
+        raise ValueError(f"render.camera must be a mapping with keys from {sorted(CAMERA_DEFAULTS)}")
+    for key in ('blur_sigma', 'read_noise'):
+        if key in camera:
+            rng = camera[key]
+            if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(v, (int, float)) for v in rng)
+                    and 0 <= rng[0] <= rng[1]):
+                raise ValueError(f"render.camera.{key} must be [min, max] with 0 <= min <= max")
+    if 'shot_noise' in camera and not (isinstance(camera['shot_noise'], (int, float)) and camera['shot_noise'] >= 0):
+        raise ValueError("render.camera.shot_noise must be a number >= 0")
 
 
 def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
