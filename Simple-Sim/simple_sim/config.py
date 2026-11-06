@@ -318,6 +318,10 @@ def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
     if render.get('style', 'photoreal') not in RENDER_STYLES:
         raise ValueError(f"render.style must be one of {sorted(RENDER_STYLES)}")
 
+    rework = render.get('rework_artifacts')
+    if rework is not None and not (isinstance(rework, (int, float)) and 0 <= rework <= 1):
+        raise ValueError("render.rework_artifacts must be a probability in [0, 1]")
+
     texture_dir = render.get('texture_dir')
     if texture_dir is not None:
         from simple_sim.generators.opencv2d.photoreal import texture_files

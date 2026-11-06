@@ -20,6 +20,7 @@ deterministic per seed.
 |---|---|
 | Substrate | Solder-mask colour sampled from a palette measured on photos of the production boards (teal-green), resin mottling, fibre weave, sensor grain |
 | Copper under mask | Copper pours (large planes with 45° chamfers, clearance around the part), 1-3 autorouted traces with 45° jogs, traces leaving pads, 0-12 vias (mostly tented). Brightness ratio mask-over-copper / mask-over-laminate measured on the photos |
+| Residue | In `render.rework_artifacts` of the samples (default 0.3, 0 = clean): amber flux residue with a dried rim, smeared yellow contamination (colour and width measured on a board photo), thin patch wires (white or enamel) with shadow. Always outside the inspected part, so the label is unaffected: the model learns to ignore it |
 | Neighbour parts | 0-6 chip resistors/capacitors around the inspected part (pads, fillets, bodies), sized from its pads, at 0/90°, possibly cut by the ROI border, never in its keep-out |
 | Silkscreen | In 55 % of samples: white footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`), placed around the *nominal* footprint so it never moves with a defect |
 | Pads | Mask-defined opening with dark rim, ENIG (gold) or HASL (silver) finish visible at the pad edge. Large (thermal) pads without a part show window-pane stencil islands |

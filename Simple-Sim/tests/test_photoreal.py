@@ -124,3 +124,23 @@ def test_tombstone_tilt_spans_threshold_to_upright():
     assert min(tilts) < 35.0 and max(tilts) > 85.0
     assert all(classify_defect({}, {"type": "TOMBSTONE", "shift_x": 0.0, "shift_y": 0.0, "rotation_deg": 0.0,
                                     "tilt_deg": t}, tol) == "TOMBSTONE" for t in tilts)
+
+
+def test_rework_residue_stays_out_of_the_keepout():
+    import cv2
+
+    from simple_sim.generators.opencv2d.photoreal import _rework
+
+    img = np.full((256, 256, 3), 100.0, dtype=np.float32)
+    keepout = (96, 112, 160, 144)
+    for seed in range(20):
+        _rework(img, keepout, 20.0, np.random.default_rng(seed), 1.0)
+    x0, y0, x1, y1 = keepout
+    assert np.all(img[y0:y1, x0:x1] == 100.0)  # label-relevant area untouched
+    assert np.abs(img - 100.0).max() > 20      # but residue was drawn elsewhere
+
+
+def test_rework_can_be_disabled():
+    a = _render("chip_2pad", "OK", seed=3, rework_artifacts=0.0)
+    b = _render("chip_2pad", "OK", seed=3, rework_artifacts=0.0)
+    assert np.array_equal(a, b)
