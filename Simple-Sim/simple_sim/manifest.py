@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from simple_sim import __version__ as _VERSION
+from simple_sim.io_utils import atomic_write_json
 
 
 def hash_file(file_path: Path) -> str:
@@ -67,14 +68,6 @@ def _compute_class_counts(label_rows: list[Any]) -> dict[str, int]:
     for row in label_rows:
         counts[row.class_name] = counts.get(row.class_name, 0) + 1
     return counts
-
-
-def _atomic_json_write(path: Path, obj: Any) -> None:
-    """Write JSON to *path* atomically via a .tmp rename."""
-    temp_path = path.with_suffix('.tmp')
-    with open(temp_path, 'w') as f:
-        json.dump(obj, f, indent=2)
-    temp_path.replace(path)
 
 
 def write_dataset_manifest(
@@ -190,7 +183,7 @@ def write_dataset_manifest(
             }]
         }
 
-    _atomic_json_write(manifest_path, manifest)
+    atomic_write_json(manifest_path, manifest)
     print(f"✓ Dataset manifest written: {manifest_path}")
 
 
@@ -443,5 +436,5 @@ def write_multi_profile_manifest(
         }],
     }
 
-    _atomic_json_write(manifest_path, manifest)
+    atomic_write_json(manifest_path, manifest)
     print(f"✓ Multi-profile dataset manifest written: {manifest_path}")

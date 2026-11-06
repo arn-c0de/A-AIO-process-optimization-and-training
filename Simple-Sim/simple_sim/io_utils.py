@@ -1,0 +1,112 @@
+"""Small, dependency-free file/format helpers shared by scripts, tools and the GUI.
+
+Everything here is pure stdlib so it can be imported anywhere (no torch/cv2/tk).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Iterable
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write *text* to *path* atomically (write ``<name>.tmp`` then rename)."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def atomic_write_json(path: Path, obj: Any, *, indent: int = 2) -> None:
+    """Serialize *obj* as JSON and write it to *path* atomically."""
+    atomic_write_text(path, json.dumps(obj, indent=indent, ensure_ascii=True) + "\n")
+
+
+def read_json(path: Path, default: Any = None) -> Any:
+    """Return parsed JSON from *path*, or *default* if missing/unreadable/invalid."""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    """Append dict rows to a JSONL file (one JSON object per line)."""
+    with open(path, "a", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
+def now_tag() -> str:
+    """Filesystem-safe timestamp tag with microseconds (``YYYYmmdd_HHMMSS_ffffff``)."""
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+
+def unique_path(p: Path) -> Path:
+    """Return *p* if it does not exist, else ``<stem>_NNN<suffix>`` that does not exist."""
+    p = Path(p)
+    if not p.exists():
+        return p
+    for i in range(1, 10000):
+        cand = p.parent / f"{p.stem}_{i:03d}{p.suffix}"
+        if not cand.exists():
+            return cand
+    return p.parent / f"{p.stem}_{time.time_ns()}{p.suffix}"
+
+
+def format_bytes(n: int, decimals: int = 2) -> str:
+    """Human-readable byte count (``1.50 MB``); negative values show as ``0 B``."""
+    try:
+        v = float(max(0, int(n)))
+    except (TypeError, ValueError):
+        return str(n)
+    units = ["B", "KB", "MB", "GB", "TB"]
+    u = 0
+    while v >= 1024.0 and u < len(units) - 1:
+        v /= 1024.0
+        u += 1
+    if u == 0:
+        return f"{int(v)} {units[u]}"
+    return f"{v:.{decimals}f} {units[u]}"
+
+
+def path_size_bytes(p: Path) -> int:
+    """On-disk size of a file, or the recursive size of a directory (symlinks skipped)."""
+    p = Path(p)
+    try:
+        if p.is_file():
+            return int(p.stat().st_size)
+        if not p.is_dir():
+            return 0
+    except OSError:
+        return 0
+    total = 0
+    for root, _dirs, files in os.walk(str(p)):
+        for fn in files:
+            fp = Path(root) / fn
+            try:
+                if not fp.is_symlink():
+                    total += int(fp.stat().st_size)
+            except OSError:
+                continue
+    return total
+
+
+def rel_to(root: Path, p: Path) -> str:
+    """Path of *p* relative to *root* as string, or the absolute path if outside."""
+    try:
+        return str(Path(p).resolve().relative_to(Path(root).resolve()))
+    except (OSError, ValueError):
+        return str(p)
+
+
+def parse_iso_ts(s: Any) -> float:
+    """Parse an ISO timestamp to epoch seconds; ``0.0`` if unparseable."""
+    try:
+        return datetime.fromisoformat(str(s)).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
