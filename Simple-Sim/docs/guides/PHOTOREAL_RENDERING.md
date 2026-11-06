@@ -71,16 +71,30 @@ although it reads as green) and of pour vs. laminate areas.
 
 ## Camera model (`render.camera`) and calibration (`tools/calibrate_camera.py`)
 
-Every image (2D and 3D) passes through a camera model: lens blur, uneven illumination, highlight
-roll-off, read + shot noise. Its parameters can be set per run config:
+Every image (2D and 3D) passes through a camera model: viewing geometry, lens blur, uneven
+illumination, highlight roll-off, read + shot noise, optionally phone-style sharpening and JPEG.
+Two presets, every value can be overridden (ranges are sampled per image):
 
 ```yaml
 render:
   camera:
-    blur_sigma: [0.55, 0.95]   # lens blur, Gaussian sigma in camera pixels (sampled per image)
-    read_noise: [1.0, 4.0]     # read noise variance (8-bit levels^2, sampled per image)
+    preset: aoi                # aoi (default): fixed top-down AOI camera | phone: handheld phone photos
+    blur_sigma: [0.55, 0.95]   # lens blur, Gaussian sigma in camera pixels
+    read_noise: [1.0, 4.0]     # read noise variance (8-bit levels^2)
     shot_noise: 0.04           # shot noise variance per intensity level
+    tilt_deg: [0, 0]           # oblique view (0-60)
+    zoom: [1, 1]               # >= 1: farther away, the part appears this much smaller (more board around it)
+    defocus: [0, 0]            # extra blur towards the near/far edge of a tilted view (depth of field)
+    sharpen: [0, 0]            # phone ISP sharpening (unsharp mask amount)
+    jpeg_quality: [100, 100]   # < 95 compresses
 ```
+
+`preset: phone` sets `tilt_deg: [5, 40]`, `zoom: [1, 2.5]`, `blur_sigma: [0.8, 1.6]`,
+`defocus: [0.5, 2.5]`, `read_noise: [4, 16]`, `shot_noise: 0.08`, `sharpen: [0.3, 0.8]`,
+`jpeg_quality: [70, 92]`; `configs/run_0001_phone.yaml` is `run_0001` with this preset. 2D renders a
+larger board area for zoomed-out/oblique views (more neighbour parts) and projects it; the Blender
+backend tilts its camera and widens its view accordingly. The part always stays centred, so labels
+are unchanged.
 
 To fit them to the production camera, put a few hundred real ROIs (same `roi.mm_per_px`, similar
 parts) in a folder, render a synthetic set with the run config and run:

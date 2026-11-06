@@ -402,25 +402,93 @@ def _draw_excess(img: np.ndarray, base: np.ndarray, family: str, pads: list[dict
 
 # --------------------------------------------------------------------------- camera
 
-# Camera model parameters (``render.camera``); tools/calibrate_camera.py fits them to real ROIs.
+# Camera model parameters (``render.camera``); tools/calibrate_camera.py fits the AOI ones to real ROIs.
+# Ranges are sampled per image.
 CAMERA_DEFAULTS: dict[str, Any] = {
-    "blur_sigma": [0.55, 0.95],  # lens/optics blur (Gaussian sigma in camera pixels), sampled per image
-    "read_noise": [1.0, 4.0],    # read noise variance (8-bit levels^2), sampled per image
-    "shot_noise": 0.04,          # shot noise variance per intensity level
+    "blur_sigma": [0.55, 0.95],    # lens/optics blur (Gaussian sigma in camera pixels)
+    "read_noise": [1.0, 4.0],      # read noise variance (8-bit levels^2)
+    "shot_noise": 0.04,            # shot noise variance per intensity level
+    "tilt_deg": [0.0, 0.0],        # oblique view: angle between optical axis and board normal
+    "zoom": [1.0, 1.0],            # >1: camera farther away, the part appears this much smaller
+    "defocus": [0.0, 0.0],         # extra blur (sigma) at the far/near edge of a tilted view (depth of field)
+    "sharpen": [0.0, 0.0],         # phone ISP edge sharpening (unsharp mask amount)
+    "jpeg_quality": [100, 100],    # < 95 compresses
+}
+# ``render.camera.preset``: a fixed AOI camera (default) or handheld phone photos.
+CAMERA_PRESETS: dict[str, dict[str, Any]] = {
+    "aoi": {},
+    "phone": {"tilt_deg": [5.0, 40.0], "zoom": [1.0, 2.5], "blur_sigma": [0.8, 1.6], "defocus": [0.5, 2.5],
+              "read_noise": [4.0, 16.0], "shot_noise": 0.08, "sharpen": [0.3, 0.8], "jpeg_quality": [70, 92]},
 }
 
 
-def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] | None = None) -> np.ndarray:
+def camera_settings(cfg: dict[str, Any] | None) -> dict[str, Any]:
+    """Effective camera parameters: defaults < preset < explicit ``render.camera`` keys."""
+    cfg = dict(cfg or {})
+    return {**CAMERA_DEFAULTS, **CAMERA_PRESETS[str(cfg.pop("preset", "aoi"))], **cfg}
+
+
+def sample_camera_pose(cam: dict[str, Any], rng: np.random.Generator) -> dict[str, float]:
+    """Viewing geometry for one image: tilt (deg), its azimuth in the image (deg), zoom."""
+    return {"tilt": float(rng.uniform(*cam["tilt_deg"])), "azimuth": float(rng.uniform(0.0, 360.0)),
+            "zoom": float(rng.uniform(*cam["zoom"]))}
+
+
+def view_canvas(size: tuple[int, int], pose: dict[str, float]) -> tuple[int, int]:
+    """Board area to render so that *size* is still covered after zooming out and foreshortening."""
+    grow = pose["zoom"] / max(np.cos(np.radians(pose["tilt"])), 0.5) * (1.1 if pose["tilt"] > 0 else 1.0)
+    return int(np.ceil(size[0] * grow)), int(np.ceil(size[1] * grow))
+
+
+def apply_view(img: np.ndarray, pose: dict[str, float], size: tuple[int, int]) -> np.ndarray:
+    """Look at a top-down render of the board (from :func:`view_canvas`) from farther away and at an angle.
+
+    The board plane is tilted by ``pose['tilt']`` about an in-plane axis perpendicular to
+    ``pose['azimuth']`` and projected with a pinhole camera; the output is centred on the part.
+    """
+    width, height = size
+    z = pose["zoom"]
+    small = cv2.resize(img, (max(1, int(round(img.shape[1] / z))), max(1, int(round(img.shape[0] / z)))),
+                       interpolation=cv2.INTER_AREA) if z > 1.0 else img
+    sh, sw = small.shape[:2]
+    if pose["tilt"] <= 0.0 and (sw, sh) == (width, height):
+        return small
+    t, a = np.radians(pose["tilt"]), np.radians(pose["azimuth"])
+    d = np.array([np.cos(a), np.sin(a)])                              # tilt direction in the image
+    corners = np.array([[0, 0], [sw, 0], [sw, sh], [0, sh]], dtype=np.float64) - [sw / 2.0, sh / 2.0]
+    along, across = corners @ d, corners @ np.array([-d[1], d[0]])
+    dist = 4.0 * max(width, height)                                   # pinhole distance: mild keystone
+    depth = along * np.sin(t)                                         # towards the camera on one side
+    scale = dist / (dist - depth)
+    proj = (np.outer(along * np.cos(t), d) + np.outer(across, [-d[1], d[0]])) * scale[:, None]
+    dst = (proj + [width / 2.0, height / 2.0]).astype(np.float32)
+    m = cv2.getPerspectiveTransform((corners + [sw / 2.0, sh / 2.0]).astype(np.float32), dst)
+    return cv2.warpPerspective(small, m, (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+
+
+def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] | None = None,
+                 pose: dict[str, float] | None = None) -> np.ndarray:
     """Turn an ideal render (2D supersampled or 3D) into a camera image. BGR in, uint8 out.
 
-    Lens blur, uneven illumination, soft highlight roll-off instead of hard clipping, and
-    signal-dependent sensor noise that is slightly correlated by demosaicing. *cfg* overrides
-    :data:`CAMERA_DEFAULTS` (``render.camera``).
+    Lens blur (plus depth-of-field falloff along the tilt of an oblique *pose*), uneven
+    illumination, soft highlight roll-off instead of hard clipping, signal-dependent sensor noise
+    that is slightly correlated by demosaicing, and for phones ISP sharpening and JPEG.
+    *cfg* is ``render.camera`` (see :func:`camera_settings`).
     """
-    c = {**CAMERA_DEFAULTS, **(cfg or {})}
+    c = camera_settings(cfg)
     h, w = img.shape[:2]
-    img = cv2.GaussianBlur(img.astype(np.float32), (0, 0), max(1e-3, float(rng.uniform(*c["blur_sigma"]))))
+    img = img.astype(np.float32)
+    sigma0 = max(1e-3, float(rng.uniform(*c["blur_sigma"])))
+    blurred = cv2.GaussianBlur(img, (0, 0), sigma0)
+    defocus = float(rng.uniform(*c["defocus"]))
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    if pose is not None and pose["tilt"] > 0.0 and defocus > 0.0:
+        a = np.radians(pose["azimuth"])  # focus on the part; sharpness falls off towards near/far edge
+        off = np.abs((xx - w / 2.0) * np.cos(a) + (yy - h / 2.0) * np.sin(a)) / (0.5 * max(h, w))
+        weight = np.clip(off * np.sin(np.radians(pose["tilt"])) / np.sin(np.radians(40.0)), 0.0, 1.0)[..., None]
+        far = cv2.GaussianBlur(img, (0, 0), float(np.hypot(sigma0, defocus)))
+        blurred = blurred * (1.0 - weight) + far * weight
+    img = blurred
     a = float(rng.uniform(0.0, 2.0 * np.pi))
     ramp = ((xx - w / 2.0) * np.cos(a) + (yy - h / 2.0) * np.sin(a)) / max(h, w)
     img *= (1.0 + float(rng.uniform(0.04, 0.12)) * ramp + 0.03 * _smooth_noise((h, w), max(h, w) / 3.0, rng))[..., None]
@@ -430,7 +498,15 @@ def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] 
     noise = rng.normal(0.0, 1.0, img.shape).astype(np.float32)
     noise = cv2.GaussianBlur(noise, (0, 0), 0.5) * 1.6  # demosaic correlation, variance roughly kept
     noise += rng.normal(0.0, 0.35, (h, w, 1)).astype(np.float32)  # luminance-dominated
-    return _clip8(img + sigma * noise)
+    img = img + sigma * noise
+    amount = float(rng.uniform(*c["sharpen"]))
+    if amount > 0.0:
+        img = img + amount * (img - cv2.GaussianBlur(img, (0, 0), 1.2))
+    out = _clip8(img)
+    quality = int(round(float(rng.uniform(*c["jpeg_quality"]))))
+    if quality < 95:
+        out = cv2.imdecode(cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, quality])[1], cv2.IMREAD_COLOR)
+    return out
 
 
 # --------------------------------------------------------------------------- component body
@@ -582,6 +658,18 @@ def _draw_body(img: np.ndarray, family: str, center: tuple[float, float], length
 _THICKNESS_RATIO = 0.55  # body height / width of chip parts (0603: 0.45 / 0.8)
 
 
+def _draw_body_local(img: np.ndarray, family: str, center: tuple[float, float], length: float, width: float,
+                     angle_deg: float, base_color: np.ndarray, rng: np.random.Generator, *, marks: bool = True) -> None:
+    """:func:`_draw_body` on just the part's window (cost independent of the canvas size)."""
+    h, w = img.shape[:2]
+    r = 0.6 * float(np.hypot(length, width)) + 2 * SS
+    x0, y0 = max(0, int(center[0] - r)), max(0, int(center[1] - r))
+    x1, y1 = min(w, int(center[0] + r) + 1), min(h, int(center[1] + r) + 1)
+    if x1 > x0 and y1 > y0:
+        _draw_body(img[y0:y1, x0:x1], family, (center[0] - x0, center[1] - y0), length, width, angle_deg, base_color, rng,
+                   marks=marks)
+
+
 def _tombstone_pose(geo: dict[str, Any], selector: int, img_shape: tuple[int, int]) -> dict[str, Any]:
     """Part raised on one end, pivoting about the bottom edge of its anchored end.
 
@@ -655,11 +743,12 @@ def _pad_ref(pads: list[dict[str, int]]) -> float:
 
 
 def _neighbours(pads: list[dict[str, int]], keepout: tuple[int, int, int, int], shape: tuple[int, int],
-                rng: np.random.Generator) -> list[dict[str, Any]]:
+                rng: np.random.Generator, crowd: float = 1.0) -> list[dict[str, Any]]:
     """Small chip parts around the inspected one: real ROIs are densely populated.
 
     Sized from the target's pads (a neighbour is about a chip with pads of that size, so it fits
     every package), at 0 or 90 degrees, possibly cut by the ROI border, never in the keep-out.
+    *crowd*: rendered area relative to the ROI (zoomed-out views show proportionally more parts).
     """
     h, w = shape
     ref = 2.2 * _pad_ref(pads)
@@ -667,7 +756,7 @@ def _neighbours(pads: list[dict[str, int]], keepout: tuple[int, int, int, int], 
     gap = 0.35 * ref
     taken = [(x0 - gap, y0 - gap, x1 + gap, y1 + gap)]
     parts: list[dict[str, Any]] = []
-    for _ in range(int(rng.integers(0, 7))):
+    for _ in range(int(rng.integers(0, int(round(6 * crowd)) + 1))):
         length = float(rng.uniform(0.6, 1.1)) * ref
         width = length * float(rng.uniform(0.45, 0.6))
         vertical = bool(rng.random() < 0.5)
@@ -708,7 +797,7 @@ def _draw_neighbours(img: np.ndarray, base: np.ndarray, parts: list[dict[str, An
     _contact_shadow(img, mask, 0.35, 3 * SS)
     dark = np.array((20, 20, 20), dtype=np.float32)
     for p in parts:
-        _draw_body(img, p["family"], p["center"], p["length"], p["width"], p["angle"], dark, rng, marks=False)
+        _draw_body_local(img, p["family"], p["center"], p["length"], p["width"], p["angle"], dark, rng, marks=False)
 
 
 REWORK_PROBABILITY = 0.3  # default share of images with rework residue (``render.rework_artifacts``)
@@ -788,7 +877,7 @@ def _rework(img: np.ndarray, keepout: tuple[int, int, int, int], ref: float, rng
 
 
 def _board(nom: dict[str, float], footprint: str, family: str, shape: tuple[int, int], config: dict[str, Any],
-           rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, list[dict[str, int]], np.ndarray]:
+           rng: np.random.Generator, crowd: float = 1.0) -> tuple[np.ndarray, np.ndarray, list[dict[str, int]], np.ndarray]:
     """Board around the inspected part at supersampled *shape*: substrate, copper, silkscreen and
     populated neighbour parts. Returns (float image, mask colour, target pads, pad finish colour).
 
@@ -810,7 +899,7 @@ def _board(nom: dict[str, float], footprint: str, family: str, shape: tuple[int,
         _traces_and_vias(img, base, pads, keepout, rng)
     _silkscreen(img, keepout, family, rng)
     finish = _FINISHES["enig" if rng.random() < 0.5 else "hasl"] * float(rng.uniform(0.92, 1.06))
-    _draw_neighbours(img, base, _neighbours(pads, keepout, (h, w), rng), finish, rng)
+    _draw_neighbours(img, base, _neighbours(pads, keepout, (h, w), rng, crowd), finish, rng)
     _rework(img, keepout, _pad_ref(pads), rng, float(config.get("rework_artifacts", REWORK_PROBABILITY)))
     return img, base, pads, finish
 
@@ -831,6 +920,7 @@ def render_board(
     rng: np.random.Generator,
     footprint: str,
     size: tuple[int, int],
+    crowd: float = 1.0,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Board texture (substrate, copper, silkscreen, bare pad finish) for the 3D backend, plus the scene layout.
 
@@ -843,7 +933,7 @@ def render_board(
     h, w = height * SS, width * SS
     nom, dp = _scaled(nominal, defect_params)
     family = _family(footprint, str(config.get("component_type", "")))
-    img, base, pads, finish = _board(nom, footprint, family, (h, w), config, rng)
+    img, base, pads, finish = _board(nom, footprint, family, (h, w), config, rng, crowd)
     _pads_and_solder(img, base, pads, np.zeros((h, w), dtype=np.uint8), rng, finish, with_solder=False)
     if dp["type"] == "SOLDER_BRIDGE":  # flat solder between neighbouring pads
         geo = body_geometry(nom, dp, tolerances, (h, w))
@@ -887,14 +977,17 @@ def render_photoreal_base(
     roi_size: tuple[int, int],
 ) -> np.ndarray:
     """Render substrate + pads + solder + component for *defect_params* at *roi_size* (BGR uint8)."""
-    width, height = roi_size
+    view_pose = sample_camera_pose(camera_settings(config.get("camera")), rng)
+    canvas = view_canvas(roi_size, view_pose)  # larger board area for a zoomed-out / oblique view
+    width, height = canvas
     h, w = height * SS, width * SS
     nom, dp = _scaled(nominal, defect_params)
     family = _family(footprint, str(config.get("component_type", "")))
     base_color = np.array(config.get("component_color", (20, 20, 20)), dtype=np.float32)
     defect_type = dp["type"]
 
-    img, base, pads, finish = _board(nom, footprint, family, (h, w), config, rng)
+    crowd = canvas[0] * canvas[1] / float(roi_size[0] * roi_size[1])
+    img, base, pads, finish = _board(nom, footprint, family, (h, w), config, rng, crowd)
     geo = body_geometry(nom, dp, tolerances, (h, w))
     length, width_px = float(geo["length"]), float(geo["width"])
     cx, cy = geo["center"]
@@ -921,7 +1014,7 @@ def render_photoreal_base(
         _contact_shadow(img, body_mask, 0.35, 3 * SS)
         if family in ("sot", "soic"):
             _leads(img, pads, (float(cx), float(cy)), length, width_px, geo["rotation_deg"], rng)
-        _draw_body(img, family, (float(cx), float(cy)), length, width_px, geo["rotation_deg"], base_color, rng)
+        _draw_body_local(img, family, (float(cx), float(cy)), length, width_px, geo["rotation_deg"], base_color, rng)
         if defect_type == "CORNER_LIFT":
             lift = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector)
             extra = np.zeros((h, w), dtype=np.uint8)
@@ -939,4 +1032,5 @@ def render_photoreal_base(
         _draw_excess(img, base, family, pads, solder["excess"], (float(cx), float(cy)), length, width_px, geo["rotation_deg"])
         _draw_solder_balls(img, base, solder["balls"])
 
-    return camera_model(cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA), rng, config.get("camera"))
+    view = apply_view(cv2.resize(img, canvas, interpolation=cv2.INTER_AREA), view_pose, roi_size)
+    return camera_model(view, rng, config.get("camera"), view_pose)

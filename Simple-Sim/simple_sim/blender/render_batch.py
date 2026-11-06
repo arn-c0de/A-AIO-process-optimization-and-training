@@ -9,7 +9,7 @@ Each JSONL job carries the usual sample fields (``image_path``, ``seed``, ``mm_p
 
   "board": {"texture": "<png>", "scale": 2, "family": "resistor|capacitor|sot|soic|qfn",
             "pads": [[cx, cy, w, h], ...], "thermal_pad": index | null,
-            "excess": [pad index, ...], "balls": [[x, y, r], ...],
+            "excess": [pad index, ...], "balls": [[x, y, r], ...], "pose": {"tilt", "azimuth", "zoom"},
             "body": null | {"center": [x, y], "length", "width", "rotation_deg", "tilt_deg",
                             "is_tombstone", "raised_sign"}}
 
@@ -429,10 +429,15 @@ def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engi
     bpy.ops.object.camera_add(location=loc)
     cam = bpy.context.active_object
     cam.data.type = "ORTHO"
-    cam.data.ortho_scale = roi_mm
+    pose = board.get("pose") or {"tilt": 0.0, "azimuth": 0.0, "zoom": 1.0}
+    cam.data.ortho_scale = roi_mm * float(pose["zoom"])  # zoomed out: farther away (render.camera.zoom)
     cam.data.clip_end = 1000.0
     look = cam_cfg.get("look_at_mm")
     look = Vector(tuple(float(v) for v in look)) if isinstance(look, (list, tuple)) and len(look) == 3 else Vector()
+    if float(pose["tilt"]) > 0.0:  # oblique view (render.camera.tilt_deg); azimuth is in image coords (y down)
+        t, a = math.radians(float(pose["tilt"])), math.radians(float(pose["azimuth"]))
+        dist = max((Vector(loc) - look).length, 1.0)
+        cam.location = look + Vector((math.sin(t) * math.cos(a), -math.sin(t) * math.sin(a), math.cos(t))) * dist
     _look_at(cam, look)
     bpy.context.scene.camera = cam
 

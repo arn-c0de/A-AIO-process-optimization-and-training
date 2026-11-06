@@ -32,7 +32,7 @@ only models what needs real 3D: solder fillets, part bodies, leads, lighting.
 | Part | Body box (height from `component.nominal_dims_mm.height`, capped at the real package's height/width ratio). Resistor: metal end caps + printed value code. Capacitor (`component.type` contains `cap`): tan ceramic + end caps. SOT/SOIC/QFN: mold body with fine speckle, pin-1 dot, laser marking; SOT/SOIC get gull-wing leads to every pad |
 | Defects | Same semantics as 2D: shift/rotation, `MISSING`, `TOMBSTONE` (body pivots about the bottom edge of its anchored end; from above you see the steep top face and the upright end cap, `tolerances.tombstone_tilt_deg`), `SOLDER_BRIDGE` (baked into the board), `SOLDER_BALL` (solder spheres), `EXCESS_SOLDER` (convex, higher fillet meshes); ball positions and affected pads come from the same layout function as in 2D. `CORNER_LIFT` renders like a flat part |
 | Light | AOI rig around the camera axis, invisible to the camera: low-angle ring light (emissive torus; highlights on slopes and edges) plus a diffuse top light (emissive disc; makes flat metal such as solder tops and upright end caps bright), dim ambient |
-| Camera | Orthographic, framed exactly to the ROI, top-down by default |
+| Camera | Orthographic, framed exactly to the ROI, top-down by default; with `render.camera` tilt/zoom (e.g. `preset: phone`) the bake samples the view, Blender tilts the camera and widens it, and the baked board grows to cover it |
 | Orientation | `augment.rotation_deg` (cardinal 0/90/180/270 + jitter) rotates the whole scene, like the 2D image rotation |
 
 ## Profile settings (`render_3d`)

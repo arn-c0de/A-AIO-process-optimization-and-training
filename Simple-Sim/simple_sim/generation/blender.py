@@ -138,7 +138,8 @@ def render_blender_records(
     """Render dataset *records* with Blender into ``output_root/images`` and verify the image count."""
     render_cfg = config.get("render") or {}
     bake = {"component_type": str(render_cfg.get("component_type", "")), "texture_dir": render_cfg.get("texture_dir"),
-            "tolerances": tolerances, "camera": render_cfg.get("camera")}
+            "tolerances": tolerances, "camera": render_cfg.get("camera"),
+            "rework_artifacts": render_cfg.get("rework_artifacts", 0.3)}
     jobs = [
         blender_job(
             r,

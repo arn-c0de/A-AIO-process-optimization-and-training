@@ -13,9 +13,9 @@ from typing import Any
 import cv2
 import numpy as np
 
-from simple_sim.generators.opencv2d.photoreal import camera_model, render_board
+from simple_sim.generators.opencv2d.photoreal import camera_model, camera_settings, render_board, sample_camera_pose
 
-BOARD_SCALE = 2  # baked board covers 2x the ROI, so global rotations never reveal its edge
+BOARD_SCALE = 2  # baked board covers at least 2x the ROI, so global rotations never reveal its edge
 
 
 def profile_job_fields(profile: dict[str, Any]) -> dict[str, Any]:
@@ -25,19 +25,27 @@ def profile_job_fields(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def prepare_jobs(jobs: list[dict[str, Any]], work_dir: Path) -> list[dict[str, Any]]:
-    """Bake one board texture per job into *work_dir* and add the ``board`` scene description."""
+    """Bake one board texture per job into *work_dir* and add the ``board`` scene description.
+
+    The camera view (``render.camera``: tilt, zoom) is sampled here, so Blender can place its camera
+    and the baked board is large enough for a zoomed-out, oblique, rotated view.
+    """
     work_dir.mkdir(parents=True, exist_ok=True)
     prepared = []
     for i, job in enumerate(jobs):
         w, h = int(job["roi_width_px"]), int(job["roi_height_px"])
-        config = {"component_type": job.get("component_type", ""), "texture_dir": job.get("texture_dir")}
-        rng = np.random.default_rng(int(job.get("seed", 0)))
-        texture, scene = render_board(job["nominal"], job["defect"], config, job.get("tolerances"), rng,
-                                      str(job.get("footprint", "chip_2pad")), (w * BOARD_SCALE, h * BOARD_SCALE))
+        config = {"component_type": job.get("component_type", ""), "texture_dir": job.get("texture_dir"),
+                  "rework_artifacts": job.get("rework_artifacts", 0.3)}
+        seed = int(job.get("seed", 0))
+        pose = sample_camera_pose(camera_settings(job.get("camera")), np.random.default_rng([seed, 2]))
+        scale = max(float(BOARD_SCALE), 1.5 * pose["zoom"] / max(np.cos(np.radians(pose["tilt"])), 0.5))
+        texture, scene = render_board(job["nominal"], job["defect"], config, job.get("tolerances"),
+                                      np.random.default_rng(seed), str(job.get("footprint", "chip_2pad")),
+                                      (int(np.ceil(w * scale)), int(np.ceil(h * scale))), crowd=scale * scale)
         path = (work_dir / f"board_{i:06d}.png").resolve()
         if not cv2.imwrite(str(path), texture):
             raise OSError(f"Failed to write board texture: {path}")
-        prepared.append({**job, "board": {"texture": str(path), "scale": BOARD_SCALE, **scene}})
+        prepared.append({**job, "board": {"texture": str(path), "scale": scale, "pose": pose, **scene}})
     return prepared
 
 
@@ -49,5 +57,6 @@ def apply_camera(jobs: list[dict[str, Any]], output_root: Path) -> None:
         if img is None:
             raise OSError(f"Missing Blender output image: {path}")
         rng = np.random.default_rng([int(job.get("seed", 0)), 1])  # own stream, independent of the bake
-        if not cv2.imwrite(str(path), camera_model(img, rng, job.get("camera"))):
+        pose = (job.get("board") or {}).get("pose")
+        if not cv2.imwrite(str(path), camera_model(img, rng, job.get("camera"), pose)):
             raise OSError(f"Failed to write camera-processed image: {path}")

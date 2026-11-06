@@ -273,19 +273,25 @@ def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> 
 
 
 def _validate_camera(camera: Any) -> None:
-    """``render.camera`` (both backends): overrides of the camera model, see photoreal.CAMERA_DEFAULTS."""
+    """``render.camera`` (both backends): preset and overrides of the camera model (photoreal.CAMERA_DEFAULTS)."""
     if camera is None:
         return
-    from simple_sim.generators.opencv2d.photoreal import CAMERA_DEFAULTS
+    from simple_sim.generators.opencv2d.photoreal import CAMERA_DEFAULTS, CAMERA_PRESETS
 
-    if not isinstance(camera, dict) or set(camera) - set(CAMERA_DEFAULTS):
-        raise ValueError(f"render.camera must be a mapping with keys from {sorted(CAMERA_DEFAULTS)}")
-    for key in ('blur_sigma', 'read_noise'):
-        if key in camera:
-            rng = camera[key]
-            if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(v, (int, float)) for v in rng)
-                    and 0 <= rng[0] <= rng[1]):
-                raise ValueError(f"render.camera.{key} must be [min, max] with 0 <= min <= max")
+    if not isinstance(camera, dict) or set(camera) - set(CAMERA_DEFAULTS) - {'preset'}:
+        raise ValueError(f"render.camera must be a mapping with keys from {sorted(set(CAMERA_DEFAULTS) | {'preset'})}")
+    if camera.get('preset', 'aoi') not in CAMERA_PRESETS:
+        raise ValueError(f"render.camera.preset must be one of {sorted(CAMERA_PRESETS)}")
+    limits = {'tilt_deg': 60.0, 'jpeg_quality': 100.0}
+    for key, default in CAMERA_DEFAULTS.items():
+        if key not in camera or not isinstance(default, list):
+            continue
+        rng = camera[key]
+        if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(v, (int, float)) for v in rng)
+                and 0 <= rng[0] <= rng[1] <= limits.get(key, float('inf'))):
+            raise ValueError(f"render.camera.{key} must be [min, max] with 0 <= min <= max <= {limits.get(key, 'inf')}")
+    if 'zoom' in camera and camera['zoom'][0] < 1:
+        raise ValueError("render.camera.zoom must be >= 1 (1 = profile scale, larger = farther away)")
     if 'shot_noise' in camera and not (isinstance(camera['shot_noise'], (int, float)) and camera['shot_noise'] >= 0):
         raise ValueError("render.camera.shot_noise must be a number >= 0")
 

@@ -172,3 +172,25 @@ def test_flat_style_draws_solder_defects():
     ok = _render("chip_2pad", "OK", seed=4, style="flat")
     ball = _render("chip_2pad", "SOLDER_BALL", seed=4, style="flat")
     assert np.abs(ok.astype(int) - ball).sum() > 0
+
+
+def test_phone_camera_preset():
+    from simple_sim.config import _validate_camera
+    from simple_sim.generators.opencv2d.photoreal import apply_view, camera_settings, view_canvas
+
+    _validate_camera({"preset": "phone", "tilt_deg": [10.0, 30.0]})
+    cam = camera_settings({"preset": "phone", "jpeg_quality": [90, 90]})
+    assert cam["tilt_deg"] == [5.0, 40.0] and cam["jpeg_quality"] == [90, 90]
+    # AOI default: no extra canvas, view is the identity
+    flat = {"tilt": 0.0, "azimuth": 0.0, "zoom": 1.0}
+    assert view_canvas((128, 96), flat) == (128, 96)
+    img = np.random.default_rng(0).integers(0, 255, (96, 128, 3)).astype(np.uint8)
+    assert np.array_equal(apply_view(img, flat, (128, 96)), img)
+    # Zoomed out + oblique: larger canvas, output at ROI size
+    pose = {"tilt": 40.0, "azimuth": 30.0, "zoom": 2.0}
+    cw, ch = view_canvas((128, 96), pose)
+    assert cw > 2 * 128 and ch > 2 * 96
+    assert apply_view(np.zeros((ch, cw, 3), np.uint8), pose, (128, 96)).shape == (96, 128, 3)
+    phone = _render("chip_2pad", "OK", seed=2, camera={"preset": "phone"})
+    assert phone.shape == (128, 128, 3)
+    assert not np.array_equal(phone, _render("chip_2pad", "OK", seed=2))

@@ -38,7 +38,8 @@ def render_blender_batch(
     work_dir = output_root / "_board_textures"
     jobs = [json.loads(line) for line in jobs_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     prepared_path = work_dir / "jobs_prepared.jsonl"
-    write_jobs_jsonl(prepared_path, prepare_jobs(jobs, work_dir))
+    prepared = prepare_jobs(jobs, work_dir)
+    write_jobs_jsonl(prepared_path, prepared)
 
     cmd = [
         blender_executable,
@@ -72,4 +73,4 @@ def render_blender_batch(
         shutil.rmtree(work_dir, ignore_errors=True)
     if result.returncode != 0:
         raise RuntimeError(f"Blender batch render failed (exit code {result.returncode}). Command: {cmd}")
-    apply_camera(jobs, output_root)
+    apply_camera(prepared, output_root)
