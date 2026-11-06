@@ -14,6 +14,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import re
 import shutil
 import sys
 from collections import defaultdict
@@ -25,13 +27,16 @@ import cv2
 import numpy as np
 import yaml
 
-# Ensure project imports work
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from gui.components.overlay_renderer import draw_defect_overlay
-from simple_sim.config import load_config, validate_config
-from simple_sim.defects import sample_defect_params
-from simple_sim.generators.opencv_2d import render_roi, sample_nominal_geometry
-from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from gui.components.overlay_renderer import draw_defect_overlay  # noqa: E402
+from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
+from simple_sim.config import load_config, validate_config  # noqa: E402
+from simple_sim.defects import sample_defect_params  # noqa: E402
+from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl  # noqa: E402
+from simple_sim.generators.opencv_2d import render_roi, sample_nominal_geometry  # noqa: E402
+from simple_sim.io_utils import atomic_write_text  # noqa: E402
 
 # Standard defect classes for PCB components
 STANDARD_CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
@@ -48,10 +53,11 @@ def read_profile(profile_path: Path) -> dict:
     """Load profile YAML and return its contents."""
     try:
         with open(profile_path, encoding="utf-8") as f:
-            return yaml.safe_load(f)
-    except Exception as e:
+            data = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
         print(f"  Error reading {profile_path}: {e}")
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def get_profile_id(profile: dict) -> str:
@@ -75,7 +81,6 @@ def get_render_backend(profile: dict) -> str:
 
 def _stable_int_seed(*parts: str) -> int:
     # Deterministic per (profile_id, class, backend) without depending on Python's hash randomization.
-    import hashlib
     s = "|".join(str(p) for p in parts)
     h = hashlib.sha256(s.encode("utf-8")).hexdigest()
     return int(h[:12], 16)
@@ -101,7 +106,7 @@ def _find_matching_run_cfg(
         try:
             cfg = load_config(cfg_path)
             validate_config(cfg)
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError):
             continue
         if str(cfg.get("run", {}).get("component_profile", "")) != str(profile_id):
             continue
@@ -242,7 +247,6 @@ def _collect_existing_entries(
     return out
 
 
-import re
 def generate_slug(text: str) -> str:
     s = text.lower().strip()
     s = re.sub(r'[^\w\s-]', '', s) # Remove all non-word chars (except whitespace and hyphen)
@@ -267,9 +271,20 @@ def main() -> None:
     parser.add_argument("--skip-2d", action="store_true", help="Do not generate 2D gallery images")
     parser.add_argument("--skip-3d", action="store_true", help="Do not generate 3D gallery images")
     parser.add_argument("--dry-run", action="store_true", help="Only write SAMPLE_GALLERY.md entries, do not render images")
+    add_json_flag(parser)
     args = parser.parse_args()
+    try:
+        _run(args)
+    except SystemExit as exc:
+        if args.json and isinstance(exc.code, str):
+            print(exc.code, file=sys.stderr)
+            emit_result("update-sample-gallery", ok=False, error=exc.code)
+            raise SystemExit(1) from exc
+        raise
 
-    project_root = Path(__file__).resolve().parent.parent
+
+def _run(args: argparse.Namespace) -> None:
+    project_root = ROOT
     profiles_dir = (project_root / args.profiles_dir).resolve()
     configs_dir = (project_root / args.configs_dir).resolve()
     gallery_dir = (project_root / args.out_images_dir).resolve()
@@ -277,8 +292,7 @@ def main() -> None:
 
     profiles = discover_profiles(profiles_dir)
     if not profiles:
-        print(f"No profiles found in {profiles_dir}")
-        sys.exit(1)
+        raise SystemExit(f"No profiles found in {profiles_dir}")
 
     print(f"Found {len(profiles)} profile(s)")
 
@@ -296,7 +310,6 @@ def main() -> None:
     # Optional ROI override parsing
     roi_override: tuple[int, int, float] | None = None
     if args.roi:
-        import re
         m = re.match(r"^\s*(\d+)x(\d+)@([0-9]*\.?[0-9]+)\s*$", str(args.roi))
         if not m:
             raise SystemExit(f"Invalid --roi format: {args.roi!r} (expected WIDTHxHEIGHT@MM_PER_PX)")
@@ -498,10 +511,21 @@ def main() -> None:
             content_lines.append("")
 
     final_lines = header_lines + ["## Table of Contents", ""] + toc_lines + [""] + content_lines
-    gallery_md.write_text("\n".join(final_lines) + "\n", encoding="utf-8")
+    atomic_write_text(gallery_md, "\n".join(final_lines) + "\n")
     print(f"\n✓ Gallery written to {gallery_md}")
     print(f"✓ Images in {gallery_dir}")
     print(f"✓ Total samples: {len(entries)}")
+    if args.json:
+        emit_result(
+            "update-sample-gallery",
+            {
+                "gallery_md": str(gallery_md),
+                "images_dir": str(gallery_dir),
+                "total_samples": len(entries),
+                "profiles": sorted({e[0] for e in entries}),
+                "dry_run": bool(args.dry_run),
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,10 @@ Seeds must be stable across platforms and Python versions, and must not depend
 on values that are assigned after rendering (e.g., train/val/test split).
 """
 
+from __future__ import annotations
+
 import hashlib
+from typing import Any
 
 
 def derive_sample_seed(run_seed: int, domain: str, index: int) -> int:
@@ -50,7 +53,7 @@ def make_sample_id(run_id: str, domain: str, split: str, index: int) -> str:
     return f"{run_id}/{domain}/{split}/{index:06d}"
 
 
-def parse_sample_id(sample_id: str) -> tuple:
+def parse_sample_id(sample_id: str) -> tuple[str, str, str, int]:
     """Parse sample ID back into components.
 
     Args:
@@ -73,7 +76,7 @@ def parse_sample_id(sample_id: str) -> tuple:
     return run_id, domain, split, index
 
 
-def resolve_train_seed(config: dict) -> int:
+def resolve_train_seed(config: dict[str, Any]) -> int:
     """Return the training seed: train.seed if set, else run.seed, else 0."""
     train_seed = (config.get('train') or {}).get('seed')
     if train_seed is not None:

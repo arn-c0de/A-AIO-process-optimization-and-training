@@ -11,8 +11,9 @@ set -euo pipefail
 #   ./run_render_debug.sh --backend both --all --non-interactive
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REAL_HERE="$(cd "$HERE" && pwd -P)"
 cd "$HERE"
+# shellcheck source=tools/_common.sh
+source "$HERE/tools/_common.sh"
 
 REQ_FILE="$HERE/requirements.txt"
 if [[ ! -f "$REQ_FILE" ]]; then
@@ -20,33 +21,13 @@ if [[ ! -f "$REQ_FILE" ]]; then
   exit 2
 fi
 
-VENV_DIR=""
-
-# Prefer currently active venv, then local candidates from both logical and
-# physical script paths (helps when the same repo is mounted via different roots).
-if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
-  VENV_DIR="$VIRTUAL_ENV"
-else
-  for base in "$HERE" "$REAL_HERE"; do
-    for cand in ".venv" "venv"; do
-      if [[ -x "$base/$cand/bin/python" ]]; then
-        VENV_DIR="$base/$cand"
-        break 2
-      fi
-    done
-  done
+# Prefer an existing venv (VENV_DIR, active VIRTUAL_ENV, .venv, venv); else create .venv.
+if ! sim_find_python; then
+  python3 -m venv "$HERE/.venv"
+  PYTHON="$HERE/.venv/bin/python"
 fi
-
-if [[ -z "$VENV_DIR" ]]; then
-  VENV_DIR="$HERE/.venv"
-  python3 -m venv "$VENV_DIR"
-fi
-
-PYTHON_BIN="$VENV_DIR/bin/python"
-if [[ ! -x "$PYTHON_BIN" ]]; then
-  echo "[error] No python executable found in virtual environment: $VENV_DIR" >&2
-  exit 2
-fi
+PYTHON_BIN="$PYTHON"
+VENV_DIR="$(dirname "$(dirname "$PYTHON_BIN")")"
 
 # shellcheck disable=SC1090
 if [[ -f "$VENV_DIR/bin/activate" ]]; then

@@ -6,6 +6,8 @@ This module provides functions for:
 - Computing SHA256 hashes of profiles for validation
 """
 
+from __future__ import annotations
+
 import hashlib
 import yaml
 from pathlib import Path
@@ -27,7 +29,7 @@ def canonicalize_profile(profile_dict: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Canonicalized profile dictionary
     """
-    def _canonicalize(obj):
+    def _canonicalize(obj: Any) -> Any:
         if isinstance(obj, dict):
             # Sort keys and recursively canonicalize values
             result = {}
@@ -66,10 +68,11 @@ def hash_profile(profile_path: Path) -> str:
         FileNotFoundError: If profile file doesn't exist
         yaml.YAMLError: If profile YAML is invalid
     """
+    profile_path = Path(profile_path)
     if not profile_path.exists():
         raise FileNotFoundError(f"Profile not found: {profile_path}")
 
-    with open(profile_path) as f:
+    with open(profile_path, encoding='utf-8') as f:
         profile_dict = yaml.safe_load(f)
 
     # Canonicalize: remove metadata, sort keys, normalize floats
@@ -98,7 +101,7 @@ def load_profile(profile_id: str, profiles_dir: Path) -> dict[str, Any]:
         yaml.YAMLError: If profile YAML is invalid
         ValueError: If profile_id in file doesn't match filename
     """
-    profile_path = profiles_dir / f"{profile_id}.yaml"
+    profile_path = Path(profiles_dir) / f"{profile_id}.yaml"
 
     if not profile_path.exists():
         raise FileNotFoundError(
@@ -106,7 +109,7 @@ def load_profile(profile_id: str, profiles_dir: Path) -> dict[str, Any]:
             f"Available profiles: {list(profiles_dir.glob('*.yaml'))}"
         )
 
-    with open(profile_path) as f:
+    with open(profile_path, encoding='utf-8') as f:
         profile_dict = yaml.safe_load(f)
 
     # Validate profile structure
@@ -127,20 +130,3 @@ def load_profile(profile_id: str, profiles_dir: Path) -> dict[str, Any]:
         )
 
     return profile_dict
-
-
-def get_profile_metadata(profile_dict: dict[str, Any]) -> dict[str, str]:
-    """Extract profile metadata for display/logging.
-
-    Args:
-        profile_dict: Loaded profile dictionary
-
-    Returns:
-        Dictionary with profile_id, description, schema_version
-    """
-    profile_section = profile_dict.get('profile', {})
-    return {
-        'profile_id': profile_section.get('profile_id', 'unknown'),
-        'description': profile_section.get('description', ''),
-        'schema_version': profile_section.get('schema_version', 1),
-    }

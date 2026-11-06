@@ -86,7 +86,7 @@ Key API:
 - `hash_file(file_path)`
 - `write_dataset_manifest(...)`
 - `read_dataset_manifest(manifest_path)`
-- `validate_manifest_profile(...)`
+- `dataset_stats(meta_rows, label_rows, splits)`
 - `write_multi_profile_manifest(...)`
 
 Responsibilities:
@@ -170,12 +170,10 @@ Key API:
 - `canonicalize_profile(profile_dict)`
 - `hash_profile(profile_path)`
 - `load_profile(profile_id, profiles_dir)`
-- `get_profile_metadata(profile_dict)`
 
 Responsibilities:
 - Builds stable hashes independent of formatting/noise fields.
 - Validates profile-id/file-name consistency.
-- Exposes compact metadata for logs/UI.
 
 ## `simple_sim/model_bundle.py`
 

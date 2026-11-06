@@ -1,210 +1,187 @@
 #!/usr/bin/env python3
-"""Validate dataset quality and consistency."""
+"""Validate dataset quality and consistency (files, schemas, IDs, images, splits, seeds)."""
+
+from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
+
 import cv2
+import yaml
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-from simple_sim.schema import read_jsonl, MetaRow, LabelRow, validate_jsonl_pair
-from simple_sim.splits import read_split, assert_no_overlap
-from simple_sim.rng import derive_sample_seed, parse_sample_id
-from simple_sim.telemetry import emit
-from simple_sim.manifest import read_dataset_manifest
+from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
+from simple_sim.manifest import read_dataset_manifest  # noqa: E402
+from simple_sim.rng import derive_sample_seed, parse_sample_id  # noqa: E402
+from simple_sim.schema import LabelRow, MetaRow, read_jsonl, validate_jsonl_pair  # noqa: E402
+from simple_sim.splits import assert_no_overlap, read_split  # noqa: E402
+from simple_sim.telemetry import emit  # noqa: E402
+
+PASS, FAIL, WARN = "pass", "fail", "warn"
+_ICON = {PASS: "✓", FAIL: "✗ FAIL:", WARN: "⚠ WARNING:"}
+_LIST_LIMIT = 5
+
+
+class _Checks:
+    """Collects check results (for --json) and prints them as they are recorded."""
+
+    def __init__(self) -> None:
+        self.items: list[dict[str, Any]] = []
+
+    def add(self, name: str, status: str, detail: str, examples: list[str] | None = None) -> bool:
+        self.items.append({"name": name, "status": status, "detail": detail})
+        print(f"  {_ICON[status]} {detail}")
+        for ex in (examples or [])[:_LIST_LIMIT]:
+            print(f"    - {ex}")
+        if examples and len(examples) > _LIST_LIMIT:
+            print(f"    ... and {len(examples) - _LIST_LIMIT} more")
+        return status != FAIL
+
+    @property
+    def ok(self) -> bool:
+        return all(c["status"] != FAIL for c in self.items)
 
 
 def validate_dataset(data_dir: Path, seed_mismatch_log_limit: int = 5) -> bool:
-    """Validate complete dataset.
+    """Validate a complete dataset; return True if all checks pass."""
+    return run_validation(data_dir, seed_mismatch_log_limit)[0]
 
-    Args:
-        data_dir: Dataset directory
 
-    Returns:
-        True if all validations pass, False otherwise
-    """
+def run_validation(data_dir: Path, seed_mismatch_log_limit: int = 5) -> tuple[bool, list[dict[str, Any]]]:
+    """Validate *data_dir*; return ``(ok, checks)`` with one ``{name, status, detail}`` per check."""
     data_dir = Path(data_dir)
     emit("validate_start", dataset_dir=str(data_dir))
-    ok = False
+    checks = _Checks()
     try:
-        ok = _run_checks(data_dir, seed_mismatch_log_limit)
-        return ok
+        _run_checks(data_dir, seed_mismatch_log_limit, checks)
+        return checks.ok, checks.items
     finally:
         # Always emit validate_done (also on early returns/exceptions) so the GUI leaves "validating".
-        emit("validate_done", dataset_dir=str(data_dir), ok=ok)
+        emit("validate_done", dataset_dir=str(data_dir), ok=checks.ok)
 
 
-def _run_checks(data_dir: Path, seed_mismatch_log_limit: int) -> bool:
-    all_checks_passed = True
-
-    print("="*60)
+def _run_checks(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> None:
+    print("=" * 60)
     print("DATASET VALIDATION")
-    print("="*60)
+    print("=" * 60)
     print(f"Dataset: {data_dir}\n")
+    try:
+        _checks_body(data_dir, seed_mismatch_log_limit, c)
+    finally:
+        print("\n" + "=" * 60)
+        print("✓ ALL VALIDATIONS PASSED" if c.ok else "✗ SOME VALIDATIONS FAILED")
+        print("=" * 60)
 
-    # Check 1: Required files exist
+
+def _checks_body(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> None:
+    # 1: Required files/directories
     print("1. Checking required files...")
-    required_files = ['meta.jsonl', 'labels.jsonl', 'config.yaml']
-    for filename in required_files:
-        filepath = data_dir / filename
-        if not filepath.exists():
-            print(f"  ✗ FAIL: Missing {filename}")
-            all_checks_passed = False
-        else:
-            print(f"  ✓ {filename} exists")
+    for filename in ("meta.jsonl", "labels.jsonl", "config.yaml"):
+        exists = (data_dir / filename).exists()
+        c.add(f"file:{filename}", PASS if exists else FAIL, f"{filename} exists" if exists else f"Missing {filename}")
+    splits_dir = data_dir / "splits"
+    c.add("dir:splits", PASS if splits_dir.exists() else FAIL,
+          "splits/ directory exists" if splits_dir.exists() else "Missing splits directory")
+    if not c.add("dir:images", PASS if (data_dir / "images").exists() else FAIL,
+                 "images/ directory exists" if (data_dir / "images").exists() else "Missing images directory"):
+        return  # Can't continue without images
 
-    # Check splits directory
-    splits_dir = data_dir / 'splits'
-    if not splits_dir.exists():
-        print("  ✗ FAIL: Missing splits directory")
-        all_checks_passed = False
-    else:
-        print("  ✓ splits/ directory exists")
-
-    # Check images directory
-    images_dir = data_dir / 'images'
-    if not images_dir.exists():
-        print("  ✗ FAIL: Missing images directory")
-        all_checks_passed = False
-        return False  # Can't continue without images
-    else:
-        print("  ✓ images/ directory exists")
-
-    # Check 2: Schema validation
+    # 2: Schema validation
     print("\n2. Validating JSONL schemas...")
     try:
-        meta_rows = read_jsonl(data_dir / 'meta.jsonl', MetaRow)
-        print(f"  ✓ meta.jsonl valid ({len(meta_rows)} rows)")
-    except Exception as e:
-        print(f"  ✗ FAIL: meta.jsonl invalid - {e}")
-        all_checks_passed = False
-        return False
-
+        meta_rows = read_jsonl(data_dir / "meta.jsonl", MetaRow)
+    except Exception as e:  # noqa: BLE001 - any parse error is a failed check
+        c.add("schema:meta", FAIL, f"meta.jsonl invalid - {e}")
+        return
+    c.add("schema:meta", PASS, f"meta.jsonl valid ({len(meta_rows)} rows)")
     try:
-        label_rows = read_jsonl(data_dir / 'labels.jsonl', LabelRow)
-        print(f"  ✓ labels.jsonl valid ({len(label_rows)} rows)")
-    except Exception as e:
-        print(f"  ✗ FAIL: labels.jsonl invalid - {e}")
-        all_checks_passed = False
-        return False
+        label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
+    except Exception as e:  # noqa: BLE001
+        c.add("schema:labels", FAIL, f"labels.jsonl invalid - {e}")
+        return
+    c.add("schema:labels", PASS, f"labels.jsonl valid ({len(label_rows)} rows)")
 
-    # Check 3: Count matching
+    # 3: Row counts
     print("\n3. Checking row counts...")
     if len(meta_rows) == len(label_rows):
-        print(f"  ✓ Row counts match ({len(meta_rows)} samples)")
+        c.add("row_counts", PASS, f"Row counts match ({len(meta_rows)} samples)")
     else:
-        print(f"  ✗ FAIL: Row count mismatch (meta={len(meta_rows)}, labels={len(label_rows)})")
-        all_checks_passed = False
+        c.add("row_counts", FAIL, f"Row count mismatch (meta={len(meta_rows)}, labels={len(label_rows)})")
 
-    # Check 4: ID consistency
+    # 4: ID consistency
     print("\n4. Checking ID consistency...")
     try:
-        validate_jsonl_pair(data_dir / 'meta.jsonl', data_dir / 'labels.jsonl')
-        print("  ✓ All IDs match between meta and labels")
-    except Exception as e:
-        print(f"  ✗ FAIL: ID mismatch - {e}")
-        all_checks_passed = False
+        validate_jsonl_pair(data_dir / "meta.jsonl", data_dir / "labels.jsonl")
+        c.add("id_consistency", PASS, "All IDs match between meta and labels")
+    except Exception as e:  # noqa: BLE001
+        c.add("id_consistency", FAIL, f"ID mismatch - {e}")
 
-    # Check 5: Image files exist and readable
+    # 5: Images exist and are readable
     print("\n5. Checking image files...")
-    missing_images = []
-    corrupt_images = []
-
-    for meta_row in meta_rows:
-        image_path = data_dir / meta_row.image_path
-
-        if not image_path.exists():
-            missing_images.append(meta_row.image_path)
-            continue
-
-        # Try to read image
-        img = cv2.imread(str(image_path))
-        if img is None:
-            corrupt_images.append(meta_row.image_path)
-
-    if missing_images:
-        print(f"  ✗ FAIL: {len(missing_images)} missing images")
-        for img_path in missing_images[:5]:  # Show first 5
-            print(f"    - {img_path}")
-        if len(missing_images) > 5:
-            print(f"    ... and {len(missing_images) - 5} more")
-        all_checks_passed = False
+    missing: list[str] = []
+    corrupt: list[str] = []
+    for row in meta_rows:
+        p = data_dir / row.image_path
+        if not p.exists():
+            missing.append(row.image_path)
+        elif cv2.imread(str(p)) is None:
+            corrupt.append(row.image_path)
+    if missing:
+        c.add("images:exist", FAIL, f"{len(missing)} missing images", missing)
     else:
-        print(f"  ✓ All {len(meta_rows)} images exist")
-
-    if corrupt_images:
-        print(f"  ✗ FAIL: {len(corrupt_images)} corrupt images")
-        for img_path in corrupt_images[:5]:
-            print(f"    - {img_path}")
-        if len(corrupt_images) > 5:
-            print(f"    ... and {len(corrupt_images) - 5} more")
-        all_checks_passed = False
+        c.add("images:exist", PASS, f"All {len(meta_rows)} images exist")
+    if corrupt:
+        c.add("images:readable", FAIL, f"{len(corrupt)} corrupt images", corrupt)
     else:
-        print("  ✓ All images readable")
+        c.add("images:readable", PASS, "All images readable")
 
-    # Check 6: Split overlap
+    # 6: Split files and overlap
     print("\n6. Checking split overlap...")
-    try:
-        splits = {}
-        for split_name in ['train', 'val', 'test']:
-            split_file = splits_dir / f'{split_name}.txt'
-            if split_file.exists():
-                splits[split_name] = read_split(split_file)
-            else:
-                print(f"  ✗ FAIL: Missing {split_name}.txt")
-                all_checks_passed = False
+    splits: dict[str, list[str]] = {}
+    for split_name in ("train", "val", "test"):
+        split_file = splits_dir / f"{split_name}.txt"
+        if split_file.exists():
+            splits[split_name] = read_split(split_file)
+        else:
+            c.add(f"split:{split_name}", FAIL, f"Missing {split_name}.txt")
+    if len(splits) == 3:
+        try:
+            assert_no_overlap(splits)
+            sizes = ", ".join(f"{k}={len(v)}" for k, v in splits.items())
+            c.add("split_overlap", PASS, f"No overlap between splits ({sizes})")
+        except ValueError as e:
+            c.add("split_overlap", FAIL, f"Split overlap detected - {e}")
 
-        if len(splits) == 3:
-            try:
-                assert_no_overlap(splits)
-                print("  ✓ No overlap between splits")
-                print(f"    - train: {len(splits['train'])} samples")
-                print(f"    - val: {len(splits['val'])} samples")
-                print(f"    - test: {len(splits['test'])} samples")
-            except Exception as e:
-                print(f"  ✗ FAIL: Split overlap detected - {e}")
-                all_checks_passed = False
-
-    except Exception as e:
-        print(f"  ✗ FAIL: Error reading splits - {e}")
-        all_checks_passed = False
-
-    # Check 7: Class distribution
+    # 7: Class distribution per split (warning only)
     print("\n7. Checking class distribution...")
     id_to_label = {row.id: row.class_name for row in label_rows}
-
+    all_classes = {row.class_name for row in label_rows}
     for split_name, sample_ids in splits.items():
-        split_classes = set(id_to_label[sid] for sid in sample_ids if sid in id_to_label)
-        all_classes = set(row.class_name for row in label_rows)
-
-        missing_classes = all_classes - split_classes
+        missing_classes = all_classes - {id_to_label[s] for s in sample_ids if s in id_to_label}
         if missing_classes:
-            print(f"  ⚠ WARNING: {split_name} missing classes: {missing_classes}")
+            c.add(f"class_coverage:{split_name}", WARN, f"{split_name} missing classes: {sorted(missing_classes)}")
         else:
-            print(f"  ✓ {split_name} contains all classes")
+            c.add(f"class_coverage:{split_name}", PASS, f"{split_name} contains all classes")
 
-    # Check 8: Determinism check (sample a few)
+    # 8: Determinism (seed replay on the first 20 samples)
     print("\n8. Checking determinism (sample verification)...")
-    import yaml
+    _check_seeds(data_dir, meta_rows, seed_mismatch_log_limit, c)
 
-    config_path = data_dir / 'config.yaml'
-    run_seed = None
+
+def _check_seeds(data_dir: Path, meta_rows: list[MetaRow], log_limit: int, c: _Checks) -> None:
+    config_path = data_dir / "config.yaml"
     if not config_path.exists():
-        # Already reported as missing in check 1.
-        print("  ✗ SKIP: config.yaml missing, cannot verify seeds")
-        all_checks_passed = False
-    else:
-        try:
-            with open(config_path) as f:
-                config = yaml.safe_load(f)
-            run_seed = config['run']['seed']
-        except Exception as e:
-            print(f"  ✗ FAIL: cannot read run.seed from config.yaml - {e}")
-            all_checks_passed = False
-    checked = 0
-    mismatches = 0
+        c.add("determinism", FAIL, "config.yaml missing, cannot verify seeds")
+        return
+    try:
+        run_seed = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {})["run"]["seed"]
+    except (OSError, yaml.YAMLError, KeyError, TypeError) as e:
+        c.add("determinism", FAIL, f"cannot read run.seed from config.yaml - {e}")
+        return
 
     manifest_version = None
     extend_len = 0
@@ -213,78 +190,64 @@ def _run_checks(data_dir: Path, seed_mismatch_log_limit: int) -> bool:
         try:
             manifest = read_dataset_manifest(manifest_path)
             manifest_version = int(manifest.get("manifest_version", 1))
-            extend_hist = manifest.get("extend_history") or []
-            if isinstance(extend_hist, list):
-                extend_len = len(extend_hist)
-        except Exception:
+            hist = manifest.get("extend_history") or []
+            extend_len = len(hist) if isinstance(hist, list) else 0
+        except (OSError, ValueError):
             pass
-
     # Extended and/or multi-profile datasets can contain historical rows generated
     # with previous configs/seeds, so strict per-row seed replay can yield false negatives.
-    strict_determinism = not ((manifest_version == 2) or (extend_len > 1))
+    strict = not (manifest_version == 2 or extend_len > 1)
 
-    logged_mismatch_examples = 0
-    for meta_row in (meta_rows[:20] if run_seed is not None else []):  # Check first 20 samples
+    checked = mismatches = logged = 0
+    for row in meta_rows[:20]:
         try:
-            run_id, domain, split, index = parse_sample_id(meta_row.id)
-            expected_seed = derive_sample_seed(run_seed, domain, index)
+            _run_id, domain, _split, index = parse_sample_id(row.id)
+        except ValueError as e:
+            c.add(f"determinism:{row.id}", FAIL, f"Error checking {row.id}: {e}")
+            continue
+        if row.seed != derive_sample_seed(run_seed, domain, index):
+            mismatches += 1
+            if logged < max(0, log_limit):
+                print(f"  ✗ Seed mismatch for {row.id}")
+                logged += 1
+        checked += 1
 
-            if meta_row.seed != expected_seed:
-                mismatches += 1
-                if logged_mismatch_examples < max(0, seed_mismatch_log_limit):
-                    print(f"  ✗ Seed mismatch for {meta_row.id}")
-                    logged_mismatch_examples += 1
-
-            checked += 1
-        except Exception as e:
-            print(f"  ✗ Error checking {meta_row.id}: {e}")
-            all_checks_passed = False
-
-    if run_seed is None:
-        pass
-    elif mismatches == 0:
-        print(f"  ✓ Determinism verified ({checked} samples checked)")
+    if mismatches == 0:
+        c.add("determinism", PASS, f"Determinism verified ({checked} samples checked)")
+        return
+    if mismatches > logged:
+        print(f"  … {mismatches - logged} additional seed mismatches suppressed")
+    if strict:
+        c.add("determinism", FAIL, f"{mismatches}/{checked} samples have seed mismatches")
     else:
-        suppressed = max(0, mismatches - logged_mismatch_examples)
-        if suppressed > 0:
-            print(f"  … {suppressed} additional seed mismatches suppressed")
-        if strict_determinism:
-            print(f"  ✗ FAIL: {mismatches}/{checked} samples have seed mismatches")
-            all_checks_passed = False
-        else:
-            print(
-                f"  ⚠ WARNING: {mismatches}/{checked} sampled rows have seed mismatches "
-                "(non-strict mode for multi/extended dataset)"
-            )
-
-    # Final summary
-    print("\n" + "="*60)
-    if all_checks_passed:
-        print("✓ ALL VALIDATIONS PASSED")
-        print("="*60)
-        return True
-    else:
-        print("✗ SOME VALIDATIONS FAILED")
-        print("="*60)
-        return False
+        c.add("determinism", WARN, f"{mismatches}/{checked} sampled rows have seed mismatches "
+              "(non-strict mode for multi/extended dataset)")
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Validate dataset quality')
-    parser.add_argument('--data', type=str, required=True, help='Path to dataset directory')
-    parser.add_argument(
-        '--seed-mismatch-log-limit',
-        type=int,
-        default=5,
-        help='How many individual seed mismatch rows to print (default: 5)',
-    )
-
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Validate dataset quality")
+    parser.add_argument("--data", type=str, required=True, help="Path to dataset directory")
+    parser.add_argument("--seed-mismatch-log-limit", type=int, default=5,
+                        help="How many individual seed mismatch rows to print (default: 5)")
+    add_json_flag(parser)
     args = parser.parse_args()
-    data_dir = Path(args.data)
 
-    success = validate_dataset(data_dir, seed_mismatch_log_limit=args.seed_mismatch_log_limit)
-    sys.exit(0 if success else 1)
+    ok, checks = run_validation(Path(args.data), seed_mismatch_log_limit=args.seed_mismatch_log_limit)
+    if args.json:
+        failed = [ch["name"] for ch in checks if ch["status"] == FAIL]
+        emit_result(
+            "validate",
+            {
+                "dataset": str(args.data),
+                "checks": checks,
+                "failed": failed,
+                "warnings": [ch["name"] for ch in checks if ch["status"] == WARN],
+            },
+            ok=ok,
+            error=None if ok else f"{len(failed)} check(s) failed: {', '.join(failed)}",
+        )
+    sys.exit(0 if ok else 1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

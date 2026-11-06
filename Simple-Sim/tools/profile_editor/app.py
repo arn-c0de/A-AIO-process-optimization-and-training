@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import json
 import queue
 import re
 from pathlib import Path
@@ -24,6 +23,7 @@ if __package__ in {None, ""}:
     from tools.profile_editor.sync_controller import SyncController
     from tools.profile_editor.yaml_editor import YamlEditorPanel
     from tools.profile_editor.yaml_io import save_yaml
+    from simple_sim.io_utils import atomic_write_json, read_json
 else:
     from .blender_live_preview import BlenderLivePreviewWorker, RenderRequest
     from .form_renderer import FormRenderer
@@ -35,6 +35,7 @@ else:
     from .sync_controller import SyncController
     from .yaml_editor import YamlEditorPanel
     from .yaml_io import save_yaml
+    from simple_sim.io_utils import atomic_write_json, read_json
 
 
 class ProfileEditorApp:
@@ -579,14 +580,8 @@ class ProfileEditorApp:
         return self.sim_root / "outputs" / "profile_editor" / "settings.json"
 
     def _load_session_settings(self) -> dict:
-        path = self._session_settings_path()
-        try:
-            if not path.exists():
-                return {}
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            return raw if isinstance(raw, dict) else {}
-        except Exception:
-            return {}
+        raw = read_json(self._session_settings_path(), {})
+        return raw if isinstance(raw, dict) else {}
 
     def _apply_session_settings_to_ui(self) -> None:
         geom = str(self._session_settings.get("window_geometry") or "").strip()
@@ -623,11 +618,9 @@ class ProfileEditorApp:
         path = self._session_settings_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-            tmp.replace(path)
+            atomic_write_json(path, data)
             self._session_settings = data
-        except Exception:
+        except (OSError, TypeError, ValueError):
             pass
 
     def _on_close(self) -> None:

@@ -1,7 +1,12 @@
 """Defect classification and parameter sampling."""
 
+from __future__ import annotations
+
+from typing import Any, Callable
+
 import numpy as np
-from typing import Any
+
+_Sample = tuple[float, float, float, float]  # shift_x, shift_y, rotation_deg, tilt_deg
 
 # ---------------------------------------------------------------------------
 # Sampling constants
@@ -89,7 +94,7 @@ def sample_defect_params(
     ok_rotation_deg = float(tolerances['ok_rotation_deg']) if tolerances else None
     tombstone_tilt_deg = float(tolerances['tombstone_tilt_deg']) if tolerances else None
 
-    samplers = {
+    samplers: dict[str, Callable[..., _Sample]] = {
         'OK':           _sample_ok,
         'MISSING':      _sample_missing,
         'MISALIGNED':   _sample_misaligned,

@@ -6,6 +6,8 @@ This module provides functions for:
 - Computing file hashes for integrity checking
 """
 
+from __future__ import annotations
+
 import json
 import hashlib
 import subprocess
@@ -57,7 +59,7 @@ def _get_git_commit() -> str | None:
         )
         if result.returncode == 0:
             return result.stdout.strip()
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         pass
     return None
 
@@ -68,6 +70,15 @@ def _compute_class_counts(label_rows: list[Any]) -> dict[str, int]:
     for row in label_rows:
         counts[row.class_name] = counts.get(row.class_name, 0) + 1
     return counts
+
+
+def dataset_stats(meta_rows: list[Any], label_rows: list[Any], splits: dict[str, list[str]]) -> dict[str, Any]:
+    """``dataset_stats`` block of a manifest: total samples, split sizes and class counts."""
+    return {
+        'total_samples': len(meta_rows),
+        'splits': {k: len(v) for k, v in splits.items()},
+        'classes': _compute_class_counts(label_rows),
+    }
 
 
 def write_dataset_manifest(
@@ -102,9 +113,6 @@ def write_dataset_manifest(
     manifest_path = output_dir / "dataset_manifest.json"
 
     git_commit = _get_git_commit()
-    class_counts = _compute_class_counts(label_rows)
-    split_counts = {k: len(v) for k, v in splits.items()}
-
     if extend and manifest_path.exists():
         # Update existing manifest
         with open(manifest_path) as f:
@@ -139,9 +147,9 @@ def write_dataset_manifest(
         manifest['dataset_stats']['total_samples'] += len(meta_rows)
 
         # `splits` is the complete (already merged) split map, so overwrite instead of adding.
-        manifest['dataset_stats']['splits'] = dict(split_counts)
+        manifest['dataset_stats']['splits'] = {k: len(v) for k, v in splits.items()}
 
-        for class_name, count in class_counts.items():
+        for class_name, count in _compute_class_counts(label_rows).items():
             manifest['dataset_stats']['classes'][class_name] = \
                 manifest['dataset_stats']['classes'].get(class_name, 0) + count
 
@@ -170,11 +178,7 @@ def write_dataset_manifest(
                 'script': 'scripts/generate.py'
             },
 
-            'dataset_stats': {
-                'total_samples': len(meta_rows),
-                'splits': split_counts,
-                'classes': class_counts
-            },
+            'dataset_stats': dataset_stats(meta_rows, label_rows, splits),
 
             'extend_history': [{
                 'timestamp': datetime.now().isoformat(),
@@ -331,50 +335,6 @@ def check_checkpoint_profile(
     return ckpt_profile_id
 
 
-def validate_manifest_profile(
-    manifest: dict[str, Any],
-    expected_profile_id: str,
-    expected_profile_hash: str,
-    *,
-    strict_hash: bool = True
-) -> None:
-    """Validate that manifest profile matches expected values.
-
-    Args:
-        manifest: Manifest dictionary from read_dataset_manifest()
-        expected_profile_id: Expected component profile ID
-        expected_profile_hash: Expected profile hash
-        strict_hash: If False, only warn on hash mismatch instead of raising
-
-    Raises:
-        ValueError: If profile ID mismatch or (if strict_hash) hash mismatch
-    """
-    manifest_profile_id = manifest['component_profile']['profile_id']
-    manifest_profile_hash = manifest['component_profile']['profile_hash']
-
-    # Profile ID must match
-    if manifest_profile_id != expected_profile_id:
-        raise ValueError(
-            f"Component profile mismatch:\n"
-            f"  Dataset profile: {manifest_profile_id}\n"
-            f"  Expected profile: {expected_profile_id}\n"
-            f"Cannot use dataset with different component type."
-        )
-
-    # Profile hash mismatch
-    if manifest_profile_hash != expected_profile_hash:
-        message = (
-            f"Profile hash mismatch:\n"
-            f"  Dataset hash: {manifest_profile_hash[:72]}...\n"
-            f"  Expected hash: {expected_profile_hash[:72]}...\n"
-            f"Profile '{expected_profile_id}' has changed since dataset creation."
-        )
-        if strict_hash:
-            raise ValueError(message)
-        else:
-            print(f"WARNING: {message}")
-
-
 def write_multi_profile_manifest(
     output_dir: Path,
     run_id: str,
@@ -399,8 +359,6 @@ def write_multi_profile_manifest(
     manifest_path = output_dir / "dataset_manifest.json"
 
     git_commit = _get_git_commit()
-    class_counts = _compute_class_counts(label_rows)
-    split_counts = {k: len(v) for k, v in splits.items()}
 
     # Profile sample counts
     profile_counts: dict[str, int] = {}
@@ -422,12 +380,7 @@ def write_multi_profile_manifest(
             'script': script_name,
         },
 
-        'dataset_stats': {
-            'total_samples': len(meta_rows),
-            'splits': split_counts,
-            'classes': class_counts,
-            'profile_counts': profile_counts,
-        },
+        'dataset_stats': {**dataset_stats(meta_rows, label_rows, splits), 'profile_counts': profile_counts},
 
         'extend_history': [{
             'timestamp': datetime.now().isoformat(),

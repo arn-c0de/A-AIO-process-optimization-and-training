@@ -5,6 +5,8 @@ from typing import Any
 
 import yaml
 
+from simple_sim.io_utils import atomic_write_text
+
 
 class YamlError(Exception):
     """Raised when YAML cannot be read/written."""
@@ -17,7 +19,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
-    except Exception as exc:
+    except (OSError, yaml.YAMLError) as exc:
         raise YamlError(f"Failed to read YAML {path}: {exc}") from exc
     if data is None:
         return {}
@@ -33,10 +35,7 @@ def dump_yaml(data: dict[str, Any]) -> str:
 def save_yaml(path: Path, data: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    text = dump_yaml(data)
     try:
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(path)
-    except Exception as exc:
+        atomic_write_text(path, dump_yaml(data))
+    except (OSError, yaml.YAMLError) as exc:
         raise YamlError(f"Failed to write YAML {path}: {exc}") from exc
