@@ -138,7 +138,9 @@ def _build_blender_jobs(
     footprint: str,
     component_height_mm: float,
     profile_render_3d: dict,
+    tolerances: dict | None,
 ) -> list[dict]:
+    render_cfg = config.get("render") or {}
     jobs: list[dict] = []
     for r in records:
         jobs.append({
@@ -153,6 +155,10 @@ def _build_blender_jobs(
             "defect": r["defect"],
             "augment": r["augment"],
             "render_3d": profile_render_3d,
+            # Board bake (shared look with the 2D backend, see blender3d/bake.py).
+            "component_type": str(render_cfg.get("component_type", "")),
+            "texture_dir": render_cfg.get("texture_dir"),
+            "tolerances": tolerances,
         })
     return jobs
 
@@ -166,6 +172,7 @@ def _render_blender_records(
     footprint: str,
     component_height_mm: float,
     profile_render_3d: dict,
+    tolerances: dict | None,
     project_root: Path,
     output_root: Path,
     jobs_filename: str,
@@ -185,6 +192,7 @@ def _render_blender_records(
         footprint=footprint,
         component_height_mm=component_height_mm,
         profile_render_3d=profile_render_3d,
+        tolerances=tolerances,
     )
     jobs_path = output_root / jobs_filename
     write_jobs_jsonl(jobs_path, jobs)
@@ -634,6 +642,7 @@ def generate_dataset(
                 footprint=footprint,
                 component_height_mm=component_height_mm,
                 profile_render_3d=profile_render_3d,
+                tolerances=tolerances,
                 project_root=project_root,
                 output_root=output_dir,
                 jobs_filename="blender_jobs_extend.jsonl",
@@ -693,6 +702,7 @@ def generate_dataset(
                     footprint=footprint,
                     component_height_mm=component_height_mm,
                     profile_render_3d=profile_render_3d,
+                    tolerances=tolerances,
                     project_root=project_root,
                     output_root=temp_dir,
                     jobs_filename="blender_jobs.jsonl",

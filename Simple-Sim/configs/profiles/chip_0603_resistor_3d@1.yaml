@@ -41,28 +41,15 @@ defect_set:
 # 3D scene defaults (consumed by the Blender batch renderer).
 render_3d:
   camera:
-    # AOI-like top-down with slight tilt.
-    location_mm: [0.0, -7.0, 9.0]
+    # AOI top camera: straight down (orthographic, framed to the ROI by the renderer).
+    location_mm: [0.0, 0.0, 9.0]
     look_at_mm: [0.0, 0.0, 0.0]
     focal_length_mm: 35.0
   lighting:
-    key_light:
-      location_mm: [4.0, -4.0, 10.0]
-      power_w: 300.0
-      size_mm: 10.0
-    fill_light:
-      location_mm: [-4.0, 4.0, 8.0]
-      power_w: 120.0
-      size_mm: 12.0
+    # AOI ring light around the camera axis; defaults are calibrated to the baked board colours.
+    ring_light: {}
   materials:
-    substrate:
-      base_color: [0.05, 0.20, 0.05]
-      roughness: 0.85
-      metallic: 0.0
-    copper:
-      base_color: [0.80, 0.45, 0.10]
-      roughness: 0.25
-      metallic: 1.0
+    # Board (mask, copper, silkscreen) comes from the shared 2D generator; only the 3D parts are set here.
     body:
       base_color: [0.02, 0.02, 0.02]
       roughness: 0.60

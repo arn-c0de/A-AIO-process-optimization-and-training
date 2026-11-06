@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
-from simple_sim.generators.blender_3d import write_jobs_jsonl, render_blender_batch
+from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl
 from simple_sim.generators.filter_settings import default_filter_values_for_popup, normalize_image_filters
 from simple_sim.generators.opencv2d.geometry import sample_nominal_geometry
 from simple_sim.profile_hash import load_profile
@@ -1355,6 +1355,7 @@ def _build_preview_jobs(
             "defect": defect,
             "augment": augment,
             "render_3d": render_3d,
+            **profile_job_fields(profile),
         }
         jobs.append(job)
         previews.append((profile_id, backend, str(defect_type), rel_path))

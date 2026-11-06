@@ -239,10 +239,10 @@ def add_filter_sections(popup: Any, parent: ttk.Frame, current: dict[str, Any]) 
 
     add_section("━━━ High Priority ━━━")
     add_filter_row("Perspective Transform", "enable_perspective", "perspective_strength", False, 1.0, max_v=2.0)
-    add_filter_row("Motion Blur", "enable_motion_blur", "motion_blur_strength", True, 1.0, max_v=3.0)
+    add_filter_row("Motion Blur", "enable_motion_blur", "motion_blur_strength", False, 1.0, max_v=3.0)
     add_filter_row("Saturation", "enable_saturation", "saturation_factor", True, 1.0, min_v=0.5, max_v=1.5)
     add_filter_row("Hue Shift", "enable_hue_shift", "hue_shift_deg", True, 0.0, min_v=-30.0, max_v=30.0)
-    add_filter_row("Shadow", "enable_shadow", "shadow_strength", True, 0.3, min_v=0.0, max_v=0.8)
+    add_filter_row("Shadow", "enable_shadow", "shadow_strength", False, 0.3, min_v=0.0, max_v=0.8)
     add_filter_row("Reflection/Glare", "enable_reflection", "reflection_strength", False, 0.5, min_v=0.0, max_v=1.0)
 
     add_section("━━━ Medium Priority (disabled) ━━━")

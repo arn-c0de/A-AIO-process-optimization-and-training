@@ -92,7 +92,7 @@ class PipelineUI:
         self.var_filter_perspective_angle_x: tk.StringVar = tk.StringVar(value="0.0")
         self.var_filter_perspective_angle_y: tk.StringVar = tk.StringVar(value="0.0")
 
-        self.var_filter_enable_motion_blur: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_enable_motion_blur: tk.BooleanVar = tk.BooleanVar(value=False)
         self.var_filter_motion_blur_strength: tk.StringVar = tk.StringVar(value="1.0")
         self.var_filter_motion_blur_angle: tk.StringVar = tk.StringVar(value="0.0")
 
@@ -102,7 +102,7 @@ class PipelineUI:
         self.var_filter_enable_hue_shift: tk.BooleanVar = tk.BooleanVar(value=True)
         self.var_filter_hue_shift_deg: tk.StringVar = tk.StringVar(value="0.0")
 
-        self.var_filter_enable_shadow: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.var_filter_enable_shadow: tk.BooleanVar = tk.BooleanVar(value=False)
         self.var_filter_shadow_strength: tk.StringVar = tk.StringVar(value="0.3")
         self.var_filter_shadow_size: tk.StringVar = tk.StringVar(value="0.2")
 

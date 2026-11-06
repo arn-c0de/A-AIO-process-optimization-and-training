@@ -415,12 +415,9 @@ class Preview3D(ttk.Frame):
         footprint = str((profile.get("component") or {}).get("footprint") or "chip_2pad").strip()
         self._scene_footprint = footprint
 
+        # Same axes as the 2D layout used by both backends: component_length along x.
         body_len_x = comp_l
         body_len_y = comp_w
-        if footprint == "soic_16":
-            # Match blender/render_batch.py orientation for SOIC-16.
-            body_len_x = comp_w
-            body_len_y = comp_l
 
         board_w = max(260.0, body_len_x * 2.8, pad_sx + pad_w * 2.6)
         board_h = max(220.0, body_len_y * 2.8, pad_sy + pad_h * 2.8)
@@ -444,7 +441,7 @@ class Preview3D(ttk.Frame):
 
         pads: list[BoxMesh] = []
         if footprint == "soic_16":
-            # 8 pads on the left + 8 pads on the right, matching blender/render_batch.py intent.
+            # 8 pads on the left + 8 pads on the right (2D layout, see draw._compute_pad_positions).
             # Keep pads distributed along package length and outside body width.
             row_x = max(pad_sx * 0.5, (body_len_x * 0.5) + (pad_h * 0.65))
             y_span = max(pad_w * 7.0, body_len_y * 0.82)
@@ -476,7 +473,7 @@ class Preview3D(ttk.Frame):
                 )
                 idx += 1
         elif footprint in {"sot23", "qfn_32", "qfn"}:
-            # SOT-23 matches blender/render_batch.py: pads 1/2 on the left column
+            # SOT-23 matches the 2D layout: pads 1/2 on the left column
             # (y = -/+ pad_spacing_y/2), pad 3 on the right at y = 0. pad_spacing is
             # the left/right column distance; _emit_geometry_updates_from_scene inverts this.
             offsets = [(-pad_sx * 0.5, -pad_sy * 0.5), (-pad_sx * 0.5, pad_sy * 0.5), (pad_sx * 0.5, 0.0)]
@@ -488,7 +485,7 @@ class Preview3D(ttk.Frame):
                     (pad_sx * 0.45, pad_sy * 0.45),
                 ]
             for i, (ox, oy) in enumerate(offsets, start=1):
-                # render_batch.py draws the two SOT-23 left pads at 0.8x pad_height.
+                # The 2D layout draws the two SOT-23 left pads at 0.8x pad_height.
                 ph = pad_h * 0.8 if footprint == "sot23" and i < 3 else pad_h
                 pads.append(
                     self._box(

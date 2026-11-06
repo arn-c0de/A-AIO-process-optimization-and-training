@@ -243,8 +243,17 @@ def _silkscreen(img: np.ndarray, keepout: tuple[int, int, int, int], family: str
 
 # --------------------------------------------------------------------------- pads & solder
 
+def thermal_pad_index(pads: list[dict[str, int]]) -> int | None:
+    """Index of an exposed thermal pad (QFN): the largest pad, if clearly larger than the others."""
+    if len(pads) < 3:
+        return None
+    areas = [p["w"] * p["h"] for p in pads]
+    i = max(range(len(areas)), key=areas.__getitem__)
+    return i if areas[i] > 3 * sorted(areas)[len(areas) // 2] else None
+
+
 def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int]], body_mask: np.ndarray,
-                     rng: np.random.Generator) -> None:
+                     rng: np.random.Generator, *, with_solder: bool = True) -> None:
     h, w = img.shape[:2]
     finish = _FINISHES["enig" if rng.random() < 0.5 else "hasl"] * float(rng.uniform(0.92, 1.06))
     solder = _SOLDER * float(rng.uniform(0.9, 1.05))
@@ -252,8 +261,9 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
     env = base * 0.8 + 12.0  # what slopes of the solder mirror: the surrounding board
     # Surface irregularity: real fillets are lumpy, not mathematically smooth.
     lumps = _smooth_noise((h, w), 8 * SS, rng) * 0.06
+    thermal = thermal_pad_index(pads)
 
-    for pad in pads:
+    for i, pad in enumerate(pads):
         x0, y0 = max(0, pad["x"]), max(0, pad["y"])
         x1, y1 = min(w, pad["x"] + pad["w"]), min(h, pad["y"] + pad["h"])
         if x1 - x0 < 3 or y1 - y0 < 3:
@@ -262,6 +272,8 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
         cv2.rectangle(img, (x0 - SS, y0 - SS), (x1 + SS - 1, y1 + SS - 1), mask_edge.tolist(), SS)
         region = img[y0:y1, x0:x1]
         region[:] = finish
+        if not with_solder:
+            continue
 
         ph, pw = region.shape[:2]
         covered = body_mask[y0:y1, x0:x1] > 0
@@ -275,10 +287,9 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
             hmap = np.where(covered, 1.0, t ** 1.8) * rim * amp  # concave fillet rising to the terminal
             spec_power, spec_gain = 60.0, 0.85
         else:
-            # Reflowed paste, no part. Big (thermal) pads are printed through a window-pane stencil,
+            # Reflowed paste, no part. Thermal pads are printed through a window-pane stencil,
             # so the solder pulls into separate flat islands with bare finish in between.
-            big = min(pw, ph) >= 60 * SS
-            nx, ny = (max(2, round(pw / (32 * SS))), max(2, round(ph / (32 * SS)))) if big else (1, 1)
+            nx, ny = (max(2, round(3 * pw / min(pw, ph))), max(2, round(3 * ph / min(pw, ph)))) if i == thermal else (1, 1)
             u, v = ((xx / pw * nx) % 1.0) * 2 - 1, ((yy / ph * ny) % 1.0) * 2 - 1
             dome = np.clip(1.0 - (np.abs(u) ** 3 + np.abs(v) ** 3) * (0.85 if nx * ny == 1 else 1.2), 0, 1)
             hmap = dome * rim * min(amp * 0.35, 4.0 * SS)
@@ -292,14 +303,14 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
 
 # --------------------------------------------------------------------------- camera
 
-def _camera(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Turn the ideal (supersampled, perfectly sharp) render into a camera image. Float in, uint8 out.
+def camera_model(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Turn an ideal render (2D supersampled or 3D) into a camera image. BGR in, uint8 out.
 
     Lens blur, uneven illumination, soft highlight roll-off instead of hard clipping, and
     signal-dependent sensor noise that is slightly correlated by demosaicing.
     """
     h, w = img.shape[:2]
-    img = cv2.GaussianBlur(img, (0, 0), float(rng.uniform(0.55, 0.95)))
+    img = cv2.GaussianBlur(img.astype(np.float32), (0, 0), float(rng.uniform(0.55, 0.95)))
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     a = float(rng.uniform(0.0, 2.0 * np.pi))
     ramp = ((xx - w / 2.0) * np.cos(a) + (yy - h / 2.0) * np.sin(a)) / max(h, w)
@@ -492,6 +503,85 @@ def _draw_tombstone(img: np.ndarray, family: str, pose: dict[str, Any], width: f
                raised_sign=pose["raised_sign"])
 
 
+def _board(nom: dict[str, float], footprint: str, family: str, shape: tuple[int, int], config: dict[str, Any],
+           rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, list[dict[str, int]]]:
+    """Substrate, copper and silkscreen at supersampled *shape*. Returns (float image, mask colour, pads).
+
+    The silkscreen keep-out uses the *nominal* body, so the print never follows a defect (a real
+    board's silkscreen does not move when a part is misplaced).
+    """
+    h, w = shape
+    pads = _compute_pad_positions(footprint, nom, (h, w))
+    hl, hw = nom["component_length"] / 2.0, nom["component_width"] / 2.0
+    xs = [p["x"] for p in pads] + [p["x"] + p["w"] for p in pads] + [int(w // 2 - hl), int(w // 2 + hl)]
+    ys = [p["y"] for p in pads] + [p["y"] + p["h"] for p in pads] + [int(h // 2 - hw), int(h // 2 + hw)]
+    keepout = (min(xs), min(ys), max(xs), max(ys))
+
+    texture_dir = config.get("texture_dir")
+    if texture_dir:
+        img, base = _texture_substrate(h, w, str(texture_dir), rng)  # real board already has its own copper
+    else:
+        img, base = _substrate(h, w, rng)
+        _traces_and_vias(img, base, pads, keepout, rng)
+    _silkscreen(img, keepout, family, rng)
+    return img, base, pads
+
+
+def _scaled(nominal: dict[str, float], defect_params: dict[str, Any]) -> tuple[dict[str, float], dict[str, Any]]:
+    nom = {k: float(v) * SS for k, v in nominal.items()}
+    dp = dict(defect_params)
+    dp["shift_x"] = float(dp["shift_x"]) * SS
+    dp["shift_y"] = float(dp["shift_y"]) * SS
+    return nom, dp
+
+
+def render_board(
+    nominal: dict[str, float],
+    defect_params: dict[str, Any],
+    config: dict[str, Any],
+    tolerances: dict[str, Any] | None,
+    rng: np.random.Generator,
+    footprint: str,
+    size: tuple[int, int],
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Board texture (substrate, copper, silkscreen, bare pad finish) for the 3D backend, plus the scene layout.
+
+    Returns ``(BGR uint8 image of *size*, scene)``. ``scene`` holds, in camera pixels relative to the image
+    centre (x right, y down): ``family``, ``pads`` as ``[cx, cy, w, h]`` and ``body`` (``None`` when MISSING)
+    with the same pose semantics as the 2D renderer, including the tombstone pivot.
+    """
+    width, height = size
+    h, w = height * SS, width * SS
+    nom, dp = _scaled(nominal, defect_params)
+    family = _family(footprint, str(config.get("component_type", "")))
+    img, base, pads = _board(nom, footprint, family, (h, w), config, rng)
+    _pads_and_solder(img, base, pads, np.zeros((h, w), dtype=np.uint8), rng, with_solder=False)
+    if dp["type"] == "SOLDER_BRIDGE":  # flat solder between neighbouring pads
+        geo = body_geometry(nom, dp, tolerances, (h, w))
+        img8 = _clip8(img)
+        _draw_solder_bridge(img8, nom, footprint, geo["center"], (int(geo["length"]), int(geo["width"])),
+                            _param_selector(defect_params), geo["tilt_deg"])
+        img = img8.astype(np.float32)
+
+    scene: dict[str, Any] = {
+        "family": family,
+        "pads": [[(p["x"] + p["w"] / 2.0 - w / 2.0) / SS, (p["y"] + p["h"] / 2.0 - h / 2.0) / SS, p["w"] / SS, p["h"] / SS]
+                 for p in pads],
+        "thermal_pad": thermal_pad_index(pads),
+        "body": None,
+    }
+    if dp["type"] != "MISSING":
+        geo = body_geometry(nominal, defect_params, tolerances, (height, width))
+        body = {"center": [geo["center"][0] - width // 2, geo["center"][1] - height // 2], "length": geo["length"],
+                "width": geo["width"], "rotation_deg": geo["rotation_deg"], "tilt_deg": geo["tilt_deg"],
+                "is_tombstone": bool(geo["is_tombstone"])}
+        if geo["is_tombstone"]:
+            pose = _tombstone_pose(geo, _param_selector(defect_params), (height, width))
+            body["raised_sign"] = pose["raised_sign"]
+        scene["body"] = body
+    return cv2.resize(_clip8(img), (width, height), interpolation=cv2.INTER_AREA), scene
+
+
 def render_photoreal_base(
     nominal: dict[str, float],
     defect_params: dict[str, Any],
@@ -504,32 +594,17 @@ def render_photoreal_base(
     """Render substrate + pads + solder + component for *defect_params* at *roi_size* (BGR uint8)."""
     width, height = roi_size
     h, w = height * SS, width * SS
-    nom = {k: float(v) * SS for k, v in nominal.items()}
-    dp = dict(defect_params)
-    dp["shift_x"] = float(dp["shift_x"]) * SS
-    dp["shift_y"] = float(dp["shift_y"]) * SS
+    nom, dp = _scaled(nominal, defect_params)
     family = _family(footprint, str(config.get("component_type", "")))
     base_color = np.array(config.get("component_color", (20, 20, 20)), dtype=np.float32)
     defect_type = dp["type"]
 
-    pads = _compute_pad_positions(footprint, nom, (h, w))
+    img, base, pads = _board(nom, footprint, family, (h, w), config, rng)
     geo = body_geometry(nom, dp, tolerances, (h, w))
     length, width_px = float(geo["length"]), float(geo["width"])
     cx, cy = geo["center"]
     rect = cv2.boxPoints(((float(cx), float(cy)), (length, width_px), geo["rotation_deg"]))
     selector = _param_selector(defect_params)
-
-    xs = [p["x"] for p in pads] + [p["x"] + p["w"] for p in pads] + [int(rect[:, 0].min()), int(rect[:, 0].max())]
-    ys = [p["y"] for p in pads] + [p["y"] + p["h"] for p in pads] + [int(rect[:, 1].min()), int(rect[:, 1].max())]
-    keepout = (min(xs), min(ys), max(xs), max(ys))
-
-    texture_dir = config.get("texture_dir")
-    if texture_dir:
-        img, base = _texture_substrate(h, w, str(texture_dir), rng)  # real board already has its own copper
-    else:
-        img, base = _substrate(h, w, rng)
-        _traces_and_vias(img, base, pads, keepout, rng)
-    _silkscreen(img, keepout, family, rng)
 
     body_mask = np.zeros((h, w), dtype=np.uint8)
     pose = None
@@ -566,4 +641,4 @@ def render_photoreal_base(
             _draw_solder_bridge(img8, nom, footprint, (int(cx), int(cy)), (int(length), int(width_px)), selector, geo["tilt_deg"])
             img = img8.astype(np.float32)
 
-    return _camera(cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA), rng)
+    return camera_model(cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA), rng)

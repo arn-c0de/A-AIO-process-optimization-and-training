@@ -42,10 +42,10 @@ class CustomFilterSettings:
     enable_brightness: bool = True
     enable_contrast: bool = True
     enable_perspective: bool = False
-    enable_motion_blur: bool = True
+    enable_motion_blur: bool = False
     enable_saturation: bool = True
     enable_hue_shift: bool = True
-    enable_shadow: bool = True
+    enable_shadow: bool = False
     enable_reflection: bool = False
     enable_vignetting: bool = False
     enable_chromatic_aberration: bool = False
@@ -116,10 +116,10 @@ class FilterPopupPayload:
             enable_brightness=_to_bool(data.get("enable_brightness", True), True),
             enable_contrast=_to_bool(data.get("enable_contrast", True), True),
             enable_perspective=_to_bool(data.get("enable_perspective", False), False),
-            enable_motion_blur=_to_bool(data.get("enable_motion_blur", True), True),
+            enable_motion_blur=_to_bool(data.get("enable_motion_blur", False), False),
             enable_saturation=_to_bool(data.get("enable_saturation", True), True),
             enable_hue_shift=_to_bool(data.get("enable_hue_shift", True), True),
-            enable_shadow=_to_bool(data.get("enable_shadow", True), True),
+            enable_shadow=_to_bool(data.get("enable_shadow", False), False),
             enable_reflection=_to_bool(data.get("enable_reflection", False), False),
             enable_vignetting=_to_bool(data.get("enable_vignetting", False), False),
             enable_chromatic_aberration=_to_bool(data.get("enable_chromatic_aberration", False), False),

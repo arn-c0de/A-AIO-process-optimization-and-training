@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
-from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
+from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl
 
 
 StatusCallback = Callable[[str, Path | None], None]
@@ -127,6 +127,7 @@ class BlenderLivePreviewWorker:
             },
             "augment": {"rotation_deg": 0.0},
             "render_3d": profile_data.get("render_3d") or {},
+            **profile_job_fields(profile_data),
         }
 
         write_jobs_jsonl(jobs_path, [job])

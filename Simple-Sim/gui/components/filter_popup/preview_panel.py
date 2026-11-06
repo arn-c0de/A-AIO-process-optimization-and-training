@@ -284,7 +284,7 @@ def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any
         from simple_sim.profile_hash import load_profile  # type: ignore
         from simple_sim.config import load_config  # type: ignore
         from simple_sim.defects import sample_defect_params  # type: ignore
-        from simple_sim.generators.blender_3d import write_jobs_jsonl, render_blender_batch  # type: ignore
+        from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # type: ignore
         from simple_sim.generators.opencv_2d import (  # type: ignore
             apply_image_filter_overrides,
             sample_nominal_geometry,
@@ -356,6 +356,7 @@ def do_render_3d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any
             "defect": defect,
             "augment": augment,
             "render_3d": render_3d,
+            **profile_job_fields(profile),
         }
 
         jobs_path = out_root / f"jobs_{profile_id}.jsonl"
@@ -719,7 +720,7 @@ def _left_render_3d_thread(popup: Any, profile_id: str, filter_vals: dict[str, A
         from simple_sim.profile_hash import load_profile  # type: ignore
         from simple_sim.config import load_config  # type: ignore
         from simple_sim.defects import sample_defect_params  # type: ignore
-        from simple_sim.generators.blender_3d import write_jobs_jsonl, render_blender_batch  # type: ignore
+        from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # type: ignore
         from simple_sim.generators.opencv_2d import (  # type: ignore
             apply_image_filter_overrides,
             sample_nominal_geometry,
@@ -792,6 +793,7 @@ def _left_render_3d_thread(popup: Any, profile_id: str, filter_vals: dict[str, A
             "defect": defect,
             "augment": augment,
             "render_3d": render_3d,
+            **profile_job_fields(profile),
         }
 
         jobs_path = out_root / f"jobs_{profile_id}.jsonl"

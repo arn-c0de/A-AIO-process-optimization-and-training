@@ -313,9 +313,17 @@ Responsibilities:
 
 - `write_jobs_jsonl(path, jobs)`: writes render jobs for batch Blender execution.
 
+## `simple_sim/generators/blender3d/bake.py`
+
+- `prepare_jobs(jobs, work_dir)`: bakes the photoreal 2D board (mask, traces, vias, silkscreen, pad finish)
+  per job to a texture and adds the shared layout (pads, body pose, family, thermal pad).
+- `apply_camera(jobs, output_root)`: runs every render through the 2D camera model.
+- `profile_job_fields(profile)`: part type + tolerances a job needs for the bake.
+
 ## `simple_sim/generators/blender3d/runner.py`
 
-- `render_blender_batch(...)`: executes Blender in background with render script + jobs file.
+- `render_blender_batch(...)`: bakes boards, executes Blender in background with render script + prepared
+  jobs file, removes the textures, then applies the camera model.
 - Validates script/jobs existence and raises on non-zero return code.
 
 ## `simple_sim/blender/render_batch.py`
@@ -324,10 +332,10 @@ Purpose: standalone Blender-side batch renderer script.
 
 Responsibilities:
 - Parses Blender custom CLI args.
-- Builds minimal scene per job from JSONL:
-  - substrate, pads, component, solder joints
-  - footprint-specific geometry for `chip_2pad`, `sot23`, `qfn*`, `soic_16`
-- Configures renderer/view transform and light/camera rig.
+- Builds the scene per job from the prepared JSONL (layout from the bake, no own pad logic):
+  - textured board plane, solder fillet height-field meshes per pad
+  - part per family: chip body + end caps, SOT/SOIC/QFN mold body, gull-wing leads, pin-1 mark, marking text
+- Configures renderer (sRGB `Standard` view transform), AOI ring light and ROI-framed orthographic camera.
 - Applies defect transforms and augmentation-driven global rotation.
 - Renders each job image and fails fast on error.
 

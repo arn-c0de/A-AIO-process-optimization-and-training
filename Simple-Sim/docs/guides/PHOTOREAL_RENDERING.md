@@ -20,7 +20,7 @@ deterministic per seed.
 |---|---|
 | Substrate | Solder-mask green sampled from a palette measured on real boards, resin mottling, fibre weave, sensor grain |
 | Copper under mask | 1-3 autorouted traces with 45° jogs, traces leaving pads, 0-3 vias with annular ring and dark hole |
-| Silkscreen | White footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`) |
+| Silkscreen | White footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`), placed around the *nominal* footprint so it never moves with a defect |
 | Pads | Mask-defined opening with dark rim, ENIG (gold) or HASL (silver) finish visible at the pad edge. Large (thermal) pads without a part show window-pane stencil islands |
 | Solder | Height map with slight lumpiness, shaded as a rough mirror: flat areas reflect the overhead light, slopes reflect the dark board, sharp highlight towards the light. Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
 | Chip body | Resistor: dark body, metallic end caps, white value code (`103`, `4R7`, ...). Capacitor (`component.type` contains `cap`): tan ceramic, nickel caps, no marking. Printed codes have blotchy ink |
@@ -82,9 +82,8 @@ a few hundred real ROIs per package are enough.
 ## Roadmap towards "indistinguishable from the camera"
 
 1. **Done – procedural photoreal 2D** (this document).
-2. **Blender PBR upgrade** (`simple_sim/blender/render_batch.py`): texture the substrate with the same
-   trace/via/silkscreen generator baked to an image, add a solder-fillet mesh instead of flat pads,
-   marking decals, HDRI/ring-light rig matching the AOI box.
+2. **Done – Blender upgrade**: the 3D backend bakes this generator's board as texture, models solder
+   fillets as meshes, adds markings, leads and an AOI ring light (see `3D_RENDERING_QUICKSTART.md`).
 3. **Done – real-photo texture bank**: `render.texture_dir` (see above).
 4. **Done – sim-to-real check**: `tools/sim_to_real.py` (see below). Still open: a small labelled
    set of real ROIs per package to measure classifier accuracy on real data.

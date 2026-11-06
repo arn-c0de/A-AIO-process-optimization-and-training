@@ -31,7 +31,7 @@ from gui.components.overlay_renderer import draw_defect_overlay
 from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generators.opencv_2d import render_roi, sample_nominal_geometry
-from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
+from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl
 
 # Standard defect classes for PCB components
 STANDARD_CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
@@ -206,6 +206,7 @@ def _build_3d_job(
         "nominal": nominal,
         "defect": defect,
         "render_3d": render_3d,
+        **profile_job_fields(profile),
     }
     return job, nominal, defect
 

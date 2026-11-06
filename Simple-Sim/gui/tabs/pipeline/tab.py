@@ -576,13 +576,13 @@ class PipelineControlTab(BaseTab):
         # High priority new filters (enabled by default)
         self.ui.var_filter_enable_perspective.set(bool(data.get("enable_perspective", False)))
         self.ui.var_filter_perspective_strength.set(str(data.get("perspective_strength", "1.00")))
-        self.ui.var_filter_enable_motion_blur.set(bool(data.get("enable_motion_blur", True)))
+        self.ui.var_filter_enable_motion_blur.set(bool(data.get("enable_motion_blur", False)))
         self.ui.var_filter_motion_blur_strength.set(str(data.get("motion_blur_strength", "1.00")))
         self.ui.var_filter_enable_saturation.set(bool(data.get("enable_saturation", True)))
         self.ui.var_filter_saturation_factor.set(str(data.get("saturation_factor", "1.00")))
         self.ui.var_filter_enable_hue_shift.set(bool(data.get("enable_hue_shift", True)))
         self.ui.var_filter_hue_shift_deg.set(str(data.get("hue_shift_deg", "0.00")))
-        self.ui.var_filter_enable_shadow.set(bool(data.get("enable_shadow", True)))
+        self.ui.var_filter_enable_shadow.set(bool(data.get("enable_shadow", False)))
         self.ui.var_filter_shadow_strength.set(str(data.get("shadow_strength", "0.30")))
         self.ui.var_filter_enable_reflection.set(bool(data.get("enable_reflection", False)))
         self.ui.var_filter_reflection_strength.set(str(data.get("reflection_strength", "0.50")))
@@ -637,13 +637,13 @@ class PipelineControlTab(BaseTab):
                 # High priority new filters
                 "enable_perspective": bool(st.get("pipeline.filter.enable_perspective", False)),
                 "perspective_strength": str(st.get("pipeline.filter.perspective_strength", "1.00")),
-                "enable_motion_blur": bool(st.get("pipeline.filter.enable_motion_blur", True)),
+                "enable_motion_blur": bool(st.get("pipeline.filter.enable_motion_blur", False)),
                 "motion_blur_strength": str(st.get("pipeline.filter.motion_blur_strength", "1.00")),
                 "enable_saturation": bool(st.get("pipeline.filter.enable_saturation", True)),
                 "saturation_factor": str(st.get("pipeline.filter.saturation_factor", "1.00")),
                 "enable_hue_shift": bool(st.get("pipeline.filter.enable_hue_shift", True)),
                 "hue_shift_deg": str(st.get("pipeline.filter.hue_shift_deg", "0.00")),
-                "enable_shadow": bool(st.get("pipeline.filter.enable_shadow", True)),
+                "enable_shadow": bool(st.get("pipeline.filter.enable_shadow", False)),
                 "shadow_strength": str(st.get("pipeline.filter.shadow_strength", "0.30")),
                 "enable_reflection": bool(st.get("pipeline.filter.enable_reflection", False)),
                 "reflection_strength": str(st.get("pipeline.filter.reflection_strength", "0.50")),
