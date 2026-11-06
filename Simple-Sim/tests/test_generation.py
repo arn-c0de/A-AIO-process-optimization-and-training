@@ -56,12 +56,13 @@ def test_generate_cli_json_and_extend(tmp_path: Path) -> None:
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     out = tmp_path / "ds"
     cmd = [sys.executable, str(SIM_ROOT / "scripts" / "generate.py"), "--config", str(cfg_path), "--out", str(out), "--json"]
+    n = 2 * len(cfg["classes"])
     res = parse_result(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)
-    assert res["ok"] and res["total_samples"] == res["new_samples"] == 8
-    assert sum(res["splits"].values()) == 8 and sum(res["classes"].values()) == 8
+    assert res["ok"] and res["total_samples"] == res["new_samples"] == n
+    assert sum(res["splits"].values()) == n and sum(res["classes"].values()) == n
     res2 = parse_result(subprocess.run(cmd + ["--extend"], capture_output=True, text=True, check=True).stdout)
-    assert res2["extend"] and res2["total_samples"] == 16 and res2["new_samples"] == 8
-    assert len(list((out / "images").glob("*.png"))) == 16
+    assert res2["extend"] and res2["total_samples"] == 2 * n and res2["new_samples"] == n
+    assert len(list((out / "images").glob("*.png"))) == 2 * n
 
     bad = subprocess.run(cmd[:3] + [str(tmp_path / "missing.yaml")] + cmd[4:], capture_output=True, text=True)
     assert bad.returncode == 1 and parse_result(bad.stdout)["ok"] is False

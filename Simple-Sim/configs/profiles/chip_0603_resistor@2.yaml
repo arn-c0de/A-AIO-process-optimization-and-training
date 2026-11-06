@@ -26,7 +26,7 @@
 #
 # Component: Standard 0603 SMD chip resistor (1.6 x 0.8 mm) on a 2-pad footprint.
 # @2 (vs @1): TOMBSTONE starts at 30 deg instead of 75 deg - a partly lifted end is already an
-# open joint. @1 stays for datasets and models created with it.
+# open joint; additional classes SOLDER_BALL and EXCESS_SOLDER. @1 stays for datasets and models created with it.
 profile:
   profile_id: "chip_0603_resistor@2"
   schema_version: 1
@@ -63,6 +63,8 @@ defect_set:
   - "MISSING"
   - "MISALIGNED"
   - "TOMBSTONE"
+  - "SOLDER_BALL"
+  - "EXCESS_SOLDER"
 
 # Component-specific render parameters
 render:

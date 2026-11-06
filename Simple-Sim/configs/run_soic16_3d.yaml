@@ -16,6 +16,8 @@ classes:
   MISSING: 200
   MISALIGNED: 200
   TOMBSTONE: 200
+  SOLDER_BALL: 200
+  EXCESS_SOLDER: 200
 
 domains:
   domain_A:

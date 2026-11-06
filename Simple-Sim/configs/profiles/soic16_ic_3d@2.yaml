@@ -36,6 +36,8 @@ defect_set:
   - "MISSING"
   - "MISALIGNED"
   - "TOMBSTONE"
+  - "SOLDER_BALL"
+  - "EXCESS_SOLDER"
 
 render_3d:
   camera:

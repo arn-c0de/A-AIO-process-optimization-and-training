@@ -38,6 +38,8 @@ defect_set:
   - "MISSING"
   - "MISALIGNED"
   - "TOMBSTONE"
+  - "SOLDER_BALL"
+  - "EXCESS_SOLDER"
 
 # 3D scene defaults (consumed by the Blender batch renderer).
 render_3d:

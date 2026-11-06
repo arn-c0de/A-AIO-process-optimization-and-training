@@ -271,7 +271,9 @@ def thermal_pad_index(pads: list[dict[str, int]]) -> int | None:
 
 
 def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int]], body_mask: np.ndarray,
-                     rng: np.random.Generator, finish: np.ndarray, *, with_solder: bool = True) -> None:
+                     rng: np.random.Generator, finish: np.ndarray, *, with_solder: bool = True,
+                     excess: frozenset[int] = frozenset()) -> None:
+    """Pad finish and solder; pads in *excess* get a high, convex (bulging) joint instead of a fillet."""
     h, w = img.shape[:2]
     solder = _SOLDER * float(rng.uniform(0.9, 1.05))
     mask_edge = base * 0.65
@@ -301,7 +303,10 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
         if covered.any():
             dist = cv2.distanceTransform((~covered).astype(np.uint8), cv2.DIST_L2, 3)
             t = 1.0 - dist / max(1.0, float(dist.max()))
-            hmap = np.where(covered, 1.0, t ** 1.8) * rim * amp  # concave fillet rising to the terminal
+            if i in excess:  # too much solder: convex bulge, higher than the terminal
+                hmap = np.where(covered, 1.0, t ** 0.5) * rim * amp * 1.5
+            else:
+                hmap = np.where(covered, 1.0, t ** 1.8) * rim * amp  # concave fillet rising to the terminal
             spec_power, spec_gain = 60.0, 0.85
         else:
             # Reflowed paste, no part. Thermal pads are printed through a window-pane stencil,
@@ -316,6 +321,83 @@ def _pads_and_solder(img: np.ndarray, base: np.ndarray, pads: list[dict[str, int
         alpha = np.clip(hmap / (0.08 * amp), 0.0, 1.0)
         _blend(region, shaded, alpha)
         img[y0:y1, x0:x1] = region
+
+
+# --------------------------------------------------------------------------- solder defects
+
+def solder_defect_layout(defect_type: str, pads: list[dict[str, int]], body: np.ndarray | None,
+                         rng: np.random.Generator) -> dict[str, Any]:
+    """Where the inspected part's solder defects are; shared by the 2D renderer and the 3D bake.
+
+    ``excess``: indices of pads with too much (bulging) solder. ``balls``: ``(x, y, r)`` solder balls on
+    the mask next to the joints, never on a pad or under the body (*body*: its 4 corner points).
+    """
+    out: dict[str, Any] = {"excess": [], "balls": []}
+    thermal = thermal_pad_index(pads)
+    joints = [i for i in range(len(pads)) if i != thermal]
+    if defect_type == "EXCESS_SOLDER":
+        k = int(rng.integers(1, min(len(joints), 4) + 1))
+        out["excess"] = sorted(int(i) for i in rng.choice(joints, size=k, replace=False))
+    elif defect_type == "SOLDER_BALL":
+        ref = _pad_ref([pads[i] for i in joints])
+        for _ in range(int(rng.integers(1, 5))):
+            r = max(float(rng.uniform(0.12, 0.25)) * ref, float(rng.uniform(2.5, 4.5)) * SS)  # >= ~5-9 camera px across
+            for _try in range(30):
+                p = pads[joints[int(rng.integers(len(joints)))]]
+                a, d = float(rng.uniform(0, 2 * np.pi)), float(rng.uniform(0.6, 1.3)) * max(p["w"], p["h"])
+                x, y = p["x"] + p["w"] / 2.0 + d * np.cos(a), p["y"] + p["h"] / 2.0 + d * np.sin(a)
+                on_pad = any(q["x"] - r < x < q["x"] + q["w"] + r and q["y"] - r < y < q["y"] + q["h"] + r for q in pads)
+                under = body is not None and cv2.pointPolygonTest(body.astype(np.float32), (x, y), True) > -r
+                if not on_pad and not under:
+                    out["balls"].append((float(x), float(y), r))
+                    break
+    return out
+
+
+def _draw_solder_balls(img: np.ndarray, base: np.ndarray, balls: list[tuple[float, float, float]]) -> None:
+    """Small mirror-like solder spheres with a contact shadow."""
+    h, w = img.shape[:2]
+    env = base * 0.8 + 12.0
+    for x, y, r in balls:
+        x0, y0, x1, y1 = int(x - 2 * r), int(y - 2 * r), int(x + 2 * r) + 1, int(y + 2 * r) + 1
+        if x1 <= 0 or y1 <= 0 or x0 >= w or y0 >= h:
+            continue
+        cx0, cy0, cx1, cy1 = max(0, x0), max(0, y0), min(w, x1), min(h, y1)
+        yy, xx = np.mgrid[cy0:cy1, cx0:cx1].astype(np.float32)
+        d2 = ((xx - x) ** 2 + (yy - y) ** 2) / (r * r)
+        region = img[cy0:cy1, cx0:cx1]
+        shadow = np.clip(1.0 - (((xx - x - 0.4 * r) ** 2 + (yy - y - 0.4 * r) ** 2) / (r * r) - 0.6) / 0.8, 0, 1)
+        region *= (1.0 - 0.4 * shadow)[..., None]
+        hmap = np.sqrt(np.clip(1.0 - d2, 0.0, 1.0)) * r
+        _blend(region, _shade_solder(hmap, _SOLDER, env, 60.0, 0.9), np.clip((1.0 - d2) * r, 0.0, 1.0))
+
+
+def _solder_bulge(img: np.ndarray, base: np.ndarray, center, length: float, width: float, angle_deg: float) -> None:
+    """Shiny convex solder blob (too much solder), e.g. over a chip's end cap or a buried lead foot."""
+    h, w = img.shape[:2]
+    u, v, m = _rect_alpha(h, w, center, length, width, angle_deg)
+    bulge = np.clip(1.0 - (u / (length / 2.0)) ** 2 - (v / (width / 2.0)) ** 2, 0.0, 1.0)
+    hmap = np.sqrt(bulge) * 0.4 * min(length, width)
+    _blend(img, _shade_solder(hmap, _SOLDER, base * 0.8 + 12.0, 60.0, 0.85), np.clip(bulge * 4.0, 0, 1) * m)
+
+
+def _draw_excess(img: np.ndarray, base: np.ndarray, family: str, pads: list[dict[str, int]], excess: list[int],
+                 center: tuple[float, float], length: float, width: float, angle_deg: float) -> None:
+    """Too much solder on the pads in *excess*: chips get it over the end cap, leaded parts over the lead foot."""
+    a = np.radians(angle_deg)
+    axis = np.array([np.cos(a), np.sin(a)])
+    for i in excess:
+        p = pads[i]
+        pc = np.array([p["x"] + p["w"] / 2.0, p["y"] + p["h"] / 2.0])
+        if family in ("resistor", "capacitor"):
+            side = 1.0 if (pc - np.array(center)) @ axis >= 0 else -1.0
+            _solder_bulge(img, base, np.array(center) + axis * side * length * 0.42, length * 0.3, width * 1.06, angle_deg)
+        elif family in ("sot", "soic"):
+            _solder_bulge(img, base, pc, p["w"] * 0.95, p["h"] * 0.95, 0.0)
+        elif family == "qfn":  # bulges out beyond the package edge
+            out = pc - np.array(center)
+            out = np.where(np.abs(out) >= np.abs(out).max(), np.sign(out), 0.0)
+            _solder_bulge(img, base, pc + out * 0.35 * np.array([p["w"], p["h"]]), p["w"] * 1.1, p["h"] * 1.1, 0.0)
 
 
 # --------------------------------------------------------------------------- camera
@@ -753,8 +835,9 @@ def render_board(
     """Board texture (substrate, copper, silkscreen, bare pad finish) for the 3D backend, plus the scene layout.
 
     Returns ``(BGR uint8 image of *size*, scene)``. ``scene`` holds, in camera pixels relative to the image
-    centre (x right, y down): ``family``, ``pads`` as ``[cx, cy, w, h]`` and ``body`` (``None`` when MISSING)
-    with the same pose semantics as the 2D renderer, including the tombstone pivot.
+    centre (x right, y down): ``family``, ``pads`` as ``[cx, cy, w, h]``, ``body`` (``None`` when MISSING)
+    with the same pose semantics as the 2D renderer including the tombstone pivot, ``excess`` (pad
+    indices with too much solder) and ``balls`` (``[x, y, r]``), from :func:`solder_defect_layout`.
     """
     width, height = size
     h, w = height * SS, width * SS
@@ -776,6 +859,12 @@ def render_board(
         "thermal_pad": thermal_pad_index(pads),
         "body": None,
     }
+    geo_ss = body_geometry(nom, dp, tolerances, (h, w))
+    rect = cv2.boxPoints(((float(geo_ss["center"][0]), float(geo_ss["center"][1])),
+                          (float(geo_ss["length"]), float(geo_ss["width"])), geo_ss["rotation_deg"]))
+    solder = solder_defect_layout(dp["type"], pads, rect, rng)
+    scene["excess"] = solder["excess"]
+    scene["balls"] = [[(x - w / 2.0) / SS, (y - h / 2.0) / SS, r / SS] for x, y, r in solder["balls"]]
     if dp["type"] != "MISSING":
         geo = body_geometry(nominal, defect_params, tolerances, (height, width))
         body = {"center": [geo["center"][0] - width // 2, geo["center"][1] - height // 2], "length": geo["length"],
@@ -823,7 +912,8 @@ def render_photoreal_base(
             pts = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector)["lifted"]
         cv2.fillPoly(body_mask, [np.round(pts).astype(np.int32)], 255)
 
-    _pads_and_solder(img, base, pads, body_mask, rng, finish)
+    solder = solder_defect_layout(defect_type, pads, rect, rng)
+    _pads_and_solder(img, base, pads, body_mask, rng, finish, excess=frozenset(solder["excess"]))
 
     if pose is not None:
         _draw_tombstone(img, family, pose, width_px, base_color, rng)
@@ -846,5 +936,7 @@ def render_photoreal_base(
             img8 = _clip8(img)
             _draw_solder_bridge(img8, nom, footprint, (int(cx), int(cy)), (int(length), int(width_px)), selector, geo["tilt_deg"])
             img = img8.astype(np.float32)
+        _draw_excess(img, base, family, pads, solder["excess"], (float(cx), float(cy)), length, width_px, geo["rotation_deg"])
+        _draw_solder_balls(img, base, solder["balls"])
 
     return camera_model(cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA), rng, config.get("camera"))

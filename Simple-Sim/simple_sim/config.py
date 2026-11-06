@@ -22,7 +22,7 @@ def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any]) ->
     out.setdefault("component_type", str((profile.get("component") or {}).get("type", "")))
     return out
 
-VALID_CLASSES = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT'}
+VALID_CLASSES = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT', 'SOLDER_BALL', 'EXCESS_SOLDER'}
 
 _SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 _SUPPORTED_MODELS = {'resnet18'}

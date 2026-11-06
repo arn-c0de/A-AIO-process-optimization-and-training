@@ -9,6 +9,7 @@ Each JSONL job carries the usual sample fields (``image_path``, ``seed``, ``mm_p
 
   "board": {"texture": "<png>", "scale": 2, "family": "resistor|capacitor|sot|soic|qfn",
             "pads": [[cx, cy, w, h], ...], "thermal_pad": index | null,
+            "excess": [pad index, ...], "balls": [[x, y, r], ...],
             "body": null | {"center": [x, y], "length", "width", "rotation_deg", "tilt_deg",
                             "is_tombstone", "raised_sign"}}
 
@@ -150,7 +151,8 @@ def _rect_distance(x: float, y: float, rect: dict[str, float]) -> float:
     return max(abs(dx * c + dy * s) - rect["hl"], abs(-dx * s + dy * c) - rect["hw"])
 
 
-def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big: bool, mat) -> bpy.types.Object:
+def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big: bool, mat,
+            excess: bool = False) -> bpy.types.Object:
     """Solder as a height-field mesh over the pad.
 
     With a part terminal on the pad: concave fillet rising towards the terminal. Without one
@@ -176,7 +178,7 @@ def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big
             rim = min(1.0, min(x - xs[0], xs[-1] - x, y - ys[0], ys[-1] - y) / rim_w)
             if touched:
                 t = 1.0 - max(0.0, dist[j][i]) / max(dmax, 1e-6)
-                z = h_term * t ** 1.8
+                z = h_term * (1.5 * t ** 0.5 if excess else t ** 1.8)  # too much solder: convex bulge
             else:
                 u = ((i / n * nx) % 1.0) * 2 - 1
                 v = ((j / n * ny) % 1.0) * 2 - 1
@@ -398,7 +400,15 @@ def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engi
                              (0.7, 0.7, 0.72), 0.18, 1.0, bump=0.02)
     for i, (pad, contact) in enumerate(zip(pads, contacts)):
         big = i == board.get("thermal_pad")  # window-pane stencil, as in 2D
-        scene_objs.append(_fillet(f"solder_{i}", pad, contact, h_solder, big, m_solder))
+        scene_objs.append(_fillet(f"solder_{i}", pad, contact, h_solder, big, m_solder, excess=i in board.get("excess", [])))
+    for k, (bx, by, br) in enumerate(board.get("balls", [])):  # solder balls on the mask
+        r = br * mmpp
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=r, location=(bx * mmpp, -by * mmpp, 0.7 * r), segments=16, ring_count=8)
+        ball = bpy.context.active_object
+        ball.name = f"solder_ball_{k}"
+        ball.data.materials.append(m_solder)
+        bpy.ops.object.shade_smooth()
+        scene_objs.append(ball)
 
     # Global in-plane orientation (cardinal 0/90/180/270 + jitter), like the 2D rotation.
     rot = float((job.get("augment") or {}).get("rotation_deg", 0.0))

@@ -17,7 +17,7 @@ FOOTPRINTS = {
     "soic_16": {"pad_width": [10.0, 12.0], "pad_spacing": [120.0, 130.0], "component_length": [90.0, 100.0],
                 "component_width": [70.0, 80.0]},
 }
-CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE", "SOLDER_BRIDGE", "CORNER_LIFT"]
+CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE", "SOLDER_BRIDGE", "CORNER_LIFT", "SOLDER_BALL", "EXCESS_SOLDER"]
 
 
 def _render(footprint, defect_type, seed=1, **cfg):
@@ -144,3 +144,31 @@ def test_rework_can_be_disabled():
     a = _render("chip_2pad", "OK", seed=3, rework_artifacts=0.0)
     b = _render("chip_2pad", "OK", seed=3, rework_artifacts=0.0)
     assert np.array_equal(a, b)
+
+
+def test_solder_defect_layout():
+    from simple_sim.generators.opencv2d.photoreal import solder_defect_layout
+
+    pads = [{"x": 20, "y": 40, "w": 30, "h": 40}, {"x": 110, "y": 40, "w": 30, "h": 40}]
+    body = np.array([[35, 45], [125, 45], [125, 75], [35, 75]], dtype=np.float32)
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        assert 1 <= len(solder_defect_layout("EXCESS_SOLDER", pads, body, rng)["excess"]) <= 2
+        balls = solder_defect_layout("SOLDER_BALL", pads, body, rng)["balls"]
+        assert 1 <= len(balls) <= 4
+        for x, y, r in balls:  # never on a pad, never under the body
+            assert not any(p["x"] - r < x < p["x"] + p["w"] + r and p["y"] - r < y < p["y"] + p["h"] + r for p in pads)
+            assert cv2_point_outside(body, x, y, r)
+    assert solder_defect_layout("OK", pads, body, np.random.default_rng(0)) == {"excess": [], "balls": []}
+
+
+def cv2_point_outside(poly, x, y, r):
+    import cv2
+
+    return cv2.pointPolygonTest(poly, (x, y), True) <= -r
+
+
+def test_flat_style_draws_solder_defects():
+    ok = _render("chip_2pad", "OK", seed=4, style="flat")
+    ball = _render("chip_2pad", "SOLDER_BALL", seed=4, style="flat")
+    assert np.abs(ok.astype(int) - ball).sum() > 0

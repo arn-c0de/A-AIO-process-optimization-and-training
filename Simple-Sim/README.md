@@ -165,7 +165,7 @@ cd Simple-Sim
 Profiles live in `configs/profiles/` and are versioned via `profile_id` like `chip_0603_resistor@2`.
 
 Included profiles:
-- `chip_0603_resistor@2` (default): 2-pad 0603 chip resistor (OK/MISSING/MISALIGNED/TOMBSTONE from 30 deg tilt)
+- `chip_0603_resistor@2` (default): 2-pad 0603 chip resistor (OK/MISSING/MISALIGNED/TOMBSTONE from 30 deg tilt/SOLDER_BALL/EXCESS_SOLDER)
 - `chip_0603_resistor@1`: same with TOMBSTONE from 75 deg (kept for existing datasets/models)
 - `sot23_transistor@1`: 3-pad SOT-23 transistor (OK/MISSING/MISALIGNED/TOMBSTONE)
 - `qfn32_ic@1`: 4-pad QFN-32 IC (OK/MISSING/MISALIGNED/TOMBSTONE)

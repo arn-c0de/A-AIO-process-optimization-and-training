@@ -32,7 +32,10 @@ deterministic per seed.
 
 Defect semantics are unchanged: `MISSING`, `MISALIGNED` (shift/rotation), `TOMBSTONE` (part pivoting about
 the bottom edge of its anchored end: from above the steep, foreshortened top face plus the upright
-metal end cap, with a shadow projected along the light), `SOLDER_BRIDGE`, `CORNER_LIFT` are driven by the same `defect_params`
+metal end cap, with a shadow projected along the light), `SOLDER_BRIDGE`, `CORNER_LIFT`,
+`SOLDER_BALL` (1-4 shiny solder balls on the mask next to the joints, never on a pad or under the
+part) and `EXCESS_SOLDER` (high convex joints on 1-4 pads, over the end cap of chips, over the lead
+foot of SOT/SOIC, bulging past the package edge on QFN; the part itself is placed like OK) are driven by the same `defect_params`
 and `tolerances` as before. Realism-group and custom image filters are applied afterwards exactly as
 for the flat style.
 

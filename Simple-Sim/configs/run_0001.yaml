@@ -12,6 +12,8 @@ classes:
   MISSING: 100
   MISALIGNED: 100
   TOMBSTONE: 100
+  SOLDER_BALL: 100
+  EXCESS_SOLDER: 100
 domains:
   domain_A:
     lighting_brightness:
