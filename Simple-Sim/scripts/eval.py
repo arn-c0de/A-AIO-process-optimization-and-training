@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ROIDataset
 from simple_sim.eval_utils import (
     dataset_profile,
@@ -25,7 +25,6 @@ from simple_sim.eval_utils import (
     print_checkpoint_info,
     print_distribution,
     resolve_bundle_checkpoint,
-    run_cli,
     run_inference,
 )
 from simple_sim.io_utils import atomic_write_json

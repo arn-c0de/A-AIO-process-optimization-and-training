@@ -41,7 +41,7 @@ the **last line of stdout**:
 SIMPLE_SIM_RESULT {"ok": true, "command": "...", ...}
 ```
 
-- `ok` (bool) and `command` (str) are always present; on failure `error` (str) is set and
+- `ok` (bool) and `command` (str, the `python -m simple_sim` subcommand name, e.g. `batch-predict`) are always present; on failure `error` (str) is set and
   the exit code is non-zero.
 - All other keys are command-specific - inspect the result line instead of assuming them.
 - Other output (progress, tables) is human-oriented; do not parse it.

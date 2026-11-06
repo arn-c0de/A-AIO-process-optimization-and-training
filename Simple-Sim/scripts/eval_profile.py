@@ -17,9 +17,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ProfileDataset
-from simple_sim.eval_utils import eval_loader, metrics_summary, print_checkpoint_info, print_distribution, run_cli
+from simple_sim.eval_utils import eval_loader, metrics_summary, print_checkpoint_info, print_distribution
 from simple_sim.io_utils import atomic_write_json
 from simple_sim.metrics import check_success_criteria, format_metrics
 from simple_sim.models import load_checkpoint_model

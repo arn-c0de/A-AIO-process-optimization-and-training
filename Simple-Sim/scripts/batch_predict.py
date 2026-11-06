@@ -31,7 +31,7 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, emit_result
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ROIDataset
 from simple_sim.io_utils import append_jsonl, atomic_write_json, now_tag, unique_path
 from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
@@ -536,15 +536,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    try:
-        result = run(args)
-    except (Exception, SystemExit) as exc:
-        if not args.json:
-            raise
-        emit_result(COMMAND, ok=False, error=str(exc))
-        sys.exit(1)
-    if args.json:
-        emit_result(COMMAND, result)
+    run_cli(COMMAND, lambda: run(args), args.json)
 
 
 if __name__ == "__main__":

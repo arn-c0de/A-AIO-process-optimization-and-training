@@ -17,9 +17,9 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ProfileDataset, make_loader_kwargs
-from simple_sim.eval_utils import print_distribution, require_manifest, run_cli
+from simple_sim.eval_utils import print_distribution, require_manifest
 from simple_sim.manifest import hash_file, read_dataset_manifest
 from simple_sim.rng import resolve_train_seed, seed_everything
 from simple_sim.schema import LabelRow, read_jsonl

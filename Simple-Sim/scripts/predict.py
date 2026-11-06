@@ -21,15 +21,13 @@ import torch
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag
+from simple_sim.cli_utils import UsageError, add_json_flag, run_cli
 from simple_sim.data_loader import load_image_bgr, preprocess_bgr
 from simple_sim.eval_utils import (
     MANIFEST_NAME,
-    UsageError,
     dataset_profile,
     predict_probs,
     resolve_bundle_checkpoint,
-    run_cli,
 )
 from simple_sim.manifest import check_checkpoint_profile
 from simple_sim.models import load_checkpoint_model

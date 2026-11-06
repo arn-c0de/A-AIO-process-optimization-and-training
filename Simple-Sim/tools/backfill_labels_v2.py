@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
+from simple_sim.cli_utils import add_json_flag, run_cli  # noqa: E402
 from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile  # noqa: E402
 from simple_sim.schema import LabelRow, read_jsonl, write_jsonl  # noqa: E402
 
@@ -89,16 +89,7 @@ def main() -> None:
     add_json_flag(parser)
     args = parser.parse_args()
 
-    try:
-        filled = backfill_labels(Path(args.data))
-    except (FileNotFoundError, ValueError) as exc:
-        if args.json:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            emit_result("backfill-labels", {"dataset": args.data}, ok=False, error=str(exc))
-            raise SystemExit(1) from exc
-        raise SystemExit(f"ERROR: {exc}") from exc
-    if args.json:
-        emit_result("backfill-labels", {"dataset": args.data, "rows_filled": filled})
+    run_cli("backfill-labels", lambda: {"dataset": args.data, "rows_filled": backfill_labels(Path(args.data))}, args.json)
 
 
 if __name__ == "__main__":

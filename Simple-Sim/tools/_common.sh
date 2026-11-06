@@ -52,6 +52,8 @@ sim_bootstrap_venv() {
     echo "Creating venv at ${venv}"
     python3 -m venv "${venv}"
   fi
+  # Some distros create venvs without pip.
+  "${PYTHON}" -m pip --version >/dev/null 2>&1 || "${PYTHON}" -m ensurepip --upgrade
 
   local pip_flags=()
   if [[ -n "${WHEELHOUSE:-}" ]]; then

@@ -121,5 +121,5 @@ def test_cli_json(tmp_path: Path) -> None:
         capture_output=True, text=True, check=True,
     )
     res = parse_result(proc.stdout)
-    assert res["ok"] is True and res["command"] == "arena_report"
+    assert res["ok"] is True and res["command"] == "arena-report"
     assert res["n_models"] == 3 and out.exists()

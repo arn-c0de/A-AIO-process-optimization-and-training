@@ -27,7 +27,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
+from simple_sim.cli_utils import add_json_flag, run_cli  # noqa: E402
 from simple_sim.config import load_config  # noqa: E402
 from simple_sim.manifest import (  # noqa: E402
     read_dataset_manifest,
@@ -284,21 +284,12 @@ def main() -> None:
     add_json_flag(parser)
     args = parser.parse_args()
 
-    try:
-        summary = create_multi_dataset(
-            [Path(d) for d in args.datasets],
-            Path(args.out),
-            config_path=Path(args.config) if args.config else None,
-            run_id=args.run_id,
-        )
-    except (SystemExit, OSError, ValueError) as exc:
-        if not args.json or (isinstance(exc, SystemExit) and not isinstance(exc.code, str)):
-            raise
-        print(f"ERROR: {exc}", file=sys.stderr)
-        emit_result("create-multi-dataset", ok=False, error=str(exc))
-        raise SystemExit(1) from exc
-    if args.json:
-        emit_result("create-multi-dataset", summary)
+    run_cli("create-multi-dataset", lambda: create_multi_dataset(
+        [Path(d) for d in args.datasets],
+        Path(args.out),
+        config_path=Path(args.config) if args.config else None,
+        run_id=args.run_id,
+    ), args.json)
 
 
 if __name__ == "__main__":

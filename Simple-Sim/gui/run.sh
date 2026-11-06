@@ -11,29 +11,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-cd "${ROOT_DIR}"
-
-VENV_DIR="${VENV_DIR:-.venv}"
-PYTHON="${VENV_DIR}/bin/python"
-
-if [[ ! -x "${PYTHON}" ]]; then
-  echo "Creating venv at ${VENV_DIR}"
-  python3 -m venv "${VENV_DIR}"
-fi
-
-echo "Ensuring pip is installed"
-"${PYTHON}" -m ensurepip --upgrade
-
-PIP_FLAGS=()
-if [[ -n "${WHEELHOUSE:-}" ]]; then
-  PIP_FLAGS+=(--no-index --find-links "${WHEELHOUSE}")
-fi
-
-echo "Installing dependencies (if needed)"
-# ${arr[@]+...} keeps an empty array safe under `set -u` on bash < 4.4 (macOS ships 3.2).
-"${PYTHON}" -m pip install ${PIP_FLAGS[@]+"${PIP_FLAGS[@]}"} -r requirements.txt
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/tools/_common.sh"
+cd "${SIM_ROOT}"
+sim_bootstrap_venv
 
 exec "${PYTHON}" gui/monitor.py
-

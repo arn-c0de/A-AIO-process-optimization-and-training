@@ -19,14 +19,13 @@ from tqdm import tqdm
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ROIDataset, make_loader_kwargs
 from simple_sim.eval_utils import (
     ThroughputMeter,
     amp_autocast,
     print_distribution,
     require_manifest,
-    run_cli,
     run_inference,
     to_device,
     unpack_batch,

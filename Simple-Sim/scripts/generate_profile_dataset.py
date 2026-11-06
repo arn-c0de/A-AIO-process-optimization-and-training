@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, emit_result
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.generation.profile_dataset import generate_profile_dataset
 
 COMMAND = "generate_profile_dataset"
@@ -34,19 +34,11 @@ def main(argv: list[str] | None = None) -> None:
     add_json_flag(parser)
     args = parser.parse_args(argv)
 
-    try:
-        result = generate_profile_dataset(
-            Path(args.config),
-            Path(args.out),
-            enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
-        )
-    except Exception as exc:
-        if not args.json:
-            raise
-        emit_result(COMMAND, ok=False, error=str(exc))
-        sys.exit(1)
-    if args.json:
-        emit_result(COMMAND, result)
+    run_cli(COMMAND, lambda: generate_profile_dataset(
+        Path(args.config),
+        Path(args.out),
+        enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
+    ), args.json)
 
 
 if __name__ == '__main__':

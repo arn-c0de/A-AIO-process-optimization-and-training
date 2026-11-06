@@ -52,12 +52,12 @@ def open_tk_viewer(
     try:
         import tkinter as tk
         from tkinter import ttk, messagebox
-    except Exception as exc:
+    except ImportError as exc:
         raise RuntimeError(f"Tkinter not available: {exc}") from exc
 
     try:
         from PIL import Image, ImageTk
-    except Exception as exc:
+    except ImportError as exc:
         raise RuntimeError(f"Pillow (PIL) not available: {exc}") from exc
 
     import queue
@@ -549,8 +549,6 @@ def open_tk_viewer(
 
     def _refresh_images():
         """Clear and rebuild the image grid."""
-        nonlocal photo_refs
-
         # Clear existing widgets
         for widget in inner.winfo_children():
             widget.destroy()

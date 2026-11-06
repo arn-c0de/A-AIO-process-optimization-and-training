@@ -21,9 +21,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag
+from simple_sim.cli_utils import UsageError, add_json_flag, run_cli
 from simple_sim.data_loader import load_image_bgr, preprocess_bgr
-from simple_sim.eval_utils import UsageError, predict_probs, run_cli
+from simple_sim.eval_utils import predict_probs
 from simple_sim.models import load_checkpoint_model
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl
 

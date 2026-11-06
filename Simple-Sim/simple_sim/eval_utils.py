@@ -1,15 +1,14 @@
 """Shared helpers for the train/eval/predict scripts.
 
 Covers batch unpacking, the no-grad inference loop used by validation and evaluation,
-softmax prediction, dataset-manifest / model-bundle resolution and the ``--json`` CLI runner.
+softmax prediction, and dataset-manifest / model-bundle resolution.
 """
 
 from __future__ import annotations
 
 import contextlib
-import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,16 +19,11 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from simple_sim.cli_utils import emit_result
 from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
 from simple_sim.telemetry import emit
 
 MANIFEST_NAME = "dataset_manifest.json"
-
-
-class UsageError(ValueError):
-    """Invalid combination of arguments; shown as a plain message (no traceback) by :func:`run_cli`."""
 
 
 # ---------------------------------------------------------------------------
@@ -240,23 +234,3 @@ def resolve_bundle_checkpoint(model_path: Path, profile_id: str, *, hint: str = 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-
-def run_cli(command: str, fn: Callable[[], dict[str, Any] | None], json_mode: bool) -> dict[str, Any] | None:
-    """Run a script's core *fn* and handle ``--json`` output.
-
-    Without *json_mode* exceptions propagate as before (a :class:`UsageError` becomes a plain
-    ``SystemExit`` message). With *json_mode* the returned payload is emitted as the result
-    line; any exception emits ``ok=false`` + ``error`` and exits with status 1.
-    """
-    if not json_mode:
-        try:
-            return fn()
-        except UsageError as e:
-            raise SystemExit(str(e)) from None
-    try:
-        payload = fn()
-    except Exception as e:  # noqa: BLE001 - reported to the caller as the JSON error
-        emit_result(command, ok=False, error=f"{type(e).__name__}: {e}")
-        sys.exit(1)
-    emit_result(command, payload or {})
-    return payload

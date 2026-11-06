@@ -18,8 +18,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag
-from simple_sim.eval_utils import run_cli
+from simple_sim.cli_utils import add_json_flag, run_cli
+
 from simple_sim.two_stage import TwoStageClassifier, TwoStageResult
 
 

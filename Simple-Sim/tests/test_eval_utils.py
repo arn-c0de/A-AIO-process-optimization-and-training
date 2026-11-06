@@ -12,12 +12,10 @@ from torch.utils.data import DataLoader, TensorDataset
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import parse_result
+from simple_sim.cli_utils import UsageError, parse_result, run_cli
 from simple_sim.eval_utils import (
     ThroughputMeter,
-    UsageError,
     resolve_bundle_checkpoint,
-    run_cli,
     run_inference,
     top_prediction,
     unpack_batch,

@@ -6,25 +6,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-
-def is_filter_popup_extra_key(key: str) -> bool:
-    return (
-        key.endswith("_randomize")
-        or key.endswith("_min")
-        or key.endswith("_max")
-        or key == "filter_mode"
-        or key.startswith("realism_")
-    )
-
-
-def parse_bool_like(value: Any, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return default
+from simple_sim.filter_profiles import is_filter_popup_extra_key, parse_bool_like  # noqa: F401 - re-exported
 
 
 def extract_filter_popup_extras(values: dict[str, Any]) -> dict[str, Any]:

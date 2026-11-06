@@ -13,8 +13,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, emit_result
-from simple_sim.generation.blender import postprocess_blender_images as _postprocess_blender_images  # noqa: F401 (back-compat)
+from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.generation.dataset import generate_dataset  # noqa: F401 (re-exported for tests/tools)
 
 COMMAND = "generate"
@@ -33,20 +32,12 @@ def main(argv: list[str] | None = None) -> None:
     add_json_flag(parser)
     args = parser.parse_args(argv)
 
-    try:
-        result = generate_dataset(
-            Path(args.config),
-            Path(args.out),
-            extend=bool(args.extend),
-            enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
-        )
-    except Exception as exc:
-        if not args.json:
-            raise
-        emit_result(COMMAND, ok=False, error=str(exc))
-        sys.exit(1)
-    if args.json:
-        emit_result(COMMAND, result)
+    run_cli(COMMAND, lambda: generate_dataset(
+        Path(args.config),
+        Path(args.out),
+        extend=bool(args.extend),
+        enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
+    ), args.json)
 
 
 if __name__ == '__main__':

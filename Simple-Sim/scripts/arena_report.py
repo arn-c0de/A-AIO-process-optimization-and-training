@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from simple_sim.arena import detect_sim_root, write_arena_report
-from simple_sim.cli_utils import add_json_flag, emit_result
+from simple_sim.cli_utils import add_json_flag, run_cli
 
 COMMAND = "arena_report"
 
@@ -50,15 +50,7 @@ def main(argv: list[str] | None = None) -> None:
     add_json_flag(ap)
     args = ap.parse_args(argv)
 
-    try:
-        result = _run(args)
-    except (Exception, SystemExit) as exc:
-        if not args.json:
-            raise
-        emit_result(COMMAND, ok=False, error=str(exc))
-        sys.exit(1)
-    if args.json:
-        emit_result(COMMAND, result)
+    run_cli(COMMAND, lambda: _run(args), args.json)
 
 
 if __name__ == "__main__":
