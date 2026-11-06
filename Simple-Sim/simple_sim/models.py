@@ -1,11 +1,14 @@
 """Shared model construction and checkpoint loading (ResNet18 classifiers + ensembles)."""
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import torch
 import torch.nn as nn
 from torchvision import models
+
+log = logging.getLogger(__name__)
 
 ENSEMBLE_FORMAT = "simple_sim_ensemble_v1"
 
@@ -14,14 +17,14 @@ def build_resnet18(num_classes: int, pretrained: bool = False) -> nn.Module:
     """Create a ResNet18 with a ``num_classes``-way classification head.
 
     With ``pretrained=True`` ImageNet weights are used; if they cannot be loaded
-    (e.g. no network on first run) a warning is printed and random init is used.
+    (e.g. no network on first run) a warning is logged and random init is used.
     """
     model = None
     if pretrained:
         try:
             model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         except Exception as e:
-            print(f"WARNING: Failed to load pretrained weights ({e}). Falling back to random init.")
+            log.warning(f"Failed to load pretrained weights ({e}). Falling back to random init.")
     if model is None:
         model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, num_classes)

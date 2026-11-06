@@ -132,6 +132,17 @@ def _clip8(img: np.ndarray) -> np.ndarray:
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
+@lru_cache(maxsize=16)
+def _grid(h: int, w: int) -> tuple[np.ndarray, np.ndarray]:
+    """``(yy, xx)`` float32 pixel-coordinate grids of an ``h x w`` image, shared (read-only) by all
+    drawing helpers of a thread: the same values as ``np.mgrid[0:h, 0:w].astype(np.float32)`` without
+    allocating them again for every body, lead, bulge or shadow."""
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    yy.setflags(write=False)
+    xx.setflags(write=False)
+    return yy, xx
+
+
 def _blend(img: np.ndarray, color: np.ndarray, alpha: np.ndarray) -> None:
     """In-place ``img = img*(1-a) + color*a`` with a 2D alpha map."""
     # Most layers (vias, traces, text, solder blobs) cover a small part of the board: only touch the
@@ -238,9 +249,10 @@ def _substrate(h: int, w: int, rng: np.random.Generator) -> tuple[np.ndarray, np
 
     # Low-frequency mottling (resin thickness) + fibre weave + fine grain.
     coarse = _smooth_noise((h, w), 32 * _ss(), rng)
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     period = float(rng.uniform(6.0, 9.0)) * _ss()
-    weave = np.sin(2 * np.pi * xx / period) * np.sin(2 * np.pi * yy / period)
+    # Separable: the same float32 values as on a full 2D grid, computed on two 1D axes.
+    xs, ys = np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32)
+    weave = np.sin(2 * np.pi * xs / period)[None, :] * np.sin(2 * np.pi * ys / period)[:, None]
     img *= (1.0 + 0.03 * coarse + 0.03 * weave)[..., None]
     img += rng.normal(0.0, 1.2, (h, w, 1)).astype(np.float32)
     return img, base
@@ -603,15 +615,30 @@ def camera_settings(cfg: dict[str, Any] | None) -> dict[str, Any]:
     return {**CAMERA_DEFAULTS, **CAMERA_PRESETS[str(cfg.pop("preset", "aoi"))], **cfg}
 
 
-def sample_camera_pose(cam: dict[str, Any], rng: np.random.Generator) -> dict[str, float]:
-    """Viewing geometry for one image: tilt (deg), its azimuth in the image (deg), zoom."""
+def sample_camera_pose(cam: dict[str, Any], rng: np.random.Generator, roll_deg: float = 0.0) -> dict[str, float]:
+    """Viewing geometry for one image: tilt (deg), its azimuth in the image (deg), zoom, and the roll
+    of the camera about its optical axis (deg, counter-clockwise in the image; ``render.post_filters:
+    camera`` feeds the augmentation rotation in here so it happens before blur, noise and JPEG)."""
     return {"tilt": float(rng.uniform(*cam["tilt_deg"])), "azimuth": float(rng.uniform(0.0, 360.0)),
-            "zoom": float(rng.uniform(*cam["zoom"]))}
+            "zoom": float(rng.uniform(*cam["zoom"])), "roll": float(roll_deg)}
+
+
+def _roll_parts(pose: dict[str, float]) -> tuple[int, float]:
+    """``(k, jitter)``: the roll as k quarter turns (exact, via ``np.rot90``) plus a residual angle."""
+    roll = float(pose.get("roll", 0.0))
+    k = int(round(roll / 90.0))
+    return k % 4, roll - 90.0 * k
 
 
 def view_canvas(size: tuple[int, int], pose: dict[str, float]) -> tuple[int, int]:
-    """Board area to render so that *size* is still covered after zooming out and foreshortening."""
+    """Board area to render so that *size* is still covered after zooming out, foreshortening and rolling."""
     grow = pose["zoom"] / max(np.cos(np.radians(pose["tilt"])), 0.5) * (1.1 if pose["tilt"] > 0 else 1.0)
+    k, jitter = _roll_parts(pose)
+    if jitter != 0.0:  # a rotated rectangle must still cover the output: grow by |cos| + |sin|
+        j = np.radians(jitter)
+        grow *= abs(np.cos(j)) + abs(np.sin(j))
+    if k % 2 == 1:  # a quarter turn swaps the axes of the rendered board
+        size = (size[1], size[0])
     return int(np.ceil(size[0] * grow)), int(np.ceil(size[1] * grow))
 
 
@@ -620,13 +647,18 @@ def apply_view(img: np.ndarray, pose: dict[str, float], size: tuple[int, int]) -
 
     The board plane is tilted by ``pose['tilt']`` about an in-plane axis perpendicular to
     ``pose['azimuth']`` and projected with a pinhole camera; the output is centred on the part.
+    ``pose['roll']`` turns the camera (quarter turns exactly with ``np.rot90``, the rest in the
+    projection), positive = counter-clockwise in the image like ``cv2.getRotationMatrix2D``.
     """
     width, height = size
+    k, jitter = _roll_parts(pose)
+    if k:
+        img = np.ascontiguousarray(np.rot90(img, k))
     z = pose["zoom"]
     small = cv2.resize(img, (max(1, int(round(img.shape[1] / z))), max(1, int(round(img.shape[0] / z)))),
                        interpolation=cv2.INTER_AREA) if z > 1.0 else img
     sh, sw = small.shape[:2]
-    if pose["tilt"] <= 0.0 and (sw, sh) == (width, height):
+    if pose["tilt"] <= 0.0 and jitter == 0.0 and (sw, sh) == (width, height):
         return small
     t, a = np.radians(pose["tilt"]), np.radians(pose["azimuth"])
     d = np.array([np.cos(a), np.sin(a)])                              # tilt direction in the image
@@ -636,6 +668,9 @@ def apply_view(img: np.ndarray, pose: dict[str, float], size: tuple[int, int]) -
     depth = along * np.sin(t)                                         # towards the camera on one side
     scale = dist / (dist - depth)
     proj = (np.outer(along * np.cos(t), d) + np.outer(across, [-d[1], d[0]])) * scale[:, None]
+    if jitter != 0.0:
+        j = np.radians(jitter)
+        proj = proj @ np.array([[np.cos(j), -np.sin(j)], [np.sin(j), np.cos(j)]])  # image-CCW for positive jitter
     dst = (proj + [width / 2.0, height / 2.0]).astype(np.float32)
     m = cv2.getPerspectiveTransform((corners + [sw / 2.0, sh / 2.0]).astype(np.float32), dst)
     return cv2.warpPerspective(small, m, (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
@@ -649,7 +684,8 @@ def _draw_range(rng: np.random.Generator, bounds: Any) -> float:
 
 
 def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] | None = None,
-                 pose: dict[str, float] | None = None) -> np.ndarray:
+                 pose: dict[str, float] | None = None, *, extra_blur: float = 0.0,
+                 extra_noise_var: float = 0.0) -> np.ndarray:
     """Turn an ideal render (2D supersampled or 3D) into a camera image. BGR in, uint8 out.
 
     Lens blur (plus depth-of-field falloff along the tilt of an oblique *pose*), uneven
@@ -657,7 +693,10 @@ def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] 
     that is slightly correlated by demosaicing, and for phones lateral chromatic aberration, ISP
     sharpening and JPEG. With ``capture_scale`` < 1 all of this happens at the lower sensor
     resolution and the result is upscaled to the input size (a small crop fed to the model).
-    *cfg* is ``render.camera`` (see :func:`camera_settings`).
+    *cfg* is ``render.camera`` (see :func:`camera_settings`). *extra_blur* (Gaussian sigma, sensor
+    pixels) is combined with the lens blur and *extra_noise_var* (8-bit levels^2) added to the read
+    noise: ``render.post_filters: camera`` passes the domain's ``blur_sigma`` / ``noise_stddev`` here
+    instead of applying them a second time on the finished camera image.
     """
     c = camera_settings(cfg)
     out_h, out_w = img.shape[:2]
@@ -667,10 +706,10 @@ def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] 
         img = cv2.resize(img, (max(8, int(round(out_w * scale))), max(8, int(round(out_h * scale)))),
                          interpolation=cv2.INTER_AREA)
     h, w = img.shape[:2]
-    sigma0 = max(1e-3, float(rng.uniform(*c["blur_sigma"])))
+    sigma0 = max(1e-3, float(np.hypot(float(rng.uniform(*c["blur_sigma"])), max(0.0, float(extra_blur)))))
     blurred = cv2.GaussianBlur(img, (0, 0), sigma0)
     defocus = float(rng.uniform(*c["defocus"]))
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    yy, xx = _grid(h, w)
     if pose is not None and pose["tilt"] > 0.0 and defocus > 0.0:
         a = np.radians(pose["azimuth"])  # focus on the part; sharpness falls off towards near/far edge
         off = np.abs((xx - w / 2.0) * np.cos(a) + (yy - h / 2.0) * np.sin(a)) / (0.5 * max(h, w))
@@ -688,7 +727,8 @@ def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] 
     img *= (1.0 + float(rng.uniform(0.04, 0.12)) * ramp + 0.03 * _smooth_noise((h, w), max(h, w) / 3.0, rng))[..., None]
     knee = 205.0
     img = np.where(img > knee, knee + (255.0 - knee) * (1.0 - np.exp(-(img - knee) / (255.0 - knee))), img)
-    sigma = np.sqrt(float(rng.uniform(*c["read_noise"])) + float(c["shot_noise"]) * np.clip(img, 0.0, None))
+    sigma = np.sqrt(float(rng.uniform(*c["read_noise"])) + max(0.0, float(extra_noise_var))
+                    + float(c["shot_noise"]) * np.clip(img, 0.0, None))
     noise = rng.normal(0.0, 1.0, img.shape).astype(np.float32)
     noise = cv2.GaussianBlur(noise, (0, 0), 0.5) * 1.6  # demosaic correlation, variance roughly kept
     noise += rng.normal(0.0, 0.35, (h, w, 1)).astype(np.float32)  # luminance-dominated
@@ -708,7 +748,7 @@ def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] 
 # --------------------------------------------------------------------------- component body
 
 def _local_coords(h: int, w: int, center: tuple[float, float], angle_deg: float) -> tuple[np.ndarray, np.ndarray]:
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    yy, xx = _grid(h, w)
     a = np.radians(angle_deg)
     dx, dy = xx - center[0], yy - center[1]
     return dx * np.cos(a) + dy * np.sin(a), -dx * np.sin(a) + dy * np.cos(a)
@@ -721,10 +761,26 @@ def _rect_alpha(h: int, w: int, center, length: float, width: float, angle_deg: 
 
 
 def _contact_shadow(img: np.ndarray, mask: np.ndarray, strength: float, spread: float) -> None:
-    sh = cv2.dilate(mask, np.ones((int(spread), int(spread)), np.uint8))
-    sh = cv2.GaussianBlur(sh, (0, 0), spread * 0.8).astype(np.float32) / 255.0
-    sh = np.roll(sh, (int(1.5 * _ss()), int(1.5 * _ss())), axis=(0, 1))  # away from the light
-    img *= (1.0 - strength * sh)[..., None]
+    """Soft shadow under a part, shifted away from the light.
+
+    Computed on the bounding box of *mask* plus a margin that covers the dilation, the blur kernel
+    and the shift; outside it the shadow is exactly zero, so the result equals the full-frame one.
+    Masks close to the frame edge (where the shift would wrap around) use the full frame.
+    """
+    h, w = mask.shape[:2]
+    shift = int(1.5 * _ss())
+    sigma = spread * 0.8
+    margin = int(spread) + int(round(sigma * 3 * 2 + 1)) // 2 + shift + 2
+    x, y, bw, bh = cv2.boundingRect(mask)
+    if bw == 0 or bh == 0:
+        return
+    x0, y0, x1, y1 = x - margin, y - margin, x + bw + margin, y + bh + margin
+    if x0 < 0 or y0 < 0 or x1 > w or y1 > h:  # near the frame edge: the roll wraps, keep the full frame
+        x0, y0, x1, y1 = 0, 0, w, h
+    sh = cv2.dilate(mask[y0:y1, x0:x1], np.ones((int(spread), int(spread)), np.uint8))
+    sh = cv2.GaussianBlur(sh, (0, 0), sigma).astype(np.float32) / 255.0
+    sh = np.roll(sh, (shift, shift), axis=(0, 1))  # away from the light
+    img[y0:y1, x0:x1] *= (1.0 - strength * sh)[..., None]
 
 
 def nominal_body_angle(family: str) -> float:
@@ -1358,10 +1414,16 @@ def _render_photoreal_base(
     rng: np.random.Generator,
     footprint: str,
     roi_size: tuple[int, int],
+    post: dict[str, float] | None = None,
 ) -> np.ndarray:
-    """Render substrate + pads + solder + component for *defect_params* at *roi_size* (BGR uint8)."""
-    view_pose = sample_camera_pose(camera_settings(config.get("camera")), rng)
-    canvas = view_canvas(roi_size, view_pose)  # larger board area for a zoomed-out / oblique view
+    """Render substrate + pads + solder + component for *defect_params* at *roi_size* (BGR uint8).
+
+    *post* (``render.post_filters: camera``): ``rotation_deg`` is applied as camera roll before the
+    camera model, ``blur_sigma`` / ``noise_stddev`` go into the camera model (see :func:`camera_model`).
+    """
+    post = post or {}
+    view_pose = sample_camera_pose(camera_settings(config.get("camera")), rng, float(post.get("rotation_deg", 0.0)))
+    canvas = view_canvas(roi_size, view_pose)  # larger board area for a zoomed-out / oblique / rolled view
     width, height = canvas
     h, w = height * _ss(), width * _ss()
     nom, dp = _scaled(nominal, defect_params)
@@ -1425,7 +1487,8 @@ def _render_photoreal_base(
         _draw_solder_balls(img, base, solder["balls"])
 
     view = apply_view(cv2.resize(img, canvas, interpolation=cv2.INTER_AREA), view_pose, roi_size)
-    return camera_model(view, rng, config.get("camera"), view_pose)
+    return camera_model(view, rng, config.get("camera"), view_pose, extra_blur=float(post.get("blur_sigma", 0.0)),
+                        extra_noise_var=float(post.get("noise_stddev", 0.0)) ** 2)
 
 
 def render_board(nominal: dict[str, float], defect_params: dict[str, Any], config: dict[str, Any],
@@ -1440,10 +1503,11 @@ render_board.__doc__ = _render_board.__doc__
 
 def render_photoreal_base(nominal: dict[str, float], defect_params: dict[str, Any], config: dict[str, Any],
                           tolerances: dict[str, Any] | None, rng: np.random.Generator, footprint: str,
-                          roi_size: tuple[int, int]) -> np.ndarray:
+                          roi_size: tuple[int, int], post: dict[str, float] | None = None) -> np.ndarray:
     """Render substrate + pads + solder + component for *defect_params* at *roi_size* (BGR uint8).
 
     Rendered at ``render.supersampling`` x the camera resolution (default 2, up to 4) and downsampled.
+    *post*: see :func:`_render_photoreal_base` (``render.post_filters: camera``).
     """
     with _supersampling(config), _solder_context(config, rng):
-        return _render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size)
+        return _render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size, post)

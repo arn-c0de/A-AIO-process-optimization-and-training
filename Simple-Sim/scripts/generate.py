@@ -13,7 +13,8 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, run_cli
+from simple_sim.cli_utils import RENDERER_MISMATCH_HINT, add_json_flag, run_cli, with_hint
+from simple_sim.manifest import RendererMismatchError
 from simple_sim.generation.dataset import generate_dataset  # noqa: F401 (re-exported for tests/tools)
 
 COMMAND = "generate"
@@ -37,13 +38,13 @@ def main(argv: list[str] | None = None) -> None:
     add_json_flag(parser)
     args = parser.parse_args(argv)
 
-    run_cli(COMMAND, lambda: generate_dataset(
+    run_cli(COMMAND, with_hint(lambda: generate_dataset(
         Path(args.config),
         Path(args.out),
         extend=bool(args.extend),
         enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
         allow_renderer_mismatch=bool(args.allow_renderer_mismatch),
-    ), args.json)
+    ), RendererMismatchError, RENDERER_MISMATCH_HINT), args.json)
 
 
 if __name__ == '__main__':

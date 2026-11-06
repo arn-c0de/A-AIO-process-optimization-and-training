@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -26,6 +26,32 @@ def atomic_write_json(path: Path, obj: Any, *, indent: int = 2) -> None:
     atomic_write_text(path, json.dumps(obj, indent=indent, ensure_ascii=True) + "\n")
 
 
+def load_json(path: Path) -> Any:
+    """Parse the JSON file at *path* (UTF-8); errors propagate (see :func:`read_json` for a lenient read)."""
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def load_yaml(path: Path) -> Any:
+    """Parse the YAML file at *path* (UTF-8, ``yaml.safe_load``); ``None`` for an empty file.
+
+    Errors propagate (``FileNotFoundError``, ``yaml.YAMLError``). PyYAML is imported lazily, so
+    ``io_utils`` stays importable without it.
+    """
+    import yaml
+
+    return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+
+
+def atomic_write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    """Write dict rows as JSONL atomically (stream to ``<name>.tmp``, then rename)."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=True) + "\n")
+    tmp.replace(path)
+
+
 def read_json(path: Path, default: Any = None) -> Any:
     """Return parsed JSON from *path*, or *default* if missing/unreadable/invalid."""
     try:
@@ -41,9 +67,16 @@ def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
             f.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
-def now_tag() -> str:
-    """Filesystem-safe timestamp tag with microseconds (``YYYYmmdd_HHMMSS_ffffff``)."""
-    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+def now_iso(*, utc: bool = False, timespec: str = "auto") -> str:
+    """Current time as ISO 8601: naive local time (manifests, reports), or UTC with a ``Z`` suffix."""
+    if utc:
+        return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec=timespec) + "Z"
+    return datetime.now().isoformat(timespec=timespec)
+
+
+def now_tag(*, micro: bool = True) -> str:
+    """Filesystem-safe local timestamp tag ``YYYYmmdd_HHMMSS`` (plus ``_ffffff`` with *micro*)."""
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f" if micro else "%Y%m%d_%H%M%S")
 
 
 def unique_path(p: Path) -> Path:

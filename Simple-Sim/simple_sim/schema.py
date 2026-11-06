@@ -10,8 +10,8 @@ import json
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any, TypeVar
-from simple_sim.config import VALID_CLASSES
-from simple_sim.io_utils import append_jsonl
+from simple_sim.classes import VALID_CLASSES
+from simple_sim.io_utils import append_jsonl, atomic_write_jsonl
 
 T = TypeVar('T')
 
@@ -112,17 +112,7 @@ def write_jsonl(path: Path, rows: list[Any]) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write to temp file first
-    temp_path = path.with_suffix('.tmp')
-
-    with open(temp_path, 'w') as f:
-        for row in rows:
-            json_line = json.dumps(asdict(row))
-            f.write(json_line + '\n')
-
-    # Atomic rename
-    temp_path.replace(path)
+    atomic_write_jsonl(path, (asdict(row) for row in rows))
 
 
 def append_jsonl_rows(path: Path, rows: list[Any]) -> None:
@@ -147,7 +137,7 @@ def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:
         raise FileNotFoundError(f"JSONL file not found: {path}")
 
     rows = []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:

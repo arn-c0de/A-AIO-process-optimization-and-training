@@ -38,7 +38,7 @@ def _profile_and_config(sim_root: Path, profile_id: str, backend: str) -> tuple[
 
 
 def _augment(filter_vals: dict[str, Any], rng: np.random.Generator) -> dict[str, float]:
-    from simple_sim.generators.opencv_2d import apply_image_filter_overrides
+    from simple_sim.generators.opencv2d import apply_image_filter_overrides
 
     return apply_image_filter_overrides(dict(_BASE_AUGMENT), filter_vals, rng)
 
@@ -47,7 +47,7 @@ def render_filter_preview_2d(sim_root: Path, profile_id: str, filter_vals: dict[
     """BGR image of an OK sample with *filter_vals*, plus the config source used."""
     from simple_sim.config import merge_profile_render
     from simple_sim.defects import sample_defect_params
-    from simple_sim.generators.opencv_2d import render_roi, sample_nominal_geometry
+    from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 
     sim_root = Path(sim_root)
     profile, cfg, src = _profile_and_config(sim_root, profile_id, "opencv_2d")
@@ -78,7 +78,7 @@ def render_filter_preview_3d(sim_root: Path, profile_id: str, filter_vals: dict[
     from simple_sim.defects import sample_defect_params
     from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
     from simple_sim.generators.blender3d.bake import bake_fields, profile_job_fields
-    from simple_sim.generators.opencv_2d import sample_nominal_geometry
+    from simple_sim.generators.opencv2d import sample_nominal_geometry
 
     sim_root = Path(sim_root)
     profile, cfg, src = _profile_and_config(sim_root, profile_id, "blender_3d")

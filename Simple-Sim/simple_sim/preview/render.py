@@ -7,6 +7,7 @@ Tk viewer (:mod:`simple_sim.preview.viewer_tk`).
 
 from __future__ import annotations
 
+import logging
 import hashlib
 import html
 import re
@@ -22,14 +23,17 @@ from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
 from simple_sim.generators.blender3d.bake import bake_fields, profile_job_fields
-from simple_sim.generators.filter_settings import normalize_image_filters
+from simple_sim.classes import STANDARD_CLASSES
+from simple_sim.filter_settings import normalize_image_filters
 from simple_sim.generators.opencv2d.geometry import sample_nominal_geometry
 from simple_sim.profile_hash import load_profile
+
+log = logging.getLogger(__name__)
 
 BACKEND_2D = "opencv_2d"
 BACKEND_3D = "blender_3d"
 BACKEND_CHOICES = [BACKEND_2D, BACKEND_3D, "both", "auto"]
-DEFAULT_STATES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+DEFAULT_STATES = list(STANDARD_CLASSES)
 
 # (profile_id, backend, defect, rel_image_path)
 PreviewRec = tuple[str, str, str, str]
@@ -313,7 +317,7 @@ def apply_filter_overrides_to_augment(augment: dict[str, float], image_filters: 
 
     Pass the preview's seeded *rng* so randomized filter values are reproducible for a seed.
     """
-    from simple_sim.generators.opencv_2d import apply_image_filter_overrides
+    from simple_sim.generators.opencv2d import apply_image_filter_overrides
 
     f = normalize_image_filters(image_filters or {})
     a = dict(augment or {})
@@ -365,7 +369,7 @@ def render_2d_previews(
 ) -> list[PreviewRec]:
     """Render one OpenCV 2D preview per defect state; return preview records."""
     from simple_sim.dataset_store import write_image
-    from simple_sim.generators.opencv_2d import render_roi
+    from simple_sim.generators.opencv2d import render_roi
 
     w, h, mpp = resolve_2d_roi(cfg, roi_override)
     roi_cfg = {"width_px": w, "height_px": h, "mm_per_px": mpp}
@@ -550,14 +554,14 @@ def render_previews(
                 backend=backend,
                 forced_label=opts.forced_label,
             )
-            print(f"\n[preview] Profile:  {pid}")
-            print(f"[preview] Backend:  {backend}")
-            print(f"[preview] Config:    {cfg_src}")
+            log.info(f"\n[preview] Profile:  {pid}")
+            log.info(f"[preview] Backend:  {backend}")
+            log.info(f"[preview] Config:    {cfg_src}")
 
             if backend == BACKEND_2D:
                 w, h, mpp = resolve_2d_roi(cfg, opts.roi_override)
-                print(f"[preview] ROI:       {w}x{h} @ {mpp} mm/px")
-                print(f"[preview] States:    {defect_types}")
+                log.info(f"[preview] ROI:       {w}x{h} @ {mpp} mm/px")
+                log.info(f"[preview] States:    {defect_types}")
                 if dry_run:
                     previews.extend((pid, backend, str(d), preview_rel_path(pid, backend, str(d))) for d in defect_types)
                     continue
@@ -577,12 +581,12 @@ def render_previews(
                 )
             else:
                 settings = apply_3d_overrides(settings_from_config(cfg), opts)
-                print(f"[preview] ROI:       {settings.roi_width_px}x{settings.roi_height_px} @ {settings.mm_per_px} mm/px")
-                print(
+                log.info(f"[preview] ROI:       {settings.roi_width_px}x{settings.roi_height_px} @ {settings.mm_per_px} mm/px")
+                log.info(
                     f"[preview] Blender:   {settings.blender_executable} "
                     f"(samples={settings.cycles_samples}, device={settings.device}, engine={settings.engine})"
                 )
-                print(f"[preview] States:    {defect_types}")
+                log.info(f"[preview] States:    {defect_types}")
                 per_profile_settings.append(settings)
                 jobs, recs = build_preview_jobs(
                     profile_id=pid,
@@ -603,13 +607,13 @@ def render_previews(
     index_path = write_index_html(out_root, previews)
     if dry_run:
         if all_jobs:
-            from simple_sim.generators.blender_3d import write_jobs_jsonl
+            from simple_sim.generators.blender3d import write_jobs_jsonl
 
             write_jobs_jsonl(jobs_path, all_jobs)
-            print(f"\n[dry-run] Wrote jobs:  {jobs_path}")
-        print(f"[dry-run] Wrote index: {out_root / 'index.html'}")
+            log.info(f"\n[dry-run] Wrote jobs:  {jobs_path}")
+        log.info(f"[dry-run] Wrote index: {out_root / 'index.html'}")
     elif all_jobs:
-        print(f"\n[render] Running Blender batch for {len(all_jobs)} previews...")
+        log.info(f"\n[render] Running Blender batch for {len(all_jobs)} previews...")
         run_blender_jobs(
             all_jobs,
             sim_root=sim_root,
@@ -618,7 +622,7 @@ def render_previews(
             settings=_merge_blender_settings(per_profile_settings, opts),
         )
     if not dry_run:
-        print(f"[render] Done. Open: {index_path.resolve()}")
+        log.info(f"[render] Done. Open: {index_path.resolve()}")
     return PreviewRun(previews=previews, index_path=index_path, jobs_path=jobs_path if all_jobs else None)
 
 
@@ -629,13 +633,13 @@ def _merge_blender_settings(per_profile: list[RenderSettings], opts: PreviewOpti
     samples_list = sorted({int(s.cycles_samples) for s in per_profile} or {64})
     engines = sorted({s.engine for s in per_profile} or {"BLENDER_EEVEE"})
     if len(exes) > 1 and not opts.blender:
-        print(f"\n[warn] Multiple blender executables across auto configs: {exes} (using: {exes[-1]})")
+        log.warning(f"\nMultiple blender executables across auto configs: {exes} (using: {exes[-1]})")
     if len(devices) > 1 and not opts.device:
-        print(f"[warn] Multiple devices across auto configs: {devices} (using: {devices[-1]})")
+        log.warning(f"Multiple devices across auto configs: {devices} (using: {devices[-1]})")
     if len(samples_list) > 1 and not opts.samples:
-        print(f"[warn] Multiple sample counts across auto configs: {samples_list} (using max: {max(samples_list)})")
+        log.warning(f"Multiple sample counts across auto configs: {samples_list} (using max: {max(samples_list)})")
     if len(engines) > 1:
-        print(f"[warn] Multiple render engines across auto configs: {engines} (using: {engines[-1]})")
+        log.warning(f"Multiple render engines across auto configs: {engines} (using: {engines[-1]})")
     return {
         "executable": str(opts.blender or exes[-1]),
         "device": str(opts.device or devices[-1]),

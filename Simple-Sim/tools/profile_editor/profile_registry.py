@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+from simple_sim.io_utils import load_yaml
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,7 @@ class ProfileRegistry:
 
     def _profile_id_from_file(self, path: Path) -> str | None:
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            data = load_yaml(path) or {}
         except Exception:
             return None
         if not isinstance(data, dict):
@@ -38,7 +38,7 @@ class ProfileRegistry:
 
     def _run_id_from_file(self, path: Path) -> str | None:
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            data = load_yaml(path) or {}
         except Exception:
             return None
         if not isinstance(data, dict):
@@ -97,7 +97,7 @@ class ProfileRegistry:
         out: list[str] = []
         for run_id, run_path in snap.run_files.items():
             try:
-                data = yaml.safe_load(run_path.read_text(encoding="utf-8")) or {}
+                data = load_yaml(run_path) or {}
             except Exception:
                 continue
             if not isinstance(data, dict):

@@ -9,8 +9,13 @@ All commands below run from the `Simple-Sim/` directory.
 
 ```bash
 python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --no-deps -e .   # optional: `import simple_sim` from anywhere + `simple-sim` script
 # or reuse an existing interpreter that has torch (CPU is fine), torchvision, opencv-python, PyYAML, numpy
 ```
+
+`pyproject.toml` declares the package (`simple_sim` only; `gui/`, `scripts/`, `tools/` stay
+checkout-relative). Core deps cover config, rendering, generation and metrics; extras `[train]`
+(torch), `[gui]`, `[dev]`, `[all]`. `simple-sim <cmd>` equals `python -m simple_sim <cmd>`.
 
 Blender is only needed for `render.backend: blender_3d` configs; tkinter only for the GUI
 (`./run.sh`) and the profile editor. Neither is needed for the CLI workflow below.
@@ -78,6 +83,11 @@ For a quick experiment copy a run config and shrink it: small `classes:` counts 
 class), `train.epochs: 1`, `train.pretrained: false` (avoids downloading weights). Write
 scratch outputs outside the repo (e.g. `/tmp/...`); `outputs/` is git-ignored.
 
+Optional quality settings (all default to the old behaviour; `configs/run_0001_xdomain.yaml` has
+them all): `defects.placement_sampling: continuous`, several `domains` with a held-out one in
+`splits.val_domains`/`test_domains` (per-domain `camera` override), `render.post_filters: camera`,
+`train.augment` / `train.scheduler: cosine` / `train.label_smoothing`.
+
 Other commands: `generate-profile-dataset` / `train-profile` / `eval-profile` (component
 type classifier), `predict` (single image), `predict-two-stage`, `sample-check`,
 `create-multi-dataset` (merge datasets), `backfill-manifest` / `backfill-labels` (legacy
@@ -116,15 +126,21 @@ The exact report path is also in the command's result line.
 ## Tests
 
 ```bash
-python -m pytest -q --ignore=tests/test_tab_registry.py   # test_tab_registry needs tkinter
+python -m pytest -q   # tkinter-only tests skip without tkinter / an X display
 ```
+
+`gui/tabs/*/logic.py` import without tkinter (`tests/test_headless_imports.py` keeps it so);
+import tab classes from their own modules (`gui.tabs.<name>.tab`), not from `gui.tabs`.
 
 `tests/test_pipeline_e2e.py` runs a tiny generate -> validate -> train -> eval on CPU.
 
 ## Code map
 
-- `simple_sim/` - library (no CLI side effects). Shared helpers: `io_utils` (atomic writes,
-  JSON), `cli_utils` (`--json` convention), `reports`, `manifest`, `config`, `schema`.
+- `simple_sim/` - library (no CLI side effects: no `print`/`sys.exit`, progress and warnings via
+  `logging` under the `simple_sim` logger, neutral exceptions). Shared helpers: `io_utils`
+  (atomic writes, JSON/JSONL/YAML, `now_iso`/`now_tag`), `classes` (`DefectClass`, `Split`,
+  `Backend`, class sets), `coerce` (`as_bool`/`as_float`/`as_int`), `cli_utils` (`--json`
+  convention, `configure_cli_logging`, `with_hint`), `reports`, `manifest`, `config`, `schema`.
   `simple_sim/board/` - PCB model (footprints, nets, router, pours, DRC, raster) behind
   `render.board` (`routing: legacy | none | escape`); `generators/` - the 2D/3D renderers.
 - `scripts/` - pipeline CLIs; `tools/` - dataset maintenance CLIs, `tools/_common.sh`

@@ -183,7 +183,7 @@ class ProfilePreviewLogic:
 
     def _render_2d(self, req, profile, cfg, states, out_dir, on_image, on_log, should_stop) -> list[PreviewImage]:
         from simple_sim.dataset_store import write_image
-        from simple_sim.generators.opencv_2d import render_roi
+        from simple_sim.generators.opencv2d import render_roi
 
         roi = cfg["roi"]
         w, h = int(roi["width_px"]), int(roi["height_px"])

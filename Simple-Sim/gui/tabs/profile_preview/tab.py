@@ -145,6 +145,8 @@ class ProfilePreviewTab(BaseTab):
         self.cb_profile = ttk.Combobox(box, textvariable=self.var_profile, state="readonly", width=28)
         self.cb_profile.grid(row=0, column=1, sticky="ew", pady=2)
         self.cb_profile.bind("<<ComboboxSelected>>", lambda _e: self._on_profile_changed())
+        # Re-scan configs/profiles/ whenever the list opens: profiles added while the GUI runs show up.
+        self.cb_profile.configure(postcommand=self._load_profiles)
         ttk.Label(box, text="Backend").grid(row=1, column=0, sticky="w")
         self.cb_backend = ttk.Combobox(box, textvariable=self.var_backend, state="readonly", width=28)
         self.cb_backend.grid(row=1, column=1, sticky="ew", pady=2)

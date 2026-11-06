@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -12,30 +13,31 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import yaml
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, run_cli
-from simple_sim.data_loader import ROIDataset, make_loader_kwargs
+from simple_sim.cli_utils import PROFILE_MISMATCH_HINT, add_json_flag, run_cli, with_hint
+from simple_sim.data_loader import ROIDataset, build_train_transform, make_loader_kwargs
 from simple_sim.eval_utils import (
     ThroughputMeter,
     amp_autocast,
-    print_distribution,
+    format_distribution,
     require_manifest,
     run_inference,
     to_device,
     unpack_batch,
 )
-from simple_sim.manifest import check_checkpoint_profile, hash_file, read_dataset_manifest, resolve_dataset_profile
+from simple_sim.manifest import ProfileMismatchError, check_checkpoint_profile, hash_file, read_dataset_manifest, resolve_dataset_profile
 from simple_sim.metrics import compute_metrics
 from simple_sim.model_bundle import bundle_checkpoint_path, upsert_bundle_meta
 from simple_sim.models import build_resnet18, load_checkpoint
 from simple_sim.rng import resolve_train_seed, seed_everything
 from simple_sim.telemetry import emit
+from simple_sim.io_utils import load_yaml
+
 
 
 def train_epoch(
@@ -132,23 +134,56 @@ def validate(
 
 def load_dataset_config(data_dir: Path) -> dict[str, Any]:
     """Read ``<data_dir>/config.yaml``."""
-    with open(Path(data_dir) / 'config.yaml', encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    return load_yaml(Path(data_dir) / 'config.yaml')
 
 
 def build_training(
     num_classes: int, train_config: dict[str, Any], device: torch.device, use_amp: bool
 ) -> tuple[nn.Module, nn.Module, optim.Optimizer, torch.amp.GradScaler]:
-    """Create ``(model, criterion, optimizer, scaler)`` from the dataset's ``train`` config section."""
+    """Create ``(model, criterion, optimizer, scaler)`` from the dataset's ``train`` config section.
+
+    ``train.label_smoothing`` (default 0) smooths the training loss only; validation uses plain
+    cross-entropy so val losses stay comparable between runs.
+    """
     print("\nInitializing ResNet18...")
     model = build_resnet18(num_classes, pretrained=train_config.get('pretrained', True))
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
     model = model.to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=float(train_config.get('label_smoothing', 0.0) or 0.0))
     optimizer = optim.Adam(model.parameters(), lr=train_config['lr'], weight_decay=train_config['weight_decay'])
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     return model, criterion, optimizer, scaler
+
+
+LR_FLOOR = 0.02  # cosine schedule ends at this fraction of train.lr
+
+
+def lr_factor(epoch: int, total_epochs: int, *, scheduler: str = "none", warmup_epochs: int = 0) -> float:
+    """Learning-rate multiplier for 0-based *epoch* (``train.scheduler``: ``none`` keeps ``train.lr``).
+
+    ``cosine``: linear warm-up over ``train.warmup_epochs`` (first epoch at ``1/warmup``), then
+    cosine annealing from ``train.lr`` to ``LR_FLOOR * train.lr`` at the last epoch.
+    """
+    if scheduler == "none":
+        return 1.0
+    if scheduler != "cosine":
+        raise ValueError(f"train.scheduler must be 'none' or 'cosine', got {scheduler!r}")
+    if warmup_epochs > 0 and epoch < warmup_epochs:
+        return (epoch + 1) / float(warmup_epochs)
+    span = max(1, total_epochs - 1 - warmup_epochs)
+    progress = min(1.0, max(0.0, (epoch - warmup_epochs) / float(span)))
+    return LR_FLOOR + (1.0 - LR_FLOOR) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def build_scheduler(optimizer: optim.Optimizer, train_config: dict[str, Any], total_epochs: int) -> optim.lr_scheduler.LambdaLR | None:
+    """Per-epoch LR scheduler from ``train.scheduler`` / ``train.warmup_epochs``; ``None`` for ``none``."""
+    name = str(train_config.get('scheduler', 'none') or 'none')
+    if name == 'none':
+        return None
+    warmup = int(train_config.get('warmup_epochs', 0) or 0)
+    return optim.lr_scheduler.LambdaLR(
+        optimizer, lambda e: lr_factor(e, total_epochs, scheduler=name, warmup_epochs=warmup))
 
 
 def fit_epoch(
@@ -283,11 +318,15 @@ def train_model(
 
     print("\nLoading datasets...")
     # return_id=True so we can show "last seen" sample IDs live in tqdm.
-    train_dataset = ROIDataset(data_dir, 'train', class_names, return_id=True)
+    train_augment = train_config.get('augment') or {}
+    if train_augment:
+        print(f"  Train augmentation: {train_augment}")
+    train_dataset = ROIDataset(data_dir, 'train', class_names, return_id=True,
+                               transform=build_train_transform(train_augment))
     val_dataset = ROIDataset(data_dir, 'val', class_names, return_id=True)
     print(f"Train samples: {len(train_dataset)}")
     print(f"Val samples: {len(val_dataset)}")
-    print_distribution("Train class distribution", train_dataset.get_class_distribution())
+    print(format_distribution("Train class distribution", train_dataset.get_class_distribution()))
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
@@ -345,6 +384,15 @@ def train_model(
     # Where to save a "last checkpoint" so resume runs always write something.
     last_path = output_path.with_name(output_path.stem + "_last.pt")
 
+    # LR schedule over the whole run (resume continues it at start_epoch).
+    scheduler = build_scheduler(optimizer, train_config, total_epochs)
+    if scheduler is not None:
+        print(f"  Scheduler: {train_config.get('scheduler')} (warmup {int(train_config.get('warmup_epochs', 0) or 0)} epochs)")
+        for _ in range(start_epoch):  # LambdaLR sets lr = base_lr * factor(epoch) on each step
+            scheduler.step()
+    if float(train_config.get('label_smoothing', 0.0) or 0.0) > 0:
+        print(f"  Label smoothing: {train_config['label_smoothing']}")
+
     print("\n" + "=" * 60)
     print("TRAINING")
     print("=" * 60)
@@ -367,6 +415,7 @@ def train_model(
     critical_classes = config.get('eval', {}).get('critical_classes')
     stats: dict[str, Any] = {}
     for epoch in range(start_epoch, total_epochs):
+        print(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
         stats = fit_epoch(
             model, train_loader, val_loader, criterion, optimizer, device, class_names,
             epoch=epoch, total_epochs=total_epochs, critical_classes=critical_classes,
@@ -374,6 +423,8 @@ def train_model(
         )
         val_acc = stats['val_accuracy']
         val_f1 = stats['val_macro_f1']
+        if scheduler is not None:
+            scheduler.step()
 
         # Decide "best" before building the checkpoint so it carries the best-so-far score.
         if out_mode == "last":
@@ -458,7 +509,7 @@ def main() -> None:
     add_json_flag(parser)
     args = parser.parse_args()
 
-    run_cli("train", lambda: train_model(
+    run_cli("train", with_hint(lambda: train_model(
         Path(args.data), Path(args.out),
         resume=Path(args.resume) if args.resume else None,
         allow_profile_mismatch=args.allow_profile_mismatch,
@@ -466,7 +517,7 @@ def main() -> None:
         out_mode=args.out_mode,
         device=args.device,
         amp=args.amp,
-    ), args.json)
+    ), ProfileMismatchError, PROFILE_MISMATCH_HINT), args.json)
 
 
 if __name__ == '__main__':

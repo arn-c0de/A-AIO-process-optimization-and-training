@@ -1,3 +1,1 @@
-from .tab import DatasetsTab
-
-__all__ = ["DatasetsTab"]
+"""Datasets tab. Import ``DatasetsTab`` from ``gui.tabs.datasets.tab``."""

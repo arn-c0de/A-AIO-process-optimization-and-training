@@ -20,7 +20,6 @@ import argparse
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ROIDataset
-from simple_sim.io_utils import append_jsonl, atomic_write_json, now_tag, unique_path
+from simple_sim.io_utils import append_jsonl, atomic_write_json, now_iso, now_tag, unique_path
 from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.model_bundle import bundle_checkpoint_path
@@ -436,7 +435,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     preds_path = unique_path(out_dir / f"batch_preds_{model_stem}_{args.split}_{tag}.jsonl")
 
     report: dict[str, Any] = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": now_iso(),
         "mode": "batch_predict",
         # Persist the *requested* model path for history grouping.
         # For bundles, this is the bundle directory; the resolved per-profile checkpoint is stored separately.

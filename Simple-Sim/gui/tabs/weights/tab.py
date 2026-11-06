@@ -17,7 +17,7 @@ from gui.utils.checkpoint_meta import profile_label_suffix
 from gui.utils.dataset_catalog import sim_data_roots, unique_dataset_labels
 from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
 from gui.core.tasks import as_task_fn, runner_for
-from simple_sim.io_utils import path_size_bytes
+from simple_sim.io_utils import now_iso, path_size_bytes
 from simple_sim.models import load_checkpoint
 from simple_sim.reports import metric_value, report_timestamp
 from .ui import WeightsUI
@@ -333,7 +333,7 @@ class WeightsTab(BaseTab):
             rel = self.logic.rel_path(p)
             if group == "Favorites":
                 if rel not in self._favorites:
-                    self._favorites[rel] = {"path": rel, "added": datetime.now().isoformat(timespec="seconds")}
+                    self._favorites[rel] = {"path": rel, "added": now_iso(timespec="seconds")}
                     fav_changed = True
             else:
                 if rel in self._favorites:
@@ -387,7 +387,7 @@ class WeightsTab(BaseTab):
         rel_src, rel_dst = self.logic.rel_path(src), self.logic.rel_path(dst)
         if rel_src in self._group_assignments: self._group_assignments[rel_dst] = self._group_assignments[rel_src]
         if self._is_favorited(src):
-            self._favorites[rel_dst] = {"path": rel_dst, "added": datetime.now().isoformat(timespec="seconds")}
+            self._favorites[rel_dst] = {"path": rel_dst, "added": now_iso(timespec="seconds")}
             self.logic.save_favorites(self._favorites)
         self._save_group_state()
         self.ui.append_log(f"[duplicate] {rel_src} -> {rel_dst}\n")
@@ -623,13 +623,13 @@ class WeightsTab(BaseTab):
         if was_fav and fav_entry:
             self._favorites.pop(old_rel, None)
             fav_entry = dict(fav_entry)
-            fav_entry["path"], fav_entry["renamed"] = self.logic.rel_path(dst), datetime.now().isoformat(timespec="seconds")
+            fav_entry["path"], fav_entry["renamed"] = self.logic.rel_path(dst), now_iso(timespec="seconds")
             self._favorites[fav_entry["path"]] = fav_entry
             self.logic.save_favorites(self._favorites)
         if was_arena and arena_entry:
             self._arena.pop(old_rel, None)
             arena_entry = dict(arena_entry)
-            arena_entry["path"], arena_entry["renamed"] = self.logic.rel_path(dst), datetime.now().isoformat(timespec="seconds")
+            arena_entry["path"], arena_entry["renamed"] = self.logic.rel_path(dst), now_iso(timespec="seconds")
             self._arena[arena_entry["path"]] = arena_entry
             self.logic.save_arena(self._arena)
         if old_rel in self._group_assignments:

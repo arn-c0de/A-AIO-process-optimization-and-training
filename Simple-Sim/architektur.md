@@ -106,7 +106,6 @@ Simple-Sim/
       - logic.py
       - tab.py
       - ui.py
-    - base_tab.py
     - board_detection/
       - __init__.py
       - logic.py
@@ -190,6 +189,7 @@ Simple-Sim/
   - torch_cache/
     - hub/
 - predict.sh
+- pyproject.toml
 - requirements.txt
 - run.sh
 - run_pipeline.sh
@@ -213,21 +213,20 @@ Simple-Sim/
   - __init__.py
   - blender/
     - render_batch.py
+  - classes.py
+  - coerce.py
   - config.py
   - config_schema.py
   - data_loader.py
   - dataset_store.py
   - defects.py
-  - generator_2d.py
-  - generator_3d.py
+  - filter_settings.py
   - generators/
     - __init__.py
     - blender3d/
       - __init__.py
       - io.py
       - runner.py
-    - blender_3d.py
-    - filter_settings.py
     - opencv2d/
       - __init__.py
       - augment.py
@@ -236,7 +235,6 @@ Simple-Sim/
       - geometry.py
       - realism.py
       - render.py
-    - opencv_2d.py
   - manifest.py
   - metrics.py
   - model_bundle.py
@@ -248,6 +246,7 @@ Simple-Sim/
   - two_stage.py
 - tests/
   - __init__.py
+  - test_coerce.py
   - test_config_schema.py
   - test_dataset_ops.py
   - test_filter_settings.py

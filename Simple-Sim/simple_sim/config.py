@@ -6,9 +6,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import yaml
 
+from simple_sim.classes import VALID_CLASSES  # noqa: F401  (re-exported for existing importers)
 from simple_sim.config_schema import parse_config_typed
+from simple_sim.io_utils import load_yaml
 
 log = logging.getLogger(__name__)
 
@@ -34,8 +35,6 @@ def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any],
         out["mm_per_px"] = float(roi["mm_per_px"])
     return out
 
-VALID_CLASSES = {'OK', 'MISSING', 'MISALIGNED', 'TOMBSTONE', 'SOLDER_BRIDGE', 'CORNER_LIFT', 'SOLDER_BALL', 'EXCESS_SOLDER'}
-
 _SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 _SUPPORTED_MODELS = {'resnet18'}
 _SUPPORTED_OPTIMIZERS = {'adam'}
@@ -58,8 +57,7 @@ def load_config(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
-    with open(path, encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+    config = load_yaml(path)
 
     if config is None:
         raise ValueError(f"Empty config file: {path}")
@@ -96,10 +94,11 @@ def validate_config(cfg: dict[str, Any]) -> None:
     if 'geometry_ranges' in cfg:
         _validate_geometry_ranges(cfg['geometry_ranges'])
 
-    _validate_domains(cfg['domains'])
+    _validate_domains(cfg['domains'], cfg['render'])
     validate_splits(cfg)
     _validate_render(cfg['render'], schema_version, mode)
     _validate_augment(cfg['augment'])
+    _validate_defects(cfg.get('defects'))
     _validate_train(cfg['train'])
     _validate_eval(cfg['eval'])
 
@@ -253,11 +252,15 @@ def _validate_geometry_ranges(gr: Any) -> None:
             raise ValueError(f"geometry_ranges.{k} min > max")
 
 
-def _validate_domains(domains: dict[str, Any]) -> None:
+def _validate_domains(domains: dict[str, Any], render: dict[str, Any] | None = None) -> None:
+    """``domains``: samples are spread evenly over all domains (``index % n``); each domain has its
+    own augmentation ranges and, for the 2D backend, an optional ``camera`` override of ``render.camera``."""
     if not domains:
         raise ValueError("domains cannot be empty")
     required = ['lighting_brightness', 'blur_sigma', 'noise_stddev']
     for domain_name, domain_cfg in domains.items():
+        if not isinstance(domain_cfg, dict):
+            raise ValueError(f"domains.{domain_name} must be a mapping")
         for field in required:
             if field not in domain_cfg:
                 raise ValueError(f"Missing domains.{domain_name}.{field}")
@@ -265,6 +268,43 @@ def _validate_domains(domains: dict[str, Any]) -> None:
                 raise ValueError(f"domains.{domain_name}.{field} must be a list of 2 numbers")
             if domain_cfg[field][0] > domain_cfg[field][1]:
                 raise ValueError(f"domains.{domain_name}.{field} min > max")
+        if 'camera' in domain_cfg:
+            if render is not None and render.get('backend', 'opencv_2d') != 'opencv_2d':
+                raise ValueError(f"domains.{domain_name}.camera is only supported by render.backend: opencv_2d")
+            try:
+                _validate_camera(domain_cfg['camera'])
+            except ValueError as exc:
+                raise ValueError(str(exc).replace("render.camera", f"domains.{domain_name}.camera")) from exc
+
+
+def domain_camera(render: dict[str, Any], domain_cfg: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Effective ``render.camera`` for a sample of a domain: the domain's ``camera`` keys override the
+    render section's (a ``preset`` in the domain replaces the render preset)."""
+    base = render.get("camera")
+    override = (domain_cfg or {}).get("camera")
+    if not override:
+        return base
+    return {**(base or {}), **override}
+
+
+def _validate_defects(defects: Any) -> None:
+    """``defects`` (optional): how defect parameters are drawn (``placement_sampling``)."""
+    if defects is None:
+        return
+    from simple_sim.defects import PLACEMENT_SAMPLING
+
+    if not isinstance(defects, dict) or set(defects) - {'placement_sampling'}:
+        raise ValueError("defects must be a mapping with keys from ['placement_sampling']")
+    placement = defects.get('placement_sampling')
+    if placement is not None and placement not in PLACEMENT_SAMPLING:
+        raise ValueError(f"defects.placement_sampling must be one of {list(PLACEMENT_SAMPLING)}")
+
+
+def placement_sampling(cfg: dict[str, Any]) -> str:
+    """``defects.placement_sampling`` of a run config (default ``legacy``)."""
+    from simple_sim.defects import DEFAULT_PLACEMENT_SAMPLING
+
+    return str((cfg.get('defects') or {}).get('placement_sampling') or DEFAULT_PLACEMENT_SAMPLING)
 
 
 def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> None:
@@ -284,6 +324,7 @@ def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> 
     _validate_camera(render.get('camera'))
     _validate_supersampling(render.get('supersampling'))
     _validate_solder(render.get('solder'))
+    _validate_post_filters(render)
     _validate_board(render.get('board'))
     _validate_board_look(render)
 
@@ -334,6 +375,19 @@ def _validate_solder(style: Any) -> None:
 
     if style not in SOLDER_STYLES:
         raise ValueError(f"render.solder must be one of {list(SOLDER_STYLES)}")
+
+
+def _validate_post_filters(render: dict[str, Any]) -> None:
+    """``render.post_filters`` (2D photoreal): where the domain blur/noise and the rotation are applied."""
+    mode = render.get('post_filters')
+    if mode is None:
+        return
+    from simple_sim.generators.opencv2d.render import POST_FILTER_MODES
+
+    if mode not in POST_FILTER_MODES:
+        raise ValueError(f"render.post_filters must be one of {list(POST_FILTER_MODES)}")
+    if mode == 'camera' and (render.get('backend', 'opencv_2d') != 'opencv_2d' or render.get('style', 'photoreal') != 'photoreal'):
+        raise ValueError("render.post_filters: camera requires render.backend: opencv_2d with render.style: photoreal")
 
 
 def _validate_camera(camera: Any) -> None:
@@ -452,6 +506,42 @@ def _validate_train(train: dict[str, Any]) -> None:
         raise ValueError("train.batch_size must be a positive integer")
     if not isinstance(train['lr'], (int, float)) or train['lr'] <= 0:
         raise ValueError("train.lr must be a positive number")
+    _validate_train_extras(train)
+
+
+_TRAIN_SCHEDULERS = ('none', 'cosine')
+_TRAIN_AUGMENT_FLAGS = ('hflip', 'vflip', 'rot90')
+_TRAIN_AUGMENT_JITTER = ('brightness', 'contrast', 'saturation', 'hue')
+
+
+def _validate_train_extras(train: dict[str, Any]) -> None:
+    """Optional training knobs: ``scheduler``, ``warmup_epochs``, ``label_smoothing``, ``augment``."""
+    if 'scheduler' in train and train['scheduler'] not in _TRAIN_SCHEDULERS:
+        raise ValueError(f"train.scheduler must be one of {list(_TRAIN_SCHEDULERS)}")
+    if 'warmup_epochs' in train:
+        if isinstance(train['warmup_epochs'], bool) or not isinstance(train['warmup_epochs'], int) or train['warmup_epochs'] < 0:
+            raise ValueError("train.warmup_epochs must be an integer >= 0")
+        if train['warmup_epochs'] >= train['epochs']:
+            raise ValueError("train.warmup_epochs must be smaller than train.epochs")
+    if 'label_smoothing' in train:
+        ls = train['label_smoothing']
+        if isinstance(ls, bool) or not isinstance(ls, (int, float)) or not 0 <= ls < 1:
+            raise ValueError("train.label_smoothing must be a number in [0, 1)")
+    if 'augment' in train:
+        aug = train['augment']
+        if aug is None:
+            return
+        if not isinstance(aug, dict) or set(aug) - set(_TRAIN_AUGMENT_FLAGS) - set(_TRAIN_AUGMENT_JITTER):
+            raise ValueError(f"train.augment must be a mapping with keys from {list(_TRAIN_AUGMENT_FLAGS + _TRAIN_AUGMENT_JITTER)}")
+        for key in _TRAIN_AUGMENT_FLAGS:
+            if key in aug and not isinstance(aug[key], bool):
+                raise ValueError(f"train.augment.{key} must be a boolean")
+        for key in _TRAIN_AUGMENT_JITTER:
+            if key in aug:
+                v = aug[key]
+                limit = 0.5 if key == 'hue' else 1.0
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= limit:
+                    raise ValueError(f"train.augment.{key} must be a number in [0, {limit}]")
 
 
 def _validate_eval(eval_cfg: dict[str, Any]) -> None:

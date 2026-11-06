@@ -6,13 +6,14 @@ imported without tkinter. Tk and Pillow are imported lazily when the viewer open
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
+from simple_sim.coerce import as_bool
 from simple_sim.filter_profiles import (
     load_shared_filter_profiles,
     normalized_with_extras,
-    parse_bool_like,
     save_shared_filter_profiles,
     shared_settings_path,
     to_profile_store,
@@ -33,6 +34,9 @@ from simple_sim.preview.render import (
     write_index_html,
 )
 from simple_sim.profile_hash import load_profile
+
+
+log = logging.getLogger(__name__)
 
 
 def open_tk_viewer(
@@ -176,7 +180,7 @@ def open_tk_viewer(
             shared_profiles.get(shared_active_profile),
         )
         cardinal_rotation_90_var = tk.BooleanVar(
-            value=parse_bool_like(filter_values.get("cardinal_rotation_90", True), default=True)
+            value=as_bool(filter_values.get("cardinal_rotation_90", True), default=True)
         )
 
         def _current_filter_store() -> dict[str, Any]:
@@ -192,7 +196,7 @@ def open_tk_viewer(
         def _apply_filters_to_vars(d: dict[str, Any]) -> None:
             filter_values.clear()
             filter_values.update(to_profile_store(d))
-            cardinal_rotation_90_var.set(parse_bool_like(filter_values.get("cardinal_rotation_90", True), default=True))
+            cardinal_rotation_90_var.set(as_bool(filter_values.get("cardinal_rotation_90", True), default=True))
 
         def _persist_filters(active_name: str | None = None) -> None:
             nonlocal shared_active_profile
@@ -284,7 +288,7 @@ def open_tk_viewer(
                 try:
                     fn()
                 except Exception as exc:
-                    print(f"[viewer] UI update failed: {exc}")
+                    log.info(f"[viewer] UI update failed: {exc}")
             root.after(100, _poll_ui_queue)
 
         root.after(100, _poll_ui_queue)

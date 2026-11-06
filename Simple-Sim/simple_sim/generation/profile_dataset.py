@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import time
 from pathlib import Path
@@ -20,11 +21,14 @@ from simple_sim.generation.common import (
     sample_record,
     summarize,
 )
-from simple_sim.generators.filter_settings import load_image_filters_env
-from simple_sim.generators.opencv_2d import render_roi
+from simple_sim.filter_settings import load_image_filters_env
+from simple_sim.generators.opencv2d import render_roi
 from simple_sim.generators.version import RENDERER_VERSION
 from simple_sim.manifest import write_multi_profile_manifest
 from simple_sim.profile_hash import hash_profile, load_profile
+
+
+log = logging.getLogger(__name__)
 
 
 def generate_profile_dataset(
@@ -41,7 +45,7 @@ def generate_profile_dataset(
     """
     output_dir = Path(output_dir)
     root = Path(project_root) if project_root else default_project_root()
-    print(f"Loading configuration from {config_path}")
+    log.info(f"Loading configuration from {config_path}")
     config = load_config(config_path)
     validate_config(config)
 
@@ -71,13 +75,13 @@ def generate_profile_dataset(
                 "profile_path": str(profile_path.relative_to(root)),
             }
         )
-        print(f"Loaded profile: {pid} (hash: {profile_hash_str[:40]}...)")
+        log.info(f"Loaded profile: {pid} (hash: {profile_hash_str[:40]}...)")
 
     total_per_class = sum(classes.values())
-    print(f"\nProfiles: {profile_ids}")
-    print(f"Samples per profile: {total_per_class}")
-    print(f"Total samples: {total_per_class * len(profile_ids)}")
-    print(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
+    log.info(f"\nProfiles: {profile_ids}")
+    log.info(f"Samples per profile: {total_per_class}")
+    log.info(f"Total samples: {total_per_class * len(profile_ids)}")
+    log.info(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
 
     jobs: list[tuple[dict[str, Any], np.random.Generator, dict[str, Any], dict[str, Any] | None, str]] = []
     records: list[dict[str, Any]] = []
@@ -93,7 +97,7 @@ def generate_profile_dataset(
 
         render_config = merge_profile_render(config["render"], profile, config.get("roi"))
 
-        print(f"\nGenerating samples for profile: {pid}")
+        log.info(f"\nGenerating samples for profile: {pid}")
         for class_name, count in classes.items():
             for _i in tqdm(range(count), desc=f"{pid}/{class_name}"):
                 rec, rng = sample_record(
@@ -114,7 +118,7 @@ def generate_profile_dataset(
                 records.append(rec)
                 global_index += 1
 
-    print("\nGenerating train/val/test splits")
+    log.info("\nGenerating train/val/test splits")
     meta_rows, label_rows, splits = build_rows(
         records,
         config=config,
@@ -125,7 +129,7 @@ def generate_profile_dataset(
         split_seed=run_seed,
     )
 
-    print(f"\nWriting dataset to {output_dir}")
+    log.info(f"\nWriting dataset to {output_dir}")
     workers = render_workers()
 
     def render_job(job: tuple[dict[str, Any], np.random.Generator, dict[str, Any], dict[str, Any] | None, str]) -> None:
@@ -143,7 +147,7 @@ def generate_profile_dataset(
         write_image(temp_dir / rec["image_path"], img)
 
     with atomic_dataset_dir(output_dir) as temp_dir:
-        print(f"Rendering {len(jobs)} images with {workers} worker thread(s)")
+        log.info(f"Rendering {len(jobs)} images with {workers} worker thread(s)")
         for _ in tqdm(imap_ordered(render_job, jobs, workers=workers), total=len(jobs), desc="render"):
             pass
         write_dataset_files(temp_dir, meta_rows, label_rows, config)
@@ -160,16 +164,16 @@ def generate_profile_dataset(
     )
 
     total_s = max(1e-9, time.perf_counter() - t_total0)
-    print("\n" + "=" * 60)
-    print("PROFILE DATASET GENERATION COMPLETE")
-    print("=" * 60)
-    print(f"Output directory: {output_dir}")
-    print(f"Total samples: {len(meta_rows)}")
-    print(f"Profiles: {profile_ids}")
-    print(f"Generation rate: {len(meta_rows) / total_s:.1f} samples/s  (time: {total_s:.1f}s)")
+    log.info("\n" + "=" * 60)
+    log.info("PROFILE DATASET GENERATION COMPLETE")
+    log.info("=" * 60)
+    log.info(f"Output directory: {output_dir}")
+    log.info(f"Total samples: {len(meta_rows)}")
+    log.info(f"Profiles: {profile_ids}")
+    log.info(f"Generation rate: {len(meta_rows) / total_s:.1f} samples/s  (time: {total_s:.1f}s)")
     for split_name, sample_ids in splits.items():
-        print(f"  {split_name}: {len(sample_ids)} samples")
-    print("=" * 60)
+        log.info(f"  {split_name}: {len(sample_ids)} samples")
+    log.info("=" * 60)
 
     result = summarize(output_dir, label_rows, splits, new_samples=len(meta_rows), elapsed_s=total_s)
     result.update(run_id=run_id, profile_ids=list(profile_ids), backend=backend)

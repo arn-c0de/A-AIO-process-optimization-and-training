@@ -37,6 +37,7 @@ from simple_sim.manifest import (  # noqa: E402
 from simple_sim.profile_hash import hash_profile  # noqa: E402
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, write_jsonl  # noqa: E402
 from simple_sim.splits import write_splits  # noqa: E402
+from simple_sim.io_utils import load_yaml  # noqa: E402
 
 SCRIPT_NAME = "tools/create_multi_dataset.py"
 
@@ -151,7 +152,7 @@ def _load_source_config(ds: Path) -> dict[str, Any]:
     cfg_path = ds / "config.yaml"
     if not cfg_path.exists():
         return {}
-    data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    data = load_yaml(cfg_path) or {}
     return data if isinstance(data, dict) else {}
 
 

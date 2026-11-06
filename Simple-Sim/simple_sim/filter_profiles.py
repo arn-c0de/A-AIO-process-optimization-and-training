@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from simple_sim.generators.filter_settings import default_filter_values_for_popup, normalize_image_filters
+from simple_sim.filter_settings import default_filter_values_for_popup, normalize_image_filters
 from simple_sim.io_utils import atomic_write_json, read_json
 
 PROFILES_KEY = "pipeline.filter_profiles_json"
@@ -30,17 +30,6 @@ def is_filter_popup_extra_key(key: str) -> bool:
         or key == "filter_mode"
         or key.startswith("realism_")
     )
-
-
-def parse_bool_like(value: Any, default: bool = False) -> bool:
-    """``True``/``False`` from bools, numbers and strings like ``"1"``/``"yes"``/``"on"``."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return default
 
 
 def shared_settings_path(sim_root: Path, explicit_path: str | None = None) -> Path:

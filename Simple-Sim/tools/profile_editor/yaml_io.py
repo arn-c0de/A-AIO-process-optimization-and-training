@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 
 from simple_sim.io_utils import atomic_write_text
+from simple_sim.io_utils import load_yaml as read_yaml_file
 
 
 class YamlError(Exception):
@@ -17,8 +18,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise YamlError(f"YAML file not found: {path}")
     try:
-        with path.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        data = read_yaml_file(path)
     except (OSError, yaml.YAMLError) as exc:
         raise YamlError(f"Failed to read YAML {path}: {exc}") from exc
     if data is None:

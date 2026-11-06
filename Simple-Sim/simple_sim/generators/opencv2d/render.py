@@ -7,14 +7,34 @@ from typing import Any
 import cv2
 import numpy as np
 
+from simple_sim.classes import SOLDER_ONLY_CLASSES
+
 from .draw import _compute_pad_positions, body_geometry, draw_component, draw_pads, draw_solder, draw_substrate
 from .filters import apply_post_filters
 from .photoreal import render_photoreal_base, solder_defect_layout
 
+# ``render.post_filters`` (photoreal only):
+#   legacy  domain blur/noise and the augmentation rotation are applied to the finished camera image
+#           (so the sensor noise of the camera model is blurred/rotated and noise is added twice).
+#   camera  the rotation is a camera roll before the camera model, the domain blur is combined with the
+#           lens blur and the domain noise with the read noise: one blur, one noise, no interpolated
+#           noise. Brightness/contrast/colour and the extended image filters are applied as before.
+POST_FILTER_MODES = ("legacy", "camera")
+DEFAULT_POST_FILTERS = "legacy"
+_CAMERA_KEYS = ("blur_sigma", "noise_stddev", "rotation_deg")
+
+
+def post_filter_mode(config: dict[str, Any]) -> str:
+    """``render.post_filters`` of a render config (default ``legacy``)."""
+    mode = str(config.get("post_filters", DEFAULT_POST_FILTERS))
+    if mode not in POST_FILTER_MODES:
+        raise ValueError(f"render.post_filters must be one of {POST_FILTER_MODES}, got {mode!r}")
+    return mode
+
 
 def _draw_flat_solder_defects(img, nominal, defect_params, tolerances, footprint, rng) -> None:
     """SOLDER_BALL / EXCESS_SOLDER for the legacy flat style (same layout as photoreal)."""
-    if defect_params["type"] not in ("SOLDER_BALL", "EXCESS_SOLDER"):
+    if defect_params["type"] not in SOLDER_ONLY_CLASSES:
         return
     pads = _compute_pad_positions(footprint, nominal, img.shape[:2])
     geo = body_geometry(nominal, defect_params, tolerances, img.shape[:2])
@@ -38,9 +58,15 @@ def render_roi(
     rng: np.random.Generator,
     footprint: str = "chip_2pad",
 ) -> np.ndarray:
-    """Render complete ROI with defects and augmentation."""
+    """Render complete ROI with defects and augmentation (see :data:`POST_FILTER_MODES`)."""
     width, height = roi_size
-    if str(config.get("style", "photoreal")) == "photoreal":
+    photoreal = str(config.get("style", "photoreal")) == "photoreal"
+    in_camera = photoreal and post_filter_mode(config) == "camera"
+    if in_camera:
+        post = {k: float(augment.get(k, 0.0)) for k in _CAMERA_KEYS}
+        augment = {**augment, "blur_sigma": 0.0, "noise_stddev": 0.0, "rotation_deg": 0.0}
+        img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size, post)
+    elif photoreal:
         img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size)
     else:
         img = np.zeros((height, width, 3), dtype=np.uint8)

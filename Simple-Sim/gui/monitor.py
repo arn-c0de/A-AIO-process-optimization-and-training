@@ -37,7 +37,7 @@ from gui.core.context import AppContext
 from gui.core.events import Topics
 from gui.help.texts import QUICK_START, SHORTCUTS
 from gui.state import UiState
-from gui.tabs import BaseTab
+from gui.tabs.core.base import BaseTab
 from gui.tabs.core.registry import TabRegistry
 from gui.theme.style import apply_scaling, apply_theme, ui_scale_from_env
 from gui.theme.tokens import SPACE
@@ -439,6 +439,9 @@ class MonitorAppTabbed:
 
 def main() -> None:
     """Main entry point for tabbed monitor."""
+    from simple_sim.cli_utils import configure_cli_logging
+
+    configure_cli_logging()
     sim_root = Path(__file__).resolve().parent.parent
     root = tk.Tk(className="SimpleSim")
     MonitorAppTabbed(root, sim_root=sim_root)

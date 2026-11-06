@@ -180,21 +180,22 @@ def eval_loader(dataset: Dataset, checkpoint: dict[str, Any]) -> DataLoader:
     )
 
 
-def print_checkpoint_info(checkpoint: dict[str, Any], label: str = "Classes") -> None:
-    """Print the standard checkpoint summary lines (class names, epoch, val metrics).
+def format_checkpoint_info(checkpoint: dict[str, Any], label: str = "Classes") -> str:
+    """The standard checkpoint summary lines (class names, epoch, val metrics).
 
     Tolerates ensemble checkpoints, which have no epoch / val metrics.
     """
-    print(f"  {label}: {checkpoint.get('class_names')}")
-    print(f"  Trained epoch: {checkpoint.get('epoch', '-')}")
-    print(f"  Val accuracy: {checkpoint_val_accuracy(checkpoint):.4f}")
-    print(f"  Val F1: {float(checkpoint.get('val_f1') or 0.0):.4f}")
+    return "\n".join([
+        f"  {label}: {checkpoint.get('class_names')}",
+        f"  Trained epoch: {checkpoint.get('epoch', '-')}",
+        f"  Val accuracy: {checkpoint_val_accuracy(checkpoint):.4f}",
+        f"  Val F1: {float(checkpoint.get('val_f1') or 0.0):.4f}",
+    ])
 
 
-def print_distribution(title: str, dist: dict[str, int]) -> None:
-    print(f"\n{title}:")
-    for name, count in dist.items():
-        print(f"  {name}: {count}")
+def format_distribution(title: str, dist: dict[str, int]) -> str:
+    """``title:`` followed by one indented ``name: count`` line per entry (starts with a blank line)."""
+    return "\n".join([f"\n{title}:", *(f"  {name}: {count}" for name, count in dist.items())])
 
 
 def metrics_summary(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -218,8 +219,7 @@ def require_manifest(data_dir: Path) -> Path:
         raise FileNotFoundError(
             f"Dataset manifest not found: {manifest_path}\n"
             f"This dataset was created before profile support.\n"
-            f"Regenerate or use backfill tool:\n"
-            f"  .venv/bin/python tools/backfill_manifest.py --data {data_dir}"
+            f"Regenerate it, or create the manifest: python -m simple_sim backfill-manifest --data {data_dir}"
         )
     return manifest_path
 
@@ -245,8 +245,3 @@ def resolve_bundle_checkpoint(model_path: Path, profile_id: str, *, hint: str = 
             f"  expected: {resolved}" + (f"\n{hint}" if hint else "")
         )
     return resolved
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------

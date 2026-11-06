@@ -14,7 +14,7 @@ from tkinter import ttk
 from typing import Any
 from collections.abc import Callable
 
-from simple_sim.generators.filter_settings import (
+from simple_sim.filter_settings import (
     clean_filter_values_for_popup,
     default_filter_values_for_popup,
 )

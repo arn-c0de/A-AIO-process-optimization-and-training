@@ -8,15 +8,17 @@ This module provides functions for:
 
 from __future__ import annotations
 
-import json
+import logging
 import hashlib
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from simple_sim import __version__ as _VERSION
-from simple_sim.io_utils import atomic_write_json
+from simple_sim.io_utils import atomic_write_json, load_json, now_iso
+
+
+log = logging.getLogger(__name__)
 
 
 def hash_file(file_path: Path) -> str:
@@ -121,8 +123,7 @@ def write_dataset_manifest(
     git_commit = _get_git_commit()
     if extend and manifest_path.exists():
         # Update existing manifest
-        with open(manifest_path) as f:
-            manifest = json.load(f)
+        manifest = load_json(manifest_path)
 
         # Validate profile match (should have been caught earlier, but double-check)
         existing_profile_id = manifest['component_profile']['profile_id']
@@ -144,7 +145,7 @@ def write_dataset_manifest(
 
         # Update extend history
         entry = {
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': now_iso(),
             'samples_added': len(meta_rows),
             'git_commit': git_commit
         }
@@ -173,7 +174,7 @@ def write_dataset_manifest(
 
         manifest = {
             'manifest_version': 1,
-            'created_at': datetime.now().isoformat(),
+            'created_at': now_iso(),
             'run_id': run_id,
 
             'component_profile': {
@@ -191,7 +192,7 @@ def write_dataset_manifest(
             'dataset_stats': dataset_stats(meta_rows, label_rows, splits),
 
             'extend_history': [{
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': now_iso(),
                 'samples_added': len(meta_rows),
                 'git_commit': git_commit
             }]
@@ -201,7 +202,7 @@ def write_dataset_manifest(
             manifest['extend_history'][0]['renderer_version'] = renderer_version
 
     atomic_write_json(manifest_path, manifest)
-    print(f"✓ Dataset manifest written: {manifest_path}")
+    log.info(f"Dataset manifest written: {manifest_path}")
 
 
 def resolve_dataset_profile(manifest: dict[str, Any]) -> tuple[str, str]:
@@ -237,8 +238,7 @@ def read_dataset_manifest(manifest_path: Path) -> dict[str, Any]:
     if not manifest_path.exists():
         raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
 
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    manifest = load_json(manifest_path)
 
     # Validate manifest structure
     required_fields = [
@@ -283,29 +283,46 @@ def read_dataset_manifest(manifest_path: Path) -> dict[str, Any]:
     return manifest
 
 
+class ProfileMismatchError(ValueError):
+    """A checkpoint's component profile differs from the dataset's (see :func:`check_checkpoint_profile`)."""
+
+    def __init__(self, message: str, *, checkpoint_profile: str, dataset_profile: str) -> None:
+        super().__init__(message)
+        self.checkpoint_profile = checkpoint_profile
+        self.dataset_profile = dataset_profile
+
+
+class RendererMismatchError(ValueError):
+    """Extending a dataset whose images come from another renderer version (see :func:`check_renderer_version`)."""
+
+    def __init__(self, message: str, *, dataset_version: str | None, current_version: str) -> None:
+        super().__init__(message)
+        self.dataset_version = dataset_version
+        self.current_version = current_version
+
+
 def check_checkpoint_profile(
     checkpoint: dict[str, Any],
     dataset_profile_id: str,
     dataset_profile_hash: str,
     *,
     action: str,
-    allow_mismatch: bool | None = None,
+    allow_mismatch: bool = False,
     override_verb: str = "Continuing",
     ckpt_label: str = "Model trained on",
 ) -> str | None:
     """Guard a checkpoint against being used on a dataset of another profile.
 
-    Profile ID mismatch is a hard failure. ``allow_mismatch=None`` means the
-    caller has no override flag; ``True``/``False`` reflect an
-    ``--allow-profile-mismatch`` flag (True downgrades the failure to a warning).
-    A profile hash mismatch always only warns.
+    A profile ID mismatch raises :class:`ProfileMismatchError` unless *allow_mismatch*, which
+    downgrades it to a logged warning. A profile hash mismatch and a checkpoint without profile
+    metadata (legacy) are only logged as warnings.
 
     Args:
         checkpoint: Loaded checkpoint dict
         dataset_profile_id: Profile ID from resolve_dataset_profile()
         dataset_profile_hash: Profile hash from resolve_dataset_profile()
         action: Phrase for the error, e.g. "evaluate model on"
-        allow_mismatch: Override flag value, or None if the caller has none
+        allow_mismatch: Accept a profile ID mismatch (warning only)
         override_verb: Leading verb of the override warning ("Resuming", ...)
         ckpt_label: Label for the checkpoint profile line
 
@@ -314,36 +331,28 @@ def check_checkpoint_profile(
     """
     ckpt_profile = checkpoint.get('component_profile')
     if not ckpt_profile:
-        print("WARNING: Checkpoint lacks profile metadata (legacy checkpoint)")
+        log.warning("Checkpoint lacks profile metadata (legacy checkpoint)")
         return None
 
     ckpt_profile_id = ckpt_profile.get('profile_id')
     ckpt_profile_hash = ckpt_profile.get('profile_hash')
     label = f"{ckpt_label}:"
     width = max(len(label), len("Dataset profile:")) + 1
+    lines = (f"  {label:<{width}}{ckpt_profile_id}\n"
+             f"  {'Dataset profile:':<{width}}{dataset_profile_id}")
 
-    # HARD FAIL by default: Profile ID mismatch
     if ckpt_profile_id and ckpt_profile_id != dataset_profile_id:
         if not allow_mismatch:
-            hint = (
-                "\n\nTo override (NOT recommended): pass --allow-profile-mismatch"
-                if allow_mismatch is not None else ""
+            raise ProfileMismatchError(
+                f"Component profile mismatch:\n{lines}\nCannot {action} different component type.",
+                checkpoint_profile=str(ckpt_profile_id), dataset_profile=str(dataset_profile_id),
             )
-            raise ValueError(
-                f"Component profile mismatch:\n"
-                f"  {label:<{width}}{ckpt_profile_id}\n"
-                f"  {'Dataset profile:':<{width}}{dataset_profile_id}\n"
-                f"Cannot {action} different component type.{hint}"
-            )
-        print(f"WARNING: {override_verb} with component profile mismatch (--allow-profile-mismatch).")
-        print(f"  {label:<{width}}{ckpt_profile_id}")
-        print(f"  {'Dataset profile:':<{width}}{dataset_profile_id}")
+        log.warning(f"{override_verb} with component profile mismatch (mismatch allowed).\n{lines}")
 
-    # WARNING: Profile hash mismatch
     if ckpt_profile_hash and ckpt_profile_hash != dataset_profile_hash:
-        print("WARNING: Profile hash mismatch (different tolerance/geometry)")
-        print(f"  Checkpoint hash: {ckpt_profile_hash[:72]}...")
-        print(f"  Dataset hash:    {dataset_profile_hash[:72]}...")
+        log.warning("Profile hash mismatch (different tolerance/geometry)\n"
+                    f"  Checkpoint hash: {ckpt_profile_hash[:72]}...\n"
+                    f"  Dataset hash:    {dataset_profile_hash[:72]}...")
 
     return ckpt_profile_id
 
@@ -388,11 +397,11 @@ def write_multi_profile_manifest(
             profile_counts[pid] = profile_counts.get(pid, 0) + 1
 
     history_entry = {
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': now_iso(),
         'samples_added': len(meta_rows),
         'git_commit': git_commit,
     }
-    created_at = datetime.now().isoformat()
+    created_at = now_iso()
     extend_history = [history_entry]
     if existing:
         created_at = existing.get('created_at') or created_at
@@ -426,25 +435,25 @@ def write_multi_profile_manifest(
     }
 
     atomic_write_json(manifest_path, manifest)
-    print(f"✓ Multi-profile dataset manifest written: {manifest_path}")
+    log.info(f"Multi-profile dataset manifest written: {manifest_path}")
 
 
 def check_renderer_version(manifest: dict[str, Any], current: str, *, allow_mismatch: bool = False) -> None:
     """Refuse to extend a dataset whose images come from another renderer version.
 
     A manifest without ``generator.renderer_version`` (v1.0.3 and older, merged datasets) counts as
-    a mismatch. With *allow_mismatch* only a warning is printed (the dataset then mixes two looks).
+    a mismatch and raises :class:`RendererMismatchError`. With *allow_mismatch* only a warning is
+    logged (the dataset then mixes two looks).
     """
     existing = (manifest.get('generator') or {}).get('renderer_version')
     if existing is not None and str(existing) == str(current):
         return
     shown = existing if existing is not None else "unknown (v1.0.3 or older, or a merged dataset)"
-    msg = (f"Renderer version mismatch for --extend:\n"
+    msg = (f"Renderer version mismatch when extending a dataset:\n"
            f"  Dataset renderer: {shown}\n"
            f"  Current renderer: {current}\n"
            f"New images would look different from the existing ones (same config and seeds do not\n"
-           f"reproduce them). Generate a new dataset, or pass --allow-renderer-mismatch to mix them.")
+           f"reproduce them). Generate a new dataset, or allow the mismatch to mix them.")
     if not allow_mismatch:
-        raise ValueError(msg)
-    print("⚠ " + msg.replace("\n", "\n  "))
-
+        raise RendererMismatchError(msg, dataset_version=None if existing is None else str(existing), current_version=str(current))
+    log.warning(msg)

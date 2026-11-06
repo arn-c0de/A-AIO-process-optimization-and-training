@@ -14,12 +14,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
+from simple_sim.cli_utils import add_json_flag, configure_cli_logging, emit_result  # noqa: E402
 from simple_sim.manifest import read_dataset_manifest  # noqa: E402
 from simple_sim.rng import derive_sample_seed, parse_sample_id  # noqa: E402
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, validate_jsonl_pair  # noqa: E402
 from simple_sim.splits import assert_no_overlap, read_split  # noqa: E402
 from simple_sim.telemetry import emit  # noqa: E402
+from simple_sim.io_utils import load_yaml  # noqa: E402
 
 PASS, FAIL, WARN = "pass", "fail", "warn"
 _ICON = {PASS: "✓", FAIL: "✗ FAIL:", WARN: "⚠ WARNING:"}
@@ -178,7 +179,7 @@ def _check_seeds(data_dir: Path, meta_rows: list[MetaRow], log_limit: int, c: _C
         c.add("determinism", FAIL, "config.yaml missing, cannot verify seeds")
         return
     try:
-        run_seed = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {})["run"]["seed"]
+        run_seed = (load_yaml(config_path) or {})["run"]["seed"]
     except (OSError, yaml.YAMLError, KeyError, TypeError) as e:
         c.add("determinism", FAIL, f"cannot read run.seed from config.yaml - {e}")
         return
@@ -236,6 +237,7 @@ def main() -> None:
                         help="How many individual seed mismatch rows to print (default: 5)")
     add_json_flag(parser)
     args = parser.parse_args()
+    configure_cli_logging()
 
     ok, checks = run_validation(Path(args.data), seed_mismatch_log_limit=args.seed_mismatch_log_limit)
     if args.json:

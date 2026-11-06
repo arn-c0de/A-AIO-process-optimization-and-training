@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from simple_sim.io_utils import now_iso
 
 _LOG = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class FeedbackManager:
             "verdict": verdict,
             "corrected_class": corrected,
             "note": str(note or "").strip(),
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now_iso(),
         }
 
         self.feedback_path.parent.mkdir(parents=True, exist_ok=True)

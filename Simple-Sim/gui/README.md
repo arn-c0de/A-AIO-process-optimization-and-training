@@ -114,7 +114,6 @@ Flag types: `CORRUPT`, `OUTLIER`, `SUSPECT_LABEL`, `EDGE_CASE`, `DUPLICATE`, `MA
 - ✅ Telemetry system unchanged
 - ✅ Dataset schemas unchanged
 - ✅ Model format unchanged
-- ✅ Original monitor backed up as `monitor_old.py.backup`
 
 ## Troubleshooting
 

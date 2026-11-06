@@ -11,17 +11,15 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 import shutil
-from datetime import datetime
 import re
 import shlex
 
-import cv2
 import yaml
 
 from gui.utils.checkpoint_meta import CheckpointMetaCache
 from gui.utils.paths import list_model_paths, model_root
 from gui.utils.process import terminate_process
-from simple_sim.io_utils import atomic_write_json, path_size_bytes, read_json, rel_to
+from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, now_tag, path_size_bytes, read_json, rel_to
 from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
 from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
@@ -367,7 +365,7 @@ class PipelineLogic:
 
     def _write_model_meta(self, model_path: Path, *, run_i: int, dataset_dir: Path | None, dataset_mode: str, out_dir: Path) -> None:
         meta = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"), "run_iteration": int(run_i),
+            "timestamp": now_iso(timespec="seconds"), "run_iteration": int(run_i),
             "dataset_mode": dataset_mode, "dataset_dir": str(dataset_dir) if dataset_dir else None,
             "out_dir": str(out_dir), "model_path": str(model_path),
         }
@@ -384,7 +382,7 @@ class PipelineLogic:
             
             dst_root = self._model_root() / "versions" / model_path.stem
             dst_root.mkdir(parents=True, exist_ok=True)
-            tag = time.strftime("%Y%m%d_%H%M%S")
+            tag = now_tag(micro=False)
             base = dst_root / f"{model_path.stem}_{tag}_run{int(run_i):03d}.pt"
             dst = base
             if dst.exists():
@@ -401,7 +399,7 @@ class PipelineLogic:
 
     def _write_snapshot_meta(self, snapshot_path: Path, *, src: Path, run_i: int) -> None:
         meta = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"), "run_iteration": int(run_i),
+            "timestamp": now_iso(timespec="seconds"), "run_iteration": int(run_i),
             "snapshot_path": str(snapshot_path), "source_model_path": str(src),
         }
         atomic_write_json(Path(str(snapshot_path) + ".meta.json"), meta)
@@ -490,7 +488,7 @@ class PipelineLogic:
         values: list[str] = []
         for p in profile_files:
             try:
-                data = yaml.safe_load(p.read_text(encoding="utf-8"))
+                data = load_yaml(p)
                 supported = (((data or {}).get("profile") or {}).get("supported_render_backends") or [])
                 if not supported: supported = ["opencv_2d"]
                 if render_backend not in supported: continue
@@ -519,7 +517,7 @@ class PipelineLogic:
         try: shutil.copy2(config_path, out_dir / "config.yaml")
         except Exception: pass
 
-        cfg_data, run_block = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}), {}
+        cfg_data, run_block = (load_yaml(config_path) or {}), {}
         if isinstance(cfg_data, dict): run_block = cfg_data.get("run") or {}
         run_id, classes = str(run_block.get("run_id") or out_dir.name), run_block.get("classes", {})
         
@@ -528,7 +526,7 @@ class PipelineLogic:
         profile_hash = hash_profile(profile_path) if profile_path.exists() else ""
 
         manifest = {
-            "manifest_version": 1, "created_at": datetime.utcnow().isoformat() + "Z", "run_id": run_id,
+            "manifest_version": 1, "created_at": now_iso(utc=True), "run_id": run_id,
             "component_profile": {"profile_id": profile_id, "profile_hash": profile_hash, "profile_path": str(profile_path) if profile_path.exists() else ""},
             "generator": {"version": "1.0.1", "git_commit": None, "script": "gui.profile_placeholder"},
             "dataset_stats": {"total_samples": 0, "splits": {"train": 0, "val": 0, "test": 0}, "classes": {str(k): 0 for k in classes.keys()}},
@@ -546,7 +544,7 @@ class PipelineLogic:
         best_entry = None
         for cfg in sorted(configs_root.glob("*.yaml")):
             try:
-                data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+                data = load_yaml(cfg)
             except Exception: continue
             if not isinstance(data, dict): continue
 
@@ -650,7 +648,7 @@ class PipelineLogic:
             if not cfg_path.exists():
                 raise FileNotFoundError(f"Missing config.yaml in {ds}")
             try:
-                cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                cfg = load_yaml(cfg_path) or {}
             except Exception:
                 cfg = {}
             classes = cfg.get("classes") or {}
@@ -678,6 +676,8 @@ class PipelineLogic:
         target_w: int,
         target_h: int,
     ) -> tuple[list[MetaRow], list[LabelRow], dict[str, list[str]]]:
+        import cv2  # lazy: only the merge resize needs OpenCV
+
         meta_out: list[MetaRow] = []
         label_out: list[LabelRow] = []
         split_counters: dict[str, int] = {}

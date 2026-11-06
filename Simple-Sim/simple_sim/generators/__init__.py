@@ -1,15 +1,5 @@
-"""Generator backends and shared filter settings."""
+"""Renderer backends: ``simple_sim.generators.opencv2d`` (2D) and ``.blender3d`` (3D).
 
-from .opencv_2d import *  # noqa: F401,F403
-from .blender_3d import *  # noqa: F401,F403
-from .filter_settings import (
-    normalize_image_filters,
-    default_filter_values_for_popup,
-    clean_filter_values_for_popup,
-)
-
-__all__ = [
-    "normalize_image_filters",
-    "default_filter_values_for_popup",
-    "clean_filter_values_for_popup",
-]
+Intentionally empty so that importing one backend (or ``generators.version``) does not
+load the other or OpenCV. Shared image-filter settings live in ``simple_sim.filter_settings``.
+"""

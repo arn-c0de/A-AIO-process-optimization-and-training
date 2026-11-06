@@ -15,6 +15,8 @@ import yaml
 
 from gui.utils.filter_profile_store import FILTER_SETTING_SPECS
 from gui.utils.paths import model_root
+from simple_sim.classes import STANDARD_CLASSES
+from simple_sim.io_utils import load_yaml
 
 PYTHON = "./.venv/bin/python"
 
@@ -46,7 +48,7 @@ PERSISTED_FIELD_MAP: tuple[tuple[str, str], ...] = (
 DATASET_DERIVED_KEYS: frozenset[str] = frozenset(
     {"pipeline.config", "pipeline.out", "pipeline.model", "pipeline.name", "pipeline.dataset_mode"}
 )
-DEFAULT_CLASS_NAMES: tuple[str, ...] = ("OK", "MISSING", "MISALIGNED", "TOMBSTONE")
+DEFAULT_CLASS_NAMES: tuple[str, ...] = STANDARD_CLASSES
 
 
 def resolve_under(sim_root: Path, s: str) -> Path:
@@ -58,7 +60,7 @@ def config_class_names(cfg_path: Path | None) -> list[str]:
     """Class names (``classes`` keys) of a run config, or the default four classes."""
     if cfg_path is not None:
         try:
-            data = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8")) or {}
+            data = load_yaml(Path(cfg_path)) or {}
             names = list((data.get("classes") or {}).keys())
             if names:
                 return names

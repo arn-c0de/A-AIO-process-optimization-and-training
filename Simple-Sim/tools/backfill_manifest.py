@@ -27,8 +27,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
-from simple_sim.io_utils import atomic_write_json  # noqa: E402
+from simple_sim.cli_utils import add_json_flag, configure_cli_logging, emit_result  # noqa: E402
+from simple_sim.io_utils import atomic_write_json, load_yaml  # noqa: E402
 from simple_sim.manifest import dataset_stats  # noqa: E402
 from simple_sim.profile_hash import hash_profile  # noqa: E402
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl  # noqa: E402
@@ -73,7 +73,7 @@ def backfill_dataset(
 
     # Load config
     try:
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        config = load_yaml(config_path) or {}
     except (OSError, yaml.YAMLError) as e:
         print(f"  ✗ Failed to load config: {e}")
         return STATUS_FAILED
@@ -187,6 +187,7 @@ Examples:
     add_json_flag(parser)
 
     args = parser.parse_args()
+    configure_cli_logging()
 
     if not args.data and not args.data_root:
         parser.error("Provide --data or --data-root")

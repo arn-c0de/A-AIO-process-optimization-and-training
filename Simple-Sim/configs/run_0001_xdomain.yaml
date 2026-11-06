@@ -1,0 +1,116 @@
+# Same part as run_0001 (0603 resistor, all classes) with the v1.1 training-quality options:
+#   defects.placement_sampling: continuous  OK / MISALIGNED placements fill the tolerance up to the
+#                                           boundary and start right behind it (no unsampled band).
+#   render.post_filters: camera             domain blur/noise go into the camera model, the rotation
+#                                           is a camera roll before it (no second noise, no rotated noise).
+#   domains                                 samples alternate between domain_A (AOI camera) and domain_B
+#                                           (phone camera); domain_B is held out for val/test, so the
+#                                           eval report measures generalisation to another camera.
+#   train.augment / scheduler / smoothing   flips + quarter turns + colour jitter at training time,
+#                                           cosine LR with warm-up, label smoothing.
+run:
+  run_id: run_0001_xdomain
+  seed: 42
+  schema_version: 2
+  component_profile: chip_0603_resistor@2
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.01
+classes:
+  OK: 100
+  MISSING: 100
+  MISALIGNED: 100
+  TOMBSTONE: 100
+  SOLDER_BALL: 100
+  EXCESS_SOLDER: 100
+defects:
+  placement_sampling: continuous
+domains:
+  domain_A:
+    lighting_brightness:
+    - 0.9
+    - 1.1
+    blur_sigma:
+    - 0.0
+    - 0.6
+    noise_stddev:
+    - 0.0
+    - 6.0
+  domain_B:
+    lighting_brightness:
+    - 0.8
+    - 1.2
+    blur_sigma:
+    - 0.0
+    - 0.4
+    noise_stddev:
+    - 0.0
+    - 4.0
+    camera:
+      preset: phone
+splits:
+  train_domains:
+  - domain_A
+  val_domains:
+  - domain_B
+  test_domains:
+  - domain_B
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+render:
+  backend: opencv_2d
+  post_filters: camera
+  substrate_color:
+  - 40
+  - 90
+  - 40
+  copper_color:
+  - 60
+  - 120
+  - 180
+  solder_mask_alpha: 0.3
+augment:
+  rotation_deg_range:
+  - -5
+  - 5
+  brightness_factor_range:
+  - 0.85
+  - 1.15
+  contrast_factor_range:
+  - 0.9
+  - 1.1
+train:
+  model: resnet18
+  pretrained: true
+  epochs: 10
+  batch_size: 32
+  num_workers: 0
+  lr: 0.001
+  optimizer: adam
+  weight_decay: 0.0001
+  scheduler: cosine
+  warmup_epochs: 1
+  label_smoothing: 0.05
+  augment:
+    hflip: true
+    vflip: true
+    rot90: true
+    brightness: 0.15
+    contrast: 0.15
+    saturation: 0.1
+    hue: 0.02
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - confusion_matrix
+  critical_classes:
+  - MISSING
+  - MISALIGNED
+  - TOMBSTONE

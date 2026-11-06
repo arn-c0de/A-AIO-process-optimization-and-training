@@ -2,21 +2,31 @@
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from simple_sim.config import placement_sampling
 from simple_sim.defects import classify_defect, sample_defect_params
-from simple_sim.generators.filter_settings import augment_for_meta
-from simple_sim.generators.opencv_2d import apply_image_filter_overrides, sample_augment_params, sample_nominal_geometry
+from simple_sim.filter_settings import augment_for_meta
+from simple_sim.generators.opencv2d import apply_image_filter_overrides, sample_augment_params, sample_nominal_geometry
 from simple_sim.rng import derive_sample_seed, make_sample_id
 from simple_sim.schema import LabelRow, MetaRow
-from simple_sim.splits import assert_no_overlap, check_class_coverage, generate_splits, write_splits
+from simple_sim.splits import SPLIT_NAMES, assert_no_overlap, check_class_coverage, generate_splits, write_splits
 
-DOMAIN = "domain_A"  # Single domain for MVP
-SPLIT_NAMES = ("train", "val", "test")
+log = logging.getLogger(__name__)
+
+DOMAIN = "domain_A"  # default domain name (single-domain configs and the profile-classifier generator)
+
+
+def sample_domain(config: dict[str, Any], index: int) -> str:
+    """Domain of sample *index*: the config's domains in order, cycled (``index % n``), so every class
+    is spread evenly over the domains and a single-domain config always yields that domain."""
+    names = list(config["domains"])
+    return str(names[int(index) % len(names)])
 
 
 def project_root() -> Path:
@@ -44,21 +54,23 @@ def sample_record(
     enable_cardinal_rotation_90: bool,
     footprint: str,
     profile_id: str = "",
+    domain: str = DOMAIN,
 ) -> tuple[dict[str, Any], np.random.Generator]:
-    """Sample geometry/defect/augment for sample *index* of target *class_name*.
+    """Sample geometry/defect/augment for sample *index* of target *class_name* in *domain*.
 
     Returns ``(record, rng)``; the rng is positioned after sampling so a caller may keep
     using it for rendering. ``record["class_name"]`` is the *derived* label, which can
-    differ from the target (callers may warn).
+    differ from the target (callers may warn). ``defects.placement_sampling`` of *config*
+    selects the OK / MISALIGNED placement sampler.
     """
-    seed = derive_sample_seed(run_seed, DOMAIN, index)
+    seed = derive_sample_seed(run_seed, domain, index)
     rng = np.random.default_rng(seed)
     nominal = sample_nominal_geometry(config["roi"], rng, geometry_ranges=geometry_ranges)
-    defect = sample_defect_params(class_name, rng, tolerances=tolerances)
+    defect = sample_defect_params(class_name, rng, tolerances=tolerances, placement=placement_sampling(config))
     derived = classify_defect(nominal, defect, tolerances)
     augment = sample_augment_params(
         config["augment"],
-        config["domains"][DOMAIN],
+        config["domains"][domain],
         rng,
         enable_cardinal_rotation_90=(enable_cardinal_rotation_90 and bool(image_filters.get("cardinal_rotation_90", True))),
     )
@@ -73,6 +85,7 @@ def sample_record(
         "class_name": derived,
         "footprint": footprint,
         "profile_id": profile_id,
+        "domain": domain,
     }
     return record, rng
 
@@ -84,7 +97,7 @@ def _meta_row(
         schema_version=2,
         id=sample_id,
         run_id=run_id,
-        domain=DOMAIN,
+        domain=str(r.get("domain") or DOMAIN),
         split=split,
         seed=r["seed"],
         image_path=r["image_path"],
@@ -123,7 +136,7 @@ def build_rows(
         )
 
     def tmp_id(r: dict[str, Any]) -> str:
-        return f"{DOMAIN}/{r['index']:06d}"
+        return f"{r.get('domain') or DOMAIN}/{r['index']:06d}"
 
     # Temporary rows only drive split grouping; the split value is a placeholder.
     tmp_meta = [
@@ -138,7 +151,7 @@ def build_rows(
     splits: dict[str, list[str]] = {k: [] for k in SPLIT_NAMES}
     for r in records:
         split_name = id_to_split[tmp_id(r)]
-        sample_id = make_sample_id(run_id, DOMAIN, split_name, r["index"])
+        sample_id = make_sample_id(run_id, str(r.get("domain") or DOMAIN), split_name, r["index"])
         meta = render_meta(r)
         meta.update(extra_render_meta or {})
         meta_rows.append(_meta_row(r, sample_id=sample_id, split=split_name, run_id=run_id, backend=backend, render_meta=meta))
@@ -149,18 +162,17 @@ def build_rows(
     return meta_rows, label_rows, splits
 
 
-def finalize_splits(output_dir: Path, splits: dict[str, list[str]], label_rows: list[LabelRow], *, mark: str = "") -> None:
-    """Check overlap/class coverage (printing the result) and write the split files."""
+def finalize_splits(output_dir: Path, splits: dict[str, list[str]], label_rows: list[LabelRow]) -> list[str]:
+    """Check overlap and class coverage, write the split files, return the coverage warnings (also logged)."""
     assert_no_overlap(splits)
-    print(f"{mark}No split overlap detected")
+    log.info("No split overlap detected")
     warnings = check_class_coverage(splits, label_rows)
-    if warnings:
-        print("\nWARNINGS:")
-        for warning in warnings:
-            print(f"  - {warning}")
-    else:
-        print(f"{mark}All splits contain all classes")
+    for warning in warnings:
+        log.warning(warning)
+    if not warnings:
+        log.info("All splits contain all classes")
     write_splits(output_dir, splits)
+    return warnings
 
 
 def summarize(

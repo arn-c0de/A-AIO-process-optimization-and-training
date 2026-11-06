@@ -9,9 +9,9 @@ from typing import Any
 import numpy as np
 
 from simple_sim.generators.blender3d.runner import render_prepared_batch
-from simple_sim.generators.blender_3d import render_blender_batch, write_jobs_jsonl
-from simple_sim.generators.filter_settings import NEUTRAL_AUGMENT
-from simple_sim.generators.opencv_2d import apply_post_filters
+from simple_sim.generators.blender3d import render_blender_batch, write_jobs_jsonl
+from simple_sim.filter_settings import NEUTRAL_AUGMENT
+from simple_sim.generators.opencv2d import apply_post_filters
 from simple_sim.generators.blender3d.bake import bake_fields
 from simple_sim.parallel import imap_ordered
 

@@ -10,6 +10,7 @@ import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
 from typing import Any
+from simple_sim.io_utils import load_yaml
 
 
 def _open_zoom_image_popup(popup: Any, pil_img: Any, title: str) -> None:
@@ -104,7 +105,7 @@ def populate_preview_profiles(popup: Any) -> None:
         return
 
     try:
-        import yaml as _yaml  # type: ignore
+        import yaml  # noqa: F401 - availability check (load_yaml imports it lazily)
     except ImportError:
         popup._preview_status_var.set("PyYAML not installed – cannot load profiles.")
         return
@@ -118,7 +119,7 @@ def populate_preview_profiles(popup: Any) -> None:
     vals_3d: list = []
     for p in sorted(profiles_dir.glob("*.yaml")):
         try:
-            data = _yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            data = load_yaml(p) or {}
             backends = list((data.get("profile") or {}).get("supported_render_backends") or [])
             pid = p.stem
             if "opencv_2d" in backends:
@@ -362,7 +363,7 @@ def populate_left_filter_profiles(popup: Any) -> None:
         return
 
     try:
-        import yaml as _yaml  # type: ignore
+        import yaml  # noqa: F401 - availability check (load_yaml imports it lazily)
     except ImportError:
         if status:
             status.set("PyYAML not installed.")
@@ -378,7 +379,7 @@ def populate_left_filter_profiles(popup: Any) -> None:
     vals_3d: list = []
     for p in sorted(profiles_dir.glob("*.yaml")):
         try:
-            data = _yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            data = load_yaml(p) or {}
             backends = list((data.get("profile") or {}).get("supported_render_backends") or [])
             pid = p.stem
             if "opencv_2d" in backends:

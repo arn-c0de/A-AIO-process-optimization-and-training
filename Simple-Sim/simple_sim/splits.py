@@ -8,7 +8,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Sequence
 
+from simple_sim.classes import SPLIT_NAMES
 from simple_sim.schema import MetaRow, LabelRow
+
 
 
 def generate_splits(
@@ -23,6 +25,11 @@ def generate_splits(
     profile_id comes from v2 label rows ("" for single-profile datasets).
     Per-group counts use largest-remainder rounding; when a group has at
     least 3 samples, every split with frac > 0 gets at least 1 (taken from train).
+
+    ``splits.{train,val,test}_domains`` restrict which splits a domain's samples may land in:
+    a domain listed only under ``val_domains`` and ``test_domains`` is split between val and test
+    with the fractions renormalised over those two (a held-out domain measures generalisation).
+    A domain listed everywhere (the usual single-domain config) is split as before.
 
     Args:
         meta_rows: List of metadata rows
@@ -58,14 +65,19 @@ def generate_splits(
     # Create RNG for splitting
     rng = random.Random(run_seed)
 
+    allowed = {name: set(config['splits'].get(f'{name}_domains') or []) for name in SPLIT_NAMES}
+
     # Split each group stratified
-    for sample_ids in groups.values():
+    for (domain, _profile, _class), sample_ids in groups.items():
         # Shuffle group
         sample_ids = sample_ids.copy()
         rng.shuffle(sample_ids)
 
         n = len(sample_ids)
-        n_train, n_val, _n_test = _split_counts(n, (train_frac, val_frac, test_frac))
+        fracs = [train_frac, val_frac, test_frac]
+        if any(domain in names for names in allowed.values()):  # unlisted domains (minimal configs): no restriction
+            fracs = [f if domain in allowed[name] else 0.0 for name, f in zip(SPLIT_NAMES, fracs)]
+        n_train, n_val, _n_test = _split_counts(n, fracs)
         # Remaining goes to test to ensure all samples are used
 
         train_ids = sample_ids[:n_train]

@@ -19,6 +19,7 @@ import sys
 import shutil
 import tempfile
 from pathlib import Path
+from simple_sim.io_utils import load_yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -27,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 def _make_demo_dataset(sim_root: Path) -> Path | None:
     import yaml
 
-    cfg = yaml.safe_load((ROOT / "configs" / "run_0001.yaml").read_text(encoding="utf-8"))
+    cfg = load_yaml(ROOT / "configs" / "run_0001.yaml")
     cfg["classes"] = {k: 4 for k in cfg.get("classes", {"OK": 4})}
     cfg.setdefault("run", {})["run_id"] = "demo"
     cfg_path = sim_root / "outputs" / "demo_config.yaml"
@@ -48,6 +49,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--size", default="1440x900", help="Window size (default 1440x900)")
     ap.add_argument("--themes", default="light,dark", help="Comma list of themes (light,dark)")
     args = ap.parse_args(argv)
+    from simple_sim.cli_utils import configure_cli_logging
+
+    configure_cli_logging()
 
     import tkinter as tk
 

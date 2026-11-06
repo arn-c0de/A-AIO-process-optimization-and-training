@@ -55,7 +55,7 @@ Or:
 - `Render HQ Now`: trigger immediate HQ Blender render.
 - `Refresh Files`: force registry reload.
 - Top-right live usage display: `CPU | GPU | RAM`.
-- `Night Mode`: global day/night theme toggle for the full editor.
+- `Dark Mode`: global light/dark theme toggle for the full editor.
 
 ### 3) Left Panel: Preview
 
@@ -130,7 +130,7 @@ Or:
   - parses and validates mapping structure
   - updates form and preview
 - Profile-to-run coupling:
-  - `run.component_profile` is auto-synced to current `profile.profile_id` on profile changes.
+  - `run.component_profile` is only changed explicitly via `Link Run to Profile` (sets it to the active `profile.profile_id` and marks the run dirty).
 
 ### 7) Save Behavior
 

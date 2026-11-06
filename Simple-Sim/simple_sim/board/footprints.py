@@ -187,11 +187,6 @@ def pads_px(part: Part, px_to_mm: float) -> list[dict[str, int]]:
     return out
 
 
-def fine_pitch(part: Part) -> bool:
-    """ICs with many small pads: tracks neck down at the pad."""
-    return part.family in ("soic", "qfn")
-
-
 def pin_count(part: Part) -> int:
     return sum(1 for p in part.pads if p.role != "thermal")
 

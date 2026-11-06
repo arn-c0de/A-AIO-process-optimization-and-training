@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any
 
+from simple_sim.coerce import as_bool, as_float, as_int
+
+log = logging.getLogger(__name__)
 
 _FLOAT_RANGES: dict[str, tuple[float, float, float]] = {
     "rotation_strength": (1.0, 0.0, 4.0),
@@ -131,64 +135,37 @@ NEUTRAL_AUGMENT: dict[str, float] = {
 }
 
 
-def _to_bool(src: dict[str, Any], name: str, default: bool) -> bool:
-    v = src.get(name, default)
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return bool(v)
-    if isinstance(v, str):
-        return v.strip().lower() in {"1", "true", "yes", "on"}
-    return default
-
-
-def _to_float(src: dict[str, Any], name: str, default: float, lo: float, hi: float) -> float:
-    try:
-        v = float(src.get(name, default))
-    except (TypeError, ValueError):
-        v = default
-    return max(lo, min(hi, v))
-
-
-def _to_int(src: dict[str, Any], name: str, default: int, lo: int, hi: int) -> int:
-    try:
-        v = int(src.get(name, default))
-    except (TypeError, ValueError):
-        v = default
-    return max(lo, min(hi, v))
-
-
 def normalize_image_filters(image_filters: dict[str, Any] | None) -> dict[str, Any]:
     """Normalize optional IMAGE_FILTERS payload with safe defaults."""
     src = image_filters or {}
     out: dict[str, Any] = {}
 
     for key, default in _BOOL_DEFAULTS.items():
-        out[key] = _to_bool(src, key, default)
+        out[key] = as_bool(src.get(key, default), default)
 
     for key, default in _STR_DEFAULTS.items():
         out[key] = str(src.get(key, default) or default)
 
     for key, (default, lo, hi) in _FLOAT_RANGES.items():
-        out[key] = _to_float(src, key, default, lo, hi)
+        out[key] = as_float(src.get(key, default), default, lo, hi)
 
     for key, (default, lo, hi) in _REALISM_FLOAT_RANGES.items():
-        out[key] = _to_float(src, key, default, lo, hi)
+        out[key] = as_float(src.get(key, default), default, lo, hi)
 
     for key, (default, lo, hi) in _INT_RANGES.items():
-        out[key] = _to_int(src, key, default, lo, hi)
+        out[key] = as_int(src.get(key, default), default, lo, hi)
 
     for key, (lo, hi) in _RANDOMIZABLE_FLOAT_RANGES.items():
         base = float(out[key])
-        out[f"{key}_randomize"] = _to_bool(src, f"{key}_randomize", False)
-        out[f"{key}_min"] = _to_float(src, f"{key}_min", base, lo, hi)
-        out[f"{key}_max"] = _to_float(src, f"{key}_max", base, lo, hi)
+        out[f"{key}_randomize"] = as_bool(src.get(f"{key}_randomize", False), False)
+        out[f"{key}_min"] = as_float(src.get(f"{key}_min", base), base, lo, hi)
+        out[f"{key}_max"] = as_float(src.get(f"{key}_max", base), base, lo, hi)
 
     for key, (lo, hi) in _RANDOMIZABLE_INT_RANGES.items():
         base = int(out[key])
-        out[f"{key}_randomize"] = _to_bool(src, f"{key}_randomize", False)
-        out[f"{key}_min"] = _to_int(src, f"{key}_min", base, lo, hi)
-        out[f"{key}_max"] = _to_int(src, f"{key}_max", base, lo, hi)
+        out[f"{key}_randomize"] = as_bool(src.get(f"{key}_randomize", False), False)
+        out[f"{key}_min"] = as_int(src.get(f"{key}_min", base), base, lo, hi)
+        out[f"{key}_max"] = as_int(src.get(f"{key}_max", base), base, lo, hi)
 
     mode = str(out.get("filter_mode", "custom")).strip().lower()
     if mode not in {"custom", "realism"}:
@@ -260,7 +237,7 @@ def load_image_filters_env(var_name: str = "IMAGE_FILTERS") -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
     except ValueError:
-        print(f"[warn] Invalid {var_name} JSON, using defaults.")
+        log.warning(f"Invalid {var_name} JSON, using defaults.")
         return normalize_image_filters(None)
     return normalize_image_filters(parsed if isinstance(parsed, dict) else None)
 

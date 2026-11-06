@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simple-sim"
+description = "Synthetic PCB-defect ROI generator and ResNet18 train/eval pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+# Core: config, schema, manifests, reports, 2D rendering and dataset generation.
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "PyYAML",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+# Training, evaluation, prediction (simple_sim.models, data_loader, eval_utils).
+train = ["torch", "torchvision"]
+# Tk monitor GUI and profile editor (tkinter itself comes from the system Python).
+gui = ["pillow", "matplotlib>=3.10.8", "imagehash>=4.3.2"]
+# scikit-learn only for the metrics parity test (simple_sim.metrics is numpy-only).
+dev = ["pytest", "scikit-learn"]
+all = ["simple-sim[train,gui,dev]"]
+
+[project.scripts]
+simple-sim = "simple_sim.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "simple_sim.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["simple_sim*"]
+
+[tool.pytest.ini_options]
+# Tests import gui/, scripts/ and tools/ from the checkout, which are not installed.
+pythonpath = ["."]
+testpaths = ["tests"]

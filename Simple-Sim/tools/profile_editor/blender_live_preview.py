@@ -10,7 +10,7 @@ from typing import Any
 from collections.abc import Callable
 
 from simple_sim.generators.blender3d.bake import bake_fields
-from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl
+from simple_sim.generators.blender3d import profile_job_fields, render_blender_batch, write_jobs_jsonl
 
 
 StatusCallback = Callable[[str, Path | None], None]

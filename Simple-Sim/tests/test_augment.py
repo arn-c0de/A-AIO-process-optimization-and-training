@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from simple_sim.generators.filter_settings import NEUTRAL_AUGMENT
+from simple_sim.filter_settings import NEUTRAL_AUGMENT
 from simple_sim.generators.opencv2d.augment import apply_image_filter_overrides
 
 

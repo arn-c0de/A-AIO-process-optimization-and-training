@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from simple_sim.board.footprints import footprint_pads
+from simple_sim.classes import NEVER_TOMBSTONE
 
 
 def draw_substrate(img: np.ndarray, config: dict[str, Any]) -> None:
@@ -196,7 +197,7 @@ def body_geometry(
     tilt_deg = abs(defect_params["tilt_deg"])
     thresh = float(tolerances["tombstone_tilt_deg"]) if tolerances is not None else 75.0
     # SOLDER_BRIDGE / CORNER_LIFT carry tilt but are never tombstones.
-    is_tombstone = tilt_deg >= thresh and defect_params["type"] not in ("SOLDER_BRIDGE", "CORNER_LIFT")
+    is_tombstone = tilt_deg >= thresh and defect_params["type"] not in NEVER_TOMBSTONE
     return {
         "center": (cx, cy),
         "length": int(nominal["component_length"]),

@@ -131,7 +131,11 @@ Reference:
 cd Simple-Sim
 python -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --no-deps -e .   # optional: installs the simple_sim package + `simple-sim` command
 ```
+
+As a library in another project: `pip install -e /path/to/Simple-Sim[train]` (extras: `train`,
+`gui`, `dev`, `all`; the core alone renders and generates datasets without torch).
 
 Offline install (no PyPI access):
 ```bash
@@ -258,12 +262,15 @@ Configuration files (`configs/*.yaml`) define all dataset and training parameter
 - **roi**: Image dimensions, mm/pixel scaling
 - **classes**: Sample counts per class
 - **tolerances**: Classification thresholds (shift, rotation, tilt) (profile-provided in schema v2)
-- **domains**: Lighting, blur, noise ranges per domain
-- **splits**: Train/val/test fractions and domain assignments
-- **render**: Colors, rendering backend
-- **augment**: Rotation, brightness, contrast ranges
-- **train**: Model, epochs, batch size, optimizer params
+- **defects** (optional): `placement_sampling: legacy | continuous`. `continuous` renders OK parts up to the tolerance and MISALIGNED parts from right behind it (the legacy sampler leaves the band between 0.7 x tolerance and tolerance + 1 px empty), with most misalignments close to the boundary.
+- **domains**: Lighting, blur, noise ranges per domain; samples alternate over all domains. A domain may override the camera (`camera: {preset: phone}`, 2D backend).
+- **splits**: Train/val/test fractions and domain assignments. A domain listed only under `val_domains`/`test_domains` is held out: val/test then measure generalisation to that camera.
+- **render**: Colors, rendering backend; `post_filters: camera` applies the domain blur/noise and the rotation inside the camera model instead of on the finished image (see `docs/guides/PHOTOREAL_RENDERING.md`).
+- **augment**: Rotation, brightness, contrast ranges (baked into the rendered images)
+- **train**: Model, epochs, batch size, optimizer params. Optional: `augment` (training-time flips `hflip`/`vflip`, quarter turns `rot90`, ColorJitter `brightness`/`contrast`/`saturation`/`hue`), `scheduler: cosine` + `warmup_epochs`, `label_smoothing`.
 - **eval**: Batch size, metrics to compute
+
+`configs/run_0001_xdomain.yaml` is `run_0001` with all of the optional training-quality settings turned on. Every option defaults to the previous behaviour.
 
 ## Dataset Schema
 

@@ -592,6 +592,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    from simple_sim.cli_utils import configure_cli_logging
+
+    configure_cli_logging()
     root = tk.Tk()
     app = ProfileEditorApp(root, args.sim_root)
     _ = app

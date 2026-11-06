@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +18,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ProfileDataset
-from simple_sim.eval_utils import checkpoint_val_accuracy, eval_loader, metrics_summary, print_checkpoint_info, print_distribution
-from simple_sim.io_utils import atomic_write_json
-from simple_sim.metrics import check_success_criteria, format_metrics
+from simple_sim.eval_utils import checkpoint_val_accuracy, eval_loader, metrics_summary, format_checkpoint_info, format_distribution
+from simple_sim.io_utils import atomic_write_json, now_iso
+from simple_sim.metrics import evaluate_success_criteria, format_success_criteria, format_metrics
 from simple_sim.models import load_checkpoint_model
 from scripts.eval import evaluate
 
@@ -41,13 +40,13 @@ def run_eval_profile(data_dir: Path, model_path: Path, device: str | torch.devic
     model, profile_names, checkpoint = load_checkpoint_model(model_path, device)
     if checkpoint.get('checkpoint_type') != 'profile_classifier':
         print(f"WARNING: checkpoint_type is '{checkpoint.get('checkpoint_type')}', expected 'profile_classifier'")
-    print_checkpoint_info(checkpoint, label="Profiles")
+    print(format_checkpoint_info(checkpoint, label="Profiles"))
 
     print("\nLoading test dataset...")
     test_dataset = ProfileDataset(data_dir, 'test', profile_names, return_id=True)
     print(f"Test samples: {len(test_dataset)}")
     test_dist = test_dataset.get_class_distribution()
-    print_distribution("Test profile distribution", test_dist)
+    print(format_distribution("Test profile distribution", test_dist))
 
     print("\n" + "=" * 60)
     print("PROFILE CLASSIFIER EVALUATION ON TEST SET")
@@ -59,7 +58,7 @@ def run_eval_profile(data_dir: Path, model_path: Path, device: str | torch.devic
     print(f"\nSeen samples: {seen}")
 
     report = {
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': now_iso(),
         'checkpoint_type': 'profile_classifier',
         'dataset_path': str(data_dir),
         'model_path': str(model_path),
@@ -73,7 +72,9 @@ def run_eval_profile(data_dir: Path, model_path: Path, device: str | torch.devic
     atomic_write_json(report_path, report)
     print(f"\nReport saved to: {report_path}")
 
-    passed = check_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="profile", ascii_only=True)
+    success = evaluate_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="profile")
+    print(format_success_criteria(success, ascii_only=True))
+    passed = success.passed
     return {
         "model_path": str(model_path),
         "dataset_path": str(data_dir),

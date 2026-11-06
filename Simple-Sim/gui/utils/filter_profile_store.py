@@ -6,7 +6,8 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from simple_sim.filter_profiles import is_filter_popup_extra_key, parse_bool_like  # noqa: F401 - re-exported
+from simple_sim.coerce import as_bool
+from simple_sim.filter_profiles import is_filter_popup_extra_key
 
 
 def extract_filter_popup_extras(values: dict[str, Any]) -> dict[str, Any]:
@@ -160,12 +161,12 @@ def image_filters_payload(raw: Callable[[str], Any], extras: dict[str, Any]) -> 
         if not isinstance(k, str) or not is_filter_popup_extra_key(k):
             continue
         if k.endswith("_randomize"):
-            payload[k] = parse_bool_like(v, default=False)
+            payload[k] = as_bool(v, default=False)
         elif k == "filter_mode":
             payload[k] = str(v)
         elif k.startswith("realism_"):
             if k.endswith("_enabled"):
-                payload[k] = parse_bool_like(v, default=False)
+                payload[k] = as_bool(v, default=False)
             elif k.endswith("_profile_id"):
                 payload[k] = str(v)
             else:

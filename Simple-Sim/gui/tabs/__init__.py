@@ -1,25 +1,5 @@
-"""GUI tabs for the multi-tab monitor interface."""
+"""GUI tabs for the multi-tab monitor interface.
 
-from .core.base import BaseTab
-from .predictions.tab import PredictionsTab
-from .validation.tab import ValidationTab
-from .analysis.tab import AnalysisTab
-from .board_detection.tab import BoardDetectionTab
-from .weights.tab import WeightsTab
-from .merge.tab import MergeTab
-from .pipeline.tab import PipelineControlTab
-from .datasets.tab import DatasetsTab
-from .profile_preview.tab import ProfilePreviewTab
-
-__all__ = [
-    'BaseTab',
-    'PipelineControlTab',
-    'AnalysisTab',
-    'PredictionsTab',
-    'WeightsTab',
-    'ValidationTab',
-    'MergeTab',
-    'BoardDetectionTab',
-    'DatasetsTab',
-    'ProfilePreviewTab',
-]
+Intentionally empty: importing ``gui.tabs.<name>.logic`` must not pull in tkinter.
+Import tab classes from their modules (``gui.tabs.core.registry`` lists them all).
+"""

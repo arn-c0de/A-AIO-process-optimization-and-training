@@ -1,3 +1,7 @@
+import pytest
+
+pytest.importorskip("tkinter", reason="gui.tabs.core.registry imports the Tk tab classes")
+
 from gui.tabs.core.registry import TabRegistry
 
 

@@ -7,12 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import torch
-
 from gui.utils.checkpoint_meta import checkpoint_profile, read_checkpoint_dict
 from gui.utils.paths import list_model_paths, model_root
-from simple_sim.io_utils import atomic_write_json, read_json, rel_to
-from simple_sim.models import load_checkpoint
+from simple_sim.io_utils import atomic_write_json, now_iso, read_json, rel_to
 from simple_sim.model_bundle import (
     bundle_checkpoint_path,
     upsert_bundle_meta,
@@ -141,7 +138,7 @@ class MergeLogic:
         
     def write_bundle_details(self, bundle_dir: Path, model_details: dict[str, Any], sources: dict[str, Any] | None = None):
         details_path = bundle_dir / "bundle_details.json"
-        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        now = now_iso(utc=True, timespec="seconds")
         obj = {"created_at": now, "models": model_details, "sources": sources or {}}
         atomic_write_json(details_path, obj)
 
@@ -160,6 +157,10 @@ class MergeLogic:
         shutil.rmtree(bundle_path)
 
     def do_merge_ensemble(self, out_path: Path, selected_weights: dict[str, Path], log_q: queue.Queue):
+        import torch  # lazy: keeps this module importable without torch
+
+        from simple_sim.models import load_checkpoint
+
         items: list[dict[str, Any]] = []
         class_names: list[str] | None = None
         profiles: list[str] = []
@@ -188,7 +189,7 @@ class MergeLogic:
         
         out_path.parent.mkdir(parents=True, exist_ok=True)
         obj = {
-            "format": "simple_sim_ensemble_v1", "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "format": "simple_sim_ensemble_v1", "created_at": now_iso(utc=True, timespec="seconds"),
             "class_names": class_names, "models": items,
             "component_profile": {"profile_id": "multi", "profiles": profiles},
         }

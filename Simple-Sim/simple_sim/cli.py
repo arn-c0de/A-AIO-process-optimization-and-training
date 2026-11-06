@@ -21,7 +21,7 @@ from typing import Any
 import yaml
 
 from simple_sim.cli_utils import add_json_flag, emit_result
-from simple_sim.io_utils import rel_to
+from simple_sim.io_utils import load_yaml, rel_to
 from simple_sim.manifest import read_dataset_manifest
 from simple_sim.model_bundle import is_bundle_dir
 from simple_sim.reports import best_report, load_reports, metric_value, report_search_dirs, report_timestamp
@@ -109,7 +109,7 @@ def _cmd_commands(argv: list[str]) -> int:
 def _run_config_info(path: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"name": path.stem, "path": rel_to(SIM_ROOT, path)}
     try:
-        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        cfg = load_yaml(path) or {}
         run = cfg.get("run") or {}
         info.update(
             run_id=run.get("run_id"),

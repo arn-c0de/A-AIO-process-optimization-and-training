@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from simple_sim.generators.filter_settings import NEUTRAL_AUGMENT, normalize_image_filters
+from simple_sim.filter_settings import NEUTRAL_AUGMENT, normalize_image_filters
 from .realism import apply_realism_groups
 
 

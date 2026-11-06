@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from simple_sim.coerce import as_int
 from simple_sim.io_utils import format_bytes, path_size_bytes, read_json, rel_to
 from simple_sim.model_bundle import read_bundle_meta
 from simple_sim.reports import load_reports, metric_value, report_search_dirs, report_timestamp
@@ -78,13 +79,6 @@ def load_arena(sim_root: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
             missing.append(rp)
         tracked[str(abs_p)] = dict(it)
     return tracked, missing
-
-
-def _intish(v: Any) -> int | None:
-    try:
-        return None if v is None else int(v)
-    except (TypeError, ValueError):
-        return None
 
 
 def _critical_fn_summary(report: dict[str, Any]) -> str:
@@ -214,7 +208,7 @@ def best_rows_by_model(
                 split=str(best.get("split") or "test"),
                 accuracy=metric_value(best, "accuracy"),
                 f1=metric_value(best, "macro_f1"),
-                seen=_intish(best.get("seen_samples") or best.get("test_size")),
+                seen=as_int(best.get("seen_samples") or best.get("test_size"), None),
                 dataset_size_bytes=ds_size_b,
                 last_ts=max(report_timestamp(rr) for rr in rs),
                 report_path=str(best.get("_path") or ""),

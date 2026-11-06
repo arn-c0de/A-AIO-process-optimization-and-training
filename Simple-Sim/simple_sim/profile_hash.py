@@ -12,6 +12,7 @@ import hashlib
 import yaml
 from pathlib import Path
 from typing import Any
+from simple_sim.io_utils import load_yaml
 
 
 def canonicalize_profile(profile_dict: dict[str, Any]) -> dict[str, Any]:
@@ -72,8 +73,7 @@ def hash_profile(profile_path: Path) -> str:
     if not profile_path.exists():
         raise FileNotFoundError(f"Profile not found: {profile_path}")
 
-    with open(profile_path, encoding='utf-8') as f:
-        profile_dict = yaml.safe_load(f)
+    profile_dict = load_yaml(profile_path)
 
     # Canonicalize: remove metadata, sort keys, normalize floats
     canonical = canonicalize_profile(profile_dict)
@@ -109,8 +109,7 @@ def load_profile(profile_id: str, profiles_dir: Path) -> dict[str, Any]:
             f"Available profiles: {list(profiles_dir.glob('*.yaml'))}"
         )
 
-    with open(profile_path, encoding='utf-8') as f:
-        profile_dict = yaml.safe_load(f)
+    profile_dict = load_yaml(profile_path)
 
     # Validate profile structure
     if 'profile' not in profile_dict:

@@ -1,6 +1,6 @@
 import numpy as np
 
-from simple_sim.generators.filter_settings import NEUTRAL_AUGMENT
+from simple_sim.filter_settings import NEUTRAL_AUGMENT
 from simple_sim.generators.opencv2d.filters import apply_post_filters, apply_sharpen
 
 

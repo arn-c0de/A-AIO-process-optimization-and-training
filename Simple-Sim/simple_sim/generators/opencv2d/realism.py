@@ -16,7 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
-from simple_sim.generators.filter_settings import NEUTRAL_AUGMENT
+from simple_sim.filter_settings import NEUTRAL_AUGMENT
+from simple_sim.io_utils import load_yaml
 
 
 _HEAVY_GROUPS = {"G2", "G5", "G7"}
@@ -162,9 +163,7 @@ def _load_profile_presets() -> dict[str, dict[str, float]]:
     p = Path(cfg_path)
     if p.exists():
         try:
-            import yaml  # type: ignore
-
-            obj = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            obj = load_yaml(p) or {}
             profiles = obj.get("profiles", obj) if isinstance(obj, dict) else {}
             if isinstance(profiles, dict):
                 for pid, raw in profiles.items():

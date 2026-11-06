@@ -6,7 +6,6 @@ import json
 import os
 import queue
 import shutil
-import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
@@ -17,6 +16,8 @@ from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.core.tasks import as_task_fn, runner_for
 from simple_sim.model_bundle import read_bundle_meta
+from simple_sim.io_utils import now_tag
+
 from .ui import MergeUI
 from .logic import MergeLogic
 
@@ -209,7 +210,7 @@ class MergeTab(BaseTab):
             return
 
         if self.ui.var_add_timestamp.get():
-            tag = time.strftime("%Y%m%d_%H%M%S")
+            tag = now_tag(micro=False)
             name = f"{name}_{tag}"
 
         bundle_dir = self.logic._model_root() / f"{name}.bundle"
@@ -263,7 +264,7 @@ class MergeTab(BaseTab):
             return
 
         if self.ui.var_add_timestamp.get():
-            tag = time.strftime("%Y%m%d_%H%M%S")
+            tag = now_tag(micro=False)
             name = f"{name}_{tag}"
 
         out_path = self.logic._model_root() / f"{name}_ensemble.pt"

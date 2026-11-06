@@ -6,31 +6,14 @@ from dataclasses import dataclass, field
 from typing import Any
 from collections.abc import Mapping
 
+from simple_sim.coerce import as_bool, as_float, as_int
+
 from .constants import DEFAULT_REALISM_PROFILE_ID, REALISM_GROUP_DEFAULTS, REALISM_K_DEFAULTS
 
 
-def _to_bool(v: Any, default: bool) -> bool:
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return bool(v)
-    if isinstance(v, str):
-        return v.strip().lower() in {"1", "true", "yes", "on"}
-    return default
-
-
-def _to_float(v: Any, default: float) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return float(default)
-
-
-def _to_int(v: Any, default: int) -> int:
-    try:
-        return int(float(v))
-    except Exception:
-        return int(default)
+def _int_from_number(v: Any, default: int) -> int:
+    """Integer from int, float or numeric string (``"2.7"`` -> 2), else *default*."""
+    return as_int(as_float(v, default), default)
 
 
 @dataclass
@@ -109,60 +92,60 @@ class FilterPopupPayload:
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> FilterPopupPayload:
         custom = CustomFilterSettings(
-            cardinal_rotation_90=_to_bool(data.get("cardinal_rotation_90", True), True),
-            enable_rotation=_to_bool(data.get("enable_rotation", True), True),
-            enable_blur=_to_bool(data.get("enable_blur", True), True),
-            enable_grain=_to_bool(data.get("enable_grain", True), True),
-            enable_brightness=_to_bool(data.get("enable_brightness", True), True),
-            enable_contrast=_to_bool(data.get("enable_contrast", True), True),
-            enable_perspective=_to_bool(data.get("enable_perspective", False), False),
-            enable_motion_blur=_to_bool(data.get("enable_motion_blur", False), False),
-            enable_saturation=_to_bool(data.get("enable_saturation", True), True),
-            enable_hue_shift=_to_bool(data.get("enable_hue_shift", True), True),
-            enable_shadow=_to_bool(data.get("enable_shadow", False), False),
-            enable_reflection=_to_bool(data.get("enable_reflection", False), False),
-            enable_vignetting=_to_bool(data.get("enable_vignetting", False), False),
-            enable_chromatic_aberration=_to_bool(data.get("enable_chromatic_aberration", False), False),
-            enable_jpeg_compression=_to_bool(data.get("enable_jpeg_compression", False), False),
-            enable_color_temperature=_to_bool(data.get("enable_color_temperature", False), False),
-            enable_lens_distortion=_to_bool(data.get("enable_lens_distortion", False), False),
-            enable_dust=_to_bool(data.get("enable_dust", False), False),
-            enable_sharpen=_to_bool(data.get("enable_sharpen", False), False),
-            rotation_strength=_to_float(data.get("rotation_strength", 1.0), 1.0),
-            blur_strength=_to_float(data.get("blur_strength", 1.0), 1.0),
-            grain_strength=_to_float(data.get("grain_strength", 1.0), 1.0),
-            brightness_strength=_to_float(data.get("brightness_strength", 1.0), 1.0),
-            contrast_strength=_to_float(data.get("contrast_strength", 1.0), 1.0),
-            perspective_strength=_to_float(data.get("perspective_strength", 1.0), 1.0),
-            motion_blur_strength=_to_float(data.get("motion_blur_strength", 1.0), 1.0),
-            saturation_factor=_to_float(data.get("saturation_factor", 1.0), 1.0),
-            hue_shift_deg=_to_float(data.get("hue_shift_deg", 0.0), 0.0),
-            shadow_strength=_to_float(data.get("shadow_strength", 0.3), 0.3),
-            reflection_strength=_to_float(data.get("reflection_strength", 0.5), 0.5),
-            vignetting_strength=_to_float(data.get("vignetting_strength", 1.0), 1.0),
-            chromatic_strength=_to_float(data.get("chromatic_strength", 1.0), 1.0),
-            distortion_k1=_to_float(data.get("distortion_k1", 0.0), 0.0),
-            dust_density=_to_float(data.get("dust_density", 0.3), 0.3),
-            sharpen_strength=_to_float(data.get("sharpen_strength", 1.0), 1.0),
-            jpeg_quality=_to_int(data.get("jpeg_quality", 85), 85),
-            color_temperature_kelvin=_to_int(data.get("color_temperature_kelvin", 5500), 5500),
+            cardinal_rotation_90=as_bool(data.get("cardinal_rotation_90", True), True),
+            enable_rotation=as_bool(data.get("enable_rotation", True), True),
+            enable_blur=as_bool(data.get("enable_blur", True), True),
+            enable_grain=as_bool(data.get("enable_grain", True), True),
+            enable_brightness=as_bool(data.get("enable_brightness", True), True),
+            enable_contrast=as_bool(data.get("enable_contrast", True), True),
+            enable_perspective=as_bool(data.get("enable_perspective", False), False),
+            enable_motion_blur=as_bool(data.get("enable_motion_blur", False), False),
+            enable_saturation=as_bool(data.get("enable_saturation", True), True),
+            enable_hue_shift=as_bool(data.get("enable_hue_shift", True), True),
+            enable_shadow=as_bool(data.get("enable_shadow", False), False),
+            enable_reflection=as_bool(data.get("enable_reflection", False), False),
+            enable_vignetting=as_bool(data.get("enable_vignetting", False), False),
+            enable_chromatic_aberration=as_bool(data.get("enable_chromatic_aberration", False), False),
+            enable_jpeg_compression=as_bool(data.get("enable_jpeg_compression", False), False),
+            enable_color_temperature=as_bool(data.get("enable_color_temperature", False), False),
+            enable_lens_distortion=as_bool(data.get("enable_lens_distortion", False), False),
+            enable_dust=as_bool(data.get("enable_dust", False), False),
+            enable_sharpen=as_bool(data.get("enable_sharpen", False), False),
+            rotation_strength=as_float(data.get("rotation_strength", 1.0), 1.0),
+            blur_strength=as_float(data.get("blur_strength", 1.0), 1.0),
+            grain_strength=as_float(data.get("grain_strength", 1.0), 1.0),
+            brightness_strength=as_float(data.get("brightness_strength", 1.0), 1.0),
+            contrast_strength=as_float(data.get("contrast_strength", 1.0), 1.0),
+            perspective_strength=as_float(data.get("perspective_strength", 1.0), 1.0),
+            motion_blur_strength=as_float(data.get("motion_blur_strength", 1.0), 1.0),
+            saturation_factor=as_float(data.get("saturation_factor", 1.0), 1.0),
+            hue_shift_deg=as_float(data.get("hue_shift_deg", 0.0), 0.0),
+            shadow_strength=as_float(data.get("shadow_strength", 0.3), 0.3),
+            reflection_strength=as_float(data.get("reflection_strength", 0.5), 0.5),
+            vignetting_strength=as_float(data.get("vignetting_strength", 1.0), 1.0),
+            chromatic_strength=as_float(data.get("chromatic_strength", 1.0), 1.0),
+            distortion_k1=as_float(data.get("distortion_k1", 0.0), 0.0),
+            dust_density=as_float(data.get("dust_density", 0.3), 0.3),
+            sharpen_strength=as_float(data.get("sharpen_strength", 1.0), 1.0),
+            jpeg_quality=_int_from_number(data.get("jpeg_quality", 85), 85),
+            color_temperature_kelvin=_int_from_number(data.get("color_temperature_kelvin", 5500), 5500),
         )
         realism = RealismSettings(
             filter_mode=str(data.get("filter_mode", "custom") or "custom"),
-            realism_enabled=_to_bool(data.get("realism_enabled", False), False),
-            realism_constraints_enabled=_to_bool(data.get("realism_constraints_enabled", True), True),
+            realism_enabled=as_bool(data.get("realism_enabled", False), False),
+            realism_constraints_enabled=as_bool(data.get("realism_constraints_enabled", True), True),
             realism_profile_id=str(data.get("realism_profile_id", DEFAULT_REALISM_PROFILE_ID) or DEFAULT_REALISM_PROFILE_ID),
-            realism_k_prob_0=_to_float(data.get("realism_k_prob_0", REALISM_K_DEFAULTS["realism_k_prob_0"]), REALISM_K_DEFAULTS["realism_k_prob_0"]),
-            realism_k_prob_1=_to_float(data.get("realism_k_prob_1", REALISM_K_DEFAULTS["realism_k_prob_1"]), REALISM_K_DEFAULTS["realism_k_prob_1"]),
-            realism_k_prob_2=_to_float(data.get("realism_k_prob_2", REALISM_K_DEFAULTS["realism_k_prob_2"]), REALISM_K_DEFAULTS["realism_k_prob_2"]),
-            realism_group_G1_prob=_to_float(data.get("realism_group_G1_prob", REALISM_GROUP_DEFAULTS["realism_group_G1_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G1_prob"]),
-            realism_group_G2_prob=_to_float(data.get("realism_group_G2_prob", REALISM_GROUP_DEFAULTS["realism_group_G2_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G2_prob"]),
-            realism_group_G3_prob=_to_float(data.get("realism_group_G3_prob", REALISM_GROUP_DEFAULTS["realism_group_G3_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G3_prob"]),
-            realism_group_G4_prob=_to_float(data.get("realism_group_G4_prob", REALISM_GROUP_DEFAULTS["realism_group_G4_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G4_prob"]),
-            realism_group_G5_prob=_to_float(data.get("realism_group_G5_prob", REALISM_GROUP_DEFAULTS["realism_group_G5_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G5_prob"]),
-            realism_group_G6_prob=_to_float(data.get("realism_group_G6_prob", REALISM_GROUP_DEFAULTS["realism_group_G6_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G6_prob"]),
-            realism_group_G7_prob=_to_float(data.get("realism_group_G7_prob", REALISM_GROUP_DEFAULTS["realism_group_G7_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G7_prob"]),
-            realism_group_G8_prob=_to_float(data.get("realism_group_G8_prob", REALISM_GROUP_DEFAULTS["realism_group_G8_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G8_prob"]),
+            realism_k_prob_0=as_float(data.get("realism_k_prob_0", REALISM_K_DEFAULTS["realism_k_prob_0"]), REALISM_K_DEFAULTS["realism_k_prob_0"]),
+            realism_k_prob_1=as_float(data.get("realism_k_prob_1", REALISM_K_DEFAULTS["realism_k_prob_1"]), REALISM_K_DEFAULTS["realism_k_prob_1"]),
+            realism_k_prob_2=as_float(data.get("realism_k_prob_2", REALISM_K_DEFAULTS["realism_k_prob_2"]), REALISM_K_DEFAULTS["realism_k_prob_2"]),
+            realism_group_G1_prob=as_float(data.get("realism_group_G1_prob", REALISM_GROUP_DEFAULTS["realism_group_G1_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G1_prob"]),
+            realism_group_G2_prob=as_float(data.get("realism_group_G2_prob", REALISM_GROUP_DEFAULTS["realism_group_G2_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G2_prob"]),
+            realism_group_G3_prob=as_float(data.get("realism_group_G3_prob", REALISM_GROUP_DEFAULTS["realism_group_G3_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G3_prob"]),
+            realism_group_G4_prob=as_float(data.get("realism_group_G4_prob", REALISM_GROUP_DEFAULTS["realism_group_G4_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G4_prob"]),
+            realism_group_G5_prob=as_float(data.get("realism_group_G5_prob", REALISM_GROUP_DEFAULTS["realism_group_G5_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G5_prob"]),
+            realism_group_G6_prob=as_float(data.get("realism_group_G6_prob", REALISM_GROUP_DEFAULTS["realism_group_G6_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G6_prob"]),
+            realism_group_G7_prob=as_float(data.get("realism_group_G7_prob", REALISM_GROUP_DEFAULTS["realism_group_G7_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G7_prob"]),
+            realism_group_G8_prob=as_float(data.get("realism_group_G8_prob", REALISM_GROUP_DEFAULTS["realism_group_G8_prob"]), REALISM_GROUP_DEFAULTS["realism_group_G8_prob"]),
         )
         known = cls.known_keys()
         extras = {k: v for k, v in data.items() if isinstance(k, str) and k not in known}

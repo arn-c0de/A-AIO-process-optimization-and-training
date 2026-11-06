@@ -24,7 +24,7 @@ from .filters import (
 )
 from .geometry import sample_nominal_geometry
 from .render import render_roi
-from simple_sim.generators.filter_settings import normalize_image_filters
+from simple_sim.filter_settings import normalize_image_filters
 
 __all__ = [
     "apply_image_filter_overrides",

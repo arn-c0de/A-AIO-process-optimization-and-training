@@ -15,11 +15,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from collections.abc import Callable
 from typing import Any
 
 RESULT_JSON_PREFIX = "SIMPLE_SIM_RESULT "
+
+#: Flag advice appended by :func:`with_hint` to the library's neutral mismatch errors.
+PROFILE_MISMATCH_HINT = "To override (NOT recommended): pass --allow-profile-mismatch"
+RENDERER_MISMATCH_HINT = "To mix them anyway: pass --allow-renderer-mismatch"
 
 
 def add_json_flag(parser: argparse.ArgumentParser) -> None:
@@ -41,6 +46,43 @@ def emit_result(command: str, payload: dict[str, Any] | None = None, *, ok: bool
     print(RESULT_JSON_PREFIX + json.dumps(obj, ensure_ascii=True, default=str), flush=True)
 
 
+class _CurrentStdoutHandler(logging.StreamHandler):
+    """Stream handler that always writes to the *current* ``sys.stdout`` (pytest capture, redirects)."""
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, _value) -> None:
+        pass
+
+
+class _CliFormatter(logging.Formatter):
+    """Plain message for INFO and below; ``WARNING: ...`` / ``ERROR: ...`` prefix above."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = super().format(record)
+        if record.levelno >= logging.WARNING:
+            lead = len(msg) - len(msg.lstrip("\n"))
+            msg = msg[:lead] + f"{record.levelname}: " + msg[lead:]
+        return msg
+
+
+def configure_cli_logging(level: int = logging.INFO) -> None:
+    """Show ``simple_sim`` log records on stdout, as the scripts' console output.
+
+    Idempotent. Records keep propagating, so an application or pytest's ``caplog`` still sees them.
+    """
+    logger = logging.getLogger("simple_sim")
+    logger.setLevel(level)
+    if not any(getattr(h, "_simple_sim_cli", False) for h in logger.handlers):
+        handler = _CurrentStdoutHandler()
+        handler.setFormatter(_CliFormatter("%(message)s"))
+        handler._simple_sim_cli = True  # type: ignore[attr-defined]
+        logger.addHandler(handler)
+
+
 class UsageError(ValueError):
     """Invalid combination of arguments; shown as a plain message (no traceback) by :func:`run_cli`."""
 
@@ -52,6 +94,7 @@ def run_cli(command: str, fn: Callable[[], dict[str, Any] | None], json_mode: bo
     ``SystemExit`` message). With *json_mode* the returned payload is emitted as the result line;
     any exception or failing ``SystemExit`` emits ``ok=false`` + ``error`` and exits with status 1.
     """
+    configure_cli_logging()
     if not json_mode:
         try:
             return fn()
@@ -69,6 +112,20 @@ def run_cli(command: str, fn: Callable[[], dict[str, Any] | None], json_mode: bo
         sys.exit(1)
     emit_result(command, payload or {})
     return payload
+
+
+def with_hint(fn: Callable[[], Any], errors: type[BaseException] | tuple[type[BaseException], ...], hint: str) -> Callable[[], Any]:
+    """Wrap *fn* so that *errors* become a :class:`UsageError` with the CLI *hint* appended.
+
+    The library raises neutral errors (it knows no command-line flags); scripts add the flag advice
+    here, e.g. ``with_hint(run, ProfileMismatchError, "To override: pass --allow-profile-mismatch")``.
+    """
+    def wrapped() -> Any:
+        try:
+            return fn()
+        except errors as e:
+            raise UsageError(f"{e}\n\n{hint}") from e
+    return wrapped
 
 
 def parse_result(stdout: str) -> dict[str, Any] | None:

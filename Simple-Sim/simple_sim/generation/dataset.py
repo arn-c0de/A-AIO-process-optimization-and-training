@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import time
 from dataclasses import dataclass, field
@@ -11,20 +12,22 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
-from simple_sim.config import DEFAULT_COMPONENT_PROFILE, load_config, merge_profile_render, validate_config
+from simple_sim.config import DEFAULT_COMPONENT_PROFILE, domain_camera, load_config, merge_profile_render, validate_config
 from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files, write_image
 from simple_sim.generation.blender import blender_settings, render_blender_records
 from simple_sim.generation.common import (
+    DOMAIN,
     SPLIT_NAMES,
     build_rows,
     finalize_splits,
     project_root as default_project_root,
     rel_profile_path,
+    sample_domain,
     sample_record,
     summarize,
 )
-from simple_sim.generators.filter_settings import load_image_filters_env
-from simple_sim.generators.opencv_2d import render_roi
+from simple_sim.filter_settings import load_image_filters_env
+from simple_sim.generators.opencv2d import render_roi
 from simple_sim.parallel import imap_ordered, render_workers
 from simple_sim.generators.version import RENDERER_VERSION
 from simple_sim.manifest import (check_renderer_version, read_dataset_manifest, write_dataset_manifest,
@@ -33,6 +36,9 @@ from simple_sim.profile_hash import hash_profile, load_profile
 from simple_sim.schema import LabelRow, MetaRow, append_jsonl_rows, read_jsonl, validate_jsonl_pair
 from simple_sim.splits import assert_no_overlap, read_split, write_splits
 from simple_sim.telemetry import emit
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -107,7 +113,7 @@ def _existing_profile(
         return profile_id, by_id[profile_id]["profile_hash"], target
     # Allow adding a new single profile to an existing multi-profile dataset.
     target.append({"profile_id": profile_id, "profile_hash": profile_hash, "profile_path": profile_rel_path})
-    print(f"✓ Extending multi-profile dataset with new profile: {profile_id}")
+    log.info(f"Extending multi-profile dataset with new profile: {profile_id}")
     return profile_id, profile_hash, target
 
 
@@ -153,7 +159,7 @@ def load_extend_state(
             f"Profile '{profile_id}' has changed.\n"
             f"Create a new profile version (e.g., @2) or regenerate dataset."
         )
-    print("✓ Profile validation passed for extend mode")
+    log.info("Profile validation passed for extend mode")
     check_renderer_version(manifest, RENDERER_VERSION, allow_mismatch=allow_renderer_mismatch)
 
     validate_jsonl_pair(meta_path, labels_path)
@@ -169,12 +175,12 @@ def load_extend_state(
     if not dataset_run_id and state.meta_rows:
         dataset_run_id = str(state.meta_rows[0].run_id or "").strip()
     if dataset_run_id and dataset_run_id != run_id:
-        print(f"✓ Extend mode: using existing dataset run_id '{dataset_run_id}' (config had '{run_id}')")
+        log.info(f"Extend mode: using existing dataset run_id '{dataset_run_id}' (config had '{run_id}')")
         state.run_id = dataset_run_id
 
     state.start_index = read_existing_max_index(state.meta_rows) + 1
-    print(f"\nExtending dataset: {output_dir}")
-    print(f"Existing samples: {len(state.meta_rows)} (next index: {state.start_index})")
+    log.info(f"\nExtending dataset: {output_dir}")
+    log.info(f"Existing samples: {len(state.meta_rows)} (next index: {state.start_index})")
     for s in SPLIT_NAMES:
         p = output_dir / "splits" / f"{s}.txt"
         if p.exists():
@@ -218,7 +224,7 @@ def generate_dataset(
     """
     output_dir = Path(output_dir)
     root = Path(project_root) if project_root else default_project_root()
-    print(f"Loading configuration from {config_path}")
+    log.info(f"Loading configuration from {config_path}")
     config = load_config(config_path)
     validate_config(config)
 
@@ -239,8 +245,8 @@ def generate_dataset(
     profile_hash_str = hash_profile(profile_path)
     relative_profile_path = rel_profile_path(profile_path, root)
 
-    print(f"Component Profile: {profile_id}")
-    print(f"Profile Hash: {profile_hash_str[:72]}...")
+    log.info(f"Component Profile: {profile_id}")
+    log.info(f"Profile Hash: {profile_hash_str[:72]}...")
 
     footprint = profile["component"]["footprint"]
     geometry_ranges = profile.get("geometry_ranges")
@@ -275,12 +281,12 @@ def generate_dataset(
     labels_schema_version = 2 if labels_v2 else 1
     labels_profile_id = profile_id if labels_v2 else ""
 
-    print(f"\nGenerating dataset: {run_id}")
-    print(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
-    print(f"Classes: {classes}")
+    log.info(f"\nGenerating dataset: {run_id}")
+    log.info(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
+    log.info(f"Classes: {classes}")
     total_target = sum(classes.values())
-    print(f"Total samples: {total_target}")
-    print(f"Render backend: {backend}")
+    log.info(f"Total samples: {total_target}")
+    log.info(f"Render backend: {backend}")
     emit(
         "gen_start",
         run_id=run_id,
@@ -299,7 +305,7 @@ def generate_dataset(
     sample_index = int(start_index)
     t_total0 = time.perf_counter()
     for class_name, count in classes.items():
-        print(f"\nGenerating {count} samples for class {class_name}")
+        log.info(f"\nGenerating {count} samples for class {class_name}")
         t0 = time.perf_counter()
         progress = tqdm(range(count), desc=class_name)
         for i in progress:
@@ -314,10 +320,11 @@ def generate_dataset(
                 enable_cardinal_rotation_90=enable_cardinal_rotation_90,
                 footprint=footprint,
                 profile_id=labels_profile_id,
+                domain=sample_domain(config, sample_index),
             )
             if rec["class_name"] != class_name:
                 # The derived label wins to keep labels consistent with geometry.
-                print(f"\nWARNING: Label mismatch for sample {sample_index}: target={class_name}, derived={rec['class_name']}")
+                log.warning(f"\nLabel mismatch for sample {sample_index}: target={class_name}, derived={rec['class_name']}")
             records.append(rec)
 
             sample_index += 1
@@ -334,7 +341,7 @@ def generate_dataset(
                     last_image_path=rec["image_path"],
                 )
 
-    print("\nGenerating train/val/test splits")
+    log.info("\nGenerating train/val/test splits")
     extra_render_meta = None
     if backend == "blender_3d":
         extra_render_meta = {
@@ -358,13 +365,18 @@ def generate_dataset(
     if backend not in ("opencv_2d", "blender_3d"):
         raise ValueError(f"Unsupported render backend: {backend}")
 
+    # Per-domain camera (domains.<name>.camera) on top of render.camera; None = no override.
+    domain_render = {name: {**config["render"], "camera": domain_camera(config["render"], dcfg)}
+                     if domain_camera(config["render"], dcfg) is not None else dict(config["render"])
+                     for name, dcfg in config["domains"].items()}
+
     def render_2d(r: dict[str, Any]) -> np.ndarray:
         return render_roi(
             nominal=r["nominal"],
             defect_params=r["defect"],
             augment=r["augment"],
             roi_size=(roi_width, roi_height),
-            config=config["render"],
+            config=domain_render[str(r.get("domain") or DOMAIN)],
             tolerances=tolerances,
             rng=np.random.default_rng(int(r["seed"])),
             footprint=footprint,
@@ -373,7 +385,7 @@ def generate_dataset(
     def write_2d(out_root: Path) -> None:
         """Render + write all records in parallel threads (streamed: images are never all held in memory)."""
         workers = render_workers()
-        print(f"Rendering {len(records)} images with {workers} worker thread(s)")
+        log.info(f"Rendering {len(records)} images with {workers} worker thread(s)")
 
         def job(r: dict[str, Any]) -> None:
             write_image(out_root / r["image_path"], render_2d(r))
@@ -397,7 +409,7 @@ def generate_dataset(
             expect_at_least=at_least,
         )
 
-    print(f"\nWriting dataset to {output_dir}")
+    log.info(f"\nWriting dataset to {output_dir}")
     if ext is not None and ext.meta_rows:
         # Append mode: keep existing dataset, add new images + rows + update split files.
         (output_dir / "images").mkdir(parents=True, exist_ok=True)
@@ -424,7 +436,7 @@ def generate_dataset(
         all_meta_rows = meta_rows
         all_label_rows = label_rows
 
-    finalize_splits(output_dir, final_splits, all_label_rows, mark="✓ ")
+    finalize_splits(output_dir, final_splits, all_label_rows)
 
     if ext is not None and (ext.manifest_version == 2 or (ext.manifest and "component_profiles" in ext.manifest)):
         profiles = ext.profiles or [
@@ -456,15 +468,15 @@ def generate_dataset(
         )
 
     total_s = max(1e-9, time.perf_counter() - t_total0)
-    print("\n" + "=" * 60)
-    print("DATASET GENERATION COMPLETE")
-    print("=" * 60)
-    print(f"Output directory: {output_dir}")
-    print(f"Total samples: {len(meta_rows)}")
-    print(f"Generation rate (overall): {len(meta_rows) / total_s:.1f} samples/s  (time: {total_s:.1f}s)")
+    log.info("\n" + "=" * 60)
+    log.info("DATASET GENERATION COMPLETE")
+    log.info("=" * 60)
+    log.info(f"Output directory: {output_dir}")
+    log.info(f"Total samples: {len(meta_rows)}")
+    log.info(f"Generation rate (overall): {len(meta_rows) / total_s:.1f} samples/s  (time: {total_s:.1f}s)")
     if meta_rows:
-        print(f"Last sample: {meta_rows[-1].id}")
-        print(f"Last image:  {meta_rows[-1].image_path}")
+        log.info(f"Last sample: {meta_rows[-1].id}")
+        log.info(f"Last image:  {meta_rows[-1].image_path}")
         emit(
             "gen_done",
             output_dir=str(output_dir),
@@ -476,8 +488,8 @@ def generate_dataset(
             splits={k: int(len(v)) for k, v in final_splits.items()},
         )
     for split_name, sample_ids in final_splits.items():
-        print(f"  {split_name}: {len(sample_ids)} samples")
-    print("=" * 60)
+        log.info(f"  {split_name}: {len(sample_ids)} samples")
+    log.info("=" * 60)
 
     result = summarize(output_dir, all_label_rows, final_splits, new_samples=len(meta_rows), elapsed_s=total_s)
     result.update(run_id=run_id, profile_id=profile_id, backend=backend, extend=bool(ext is not None and ext.meta_rows))

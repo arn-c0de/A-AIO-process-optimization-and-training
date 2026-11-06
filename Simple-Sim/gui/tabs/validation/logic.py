@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import json
-from datetime import datetime
 
 from gui.utils.dataset_catalog import list_dataset_dirs
 from gui.utils.validation_suite import run_validation_suite
 from gui.utils.flag_manager import FlagManager
+from simple_sim.io_utils import now_tag
 
 
 class ValidationLogic:
@@ -69,7 +69,7 @@ class ValidationLogic:
                 self.flag_manager.remove_flag(sample_id)
 
     def export_report(self, results: dict[str, Any], dataset_dir: Path) -> str:
-        output_path = dataset_dir / f"validation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        output_path = dataset_dir / f"validation_report_{now_tag(micro=False)}.json"
 
         try:
             import numpy as _np

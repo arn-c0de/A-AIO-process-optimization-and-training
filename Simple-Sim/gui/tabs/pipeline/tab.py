@@ -67,7 +67,7 @@ from gui.utils.pipeline_helpers import (
 )
 
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE
-from simple_sim.io_utils import append_jsonl, rel_to
+from simple_sim.io_utils import append_jsonl, load_yaml, now_tag, rel_to
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
 
@@ -150,6 +150,9 @@ class PipelineControlTab(BaseTab):
         self._refresh_models()
         self._refresh_profile_models()
         self._refresh_profiles()
+        # Re-scan configs/profiles/ whenever the list opens: profiles added while the GUI runs show up.
+        self.ui.profile_combo.configure(postcommand=lambda: self.ui.set_profile_combo_values(
+            self.logic.get_profile_paths(self.ui.var_render_backend.get().strip() or "opencv_2d")))
         self._load_persisted_settings()
         self._wire_settings_autosave()
         self._apply_profile_model_lock()
@@ -544,7 +547,7 @@ class PipelineControlTab(BaseTab):
 
     def _write_precise_config(self, cfg_path: Path, counts: dict[str, Any]) -> Path:
         """Write a temp config YAML with the classes section overridden by counts."""
-        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        data = load_yaml(cfg_path) or {}
         return self._write_temp_cfg(apply_precise_counts(data, counts), prefix="precise_")
 
     def _write_temp_cfg(self, data: Any, *, prefix: str) -> Path:
@@ -598,7 +601,7 @@ class PipelineControlTab(BaseTab):
         preset = (self.ui.var_profile_build_preset.get().strip() or "quick").lower()
         if preset not in ("quick", "full"): preset = "quick"
 
-        cfg, out_ds, out_model = profile_model_paths(self.sim_root, preset, time.strftime("%Y%m%d_%H%M%S"))
+        cfg, out_ds, out_model = profile_model_paths(self.sim_root, preset, now_tag(micro=False))
         if not cfg.exists():
             self.ui.show_messagebox("error", "Missing config", f"Config not found:\n{cfg}")
             return
@@ -659,7 +662,7 @@ class PipelineControlTab(BaseTab):
                 cfg_path = Path(cfg_info["path"])
                 run_id = str(cfg_info.get("run_id") or pid)
                 try:
-                    cfg_data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                    cfg_data = load_yaml(cfg_path) or {}
                 except Exception:
                     cfg_data = {}
                 backend = str((cfg_data.get("render") or {}).get("backend") or "opencv_2d").strip() or "opencv_2d"
@@ -673,7 +676,7 @@ class PipelineControlTab(BaseTab):
                     self.ui.show_messagebox("error", "Error", f"Config file not found:\n{cfg_str}")
                     return None
                 try:
-                    base_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                    base_cfg = load_yaml(cfg_path) or {}
                 except Exception as e:
                     self.ui.show_messagebox("error", "Error", f"Failed to read config:\n{cfg_path}\n\n{e}")
                     return None
@@ -696,7 +699,7 @@ class PipelineControlTab(BaseTab):
                     replace_existing_final_out = True
                     self._append_log(f"[mixed] reusing selected output path: {final_out}\n")
                 elif final_out.exists():
-                    final_out = unique_timestamped_dir(final_out, time.strftime("%Y%m%d_%H%M%S"))
+                    final_out = unique_timestamped_dir(final_out, now_tag(micro=False))
                     out_dir = str(final_out)
                     self.ui.var_out.set(rel_to(self.sim_root, final_out))
                     self._append_log(f"[mixed] output exists, using new dataset path: {final_out}\n")
@@ -1466,7 +1469,7 @@ class PipelineControlTab(BaseTab):
             try:
                 cur_path = (self.sim_root / cur) if not Path(cur).is_absolute() else Path(cur)
                 if cur_path.exists():
-                    data = yaml.safe_load(cur_path.read_text(encoding="utf-8"))
+                    data = load_yaml(cur_path)
                     cur_backend = ((data.get("render") or {}).get("backend") or "").strip()
                     cur_profile = ((data.get("run") or {}).get("component_profile") or "")
                     if cur_backend == want_backend and str(cur_profile).strip() == str(profile_id).strip(): return
@@ -1487,7 +1490,7 @@ class PipelineControlTab(BaseTab):
         if not profile_path.exists(): self.ui.show_messagebox("error", "Error", f"Profile file not found:\n{profile_path}"); return
 
         try:
-            with open(profile_path) as f: profile_data = yaml.safe_load(f)
+            profile_data = load_yaml(profile_path)
             info_text = f"Profile ID: {profile_id}\nPath: {profile_path}\n\n" + "="*60 + "\n\n" + yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
             dialogs.show_text(self.frame, f"Profile Info: {profile_id}", info_text, size=(640, 520))
 
@@ -1557,7 +1560,7 @@ class PipelineControlTab(BaseTab):
             profile_path = profiles_dir / f"{profile_id}.yaml"
 
             info_text = f"Dataset: {ds.name}\nProfile ID: {profile_id}\nProfile Hash: {profile_hash}\nProfile Path: {profile_path_str}\n\n" + "="*60 + "\nMANIFEST METADATA\n" + "="*60 + "\n\n" + json.dumps(manifest, indent=2)
-            if profile_path.exists(): info_text += "\n\n" + "="*60 + "\nPROFILE DETAILS\n" + "="*60 + "\n\n" + yaml.dump(yaml.safe_load(profile_path.read_text(encoding="utf-8")), default_flow_style=False, sort_keys=False)
+            if profile_path.exists(): info_text += "\n\n" + "="*60 + "\nPROFILE DETAILS\n" + "="*60 + "\n\n" + yaml.dump(load_yaml(profile_path), default_flow_style=False, sort_keys=False)
             else: info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
             dialogs.show_text(self.frame, f"Dataset Profile: {ds.name}", info_text, size=(680, 560))
 
@@ -1565,7 +1568,7 @@ class PipelineControlTab(BaseTab):
 
     def _apply_name_to_out_and_model(self) -> None:
         base = self.logic.slugify_name(self.ui.var_name.get())
-        name = f"{base}_{time.strftime('%Y%m%d_%H%M%S')}" if self.ui.var_name_ts.get() else base
+        name = f"{base}_{now_tag(micro=False)}" if self.ui.var_name_ts.get() else base
         out_rel, model_rel = f"outputs/sim_data/runs/{name}", f"outputs/models/{name}.{'bundle' if self.ui.var_model_bundle.get() else 'pt'}"
         self.ui.var_out.set(out_rel); self.ui.var_model.set(model_rel)
         self._refresh_models()
@@ -1782,7 +1785,7 @@ class PipelineControlTab(BaseTab):
 
         versions_root = self.sim_root / "outputs" / "sim_data" / "versions"
         versions_root.mkdir(parents=True, exist_ok=True)
-        group, tag = ds.name, time.strftime("%Y%m%d_%H%M%S")
+        group, tag = ds.name, now_tag(micro=False)
         dst = versions_root / group / f"{group}_{tag}"
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists(): self.ui.show_messagebox("error", "Error", f"Snapshot destination already exists:\n{dst}"); return
@@ -1885,7 +1888,7 @@ class PipelineControlTab(BaseTab):
             if strat in ("merge_keep", "merge_temp"):
                 if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first."); return
                 
-                ts = time.strftime("%Y%m%d_%H%M%S")
+                ts = now_tag(micro=False)
                 name = ""
                 if strat == "merge_keep":
                     default = f"{dss[0].name}_merged_{len(dss)}"

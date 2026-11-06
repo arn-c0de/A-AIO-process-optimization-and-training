@@ -98,6 +98,9 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", type=Path, help="Also write the result as JSON")
     args = ap.parse_args()
+    from simple_sim.cli_utils import configure_cli_logging
+
+    configure_cli_logging()
 
     rng = np.random.default_rng(args.seed)
     model = build_embedder(args.weights)

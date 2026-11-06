@@ -200,6 +200,55 @@ It compares edge steepness (relative to contrast) and sensor noise (flat areas) 
 ratio near 1 (usually one or two rounds). Overview photos taken with a phone are not suitable: they
 have a different scale, optics and lighting than the AOI camera.
 
+## Where the domain filters are applied (`render.post_filters`)
+
+The run config's `domains.<name>` ranges (`blur_sigma`, `noise_stddev`, `lighting_brightness`) and the
+`augment` rotation predate the camera model. With the default `render.post_filters: legacy` they are
+still applied to the *finished* camera image: the sensor noise is blurred, then a second noise is
+added, and the rotation (`warpAffine` of the final image) interpolates the noise and smears JPEG
+blocks. `render.post_filters: camera` (2D photoreal only) moves them into the camera model:
+
+```yaml
+render:
+  post_filters: camera   # legacy (default, bit-identical) | camera
+```
+
+- the domain `blur_sigma` is combined with the lens `blur_sigma` (`sqrt(a^2 + b^2)`, sensor pixels),
+- the domain `noise_stddev` squared is added to the read-noise variance (the shot noise stays),
+- the rotation (cardinal quarter turn + jitter) is a camera *roll* before the camera model: quarter
+  turns are exact (`np.rot90`), the jitter is part of the view projection, the board is rendered on
+  a correspondingly larger canvas so the corners stay filled.
+
+Brightness/contrast, colour and the extended image filters (`IMAGE_FILTERS`) are applied as before.
+Datasets rendered with `camera` look different for the same seed (the larger canvas changes the
+board around the part), so do not `--extend` a legacy dataset with it.
+
+### Several domains, held-out camera (`domains`, `splits.*_domains`)
+
+Samples are spread evenly over all `domains` (`index % n`, so every class has the same share per
+domain). Each domain has its own filter ranges and may override the camera:
+
+```yaml
+domains:
+  domain_A: {lighting_brightness: [0.9, 1.1], blur_sigma: [0, 0.6], noise_stddev: [0, 6]}
+  domain_B:
+    lighting_brightness: [0.8, 1.2]
+    blur_sigma: [0, 0.4]
+    noise_stddev: [0, 4]
+    camera: {preset: phone}      # keys as render.camera, override the render section's
+splits:
+  train_domains: [domain_A]
+  val_domains: [domain_B]        # held out: val and test see only the phone camera
+  test_domains: [domain_B]
+```
+
+A domain listed only under `val_domains` / `test_domains` is split between val and test with the
+fractions renormalised over those two, so the `eval` report measures generalisation to a camera the
+model never trained on instead of interpolation inside one domain. A domain listed everywhere is
+split as before. `configs/run_0001_xdomain.yaml` combines this with `post_filters: camera`,
+`defects.placement_sampling: continuous` and the training options (`train.augment`, `scheduler`,
+`label_smoothing`), see `README.md`.
+
 ## Measuring the sim-to-real gap (`tools/sim_to_real.py`)
 
 Compares a folder of synthetic ROIs with a folder of real camera ROIs (both searched recursively,

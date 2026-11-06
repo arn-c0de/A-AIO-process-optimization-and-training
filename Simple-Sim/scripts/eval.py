@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +15,7 @@ from torch.utils.data import DataLoader
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, run_cli
+from simple_sim.cli_utils import PROFILE_MISMATCH_HINT, add_json_flag, run_cli, with_hint
 from simple_sim.data_loader import ROIDataset
 from simple_sim.eval_utils import (
     checkpoint_eval_config,
@@ -24,16 +23,17 @@ from simple_sim.eval_utils import (
     dataset_profile,
     eval_loader,
     metrics_summary,
-    print_checkpoint_info,
-    print_distribution,
+    format_checkpoint_info,
+    format_distribution,
     resolve_bundle_checkpoint,
     run_inference,
 )
-from simple_sim.io_utils import atomic_write_json
-from simple_sim.manifest import check_checkpoint_profile
-from simple_sim.metrics import check_success_criteria, compute_metrics, format_metrics
+from simple_sim.io_utils import atomic_write_json, now_iso
+from simple_sim.manifest import ProfileMismatchError, check_checkpoint_profile
+from simple_sim.metrics import evaluate_success_criteria, format_success_criteria, compute_metrics, format_metrics
 from simple_sim.models import load_checkpoint_model
 from simple_sim.telemetry import emit
+
 
 
 def evaluate(
@@ -81,7 +81,7 @@ def run_eval(
 
     print("\nLoading model checkpoint (single model or ensemble)...")
     model, class_names, checkpoint = load_checkpoint_model(model_path, device)
-    print_checkpoint_info(checkpoint)
+    print(format_checkpoint_info(checkpoint))
 
     # GUARD: Validate component profile match
     ckpt_profile_id = check_checkpoint_profile(
@@ -99,7 +99,7 @@ def run_eval(
     test_dataset = ROIDataset(data_dir, 'test', class_names, return_id=True)
     print(f"Test samples: {len(test_dataset)}")
     test_dist = test_dataset.get_class_distribution()
-    print_distribution("Test class distribution", test_dist)
+    print(format_distribution("Test class distribution", test_dist))
 
     print("\n" + "=" * 60)
     print("EVALUATION ON TEST SET")
@@ -116,7 +116,7 @@ def run_eval(
 
     resolved_model_path = str(model_path) if model_path != requested_model_path else None
     report = {
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': now_iso(),
         'dataset_path': str(data_dir),
         'model_path': str(requested_model_path),
         'resolved_model_path': resolved_model_path,
@@ -130,7 +130,9 @@ def run_eval(
     atomic_write_json(report_path, report)
     print(f"\nReport saved to: {report_path}")
 
-    passed = check_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="class")
+    success = evaluate_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="class")
+    print(format_success_criteria(success))
+    passed = success.passed
     return {
         "model_path": str(requested_model_path),
         "resolved_model_path": resolved_model_path,
@@ -160,9 +162,9 @@ def main() -> None:
     add_json_flag(parser)
     args = parser.parse_args()
 
-    run_cli("eval", lambda: run_eval(
+    run_cli("eval", with_hint(lambda: run_eval(
         Path(args.data), Path(args.model), args.device, allow_profile_mismatch=args.allow_profile_mismatch,
-    ), args.json)
+    ), ProfileMismatchError, PROFILE_MISMATCH_HINT), args.json)
 
 
 if __name__ == '__main__':

@@ -31,16 +31,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from gui.components.overlay_renderer import draw_defect_overlay  # noqa: E402
-from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
+from simple_sim.cli_utils import add_json_flag, configure_cli_logging, emit_result  # noqa: E402
 from simple_sim.config import load_config, merge_profile_render, validate_config  # noqa: E402
 from simple_sim.defects import sample_defect_params  # noqa: E402
 from simple_sim.generators.blender3d.bake import bake_fields  # noqa: E402
-from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # noqa: E402
-from simple_sim.generators.opencv_2d import render_roi, sample_nominal_geometry  # noqa: E402
-from simple_sim.io_utils import atomic_write_text  # noqa: E402
+from simple_sim.generators.blender3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # noqa: E402
+from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry  # noqa: E402
+from simple_sim.classes import STANDARD_CLASSES  # noqa: E402
+from simple_sim.io_utils import atomic_write_text, load_yaml  # noqa: E402
 
 # Standard defect classes for PCB components
-STANDARD_CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
 
 
 def discover_profiles(profiles_dir: Path) -> list[Path]:
@@ -53,8 +53,7 @@ def discover_profiles(profiles_dir: Path) -> list[Path]:
 def read_profile(profile_path: Path) -> dict:
     """Load profile YAML and return its contents."""
     try:
-        with open(profile_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        data = load_yaml(profile_path)
     except (OSError, yaml.YAMLError) as e:
         print(f"  Error reading {profile_path}: {e}")
         return {}
@@ -266,6 +265,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Only write SAMPLE_GALLERY.md entries, do not render images")
     add_json_flag(parser)
     args = parser.parse_args()
+    configure_cli_logging()
     try:
         _run(args)
     except SystemExit as exc:

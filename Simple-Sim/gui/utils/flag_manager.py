@@ -6,7 +6,8 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
-from datetime import datetime
+
+from simple_sim.io_utils import now_iso
 
 _LOG = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class FlagManager:
             'id': sample_id,
             'flag': flag_type,
             'reason': reason,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': now_iso()
         }
 
         if sample_id not in self._flags:

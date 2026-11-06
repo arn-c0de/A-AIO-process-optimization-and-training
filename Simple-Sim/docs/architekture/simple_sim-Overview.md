@@ -15,22 +15,37 @@ This document describes the architecture and responsibilities of all modules in 
 ## High-Level Structure
 
 - Core data/config/runtime
+  - `classes.py` (class/split/backend vocabularies), `coerce.py` (lenient bool/float/int parsing), `io_utils.py` (JSON/JSONL/YAML I/O, timestamps)
   - `config.py`, `config_schema.py`, `schema.py`, `manifest.py`, `dataset_store.py`, `splits.py`, `rng.py`, `telemetry.py`
 - Defect and profile domain logic
   - `defects.py`, `profile_hash.py`
 - Inference/evaluation helpers
   - `data_loader.py`, `metrics.py`, `model_bundle.py`, `two_stage.py`
 - Generator backends
-  - `generators/opencv2d/*` + facades
+  - `generators/opencv2d/*`
   - `generators/blender3d/*` + Blender batch script
-- Compatibility re-export modules
-  - `generator_2d.py`, `generator_3d.py`, `generators/opencv_2d.py`, `generators/blender_3d.py`
+- Image-filter settings
+  - `filter_settings.py` (pure Python, shared by both backends and the GUI)
 
 ## Module-by-Module
 
 ## `simple_sim/__init__.py`
 
 - Declares package version: `__version__`.
+- Adds a `NullHandler` to the `simple_sim` logger.
+
+## Logging and errors
+
+- Library modules never `print` or `sys.exit`: progress goes to `logging.getLogger(__name__).info`, user warnings to `.warning`. Only `cli.py`, `cli_utils.py`, `__main__.py` and the Blender script `blender/render_batch.py` print.
+- `cli_utils.configure_cli_logging()` (called by `run_cli`) shows `simple_sim` records on stdout as plain lines, warnings as `WARNING: ...`, so the console output of the scripts is unchanged apart from that prefix.
+- Errors are neutral (`manifest.ProfileMismatchError`, `manifest.RendererMismatchError`, both `ValueError`); the scripts add the flag advice with `cli_utils.with_hint(..., PROFILE_MISMATCH_HINT)` / `RENDERER_MISMATCH_HINT`.
+- Console text blocks are returned as strings: `metrics.format_success_criteria`, `eval_utils.format_checkpoint_info`, `eval_utils.format_distribution`.
+
+## `simple_sim/classes.py`
+
+- `DefectClass`, `Split`, `Backend` (`StrEnum`, values are the strings stored in JSON/YAML).
+- Derived plain-string constants: `VALID_CLASSES`, `STANDARD_CLASSES`, `CRITICAL_CLASSES`, `TYPE_LABELLED_CLASSES`, `PLACEMENT_CLASSES`, `SOLDER_ONLY_CLASSES`, `NEVER_TOMBSTONE`, `SPLIT_NAMES`, `BACKENDS`.
+- Stdlib only; `schema.py` takes `VALID_CLASSES` from here, so it no longer needs PyYAML.
 
 ## `simple_sim/config.py`
 
@@ -209,10 +224,11 @@ Responsibilities:
 
 ## `simple_sim/metrics.py`
 
-Purpose: classification metric computation and formatting.
+Purpose: classification metric computation and formatting (numpy only, values identical to scikit-learn's, checked by `tests/test_metrics.py`).
 
 Key API:
 - `compute_metrics(y_true, y_pred, class_names, critical_classes=None)`
+- `evaluate_success_criteria(val_accuracy, metrics, entity="class") -> SuccessCheck` and `format_success_criteria(check, ascii_only=False)`
 - `format_metrics(metrics, class_names)`
 
 Responsibilities:
@@ -258,10 +274,9 @@ Procedural PCB around the inspected part as plain data in mm (`render.board.rout
 
 ## `simple_sim/generators/__init__.py`
 
-- Re-exports OpenCV and Blender generator APIs.
-- Re-exports filter-settings helpers.
+- Intentionally empty: import `simple_sim.generators.opencv2d` or `simple_sim.generators.blender3d` directly, so loading one backend (or `generators.version`) does not load the other or OpenCV.
 
-## `simple_sim/generators/filter_settings.py`
+## `simple_sim/filter_settings.py`
 
 Purpose: centralized filter normalization and preset shaping.
 
@@ -356,15 +371,6 @@ Responsibilities:
 - Applies defect transforms and augmentation-driven global rotation.
 - Renders each job image and fails fast on error.
 
-## Compatibility Facades
-
-- `simple_sim/generator_2d.py`
-- `simple_sim/generator_3d.py`
-- `simple_sim/generators/opencv_2d.py`
-- `simple_sim/generators/blender_3d.py`
-
-Responsibilities:
-- Preserve older import paths while re-exporting split backend modules.
 
 ## Data Flow Summary
 

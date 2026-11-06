@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ProfileDataset, make_loader_kwargs
-from simple_sim.eval_utils import print_distribution, require_manifest
+from simple_sim.eval_utils import format_distribution, require_manifest
 from simple_sim.manifest import hash_file, read_dataset_manifest
 from simple_sim.rng import resolve_train_seed, seed_everything
 from simple_sim.schema import LabelRow, read_jsonl
@@ -74,7 +74,7 @@ def train_profile_model(
     print(f"Val samples: {len(val_dataset)}")
 
     train_dist = train_dataset.get_class_distribution()
-    print_distribution("Train profile distribution", train_dist)
+    print(format_distribution("Train profile distribution", train_dist))
     for name, count in train_dist.items():
         if count == 0:
             raise ValueError(f"Profile '{name}' has 0 training samples. Check dataset generation.")

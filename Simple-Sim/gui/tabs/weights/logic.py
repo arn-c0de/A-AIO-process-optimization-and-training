@@ -9,7 +9,6 @@ import subprocess
 import threading
 import re
 import zipfile
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +16,8 @@ from gui.utils.checkpoint_meta import checkpoint_class_names
 from gui.utils.dataset_catalog import dataset_display_name, sorted_dataset_dirs
 from gui.utils.paths import list_model_paths, model_root, newest_file
 from gui.utils.process import run_streaming, terminate_process
-from simple_sim.io_utils import atomic_write_json, read_json, rel_to
+from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, now_tag, read_json, rel_to
 from simple_sim.model_bundle import bundle_checkpoint_path
-from simple_sim.models import load_checkpoint
 from simple_sim.reports import load_reports, report_search_dirs
 import yaml
 
@@ -81,7 +79,7 @@ class WeightsLogic:
                 continue
             arena[rel] = {
                 "path": rel,
-                "added_at": datetime.now().isoformat(timespec="seconds"),
+                "added_at": now_iso(timespec="seconds"),
                 "note": "",
             }
 
@@ -116,7 +114,7 @@ class WeightsLogic:
         return dst
 
     def _snapshot_path_for(self, model_path: Path) -> Path:
-        tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+        tag = now_tag(micro=False)
         root = self._model_root() / "versions" / model_path.stem
         base = root / f"{model_path.stem}_{tag}.pt"
         if not base.exists():
@@ -128,7 +126,7 @@ class WeightsLogic:
         return base
 
     def import_model(self, src_p: Path) -> Path:
-        tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+        tag = now_tag(micro=False)
         if src_p.suffix.lower() == ".zip":
             bundles_dir = self._model_root() / "bundles"
             bundles_dir.mkdir(parents=True, exist_ok=True)
@@ -220,6 +218,8 @@ class WeightsLogic:
             p.unlink()
 
     def show_model_profile_info(self, p: Path) -> tuple[str, str | None]:
+        from simple_sim.models import load_checkpoint  # lazy: pulls in torch
+
         try:
             checkpoint = load_checkpoint(p)
             profile_data = checkpoint.get('component_profile')
@@ -241,8 +241,7 @@ class WeightsLogic:
 
             if profile_path.exists():
                 info_text += "\n" + "="*60 + "\n" + "PROFILE DETAILS\n" + "="*60 + "\n\n"
-                with open(profile_path) as f:
-                    profile_yaml = yaml.safe_load(f)
+                profile_yaml = load_yaml(profile_path)
                 info_text += yaml.dump(profile_yaml, default_flow_style=False, sort_keys=False)
             else:
                 info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
