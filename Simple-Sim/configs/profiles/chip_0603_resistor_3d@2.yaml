@@ -30,7 +30,8 @@ geometry_ranges:
 tolerances:
   ok_shift_px: 3.0
   ok_rotation_deg: 5.0
-  tombstone_tilt_deg: 75.0
+  # Any lifted end is an open joint: tombstones from 30 deg (partly lifted) to 90 deg (upright).
+  tombstone_tilt_deg: 30.0
 
 defect_set:
   - "OK"

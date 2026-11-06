@@ -184,9 +184,9 @@ def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone):
 
 
 def _sample_tombstone(rng, _ok_shift, _ok_rot, tombstone_tilt_deg):
+    # Anywhere from the class threshold up to fully upright (real tombstones end up at all angles).
     tilt_min = tombstone_tilt_deg if tombstone_tilt_deg is not None else _DEFAULT_TOMBSTONE_TILT
-    tilt_max = min(90.0, tilt_min + 10.0)
-    tilt = rng.uniform(tilt_min, tilt_max)
+    tilt = rng.uniform(tilt_min, 90.0)
     sx = rng.uniform(-5.0, 5.0)
     sy = rng.uniform(-5.0, 5.0)
     rot = rng.uniform(-10.0, 10.0)

@@ -255,7 +255,10 @@ def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, 
         m_cap = _material("mat_endcap", (0.75, 0.75, 0.74), roughness=0.45, metallic=1.0, bump=0.05)
         cap = (0.26 if family == "capacitor" else 0.22) * L
         for s in (-1, 1):
-            objs.append(_box(f"endcap_{s}", (cap, W * 1.02, H * 1.02), (offset + s * (L - cap) / 2, 0.0, H / 2), m_cap,
+            # Caps wrap slightly beyond the body, so their end faces never coincide with the body's
+            # (an upright tombstone shows the cap's end face to the camera).
+            objs.append(_box(f"endcap_{s}", (cap + 0.02 * H, W * 1.02, H * 1.02),
+                             (offset + s * ((L - cap) / 2 + 0.01 * H), 0.0, H / 2), m_cap,
                              parent=root, bevel=0.1 * min(W, H)))
         if family == "resistor":
             m_ink = _material("mat_ink", (0.85, 0.85, 0.82), roughness=0.8)

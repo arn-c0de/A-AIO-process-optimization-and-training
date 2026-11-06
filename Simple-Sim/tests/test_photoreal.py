@@ -112,3 +112,15 @@ def test_tombstoned_chip_shows_bright_end_cap():
     centre = slice(40, 88)
     # The upright tin end cap faces the camera: the part area is clearly brighter than a flat black resistor.
     assert img[centre, centre].mean() > ok[centre, centre].mean()
+
+
+def test_tombstone_tilt_spans_threshold_to_upright():
+    from simple_sim.defects import classify_defect
+
+    rng = np.random.default_rng(0)
+    tol = {**TOL, "tombstone_tilt_deg": 30.0}
+    tilts = [sample_defect_params("TOMBSTONE", rng, tol)["tilt_deg"] for _ in range(400)]
+    assert min(tilts) >= 30.0 and max(tilts) <= 90.0
+    assert min(tilts) < 35.0 and max(tilts) > 85.0
+    assert all(classify_defect({}, {"type": "TOMBSTONE", "shift_x": 0.0, "shift_y": 0.0, "rotation_deg": 0.0,
+                                    "tilt_deg": t}, tol) == "TOMBSTONE" for t in tilts)
