@@ -12,7 +12,7 @@ import html
 import re
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,7 @@ import numpy as np
 from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
-from simple_sim.generators.blender3d.bake import profile_job_fields
+from simple_sim.generators.blender3d.bake import bake_fields, profile_job_fields
 from simple_sim.generators.filter_settings import normalize_image_filters
 from simple_sim.generators.opencv2d.geometry import sample_nominal_geometry
 from simple_sim.profile_hash import load_profile
@@ -47,6 +47,9 @@ class RenderSettings:
     cycles_samples: int
     device: str
     engine: str = "BLENDER_EEVEE"
+    # The run config's ``render`` section: board bake fields (camera, board model, gloss, ...) so a
+    # 3D preview bakes the same board as the generated dataset (see ``bake_fields``).
+    render: dict[str, Any] | None = field(default=None, compare=False, hash=False)
 
 
 @dataclass
@@ -216,6 +219,7 @@ def settings_from_config(cfg: dict[str, Any]) -> RenderSettings:
         cycles_samples=b["samples"],
         device=b["device"],
         engine=b["engine"],
+        render=dict(cfg.get("render") or {}),
     )
 
 
@@ -439,7 +443,7 @@ def build_preview_jobs(
                 footprint=footprint,
                 component_height_mm=component_height_mm,
                 render_3d=render_3d,
-                bake=profile_job_fields(profile),
+                bake={**profile_job_fields(profile), **bake_fields(settings.render or {}, roi_cfg)},
             )
         )
         previews.append((profile_id, backend, defect_type, rel_path))

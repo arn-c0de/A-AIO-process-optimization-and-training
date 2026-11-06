@@ -469,6 +469,7 @@ Phase 1.
 | `test_neighbour_pads_clear` | kein fremdes Kupfer unter Nachbarpads/-körpern |
 | `test_routing_isolated_rng` | `escape` vs. `grid` bei gleichem Seed ⇒ Nachbarn, Netzliste identisch (eigene Ströme) |
 | `test_legacy_routing_unchanged` | `routing: legacy` erzeugt pixelgleich dasselbe Bild wie der alte Pfad – Vergleich **im selben Prozess** gegen die unveränderte Funktion (ein gespeicherter Hash wäre von der OpenCV-Version abhängig: `LINE_AA`, `resize`) |
+| `test_render_golden` (nachgetragen) | Review-Befund: `legacy` war *nicht* pixelgleich zu v1.0.3 (Realismus-Änderungen am selben Pfad, zusätzliche RNG-Ziehungen). Seitdem `RENDERER_VERSION` im Manifest (`--extend` verweigert Mischungen) und gespeicherte md5-Hashes der 2D-Ausgabe; der Test wird übersprungen, wenn OpenCV/NumPy nicht die beim Erzeugen verwendeten Versionen sind |
 | `test_board_meta_roundtrip` | `Board` → JSON → `Board` verlustfrei |
 | `test_parallel_render_identical` | bestehender Test (`test_parallel_render.py`) deckt den neuen Pfad mit ab (S8) |
 

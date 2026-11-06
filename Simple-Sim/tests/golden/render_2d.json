@@ -1,0 +1,16 @@
+{
+  "hashes": {
+    "run_0001/000000.png": "ee6967f95ab18adfb9a6b9ef06a05f78",
+    "run_0001/000001.png": "9076c8175ee2a9ce8f4e9224b3f762af",
+    "run_0001/000002.png": "b5b84a8534e4b47a72a2683ddf365e42",
+    "run_qfn32/000000.png": "36b2750981b770c1f9a49893d3b7a149",
+    "run_qfn32/000001.png": "5f9b5b37768620a72c68b1a1d1625bf5",
+    "run_sot23/000000.png": "ae79f881d94d34b405b3fce5aa7f4677",
+    "run_sot23/000001.png": "4ca562adb41626fa7847bfe432967243"
+  },
+  "renderer_version": "2",
+  "versions": {
+    "numpy": "2.5.2",
+    "opencv": "5.0.0"
+  }
+}

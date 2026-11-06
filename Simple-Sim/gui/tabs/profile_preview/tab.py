@@ -80,11 +80,12 @@ class ProfilePreviewTab(BaseTab):
         self.var_profile = tk.StringVar()
         self.var_backend = tk.StringVar()
         self.var_config = tk.StringVar(value=CONFIG_AUTO)
-        self.var_quality = tk.StringVar(value="Ultra")
-        self.var_ss = tk.IntVar(value=QUALITY_PRESETS["Ultra"]["supersampling"])
+        # "Standard" by default: "Ultra" means 256 Cycles samples + 4x boards in 3D (very slow first run).
+        self.var_quality = tk.StringVar(value="Standard")
+        self.var_ss = tk.IntVar(value=QUALITY_PRESETS["Standard"]["supersampling"])
         self.var_style = tk.StringVar(value="photoreal")
         self.var_camera = tk.StringVar(value=CAMERA_CHOICES[0])
-        self.var_samples = tk.IntVar(value=QUALITY_PRESETS["Ultra"]["samples"])
+        self.var_samples = tk.IntVar(value=QUALITY_PRESETS["Standard"]["samples"])
         self.var_engine = tk.StringVar(value=FROM_CONFIG)
         self.var_device = tk.StringVar(value=FROM_CONFIG)
         self.var_variants = tk.IntVar(value=2)
@@ -209,7 +210,7 @@ class ProfilePreviewTab(BaseTab):
         btns.pack(fill="x", pady=(8, 0))
         self.btn_render = ttk.Button(btns, text="Render preview", command=self._start_render)
         self.btn_render.pack(side="left")
-        self.btn_stop = ttk.Button(btns, text="Stop", command=self._stop.set, state="disabled")
+        self.btn_stop = ttk.Button(btns, text="Stop", command=self._request_stop, state="disabled")
         self.btn_stop.pack(side="left", padx=(4, 0))
         ttk.Button(btns, text="Open folder", command=self._open_folder).pack(side="left", padx=(4, 0))
         self.progress = ttk.Progressbar(parent, mode="determinate")
@@ -390,6 +391,12 @@ class ProfilePreviewTab(BaseTab):
         self._worker.start()
         self._poll()
 
+    def _request_stop(self) -> None:
+        """Stop takes effect between images; a running Blender render/board bake finishes first."""
+        self._stop.set()
+        self.btn_stop.configure(state="disabled")
+        self.var_status.set("Stopping ... finishing the image/bake in progress")
+
     def _poll(self) -> None:
         finished = False
         try:
@@ -397,7 +404,11 @@ class ProfilePreviewTab(BaseTab):
                 kind, payload = self._queue.get_nowait()
                 if kind == "image":
                     self._images.append(payload)
+                    n_cells = len(self._cells)
                     self._add_thumb(len(self._images) - 1, payload)
+                    if len(self._cells) == n_cells:
+                        self._log(f"[warn] {payload.state} #{payload.variant}: image missing or unreadable "
+                                  f"({payload.path})")
                     self.progress.configure(value=len(self._images))
                     self._last_image_s = payload.seconds
                 elif kind == "log":
@@ -411,8 +422,11 @@ class ProfilePreviewTab(BaseTab):
             # Live elapsed time, so a slow first image (3D: board bake + Blender start) does not look frozen.
             elapsed = time.perf_counter() - self._t_start
             last = f" | last image {self._last_image_s:.1f}s" if self._last_image_s else ""
-            self.var_status.set(f"Rendering image {min(len(self._images) + 1, self._expected)}/{self._expected} "
-                                f"... {elapsed:.0f}s elapsed{last}")
+            if self._stop.is_set():
+                self.var_status.set(f"Stopping ... finishing the image/bake in progress ({elapsed:.0f}s elapsed)")
+            else:
+                self.var_status.set(f"Rendering image {min(len(self._images) + 1, self._expected)}/{self._expected} "
+                                    f"... {elapsed:.0f}s elapsed{last}")
             self._poll_id = self.frame.after(100, self._poll)
 
     def _finish(self, kind: str, payload: Any) -> None:
@@ -421,7 +435,9 @@ class ProfilePreviewTab(BaseTab):
         self.btn_stop.configure(state="disabled")
         elapsed = time.perf_counter() - self._t_start
         if kind == "done":
-            self.var_status.set(f"Done: {len(self._images)} images in {elapsed:.1f}s.")
+            missing = len(self._images) - len(self._cells)
+            note = f" ({missing} missing/unreadable, see log)" if missing > 0 else ""
+            self.var_status.set(f"Done: {len(self._cells)} images in {elapsed:.1f}s.{note}")
         elif kind == "cancelled":
             self.var_status.set(f"Stopped after {len(self._images)} images.")
         else:
@@ -542,7 +558,17 @@ class ProfilePreviewTab(BaseTab):
         show()
 
     def _on_wheel(self, event: tk.Event) -> None:
-        if not self.initialized or not str(event.widget).startswith(str(self.frame)):
+        # Bound application-wide: scroll only when the pointer is over the gallery
+        # canvas or one of its descendants (not the log, lists or settings).
+        if not self.initialized:
+            return
+        try:
+            w = self.canvas.winfo_containing(event.x_root, event.y_root)
+        except Exception:  # noqa: BLE001 - e.g. pointer over a destroyed/foreign window
+            return
+        while w is not None and w is not self.canvas:
+            w = getattr(w, "master", None)
+        if w is None:
             return
         if getattr(event, "num", None) == 4:
             step = -1

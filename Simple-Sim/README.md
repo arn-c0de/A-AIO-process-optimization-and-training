@@ -175,6 +175,11 @@ Included profiles:
 - `chip_0603_resistor@1`: same with TOMBSTONE from 75 deg (kept for existing datasets/models)
 - `sot23_transistor@1`: 3-pad SOT-23 transistor (OK/MISSING/MISALIGNED/TOMBSTONE)
 - `sot23_transistor@2`: same with real SOT-23 body/land proportions (used by `run_sot23.yaml`)
+- `chip_array_8_resistor@1` / `chip_array_8_capacitor@1`: 4-element resistor / MLCC arrays (`run_array_r.yaml`, `run_array_c.yaml`)
+- `sot363_ic@1` / `sot23_6_ic@1`: 6-lead SOT packages (`run_sot363.yaml`, `run_sot23_6.yaml`)
+- `chip_0402_resistor@1` / `chip_0402_capacitor@1` / `chip_1210_capacitor@1`: further chip sizes (`run_0402_r/_c.yaml`, `run_1210_c.yaml`)
+- `chip_0603_ferrite@1` / `chip_2520_power_inductor@1` / `chip_0603_led@1`: ferrite beads, moulded power inductors, chip LEDs
+- `tssop20_ic@1` / `tssop14_ic@1`: TSSOP ICs, 0.65 mm pitch
 - `qfn32_ic@1`: 4-pad QFN-32 IC (OK/MISSING/MISALIGNED/TOMBSTONE)
 
 3D profiles are intentionally **separate profile IDs** to keep datasets distinct in the GUI:
@@ -197,7 +202,7 @@ Reference run configs you can start from:
 Each generated dataset includes a `dataset_manifest.json` with provenance (profile id/hash/path, generator version, git commit) and extend history.
 
 The CLI scripts include guards to prevent silent corruption, for example:
-- `scripts/generate.py --extend ...` refuses to extend datasets if the profile id/hash differs
+- `scripts/generate.py --extend ...` refuses to extend datasets if the profile id/hash or the renderer version (`generator.renderer_version`) differs; `--allow-renderer-mismatch` downgrades the renderer check to a warning
 - `scripts/train.py --resume ...` refuses to resume across profile mismatches
 - `scripts/predict.py` / `scripts/eval.py` / `scripts/batch_predict.py` validate dataset/model compatibility
 

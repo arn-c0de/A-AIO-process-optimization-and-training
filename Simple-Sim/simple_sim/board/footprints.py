@@ -19,7 +19,14 @@ UP: Vec = (0.0, -1.0)
 DOWN: Vec = (0.0, 1.0)
 NONE: Vec = (0.0, 0.0)
 
-FAMILIES = ("resistor", "capacitor", "sot", "soic", "qfn")
+FAMILIES = ("resistor", "capacitor", "sot", "soic", "qfn", "sot6", "array_r", "array_c", "inductor", "power_inductor",
+            "led")
+# Two-terminal chip parts (chip_2pad); component_type picks the family.
+CHIP_FAMILIES = ("resistor", "capacitor", "inductor", "power_inductor", "led")
+
+# Footprints with two pad columns (left/right of the body) and this many pads per column:
+# SOIC-16, SOT-363 / SOT-23-6 and 4-element resistor/capacitor arrays (0804 / 0805 size).
+DUAL_ROW_PADS_PER_SIDE = {"soic_16": 8, "sot_6": 3, "chip_array_8": 4, "tssop_14": 7, "tssop_20": 10}
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,9 +55,20 @@ def family_of(footprint: str, component_type: str = "") -> str:
         return "sot"
     if footprint.startswith("qfn"):
         return "qfn"
-    if footprint == "soic_16":
+    if footprint == "soic_16" or footprint.startswith("tssop"):
         return "soic"
-    return "capacitor" if "cap" in component_type.lower() else "resistor"
+    if footprint == "sot_6":
+        return "sot6"
+    if footprint == "chip_array_8":
+        return "array_c" if "cap" in component_type.lower() else "array_r"
+    ct = component_type.lower()
+    if "power_inductor" in ct or "molded_inductor" in ct:
+        return "power_inductor"
+    if "inductor" in ct or "ferrite" in ct:
+        return "inductor"
+    if "led" in ct:
+        return "led"
+    return "capacitor" if "cap" in ct else "resistor"
 
 
 def qfn_pins(footprint: str) -> int:
@@ -105,19 +123,21 @@ def footprint_pads(footprint: str, nominal: dict[str, float], img_shape: tuple[i
         pads.append(PadSpec("EP", center_x - thermal // 2, center_y - thermal // 2, thermal, thermal, NONE, "thermal"))
         return pads
 
-    if footprint == "soic_16":
+    if footprint in DUAL_ROW_PADS_PER_SIDE:
+        # Pads along y over pad_spacing_y (first to last pad centre); pad_height across, pad_width along.
+        n = DUAL_ROW_PADS_PER_SIDE[footprint]
         comp_w = int(nominal.get("component_width", 0))
         pad_spacing_y = int(nominal.get("pad_spacing_y", 0))
-        y_span = max(pad_width * 7, pad_spacing_y if pad_spacing_y > 0 else int(comp_w * 0.72))
-        pitch = y_span / 7.0
+        y_span = max(pad_width * (n - 1), pad_spacing_y if pad_spacing_y > 0 else int(comp_w * 0.72))
+        pitch = y_span / float(n - 1)
         y0 = center_y - (y_span / 2.0)
         left_x = center_x - pad_spacing // 2 - pad_height // 2
         right_x = center_x + pad_spacing // 2 - pad_height // 2
         pads = []
-        for i in range(8):
+        for i in range(n):
             y = int(round(y0 + (i * pitch))) - pad_width // 2
             pads.append(PadSpec(str(i + 1), left_x, y, pad_height, pad_width, LEFT))
-            pads.append(PadSpec(str(16 - i), right_x, y, pad_height, pad_width, RIGHT))
+            pads.append(PadSpec(str(2 * n - i), right_x, y, pad_height, pad_width, RIGHT))
         return pads
 
     y = center_y - pad_height // 2

@@ -88,6 +88,11 @@ class FilterPopup:
         self._preview_photo: Any = None
 
         self.top = tk.Toplevel(parent)
+        # Named fonts/label styles exist only after apply_theme(); the popup is
+        # also opened from the standalone viewer, which never calls it.
+        from gui.theme.style import ensure_basic_styles
+
+        ensure_basic_styles(self.top)
         self.top.title("Image Filters")
         self.top.transient(parent.winfo_toplevel())
         self.top.resizable(True, True)

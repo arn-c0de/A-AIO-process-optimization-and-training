@@ -66,7 +66,7 @@ CFG=configs/run_0001.yaml               # see `status --json` -> run_configs
 DS=outputs/sim_data/runs/run_0001
 M=outputs/models/run_0001.pt
 
-python -m simple_sim generate      --config "$CFG" --out "$DS"            # add --extend to append
+python -m simple_sim generate      --config "$CFG" --out "$DS"            # add --extend to append (refused on renderer-version mismatch unless --allow-renderer-mismatch)
 python -m simple_sim validate      --data "$DS" --json
 python -m simple_sim train         --data "$DS" --out "$M" --device cpu --json
 python -m simple_sim eval          --data "$DS" --model "$M" --device cpu --json

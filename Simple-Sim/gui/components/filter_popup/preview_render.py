@@ -105,6 +105,7 @@ def render_filter_preview_3d(sim_root: Path, profile_id: str, filter_vals: dict[
                       roi_height=int(roi["height_px"]), footprint=str(component.get("footprint", "chip_2pad")),
                       component_height_mm=float((component.get("nominal_dims_mm") or {}).get("height", 0.45) or 0.45),
                       render_3d=profile.get("render_3d") or {}, bake=bake)
+    (out_root / rel).unlink(missing_ok=True)  # a silent Blender failure must not show the previous render
     run_blender_jobs([job], sim_root=sim_root, output_root=out_root, jobs_path=out_root / f"jobs_{profile_id}.jsonl",
                      settings=settings)
     path = out_root / rel

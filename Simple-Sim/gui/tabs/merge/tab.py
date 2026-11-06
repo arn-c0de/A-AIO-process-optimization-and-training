@@ -6,7 +6,6 @@ import json
 import os
 import queue
 import shutil
-import threading
 import time
 import tkinter as tk
 from pathlib import Path
@@ -16,6 +15,7 @@ from typing import Any
 from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
+from gui.core.tasks import as_task_fn, runner_for
 from simple_sim.model_bundle import read_bundle_meta
 from .ui import MergeUI
 from .logic import MergeLogic
@@ -64,29 +64,9 @@ class MergeTab(BaseTab):
             pass
 
     def _run_background(self, fn: Any, *, name: str, on_done: Any, on_error: Any, on_finally: Any = None) -> None:
-        """Run ``fn()`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
-        ctx = getattr(self.state, "ctx", None)
-        tasks = getattr(ctx, "tasks", None) if ctx is not None else None
-        if tasks is not None:
-            tasks.run(lambda _h: fn(), name=name, on_done=on_done, on_error=on_error, on_finally=on_finally)
-            return
-
-        def finish(cb: Any, arg: Any) -> None:
-            try:
-                cb(arg)
-            finally:
-                if on_finally is not None:
-                    on_finally()
-
-        def worker() -> None:
-            try:
-                result = fn()
-            except Exception as exc:  # noqa: BLE001 - reported to the UI
-                self.frame.after(0, lambda e=exc: finish(on_error, e))
-                return
-            self.frame.after(0, lambda r=result: finish(on_done, r))
-
-        threading.Thread(target=worker, daemon=True).start()
+        """Run ``fn()`` / ``fn(task)`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
+        call = as_task_fn(fn)  # fn() or fn(task) for cancel/progress
+        runner_for(self.state, self.frame).run(call, name=name, on_done=on_done, on_error=on_error, on_finally=on_finally)
 
     def _rebuild(self) -> None:
         self.ui.rebuild_tree(self._profile_models, self._iid_to_model, self._model_meta_cache,
@@ -336,7 +316,7 @@ class MergeTab(BaseTab):
         self._run_background(work, name="Build ensemble", on_done=on_done, on_error=on_error)
 
     def _log_threadsafe(self, msg: str) -> None:
-        self.frame.after(0, lambda: self._append_log(msg))
+        runner_for(self.state, self.frame).post(lambda: self._append_log(msg))
 
     def _refresh_bundles(self) -> None:
         bundle_dirs = self.logic.get_existing_bundles()

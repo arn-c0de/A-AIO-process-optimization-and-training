@@ -101,17 +101,19 @@ class StatusBar(ttk.Frame):
         tasks = list(self._tasks.values())
         t = tasks[-1]
         more = f" (+{len(tasks) - 1})" if len(tasks) > 1 else ""
-        msg = f" – {t.message}" if t.message else ""
+        snap = getattr(t, "snapshot", None)
+        fraction, message = snap() if callable(snap) else (t.fraction, t.message)
+        msg = f" – {message}" if message else ""
         self.var_task.set(f"{t.name}{msg}{more}")
         if not self._bar.winfo_ismapped():
             self._bar.pack(side="left")
-        if t.fraction is None:
+        if fraction is None:
             if str(self._bar.cget("mode")) != "indeterminate":
                 self._bar.configure(mode="indeterminate")
             self._bar.start(15)
         else:
             self._bar.stop()
-            self._bar.configure(mode="determinate", maximum=1.0, value=t.fraction)
+            self._bar.configure(mode="determinate", maximum=1.0, value=fraction)
 
     def set_stats(self, text: str) -> None:
         self.var_stats.set(text)

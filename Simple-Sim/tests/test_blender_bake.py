@@ -63,7 +63,87 @@ def test_blender_script_renders(tmp_path, footprint):
 def test_bake_supersampling_capped_for_large_boards():
     from simple_sim.generators.blender3d.bake import bake_supersampling
 
-    assert bake_supersampling(2, 8000) == 2  # default never changes (existing datasets stay identical)
+    assert bake_supersampling(2, 8000) == 2  # the default factor is never capped
     assert bake_supersampling(1, 512) == 1
     assert bake_supersampling(4, 512) == 4   # 256 px ROI: Ultra kept
     assert bake_supersampling(4, 2048) == 2  # 1024 px ROI (SOIC-16): capped to the pixel budget
+
+
+def test_bake_fields_never_override_the_roi_scale():
+    """``roi.mm_per_px`` is the one scale of a Blender job: a stale ``render.mm_per_px`` must not win."""
+    from simple_sim.generation.blender import blender_job
+    from simple_sim.generators.blender3d.bake import bake_fields
+
+    fields = bake_fields({"mm_per_px": 0.05, "board": {"routing": "escape"}, "mask_gloss": 0.0}, {"mm_per_px": 0.01})
+    assert "mm_per_px" not in fields
+    assert fields["board"] == {"routing": "escape"} and fields["mask_gloss"] == 0.0
+    record = {"image_path": "a.png", "seed": 1, "nominal": {}, "defect": {}, "augment": {}}
+    job = blender_job(record, mm_per_px=0.01, roi_width=64, roi_height=64, footprint="chip_2pad",
+                      component_height_mm=0.45, render_3d={}, bake=fields)
+    assert job["mm_per_px"] == 0.01
+
+
+def test_preview_jobs_bake_with_the_run_render_settings():
+    """3D previews bake the same board as the dataset (board model, camera, gloss from ``render``)."""
+    from simple_sim.preview.render import RenderSettings, build_preview_jobs
+    from simple_sim.profile_hash import load_profile
+
+    root = Path(__file__).parent.parent
+    profile = load_profile("chip_0603_resistor_3d@2", root / "configs" / "profiles")
+    render = {"board": {"routing": "escape"}, "camera": {"preset": "phone"}, "mask_gloss": 0.0}
+    settings = RenderSettings(roi_width_px=64, roi_height_px=64, mm_per_px=0.01, blender_executable="blender",
+                              cycles_samples=8, device="CPU", render=render)
+    jobs, _ = build_preview_jobs(profile_id="chip_0603_resistor_3d@2", profile=profile, settings=settings,
+                                 seed_base=1, defect_types=["OK"])
+    assert jobs[0]["board"] == {"routing": "escape"}
+    assert jobs[0]["camera"] == {"preset": "phone"} and jobs[0]["mask_gloss"] == 0.0
+    assert jobs[0]["mm_per_px"] == 0.01
+
+
+def _fake_blender(tmp_path, body: str) -> Path:
+    """A stand-in "blender" executable (a Python script) for the runner tests."""
+    exe = tmp_path / "fake_blender"
+    exe.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
+    exe.chmod(0o755)
+    return exe
+
+
+def test_run_blender_should_stop_terminates_the_process(tmp_path):
+    import time
+
+    from simple_sim.generators.blender3d import runner
+
+    pid_file = tmp_path / "pid"
+    exe = _fake_blender(tmp_path, f"import os, time\nopen({str(pid_file)!r}, 'w').write(str(os.getpid()))\ntime.sleep(60)")
+    root = Path(__file__).parent.parent
+    t0 = time.monotonic()
+    calls = {"n": 0}
+
+    def stop() -> bool:
+        calls["n"] += 1
+        return pid_file.exists()  # stop as soon as the fake Blender is running
+
+    with pytest.raises(runner.BlenderCancelled):
+        runner._run_blender(sim_root=root, prepared=[], prepared_path=tmp_path / "jobs.jsonl", output_root=tmp_path,
+                            blender_executable=str(exe), cycles_samples=1, device="CPU", engine="X", extra_env=None,
+                            should_stop=stop)
+    assert time.monotonic() - t0 < 20
+    pid = int(pid_file.read_text())
+    import os
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)  # terminated and reaped, not orphaned
+
+
+def test_run_blender_without_should_stop_is_unchanged(tmp_path):
+    from simple_sim.generators.blender3d import runner
+
+    root = Path(__file__).parent.parent
+    ok = _fake_blender(tmp_path, "pass")
+    runner._run_blender(sim_root=root, prepared=[], prepared_path=tmp_path / "jobs.jsonl", output_root=tmp_path,
+                        blender_executable=str(ok), cycles_samples=1, device="CPU", engine="X", extra_env=None)
+    bad = _fake_blender(tmp_path, "raise SystemExit(3)")
+    for should_stop in (None, lambda: False):
+        with pytest.raises(RuntimeError, match="exit code 3"):
+            runner._run_blender(sim_root=root, prepared=[], prepared_path=tmp_path / "jobs.jsonl", output_root=tmp_path,
+                                blender_executable=str(bad), cycles_samples=1, device="CPU", engine="X", extra_env=None,
+                                should_stop=should_stop)

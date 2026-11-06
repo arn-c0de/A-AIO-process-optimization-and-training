@@ -327,7 +327,11 @@ class MonitorAppTabbed:
         try:
             self._close_tabs()
             try:
-                self.ctx.tasks.cancel_all()
+                # Cancel and briefly wait for workers so a write in progress
+                # (merge, analysis JSON, ...) is not killed with the interpreter.
+                left = self.ctx.tasks.shutdown(timeout=3.0)
+                if left:
+                    print("[gui] still running at exit: " + ", ".join(t.name for t in left))
                 self.ctx.dispatcher.detach()
             except Exception:
                 pass

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -111,8 +111,13 @@ def run_blender_jobs(
     output_root: Path,
     jobs_path: Path,
     settings: dict[str, Any],
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
-    """Write *jobs* to *jobs_path*, run one Blender batch and post-filter the results."""
+    """Write *jobs* to *jobs_path*, run one Blender batch and post-filter the results.
+
+    *should_stop*: polled while Blender runs; True terminates it and raises
+    ``simple_sim.generators.blender3d.runner.BlenderCancelled``. None: run to completion.
+    """
     write_jobs_jsonl(jobs_path, jobs)
     render_blender_batch(
         sim_root=sim_root,
@@ -122,6 +127,7 @@ def run_blender_jobs(
         cycles_samples=settings["samples"],
         device=settings["device"],
         engine=settings["engine"],
+        should_stop=should_stop,
     )
     postprocess_blender_images(jobs, output_root)
 
@@ -133,6 +139,7 @@ def run_prepared_blender_jobs(
     output_root: Path,
     jobs_path: Path,
     settings: dict[str, Any],
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """Like :func:`run_blender_jobs` for jobs whose boards are already baked (``bake.prepare_job``)."""
     render_prepared_batch(
@@ -144,6 +151,7 @@ def run_prepared_blender_jobs(
         cycles_samples=settings["samples"],
         device=settings["device"],
         engine=settings["engine"],
+        should_stop=should_stop,
     )
     postprocess_blender_images(prepared, output_root)
 

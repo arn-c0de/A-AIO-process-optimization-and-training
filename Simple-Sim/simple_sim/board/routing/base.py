@@ -7,12 +7,10 @@ from typing import Protocol
 
 import numpy as np
 
+from simple_sim.board.geometry import box
 from simple_sim.board.model import Board, Port, Track, Vec, Via
 from simple_sim.board.netlist import net_class
-from simple_sim.board.occupancy import Occupancy
-
-# Occupancy cells per clearance: 2 keeps clearance checks exact to half a clearance.
-CELLS_PER_CLEARANCE = 2
+from simple_sim.board.occupancy import CopperMap
 
 
 @dataclass(slots=True)
@@ -30,20 +28,22 @@ class RouteResult:
 
 
 class Router(Protocol):
-    def route(self, board: Board, occupancy: Occupancy, rng: np.random.Generator) -> RouteResult: ...
+    def route(self, board: Board, occupancy: CopperMap, rng: np.random.Generator) -> RouteResult: ...
 
 
-def seed_occupancy(board: Board) -> Occupancy:
-    """Occupancy with every part's keep-out blocked and every pad claimed for its net (NC pads blocked).
+def seed_occupancy(board: Board) -> CopperMap:
+    """Copper map with every part's keep-out blocked and every pad as copper of its net (NC pads:
+    copper of no net, so every net keeps clear of them).
 
-    The keep-out (body plus pads) blocks foreign copper between the pads of a part; a pad's own
-    fan-out leaves the keep-out outward, so routers check stubs with ``ignore_blocked``.
+    Keep-out and pads carry the part's group: a pad's own fan-out stub leaves the keep-out outward
+    and only needs the pitch-limited clearance to the rest of its pin row (see the escape router).
     """
-    occ = Occupancy.for_window(board.bbox, board.rules.clearance / CELLS_PER_CLEARANCE)
+    occ = CopperMap(board.bbox)
     for part in board.parts:
-        occ.stamp(occ.rect(part.keepout), None)
+        g = occ.group(part.ref)
+        occ.add(box(part.keepout), None, group=g, blocked=True)
         for pad in part.pads:
-            occ.stamp(occ.rect(pad.bbox), pad.net if pad.role not in ("nc",) else None)
+            occ.add(box(pad.bbox), pad.net if pad.role != "nc" else None, group=g)
     return occ
 
 
@@ -67,6 +67,24 @@ def polyline45(p0: Vec, p1: Vec) -> list[Vec]:
     mid = (p0[0] + float(np.sign(dx)) * jog, p0[1] + float(np.sign(dy)) * jog)
     pts = [p0, mid, p1]
     return [p for i, p in enumerate(pts) if i == 0 or p != pts[i - 1]]
+
+
+def axial_room(bbox: tuple[float, float, float, float], direction: Vec, start: Vec) -> float:
+    """Distance from *start* to the window border along the dominant axis of *direction*."""
+    x0, y0, x1, y1 = bbox
+    if abs(direction[0]) >= abs(direction[1]):
+        return (start[0] - x0) if direction[0] < 0 else x1 - start[0]
+    return (start[1] - y0) if direction[1] < 0 else y1 - start[1]
+
+
+def runs_along_border(bbox: tuple[float, float, float, float], points: list[Vec], margin: float) -> bool:
+    """True if a segment of *points* runs (within *margin*) along a window edge instead of into it."""
+    x0, y0, x1, y1 = bbox
+    for a, b in zip(points, points[1:]):
+        for lo, hi, i in ((x0, x1, 0), (y0, y1, 1)):
+            if a[i] == b[i] and (abs(a[i] - lo) <= margin or abs(a[i] - hi) <= margin):
+                return True
+    return False
 
 
 def border_point(bbox: tuple[float, float, float, float], direction: Vec, through: Vec, lateral: float) -> Vec:

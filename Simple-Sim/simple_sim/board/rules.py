@@ -99,3 +99,27 @@ def sample_rules(preset: str | RulesPreset, rng: np.random.Generator, scale: flo
         stitch_pitch=None if p.stitch_pitch is None else _draw(rng, p.stitch_pitch) * scale,
         angle_mode=p.angle_mode,
     )
+
+
+def scaled(rules: DesignRules, k: float) -> DesignRules:
+    """*rules* with every length multiplied by *k*."""
+    return DesignRules(
+        track_width={c: w * k for c, w in rules.track_width.items()}, clearance=rules.clearance * k,
+        neck_down=rules.neck_down * k, fanout_stub=rules.fanout_stub * k, via_drill=rules.via_drill * k,
+        via_diameter=rules.via_diameter * k, zone_clearance=rules.zone_clearance * k, thermal_gap=rules.thermal_gap * k,
+        thermal_spoke=rules.thermal_spoke * k, stitch_pitch=None if rules.stitch_pitch is None else rules.stitch_pitch * k,
+        angle_mode=rules.angle_mode)
+
+
+# A pin row must hold a necked-down track plus a clearance per pitch (with this much slack).
+PITCH_FILL = 0.85
+
+
+def fit_to_pitch(rules: DesignRules, pitch: float) -> DesignRules:
+    """*rules* shrunk (all lengths alike) until a necked-down track plus a clearance fit into
+    *pitch* (mm, the finest pin pitch of the inspected part): a board carrying a fine-pitch part
+    is laid out with rules fine enough for it."""
+    need = rules.neck_down + rules.clearance
+    if not np.isfinite(pitch) or need <= PITCH_FILL * pitch:
+        return rules
+    return scaled(rules, PITCH_FILL * pitch / need)

@@ -26,7 +26,9 @@ from simple_sim.generation.common import (
 from simple_sim.generators.filter_settings import load_image_filters_env
 from simple_sim.generators.opencv_2d import render_roi
 from simple_sim.parallel import imap_ordered, render_workers
-from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
+from simple_sim.generators.version import RENDERER_VERSION
+from simple_sim.manifest import (check_renderer_version, read_dataset_manifest, write_dataset_manifest,
+                                 write_multi_profile_manifest)
 from simple_sim.profile_hash import hash_profile, load_profile
 from simple_sim.schema import LabelRow, MetaRow, append_jsonl_rows, read_jsonl, validate_jsonl_pair
 from simple_sim.splits import assert_no_overlap, read_split, write_splits
@@ -110,9 +112,11 @@ def _existing_profile(
 
 
 def load_extend_state(
-    output_dir: Path, *, profile_id: str, profile_hash: str, profile_rel_path: str, run_id: str
+    output_dir: Path, *, profile_id: str, profile_hash: str, profile_rel_path: str, run_id: str,
+    allow_renderer_mismatch: bool = False,
 ) -> ExtendState:
-    """Validate an existing dataset for ``--extend`` (files, manifest, profile id/hash) and load it."""
+    """Validate an existing dataset for ``--extend`` (files, manifest, profile id/hash, renderer
+    version) and load it."""
     meta_path = output_dir / "meta.jsonl"
     labels_path = output_dir / "labels.jsonl"
     manifest_path = output_dir / "dataset_manifest.json"
@@ -150,6 +154,7 @@ def load_extend_state(
             f"Create a new profile version (e.g., @2) or regenerate dataset."
         )
     print("✓ Profile validation passed for extend mode")
+    check_renderer_version(manifest, RENDERER_VERSION, allow_mismatch=allow_renderer_mismatch)
 
     validate_jsonl_pair(meta_path, labels_path)
     state = ExtendState(
@@ -203,11 +208,12 @@ def generate_dataset(
     extend: bool = False,
     enable_cardinal_rotation_90: bool = True,
     project_root: Path | None = None,
+    allow_renderer_mismatch: bool = False,
 ) -> dict[str, Any]:
     """Generate a complete dataset from a YAML config into *output_dir*.
 
-    With ``extend=True`` and an existing dataset, new samples are appended (profile id/hash
-    must match). Profiles are looked up under ``<project_root>/configs/profiles``.
+    With ``extend=True`` and an existing dataset, new samples are appended (profile id/hash and
+    the renderer version must match; *allow_renderer_mismatch* turns the latter into a warning). Profiles are looked up under ``<project_root>/configs/profiles``.
     Returns a summary (see :func:`simple_sim.generation.common.summarize`).
     """
     output_dir = Path(output_dir)
@@ -260,6 +266,7 @@ def generate_dataset(
             profile_hash=profile_hash_str,
             profile_rel_path=relative_profile_path,
             run_id=run_id,
+            allow_renderer_mismatch=allow_renderer_mismatch,
         )
         run_id = ext.run_id
     start_index = ext.start_index if ext else 0
@@ -432,6 +439,7 @@ def generate_dataset(
             splits=final_splits,
             script_name="scripts/generate.py",
             existing=ext.manifest,
+            renderer_version=RENDERER_VERSION,
         )
     else:
         write_dataset_manifest(
@@ -444,6 +452,7 @@ def generate_dataset(
             label_rows=label_rows,
             splits=final_splits,
             extend=extend,
+            renderer_version=RENDERER_VERSION,
         )
 
     total_s = max(1e-9, time.perf_counter() - t_total0)

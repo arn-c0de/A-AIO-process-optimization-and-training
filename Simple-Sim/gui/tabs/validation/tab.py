@@ -3,12 +3,12 @@
 from __future__ import annotations
 from tkinter import ttk
 from pathlib import Path
-import threading
 
 from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_dataset_labels
+from gui.core.tasks import runner_for
 from .ui import ValidationUI
 from .logic import ValidationLogic
 
@@ -99,22 +99,9 @@ class ValidationTab(BaseTab):
             self.ui.set_running(False)
 
         self.ui.set_running(True)
-        ctx = getattr(self.state, "ctx", None)
-        if ctx is not None and getattr(ctx, "tasks", None) is not None:
-            ctx.tasks.run(lambda _h: self.logic.run_validation(dataset_dir, checks), name="Validation",
-                          on_done=on_done, on_error=on_error, on_finally=on_finally)
-            return
-
-        def validate():
-            try:
-                results = self.logic.run_validation(dataset_dir, checks)
-                self.frame.after(0, on_done, results)
-            except Exception as e:
-                self.frame.after(0, on_error, e)
-            finally:
-                self.frame.after(0, on_finally)
-
-        threading.Thread(target=validate, daemon=True).start()
+        runner_for(self.state, self.frame).run(
+            lambda h: self.logic.run_validation(dataset_dir, checks, cancelled=h.cancelled),
+            name="Validation", on_done=on_done, on_error=on_error, on_finally=on_finally)
 
     def _refresh_flag_tree(self) -> None:
         flagged_samples = self.logic.get_all_flagged_samples()

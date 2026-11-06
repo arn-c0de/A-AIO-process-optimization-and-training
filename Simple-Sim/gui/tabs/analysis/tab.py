@@ -3,7 +3,6 @@
 from __future__ import annotations
 from tkinter import ttk
 from pathlib import Path
-import threading
 from collections import Counter
 from datetime import datetime
 
@@ -14,6 +13,7 @@ from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire
 from gui.utils.dataset_ops import delete_samples, move_samples
 from gui.utils.dataset_catalog import DatasetCatalog, catalog_labels
 from gui.widgets import ScrolledTree
+from gui.core.tasks import runner_for
 from gui.utils.feedback_manager import (
     FeedbackManager,
     VERDICT_THUMBS_DOWN,
@@ -325,7 +325,7 @@ class AnalysisTab(BaseTab):
         feedback_summary = self.feedback_manager.summary() if (use_feedback and self.feedback_manager) else None
         mode = "with feedback" if use_feedback else "baseline"
 
-        def analyze(_handle: object = None) -> dict:
+        def analyze(handle) -> dict:
             return self.logic.analyze_dataset(
                 dataset_dir,
                 sample_ids,
@@ -333,6 +333,8 @@ class AnalysisTab(BaseTab):
                 label_dict,
                 effective_label_dict=effective,
                 feedback_summary=feedback_summary,
+                progress=handle.progress,
+                cancelled=handle.cancelled,
             )
 
         def on_done(results: dict) -> None:
@@ -348,21 +350,8 @@ class AnalysisTab(BaseTab):
         def on_error(exc: BaseException) -> None:
             dialogs.show_error(self.frame, "Analysis Failed", exc)
 
-        ctx = getattr(self.state, "ctx", None)
-        tasks = getattr(ctx, "tasks", None) if ctx is not None else None
-        if tasks is not None:
-            tasks.run(analyze, name=f"Analyze dataset ({mode})", on_done=on_done, on_error=on_error)
-            return
-
-        def worker() -> None:
-            try:
-                results = analyze()
-            except Exception as e:
-                self.frame.after(0, lambda err=e: on_error(err))
-                return
-            self.frame.after(0, lambda: on_done(results))
-
-        threading.Thread(target=worker, daemon=True).start()
+        runner_for(self.state, self.frame).run(
+            analyze, name=f"Analyze dataset ({mode})", on_done=on_done, on_error=on_error)
 
     def _reload_feedback(self) -> None:
         if not self.state.dataset_dir:

@@ -80,15 +80,15 @@ def test_texture_dir_replaces_substrate(tmp_path):
 
 
 def test_texture_dir_is_validated(tmp_path):
-    from simple_sim.config import _validate_render_2d
+    from simple_sim.config import _validate_render
 
     render = {"backend": "opencv_2d", "substrate_color": [40, 90, 40], "copper_color": [60, 120, 180],
               "solder_mask_alpha": 0.3}
-    _validate_render_2d(render, 2)
+    _validate_render(render, 2, "defect")
     with pytest.raises(ValueError, match="existing directory"):
-        _validate_render_2d({**render, "texture_dir": str(tmp_path / "nope")}, 2)
+        _validate_render({**render, "texture_dir": str(tmp_path / "nope")}, 2, "defect")
     with pytest.raises(ValueError, match="no images"):
-        _validate_render_2d({**render, "texture_dir": str(tmp_path)}, 2)
+        _validate_render({**render, "texture_dir": str(tmp_path)}, 2, "defect")
 
 
 def test_tombstone_pose_shows_top_and_raised_end_face():
@@ -271,3 +271,103 @@ def test_sot23_body_is_vertical_and_leads_move_with_it():
     assert all(l["tip"] > l["edge"] for l in leads)
     img = _render("sot23", "OK", seed=3)
     assert img.shape == (128, 128, 3)
+
+
+NEW_FORM_PROFILES = ["chip_array_8_resistor@1", "chip_array_8_capacitor@1", "sot363_ic@1", "sot23_6_ic@1",
+                     "chip_0402_resistor@1", "chip_0402_capacitor@1", "chip_1210_capacitor@1", "chip_0603_ferrite@1",
+                     "chip_2520_power_inductor@1", "chip_0603_led@1", "tssop20_ic@1", "tssop14_ic@1"]
+
+
+@pytest.mark.parametrize("footprint,n", [("soic_16", 16), ("sot_6", 6), ("chip_array_8", 8), ("tssop_14", 14),
+                                         ("tssop_20", 20)])
+def test_dual_row_footprints(footprint, n):
+    """Two pad columns, pins numbered counter-clockwise (1..n/2 down the left, n/2+1..n up the right)."""
+    from simple_sim.board.footprints import footprint_pads
+
+    nom = {"pad_width": 13, "pad_height": 20, "pad_spacing": 46, "pad_spacing_y": 67,
+           "component_length": 45, "component_width": 90}
+    pads = footprint_pads(footprint, nom, (256, 256))
+    assert len(pads) == n
+    left = [p for p in pads if p.x < 128]
+    assert len(left) == n // 2 and [p.pin for p in left] == [str(i + 1) for i in range(n // 2)]
+    ys = sorted(p.y for p in left)
+    assert all(b - a >= 12 for a, b in zip(ys, ys[1:]))  # pads of a column never overlap (rounding: 1 px)
+
+
+def test_new_families():
+    from simple_sim.board.footprints import family_of
+
+    assert family_of("sot_6") == "sot6"
+    assert family_of("chip_array_8", "resistor_array") == "array_r"
+    assert family_of("chip_array_8", "capacitor_array") == "array_c"
+    assert family_of("tssop_20") == "soic"
+    assert family_of("chip_2pad", "ferrite_bead") == "inductor"
+    assert family_of("chip_2pad", "power_inductor") == "power_inductor"
+    assert family_of("chip_2pad", "led") == "led"
+    assert family_of("chip_2pad", "chip_capacitor") == "capacitor"
+    assert family_of("chip_2pad", "chip_resistor") == "resistor"
+
+
+def test_netlist_handles_every_family():
+    """Every family has net rules (routing: escape must not KeyError on new families)."""
+    from simple_sim.board.footprints import FAMILIES
+    from simple_sim.board.netlist import CONNECTED, PASSIVE_GND
+
+    for fam in FAMILIES:
+        assert fam in PASSIVE_GND or CONNECTED.get(fam, 1.0) > 0
+
+
+@pytest.mark.parametrize("profile_id", NEW_FORM_PROFILES)
+def test_new_form_profiles_render_every_class(profile_id):
+    import yaml
+    from pathlib import Path
+
+    prof = yaml.safe_load((Path(__file__).parent.parent / "configs" / "profiles" / f"{profile_id}.yaml").read_text())
+    tol = prof["tolerances"]
+    for i, cls in enumerate(prof["defect_set"]):
+        rng = np.random.default_rng(i)
+        nominal = sample_nominal_geometry({}, rng, prof["geometry_ranges"])
+        defect = sample_defect_params(cls, rng, tol)
+        cfg = {**CFG, "component_type": prof["component"]["type"],
+               "component_color": prof["render"]["component_color_bgr"],
+               "marking_probability": prof["render"].get("marking_probability", 1.0)}
+        img = render_roi(nominal, defect, {"rotation_deg": 0.0}, (128, 128), cfg, tol, rng,
+                         footprint=prof["component"]["footprint"])
+        assert img.shape == (128, 128, 3) and 10 < img.mean() < 220
+
+
+def test_resistor_array_has_dark_body_and_bright_terminals():
+    import yaml
+    from pathlib import Path
+
+    prof = yaml.safe_load((Path(__file__).parent.parent / "configs" / "profiles" / "chip_array_8_resistor@1.yaml").read_text())
+    rng = np.random.default_rng(0)
+    nominal = sample_nominal_geometry({}, rng, prof["geometry_ranges"])
+    defect = sample_defect_params("OK", rng, prof["tolerances"])
+    cfg = {**CFG, "component_type": "resistor_array", "component_color": [22, 22, 22], "mask_gloss": 0.0}
+    img = render_roi(nominal, defect, {"rotation_deg": 0.0}, (256, 256), cfg, prof["tolerances"], rng,
+                     footprint="chip_array_8")
+    centre = img[100:156, 118:138].reshape(-1, 3).max(axis=1)
+    assert (centre < 60).mean() > 0.3   # black body between the terminal rows
+    assert (img[100:156, 100:156].max(axis=2) > 170).mean() > 0.05  # metal terminals / joints
+
+
+def test_power_inductor_and_led_look():
+    """Moulded inductor: light grey block without bright end caps; LED: white housing around a yellowish lens."""
+    import yaml
+    from pathlib import Path
+
+    def render(pid):
+        prof = yaml.safe_load((Path(__file__).parent.parent / "configs" / "profiles" / f"{pid}.yaml").read_text())
+        rng = np.random.default_rng(1)
+        nominal = sample_nominal_geometry({}, rng, prof["geometry_ranges"])
+        defect = sample_defect_params("OK", rng, prof["tolerances"])
+        cfg = {**CFG, "component_type": prof["component"]["type"], "component_color": prof["render"]["component_color_bgr"],
+               "mask_gloss": 0.0, "rework_artifacts": 0.0}
+        return render_roi(nominal, defect, {"rotation_deg": 0.0}, (256, 256), cfg, prof["tolerances"], rng,
+                          footprint="chip_2pad")
+
+    ind = render("chip_2520_power_inductor@1")[118:138, 108:148].reshape(-1, 3).astype(int)
+    assert 110 < ind.mean() < 200 and (ind.max(axis=1) - ind.min(axis=1)).mean() < 25  # grey, unsaturated
+    led = render("chip_0603_led@1")[120:136, 116:140].reshape(-1, 3).astype(int)
+    assert (led[:, 2] - led[:, 0]).mean() > 20  # yellowish lens: red well above blue

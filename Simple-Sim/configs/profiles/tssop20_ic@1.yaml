@@ -1,0 +1,59 @@
+# Component Profile (Schema v1)
+#
+# Selected via `run.component_profile: tssop20_ic@1` in a run config, loaded from `configs/profiles/`.
+# Geometry in pixels; scale chosen so the footprint fills ~1/3 of a 256 px ROI, like the real
+# per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~15 px/mm.
+#
+# Black body, 3 laser-marked lines along the long side (e.g. 74LVC245A), fine leads
+# (DeepVision xpa, 6 parts; motorboards SOP50P640-38: 4).
+
+profile:
+  profile_id: tssop20_ic@1
+  schema_version: 1
+  supported_render_backends:
+  - opencv_2d
+  description: 'TSSOP-20: 6.5x4.4 mm body, 10 gull-wing leads per side, 0.65 mm pitch'
+  created_at: '2026-11-06T00:00:00Z'
+component:
+  type: tssop_ic
+  footprint: tssop_20
+  package: TSSOP-20 (SOP65P640-20)
+  nominal_dims_mm:
+    length: 4.4
+    width: 6.5
+    height: 1.1
+geometry_ranges:
+  pad_width:
+  - 5.5
+  - 6.5
+  pad_height:
+  - 21.0
+  - 24.0
+  pad_spacing:
+  - 85.0
+  - 89.0
+  pad_spacing_y:
+  - 87.0
+  - 89.0
+  component_length:
+  - 64.0
+  - 67.0
+  component_width:
+  - 96.0
+  - 99.0
+tolerances:
+  ok_shift_px: 3.0
+  ok_rotation_deg: 3.0
+  tombstone_tilt_deg: 60.0
+defect_set:
+- OK
+- MISSING
+- MISALIGNED
+- SOLDER_BRIDGE
+- SOLDER_BALL
+- EXCESS_SOLDER
+render:
+  component_color_bgr:
+  - 24
+  - 24
+  - 24

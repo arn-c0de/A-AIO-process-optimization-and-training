@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -65,6 +66,13 @@ def main(argv: list[str] | None = None) -> int:
         ds = _make_demo_dataset(sim_root)
         print(f"demo dataset: {ds}")
 
+    try:
+        return _shoot(args, tk, ImageGrab, MonitorAppTabbed, sim_root, out_dir)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _shoot(args, tk, ImageGrab, MonitorAppTabbed, sim_root: Path, out_dir: Path) -> int:
     root = tk.Tk(className="SimpleSim")
     root.geometry(args.size + "+0+0")
     app = MonitorAppTabbed(root, sim_root=sim_root)

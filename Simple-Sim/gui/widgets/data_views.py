@@ -64,6 +64,7 @@ class ScrolledTree(ttk.Frame):
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
         self._sort_state: dict[str, bool] = {}
+        self._last_top: str | None = None  # last inserted top-level row (O(1) striping)
         self._apply_tags(palette(self))
         on_theme_changed(self, self._apply_tags)
 
@@ -79,17 +80,31 @@ class ScrolledTree(ttk.Frame):
     # Convenience passthroughs ----------------------------------------------------------
     def clear(self) -> None:
         self.tree.delete(*self.tree.get_children(""))
+        self._last_top = None
+        # Rows come back in default order: drop the stale sort marker.
+        if self._sort_state:
+            self._sort_state = {}
+            self._set_sort_marker(None, False)
+
+    def _next_is_odd(self) -> bool:
+        last = self._last_top
+        if last is not None and self.tree.exists(last) and not self.tree.parent(last):
+            # Next row alternates with the last one; O(1) instead of counting children.
+            return "odd" not in self.tree.item(last, "tags")
+        return len(self.tree.get_children("")) % 2 == 1
 
     def insert(self, values: Sequence[Any] = (), *, parent: str = "", text: str = "", iid: str | None = None,
                tags: Sequence[str] = (), open: bool = False) -> str:
         tags = list(tags)
-        if self._striped and not parent:
-            if len(self.tree.get_children("")) % 2 == 1:
-                tags.append("odd")
+        if self._striped and not parent and self._next_is_odd():
+            tags.append("odd")
         kw: dict[str, Any] = {"values": list(values), "text": text, "tags": tags, "open": open}
         if iid is not None:
             kw["iid"] = iid
-        return self.tree.insert(parent, "end", **kw)
+        new = self.tree.insert(parent, "end", **kw)
+        if not parent:
+            self._last_top = new
+        return new
 
     def selected(self) -> list[str]:
         return list(self.tree.selection())
@@ -110,12 +125,17 @@ class ScrolledTree(ttk.Frame):
             kids.sort(key=key, reverse=desc)
             for i, iid in enumerate(kids):
                 self.tree.move(iid, parent, i)
+        top = self.tree.get_children("")
         if self._striped:
-            for i, iid in enumerate(self.tree.get_children("")):
+            for i, iid in enumerate(top):
                 tags = [t for t in self.tree.item(iid, "tags") if t != "odd"]
                 if i % 2 == 1:
                     tags.append("odd")
                 self.tree.item(iid, tags=tags)
+        self._last_top = top[-1] if top else None
+        self._set_sort_marker(col, desc)
+
+    def _set_sort_marker(self, col: str | None, desc: bool) -> None:
         for c in self.tree["columns"]:
             text = str(self.tree.heading(c, "text")).rstrip(" ▲▼")
             if c == col:
@@ -146,10 +166,20 @@ class LogView(ttk.Frame):
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
         self.max_lines = int(max_lines)
-        self.autoscroll = True
+        # Own variable per view: a menu checkbutton without one shares a global
+        # Tcl variable named after its label across all LogViews.
+        self._var_autoscroll = tk.BooleanVar(self, value=True)
         self._apply_tags(pal)
         on_theme_changed(self, self._apply_tags)
         self.text.bind("<Button-3>", self._context_menu)
+
+    @property
+    def autoscroll(self) -> bool:
+        return bool(self._var_autoscroll.get())
+
+    @autoscroll.setter
+    def autoscroll(self, value: bool) -> None:
+        self._var_autoscroll.set(bool(value))
 
     def _apply_tags(self, pal: Palette) -> None:
         self.text.configure(background=pal.log_bg, foreground=pal.log_text, insertbackground=pal.text,
@@ -216,8 +246,7 @@ class LogView(ttk.Frame):
         m.add_command(label="Copy Selection", command=lambda: self.text.event_generate("<<Copy>>"))
         m.add_command(label="Copy All", command=self.copy_all)
         m.add_separator()
-        m.add_checkbutton(label="Auto-Scroll", onvalue=True, offvalue=False,
-                          command=lambda: setattr(self, "autoscroll", not self.autoscroll))
+        m.add_checkbutton(label="Auto-Scroll", variable=self._var_autoscroll, onvalue=True, offvalue=False)
         m.add_command(label="Clear", command=self.clear)
         try:
             m.tk_popup(event.x_root, event.y_root)

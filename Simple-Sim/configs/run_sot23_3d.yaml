@@ -1,7 +1,7 @@
 # Simple-Sim SOT-23 3D reference configuration (Blender batch)
 
 run:
-  run_id: "run_sot23_v1_3d"
+  run_id: "run_sot23_v2_3d"  # v2: sot23_transistor_3d@3 (was @2)
   seed: 2026
   schema_version: 2
   component_profile: "sot23_transistor_3d@3"

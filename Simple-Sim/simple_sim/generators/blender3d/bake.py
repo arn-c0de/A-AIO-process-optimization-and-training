@@ -30,16 +30,21 @@ def profile_job_fields(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def bake_fields(render_cfg: dict[str, Any], roi: dict[str, Any] | None = None, **overrides: Any) -> dict[str, Any]:
-    """Job fields of the board bake from a run config's ``render`` (and ``roi``) section.
+    """Job fields of the board bake from a run config's ``render`` section.
 
-    ``texture_dir``, ``camera``, ``rework_artifacts``, ``mask_gloss``, ``supersampling``, ``board``
-    and ``mm_per_px``; *overrides* replace any of them (e.g. a preview's camera or supersampling).
+    ``texture_dir``, ``camera``, ``rework_artifacts``, ``mask_gloss``, ``supersampling``,
+    ``board`` and ``solder``; *overrides* replace any of them (e.g. a preview's camera or supersampling).
+    ``mm_per_px`` is deliberately not a bake field: the job's top-level ``mm_per_px`` (always
+    ``roi.mm_per_px``, see ``blender_job``) is the one scale of part, scene and board, so a stale
+    ``render.mm_per_px`` (e.g. persisted in a dataset's ``config.yaml``) can never override it.
+    *roi* is accepted for call-site symmetry and ignored.
     """
+    del roi
     fields = {"texture_dir": render_cfg.get("texture_dir"), "camera": render_cfg.get("camera"),
               "rework_artifacts": render_cfg.get("rework_artifacts", REWORK_PROBABILITY),
               "mask_gloss": render_cfg.get("mask_gloss", MASK_GLOSS_PROBABILITY),
               "supersampling": render_cfg.get("supersampling"), "board": render_cfg.get("board"),
-              "mm_per_px": render_cfg.get("mm_per_px", (roi or {}).get("mm_per_px"))}
+              "solder": render_cfg.get("solder")}
     return {**fields, **overrides}
 
 
@@ -62,7 +67,8 @@ def prepare_job(job: dict[str, Any], work_dir: Path, index: int) -> dict[str, An
     config = {"component_type": job.get("component_type", ""), "texture_dir": job.get("texture_dir"),
               "rework_artifacts": job.get("rework_artifacts", REWORK_PROBABILITY),
               "mask_gloss": job.get("mask_gloss", MASK_GLOSS_PROBABILITY),
-              "supersampling": job.get("supersampling") or 2, "board": job.get("board")}
+              "supersampling": job.get("supersampling") or 2, "board": job.get("board"),
+              "solder": job.get("solder")}
     if job.get("mm_per_px"):
         config["mm_per_px"] = float(job["mm_per_px"])
     seed = int(job.get("seed", 0))

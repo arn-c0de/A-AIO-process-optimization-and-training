@@ -99,6 +99,14 @@ def test_monitor_builds_every_tab(xdisplay, tmp_path):
         app._toggle_theme()
         app._toggle_theme()
         root.update()
-        app._close_tabs()
+        # Full shutdown path (tabs, tasks, stats sampler, hover sink, root.destroy()).
+        app._on_close()
+        from gui.utils import tooltip as _tooltip
+
+        assert _tooltip._hint_sink is None
+        assert not app.ctx.tasks.active
     finally:
-        root.destroy()
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass  # already destroyed by _on_close

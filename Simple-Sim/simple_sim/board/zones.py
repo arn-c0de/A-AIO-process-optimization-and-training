@@ -9,10 +9,12 @@ grid for stitching vias and DRC, the pixel grid for rendering.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
+from simple_sim.board.geometry import disc
 from simple_sim.board.model import GND, TOP, Board, ThermalRelief, Vec, Via, Zone, point_in_polygon
-from simple_sim.board.occupancy import Grid, Occupancy
+from simple_sim.board.occupancy import CopperMap, Grid
 from simple_sim.board.routing.base import add, perp, unit
 
 POUR_PROBABILITY = 0.6  # default share of boards with a copper pour (``render.board.pour_probability``)
@@ -43,8 +45,30 @@ def sample_zones(board: Board, rng: np.random.Generator, probability: float = PO
     return zones
 
 
+def own_copper(board: Board, net: str, grid: Grid, layer: str = TOP) -> np.ndarray:
+    """Pads, tracks and vias of *net* on *grid* (what a pour of that net connects to)."""
+    mask = grid.scratch()
+    for part in board.parts:
+        for pad in part.pads:
+            if pad.net == net:
+                grid.rect(pad.bbox, mask=mask)
+    for t in board.tracks:
+        if t.net == net and t.layer == layer:
+            grid.polyline(t.points, t.width, mask=mask)
+    for via in board.vias:
+        if via.net == net:
+            grid.circle(via.center, via.diameter, mask=mask)
+    return mask
+
+
 def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
-    """Copper of *zone* on *grid* as a 0/255 mask."""
+    """Copper of *zone* on *grid* as a 0/255 mask.
+
+    Foreign copper is cut out with ``zone.clearance``, the inspected part's keep-out is kept free,
+    pads of the pour's net get a thermal-relief gap (and spokes; the inspected part's pads get their
+    spoke from the router as a track), and islands that touch neither copper of the pour's net nor
+    the window border (where the pour continues) are removed.
+    """
     fill = grid.polygon(zone.outline)
     foreign = grid.scratch()
     target = board.target
@@ -54,9 +78,9 @@ def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
         for pad in part.pads:
             if pad.net != zone.net:
                 grid.rect(pad.bbox, mask=foreign)
-    for track in board.tracks:
-        if track.net != zone.net and track.layer == zone.layer:
-            grid.polyline(track.points, track.width, mask=foreign)
+    for t in board.tracks:
+        if t.net != zone.net and t.layer == zone.layer:
+            grid.polyline(t.points, t.width, mask=foreign)
     for via in board.vias:
         if via.net != zone.net:
             grid.circle(via.center, via.diameter, mask=foreign)
@@ -71,6 +95,8 @@ def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
                 if pad.net != zone.net or not point_in_polygon(pad.center, zone.outline):
                     continue
                 fill[grid.inflate(grid.rect(pad.bbox), relief.gap) > 0] = 0
+                if part.is_target:
+                    continue
                 d = unit(pad.escape_dir) if pad.escape_dir != (0.0, 0.0) else (1.0, 0.0)
                 reach = max(pad.size) / 2.0 + relief.gap + 2.0 * relief.spoke_width
                 for direction in (d, perp(d), (-d[0], -d[1]), (-perp(d)[0], -perp(d)[1]))[: relief.spokes]:
@@ -78,15 +104,31 @@ def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
         spokes[keep_clear > 0] = 0
         spokes[grid.polygon(zone.outline) == 0] = 0
         fill = np.maximum(fill, spokes)
-    return fill
+    return _drop_islands(fill, grid.inflate(own_copper(board, zone.net, grid, zone.layer), grid.res))
 
 
-def stitch_vias(board: Board, zone: Zone, occ: Occupancy, rng: np.random.Generator, max_count: int = 24) -> list[Via]:
-    """Stitching vias on a jittered grid of ``rules.stitch_pitch`` inside the pour (claimed in *occ*)."""
+def _drop_islands(fill: np.ndarray, anchors: np.ndarray) -> np.ndarray:
+    """*fill* without the connected pieces that touch neither *anchors* nor the grid border."""
+    n, labels = cv2.connectedComponents((fill > 0).astype(np.uint8), connectivity=8)
+    if n <= 2 and not np.any(fill == 0):
+        return fill
+    keep = np.zeros(n, dtype=bool)
+    keep[np.unique(labels[anchors > 0])] = True
+    border = np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]])
+    keep[np.unique(border)] = True
+    keep[0] = False
+    out = fill.copy()
+    out[~keep[labels]] = 0
+    return out
+
+
+def stitch_vias(board: Board, zone: Zone, occ: CopperMap, rng: np.random.Generator, max_count: int = 24) -> list[Via]:
+    """Stitching vias on a jittered grid of ``rules.stitch_pitch`` inside the pour (added to *occ*)."""
     rules = board.rules
     if rules.stitch_pitch is None:
         return []
-    fill = occ.erode(zone_fill(board, zone, occ), rules.via_diameter / 2.0 + rules.clearance)
+    grid = Grid.for_window(board.bbox, rules.clearance / 4.0)
+    fill = grid.erode(zone_fill(board, zone, grid), rules.via_diameter / 2.0 + rules.clearance)
     x0, y0, x1, y1 = board.bbox
     pitch = rules.stitch_pitch
     phase = (float(rng.uniform(0, pitch)), float(rng.uniform(0, pitch)))
@@ -94,13 +136,13 @@ def stitch_vias(board: Board, zone: Zone, occ: Occupancy, rng: np.random.Generat
     for gy in np.arange(y0 + phase[1], y1, pitch):
         for gx in np.arange(x0 + phase[0], x1, pitch):
             c = (float(gx + rng.uniform(-0.15, 0.15) * pitch), float(gy + rng.uniform(-0.15, 0.15) * pitch))
-            cx, cy = occ.to_cell(c)
+            cx, cy = grid.to_cell(c)
             if not (0 <= cy < fill.shape[0] and 0 <= cx < fill.shape[1]) or fill[cy, cx] == 0:
                 continue
-            mask = occ.circle(c, rules.via_diameter)
-            if occ.conflicts(mask, zone.net, rules.clearance):
+            shape = disc(c, rules.via_diameter)
+            if occ.conflicts(shape, zone.net, rules.clearance):
                 continue
-            occ.stamp(mask, zone.net)
+            occ.add(shape, zone.net)
             vias.append(Via(net=zone.net, center=c, drill=rules.via_drill, diameter=rules.via_diameter,
                             tented=bool(rng.random() < 0.9)))
             if len(vias) >= max_count:

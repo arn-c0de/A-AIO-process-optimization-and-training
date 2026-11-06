@@ -25,7 +25,6 @@ from simple_sim.generators.opencv2d.photoreal import CAMERA_PRESETS, DEFAULT_SUP
 from simple_sim.parallel import imap_ordered, render_workers
 from simple_sim.preview.render import (
     BACKEND_2D,
-    BACKEND_3D,
     ProfileEntry,
     _preview_seed,
     apply_filter_overrides_to_augment,
@@ -230,6 +229,7 @@ class ProfilePreviewLogic:
 
     def _render_3d(self, req, profile, cfg, states, out_dir, on_image, on_log, should_stop) -> list[PreviewImage]:
         from simple_sim.generation.blender import blender_job, blender_settings, run_prepared_blender_jobs
+        from simple_sim.generators.blender3d.runner import BlenderCancelled
         from simple_sim.generators.blender3d.bake import bake_fields, prepare_job, profile_job_fields
 
         roi = cfg["roi"]
@@ -281,8 +281,15 @@ class ProfilePreviewLogic:
                 if should_stop():
                     raise PreviewCancelled()
                 on_log(f"[{n}/{len(jobs)}] {st} #{v}: Blender render ...")
-                run_prepared_blender_jobs([prepared], sim_root=self.sim_root, output_root=out_dir,
-                                          jobs_path=work_dir / f"job_{n:06d}.jsonl", settings=settings)
+                path.unlink(missing_ok=True)  # never mistake a previous render for this one
+                try:
+                    run_prepared_blender_jobs([prepared], sim_root=self.sim_root, output_root=out_dir,
+                                              jobs_path=work_dir / f"job_{n:06d}.jsonl", settings=settings,
+                                              should_stop=should_stop)
+                except BlenderCancelled:
+                    raise PreviewCancelled() from None
+                if not path.exists():
+                    raise RuntimeError(f"Blender finished without writing {path.name} (see Blender log above)")
                 rec = PreviewImage(st, v, path, time.perf_counter() - t0, _defect_info(defect), defect, nominal)
                 on_log(f"[{n}/{len(jobs)}] {st} #{v}: done in {rec.seconds:.1f}s")
                 write_sidecar(rec)
@@ -290,6 +297,8 @@ class ProfilePreviewLogic:
                 on_image(rec)
                 t0 = time.perf_counter()
         finally:
+            if should_stop():
+                on_log("Stopping: waiting for the board bake(s) still running (can take a few seconds) ...")
             baked.close()  # cancel queued bakes, wait for running ones before removing their files
             shutil.rmtree(work_dir, ignore_errors=True)
         if len(out) < len(jobs):

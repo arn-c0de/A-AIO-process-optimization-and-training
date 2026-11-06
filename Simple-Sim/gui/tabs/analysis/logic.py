@@ -1,6 +1,8 @@
 """Logic for the Analysis Tab."""
 
 from __future__ import annotations
+
+from collections.abc import Callable
 from pathlib import Path
 import numpy as np
 
@@ -98,7 +100,14 @@ class AnalysisLogic:
         label_dict: dict[str, str],
         effective_label_dict: dict[str, str] | None = None,
         feedback_summary: dict | None = None,
+        progress: Callable[[float | None, str | None], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> dict:
+        """Predict every sample and write ``analysis_results.json``.
+
+        ``cancelled()`` is polled per sample; when it returns True the run stops
+        with ``TaskCancelled`` *before* anything is written.
+        """
         if not self.model:
             raise ValueError("No model loaded.")
 
@@ -113,7 +122,14 @@ class AnalysisLogic:
         y_true_labels: list[str] = []
         y_pred_labels: list[str] = []
 
-        for sample_id in sample_ids:
+        total = len(sample_ids)
+        for i, sample_id in enumerate(sample_ids):
+            if cancelled is not None and cancelled():
+                from gui.core.tasks import TaskCancelled
+
+                raise TaskCancelled("analysis")
+            if progress is not None and (i % 10 == 0 or i == total - 1):
+                progress(i / max(1, total), f"{i}/{total} samples")
             meta_row = meta_dict[sample_id]
             original_ground_truth = label_dict[sample_id]
             ground_truth = (

@@ -22,6 +22,7 @@ from simple_sim.generation.common import (
 )
 from simple_sim.generators.filter_settings import load_image_filters_env
 from simple_sim.generators.opencv_2d import render_roi
+from simple_sim.generators.version import RENDERER_VERSION
 from simple_sim.manifest import write_multi_profile_manifest
 from simple_sim.profile_hash import hash_profile, load_profile
 
@@ -155,6 +156,7 @@ def generate_profile_dataset(
         meta_rows=meta_rows,
         label_rows=label_rows,
         splits=splits,
+        renderer_version=RENDERER_VERSION,
     )
 
     total_s = max(1e-9, time.perf_counter() - t_total0)

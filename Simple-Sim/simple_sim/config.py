@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from simple_sim.config_schema import parse_config_typed
+
+log = logging.getLogger(__name__)
 
 RENDER_STYLES = {"photoreal", "flat"}
 DEFAULT_COMPONENT_PROFILE = "chip_0603_resistor@2"
@@ -25,6 +28,8 @@ def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any],
     if "component_color" not in out and "component_color_bgr" in prof_render:
         out["component_color"] = list(prof_render["component_color_bgr"])
     out.setdefault("component_type", str((profile.get("component") or {}).get("type", "")))
+    if "marking_probability" in prof_render:
+        out.setdefault("marking_probability", float(prof_render["marking_probability"]))
     if roi and roi.get("mm_per_px"):
         out["mm_per_px"] = float(roi["mm_per_px"])
     return out
@@ -278,7 +283,30 @@ def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> 
         raise ValueError(f"Unsupported render backend: {backend}")
     _validate_camera(render.get('camera'))
     _validate_supersampling(render.get('supersampling'))
+    _validate_solder(render.get('solder'))
     _validate_board(render.get('board'))
+    _validate_board_look(render)
+
+
+def _is_probability(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and 0 <= value <= 1
+
+
+def _validate_board_look(render: dict[str, Any]) -> None:
+    """Photoreal board settings shared by both backends (3D bakes the same board, see ``bake_fields``)."""
+    for key in ('rework_artifacts', 'mask_gloss'):
+        value = render.get(key)
+        if value is not None and not _is_probability(value):
+            raise ValueError(f"render.{key} must be a probability in [0, 1]")
+
+    texture_dir = render.get('texture_dir')
+    if texture_dir is not None:
+        from simple_sim.generators.opencv2d.photoreal import texture_files
+
+        if not isinstance(texture_dir, str) or not Path(texture_dir).is_dir():
+            raise ValueError(f"render.texture_dir must be an existing directory: {texture_dir!r}")
+        if not texture_files(texture_dir):
+            raise ValueError(f"render.texture_dir contains no images: {texture_dir!r}")
 
 
 def _validate_board(board: Any) -> None:
@@ -296,6 +324,16 @@ def _validate_supersampling(factor: Any) -> None:
 
     if isinstance(factor, bool) or factor not in SUPERSAMPLING_CHOICES:
         raise ValueError(f"render.supersampling must be one of {list(SUPERSAMPLING_CHOICES)}")
+
+
+def _validate_solder(style: Any) -> None:
+    """``render.solder`` (both backends; 3D: the baked neighbour joints): solder joint model, default legacy."""
+    if style is None:
+        return
+    from simple_sim.generators.opencv2d.solder import SOLDER_STYLES
+
+    if style not in SOLDER_STYLES:
+        raise ValueError(f"render.solder must be one of {list(SOLDER_STYLES)}")
 
 
 def _validate_camera(camera: Any) -> None:
@@ -352,21 +390,11 @@ def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
     if render.get('style', 'photoreal') not in RENDER_STYLES:
         raise ValueError(f"render.style must be one of {sorted(RENDER_STYLES)}")
 
-    rework = render.get('rework_artifacts')
-    if rework is not None and not (isinstance(rework, (int, float)) and 0 <= rework <= 1):
-        raise ValueError("render.rework_artifacts must be a probability in [0, 1]")
-    gloss = render.get('mask_gloss')
-    if gloss is not None and not (isinstance(gloss, (int, float)) and 0 <= gloss <= 1):
-        raise ValueError("render.mask_gloss must be a probability in [0, 1]")
-
-    texture_dir = render.get('texture_dir')
-    if texture_dir is not None:
-        from simple_sim.generators.opencv2d.photoreal import texture_files
-
-        if not isinstance(texture_dir, str) or not Path(texture_dir).is_dir():
-            raise ValueError(f"render.texture_dir must be an existing directory: {texture_dir!r}")
-        if not texture_files(texture_dir):
-            raise ValueError(f"render.texture_dir contains no images: {texture_dir!r}")
+    if render.get('style', 'photoreal') == 'flat':
+        ignored = [k for k in ('board', 'supersampling', 'camera', 'mask_gloss', 'rework_artifacts', 'texture_dir', 'solder')
+                   if render.get(k) is not None]
+        if ignored:
+            log.warning("render.style=flat ignores render.%s (photoreal-only settings)", ", render.".join(ignored))
 
 
 def _validate_render_3d(render: dict[str, Any]) -> None:

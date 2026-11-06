@@ -73,6 +73,9 @@ class PrecisePopup:
 
         self._content_frame: ttk.Frame | None = None
         self._win = tk.Toplevel(parent)
+        from gui.theme.style import ensure_basic_styles
+
+        ensure_basic_styles(self._win)  # fonts used below exist only after apply_theme()
         self._win.title("Precise Mode Settings")
         self._win.resizable(True, True)
         self._win.protocol("WM_DELETE_WINDOW", self._win.destroy)

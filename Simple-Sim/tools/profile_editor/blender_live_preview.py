@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
+from simple_sim.generators.blender3d.bake import bake_fields
 from simple_sim.generators.blender_3d import profile_job_fields, render_blender_batch, write_jobs_jsonl
 
 
@@ -128,6 +129,7 @@ class BlenderLivePreviewWorker:
             "augment": {"rotation_deg": 0.0},
             "render_3d": profile_data.get("render_3d") or {},
             **profile_job_fields(profile_data),
+            **bake_fields(render, roi),  # same board bake (camera, board model, gloss) as the dataset
         }
 
         write_jobs_jsonl(jobs_path, [job])

@@ -113,6 +113,48 @@ def _ensure_fonts(root: tk.Misc) -> None:
         pass
 
 
+def ensure_basic_styles(widget: tk.Misc) -> None:
+    """Minimal fallback for windows opened outside the themed app (e.g. the
+    standalone preview viewer): create the named fonts and the label styles
+    used by shared components, *without* restyling anything else.
+
+    No-op once ``apply_theme`` ran on ``widget``'s root.
+    """
+    root = _toplevel_root(widget)
+    if getattr(root, _ATTR_PALETTE, None) is not None:
+        return
+    try:
+        base = tkfont.nametofont("TkDefaultFont", root=root).actual()
+        mono = tkfont.nametofont("TkFixedFont", root=root).actual()
+    except Exception:
+        base, mono = {"family": "Helvetica"}, {"family": "Courier"}
+    existing = set(tkfont.names(root=root))
+    for role, (size, weight, slant, fam) in FONT_ROLES.items():
+        name = font_name(role)
+        if name in existing:
+            continue
+        family = mono["family"] if fam == "mono" else base["family"]
+        try:
+            tkfont.Font(root=root, name=name, family=family, size=size, weight=weight, slant=slant)
+        except Exception:
+            pass
+    p = palette_for("light")
+    style = ttk.Style(root)
+    for name, opts in (
+        ("Heading.TLabel", {"font": font_name("Heading")}),
+        ("Muted.TLabel", {"foreground": p.text_muted}),
+        ("Small.TLabel", {"foreground": p.text_muted, "font": font_name("Small")}),
+        ("Success.TLabel", {"foreground": p.success}),
+        ("Warning.TLabel", {"foreground": p.warning}),
+        ("Danger.TLabel", {"foreground": p.danger}),
+    ):
+        try:
+            if not style.lookup(name, "foreground") and not style.lookup(name, "font"):
+                style.configure(name, **opts)
+        except Exception:
+            pass
+
+
 def _row_height(root: tk.Misc) -> int:
     try:
         return int(tkfont.nametofont(font_name("Body"), root=root).metrics("linespace") * 1.35)

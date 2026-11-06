@@ -23,7 +23,8 @@ class ValidationLogic:
     def get_datasets(self) -> list[Path]:
         return list_dataset_dirs(self.sim_root)
 
-    def run_validation(self, dataset_dir: Path, checks: dict[str, bool]) -> dict[str, Any]:
+    def run_validation(self, dataset_dir: Path, checks: dict[str, bool],
+                       cancelled: Any = None) -> dict[str, Any]:
         results = run_validation_suite(
             dataset_dir,
             run_schema=checks.get("schema", False),
@@ -32,6 +33,11 @@ class ValidationLogic:
             run_edge_cases=checks.get("edge_cases", False),
         )
 
+        if cancelled is not None and cancelled():
+            # Stop before persisting flags (the suite itself is not interruptible).
+            from gui.core.tasks import TaskCancelled
+
+            raise TaskCancelled("validation")
         if self.flag_manager:
             for outlier in results.get('outliers', []):
                 self.flag_manager.add_flag(outlier['sample_id'], outlier['flag'], outlier['reason'])

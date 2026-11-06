@@ -92,6 +92,7 @@ def write_dataset_manifest(
     splits: dict[str, list[str]],
     extend: bool = False,
     script_name: str = "scripts/generate.py",
+    renderer_version: str | None = None,
 ) -> None:
     """Write or update dataset manifest.
 
@@ -106,6 +107,9 @@ def write_dataset_manifest(
         splits: Dictionary mapping split names to sample IDs
         extend: If True, update existing manifest; if False, create new
         script_name: Generator script name for metadata (new manifests only)
+        renderer_version: ``simple_sim.generators.version.RENDERER_VERSION`` of the images written
+            (``generator.renderer_version``; also recorded per extend history entry). None for
+            tools that do not render (merges).
 
     Raises:
         ValueError: If extend=True but manifest doesn't exist
@@ -139,11 +143,15 @@ def write_dataset_manifest(
             )
 
         # Update extend history
-        manifest['extend_history'].append({
+        entry = {
             'timestamp': datetime.now().isoformat(),
             'samples_added': len(meta_rows),
             'git_commit': git_commit
-        })
+        }
+        if renderer_version is not None:
+            entry['renderer_version'] = renderer_version
+            manifest.setdefault('generator', {})['renderer_version'] = renderer_version
+        manifest['extend_history'].append(entry)
 
         # Update stats (add to existing counts)
         manifest['dataset_stats']['total_samples'] += len(meta_rows)
@@ -188,6 +196,9 @@ def write_dataset_manifest(
                 'git_commit': git_commit
             }]
         }
+        if renderer_version is not None:
+            manifest['generator']['renderer_version'] = renderer_version
+            manifest['extend_history'][0]['renderer_version'] = renderer_version
 
     atomic_write_json(manifest_path, manifest)
     print(f"✓ Dataset manifest written: {manifest_path}")
@@ -346,6 +357,7 @@ def write_multi_profile_manifest(
     splits: dict[str, list[str]],
     script_name: str = "scripts/generate_profile_dataset.py",
     existing: dict[str, Any] | None = None,
+    renderer_version: str | None = None,
 ) -> None:
     """Write a multi-profile dataset manifest (manifest_version 2).
 
@@ -360,6 +372,8 @@ def write_multi_profile_manifest(
         existing: Previous manifest when extending; its ``created_at`` and
             ``extend_history`` are preserved and a new history entry is appended
             (``samples_added`` = growth of ``total_samples``).
+        renderer_version: renderer of the images written now (see :func:`write_dataset_manifest`);
+            None keeps the existing manifest's value (merges do not render).
     """
     output_dir = Path(output_dir)
     manifest_path = output_dir / "dataset_manifest.json"
@@ -386,6 +400,17 @@ def write_multi_profile_manifest(
         history_entry['samples_added'] = max(0, len(meta_rows) - prev_total)
         extend_history = list(existing.get('extend_history') or []) + [history_entry]
 
+    generator: dict[str, Any] = {
+        'version': _VERSION,
+        'git_commit': git_commit,
+        'script': script_name,
+    }
+    if renderer_version is None and existing:
+        renderer_version = (existing.get('generator') or {}).get('renderer_version')
+    if renderer_version is not None:
+        generator['renderer_version'] = renderer_version
+        history_entry['renderer_version'] = renderer_version
+
     manifest = {
         'manifest_version': 2,
         'created_at': created_at,
@@ -393,11 +418,7 @@ def write_multi_profile_manifest(
 
         'component_profiles': profiles,
 
-        'generator': {
-            'version': _VERSION,
-            'git_commit': git_commit,
-            'script': script_name,
-        },
+        'generator': generator,
 
         'dataset_stats': {**dataset_stats(meta_rows, label_rows, splits), 'profile_counts': profile_counts},
 
@@ -406,3 +427,24 @@ def write_multi_profile_manifest(
 
     atomic_write_json(manifest_path, manifest)
     print(f"✓ Multi-profile dataset manifest written: {manifest_path}")
+
+
+def check_renderer_version(manifest: dict[str, Any], current: str, *, allow_mismatch: bool = False) -> None:
+    """Refuse to extend a dataset whose images come from another renderer version.
+
+    A manifest without ``generator.renderer_version`` (v1.0.3 and older, merged datasets) counts as
+    a mismatch. With *allow_mismatch* only a warning is printed (the dataset then mixes two looks).
+    """
+    existing = (manifest.get('generator') or {}).get('renderer_version')
+    if existing is not None and str(existing) == str(current):
+        return
+    shown = existing if existing is not None else "unknown (v1.0.3 or older, or a merged dataset)"
+    msg = (f"Renderer version mismatch for --extend:\n"
+           f"  Dataset renderer: {shown}\n"
+           f"  Current renderer: {current}\n"
+           f"New images would look different from the existing ones (same config and seeds do not\n"
+           f"reproduce them). Generate a new dataset, or pass --allow-renderer-mismatch to mix them.")
+    if not allow_mismatch:
+        raise ValueError(msg)
+    print("⚠ " + msg.replace("\n", "\n  "))
+

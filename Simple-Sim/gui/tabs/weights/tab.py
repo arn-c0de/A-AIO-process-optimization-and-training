@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import threading
 import tkinter as tk
 from tkinter import ttk, filedialog
 from pathlib import Path
@@ -17,6 +16,7 @@ from gui.state import UiState
 from gui.utils.checkpoint_meta import profile_label_suffix
 from gui.utils.dataset_catalog import sim_data_roots, unique_dataset_labels
 from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
+from gui.core.tasks import as_task_fn, runner_for
 from simple_sim.io_utils import path_size_bytes
 from simple_sim.models import load_checkpoint
 from simple_sim.reports import metric_value, report_timestamp
@@ -102,22 +102,9 @@ class WeightsTab(BaseTab):
         return f"{shown}\n... (+{len(items) - limit} more)" if len(items) > limit else shown
 
     def _run_background(self, fn: Any, *, name: str, on_done: Any, on_error: Any) -> None:
-        """Run ``fn()`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
-        ctx = getattr(self.state, "ctx", None)
-        tasks = getattr(ctx, "tasks", None) if ctx is not None else None
-        if tasks is not None:
-            tasks.run(lambda _h: fn(), name=name, on_done=on_done, on_error=on_error)
-            return
-
-        def worker() -> None:
-            try:
-                result = fn()
-            except Exception as exc:  # noqa: BLE001 - reported to the UI
-                self.frame.after(0, lambda e=exc: on_error(e))
-                return
-            self.frame.after(0, lambda r=result: on_done(r))
-
-        threading.Thread(target=worker, daemon=True).start()
+        """Run ``fn()`` / ``fn(task)`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
+        call = as_task_fn(fn)  # fn() or fn(task) for cancel/progress
+        runner_for(self.state, self.frame).run(call, name=name, on_done=on_done, on_error=on_error)
 
     def _load_persisted_settings(self) -> None:
         st = self._store()
@@ -691,21 +678,19 @@ class WeightsTab(BaseTab):
 
         # Read Tk state on the main thread; the worker must not touch widgets/variables.
         ds_dirs = self._selected_compare_datasets()
+        if not dialogs.require(ds_dirs, self.frame, "Select at least one dataset to compare the models on."):
+            return
         split = self.ui.var_split.get().strip()
         device = self.ui.var_device.get().strip()
         max_samples_s = self.ui.var_max_samples.get().strip()
         save_preds = self.ui.chk_save_preds.get()
 
-        def worker() -> None:
-            if not ds_dirs:
-                self.log_q.put("[error] no dataset selected\n")
-                return
-
+        def worker(task: Any) -> None:
             paired: list[tuple[Path, dict[str, Any], dict[str, Any]]] = []
             cls_a, cls_b = self.logic.get_model_classes(a), self.logic.get_model_classes(b)
 
             for ds in ds_dirs:
-                if self.logic.stop_evt.is_set(): break
+                if self.logic.stop_evt.is_set() or task.cancelled(): break
                 if (ds_classes := self.logic.get_dataset_classes(ds)):
                     if cls_a and sorted(ds_classes) != sorted(cls_a):
                         self.log_q.put(f"\n[skip] A({a.name}) incompatible with dataset {ds.name}: model classes={cls_a} dataset classes={ds_classes}\n")

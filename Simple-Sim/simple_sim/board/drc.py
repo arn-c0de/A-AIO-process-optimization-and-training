@@ -1,7 +1,9 @@
-"""Design-rule checks on the board model (on the occupancy raster, independent of the render).
+"""Design-rule checks on the board model (exact geometry, independent of the render).
 
-Used by the tests, optionally per sample (``render.board.drc: warn | strict``) and by ``validate``
-through ``render_meta.board_drc`` once datasets carry it.
+Clearances are measured with :func:`simple_sim.board.geometry.gap`, the same function the router
+uses, so a board the router built cleanly passes. Pours are checked on a raster of
+``clearance / 4``. Used by the tests, optionally per sample (``render.board.drc: warn | strict``)
+and by ``validate`` through ``render_meta.board_drc`` once datasets carry it.
 """
 
 from __future__ import annotations
@@ -10,18 +12,32 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
+import cv2
 import numpy as np
 
+from simple_sim.board.geometry import TOUCH, Shape, bbox_near, box, disc, gap, track
 from simple_sim.board.model import Board, Track, Vec
-from simple_sim.board.occupancy import Occupancy
-from simple_sim.board.routing.base import CELLS_PER_CLEARANCE
+from simple_sim.board.occupancy import Grid
 from simple_sim.board.zones import zone_fill
 
 CLEARANCE = "clearance"          # copper of two nets closer than the rule clearance
 DANGLING = "dangling"            # a track end on nothing of its net
-FORBIDDEN_PAD = "forbidden_pad"  # copper on a thermal / NC pad that is not its own via
+FORBIDDEN_PAD = "forbidden_pad"  # copper on an NC pad, or a track on a thermal pad
 KEEPOUT = "keepout"              # foreign track or via inside the inspected part's keep-out
+UNCONNECTED = "unconnected"      # a connected pin of the inspected part reached by no track, via or pour
 WIDTH = "width"                  # track width outside its net class
+
+# Pour raster resolution: cells per clearance.
+POUR_CELLS_PER_CLEARANCE = 4
+
+
+class BoardDrcError(RuntimeError):
+    """``render.board.drc: strict`` and no attempt produced a clean board."""
+
+    def __init__(self, report: DrcReport, seed: int) -> None:
+        super().__init__(f"board DRC failed after every attempt (seed {seed}): {report.to_dict()}")
+        self.report = report
+        self.seed = seed
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,104 +64,161 @@ class DrcReport:
         self.violations.append(Violation(kind, detail))
 
 
-def _dist_point_segment(p: Vec, a: Vec, b: Vec) -> float:
-    ab = (b[0] - a[0], b[1] - a[1])
-    ap = (p[0] - a[0], p[1] - a[1])
-    l2 = ab[0] ** 2 + ab[1] ** 2
-    t = 0.0 if l2 == 0 else float(np.clip((ap[0] * ab[0] + ap[1] * ab[1]) / l2, 0.0, 1.0))
-    q = (a[0] + t * ab[0], a[1] + t * ab[1])
-    return float(np.hypot(p[0] - q[0], p[1] - q[1]))
+@dataclass(frozen=True, slots=True)
+class _Copper:
+    shape: Shape
+    net: str | None
+    group: str | None              # part ref (pads, fan-out stubs, thermal vias of that part)
+    kind: str                      # pad | track | via
+    label: str
+    role: str = ""
 
 
-def _end_connected(board: Board, track: Track, p: Vec) -> bool:
-    tol = track.width / 2.0 + board.rules.clearance / 2.0
+def _copper(board: Board) -> list[_Copper]:
+    out = []
+    for part in board.parts:
+        for pad in part.pads:
+            out.append(_Copper(box(pad.bbox), pad.net, part.ref, "pad", f"pad {part.ref}.{pad.pin}", pad.role))
+    for t in board.tracks:
+        out.append(_Copper(track(t.points, t.width), t.net, t.part, "track", f"track {t.net}"))
+    for v in board.vias:
+        out.append(_Copper(disc(v.center, v.diameter), v.net, v.part, "via", f"via {v.net} @ {v.center}"))
+    return out
+
+
+def _check_clearance(board: Board, items: list[_Copper], report: DrcReport) -> None:
+    """Copper of different nets keeps the rule clearance; inside one part's group (pads, stubs and
+    thermal vias of the same part) it only must not touch. Pads among themselves are given by the
+    footprint and not checked."""
+    c = board.rules.clearance
+    boxes = [it.shape.bbox for it in items]
+    for i, a in enumerate(items):
+        for j in range(i + 1, len(items)):
+            b = items[j]
+            if a.kind == "pad" and b.kind == "pad":
+                continue
+            if a.net is not None and a.net == b.net:
+                continue
+            if not bbox_near(boxes[i], boxes[j], c):
+                continue
+            same_group = a.group is not None and a.group == b.group
+            need = 0.0 if same_group else c
+            g = gap(a.shape, b.shape)
+            if g < need or g <= TOUCH:
+                nc_pad = (a.kind == "pad" and a.role == "nc") or (b.kind == "pad" and b.role == "nc")
+                kind = FORBIDDEN_PAD if nc_pad and g <= TOUCH else CLEARANCE
+                report.add(kind, f"{a.label} / {b.label}: gap {g:.4f} < {need:.4f}")
+
+
+def _fills(board: Board, grid: Grid) -> dict[int, np.ndarray]:
+    return {i: zone_fill(board, z, grid) for i, z in enumerate(board.zones)}
+
+
+def _near_fill(fill: np.ndarray, grid: Grid, p: Vec, radius: float) -> bool:
+    cx, cy = grid.to_cell(p)
+    n = grid.cells(radius) + 1
+    y0, y1, x0, x1 = max(0, cy - n), min(fill.shape[0], cy + n + 1), max(0, cx - n), min(fill.shape[1], cx + n + 1)
+    return y1 > y0 and x1 > x0 and bool(np.any(fill[y0:y1, x0:x1] > 0))
+
+
+def _end_connected(board: Board, t: Track, p: Vec, fills: dict[int, np.ndarray], grid: Grid) -> bool:
+    tol = t.width / 2.0 + board.rules.clearance / 2.0
     x0, y0, x1, y1 = board.bbox
     if min(abs(p[0] - x0), abs(p[0] - x1), abs(p[1] - y0), abs(p[1] - y1)) <= tol:
         return True  # port on the window border
+    end = disc(p, 2.0 * tol)
     for part in board.parts:
         for pad in part.pads:
-            if pad.net == track.net:
-                bx0, by0, bx1, by1 = pad.bbox
-                if bx0 - tol <= p[0] <= bx1 + tol and by0 - tol <= p[1] <= by1 + tol:
-                    return True
+            if pad.net == t.net and gap(end, box(pad.bbox)) <= TOUCH:
+                return True
     for via in board.vias:
-        if via.net == track.net and np.hypot(p[0] - via.center[0], p[1] - via.center[1]) <= via.diameter / 2.0 + tol:
+        if via.net == t.net and gap(end, disc(via.center, via.diameter)) <= TOUCH:
             return True
     for other in board.tracks:
-        if other is track or other.net != track.net or other.layer != track.layer:
+        if other is not t and other.net == t.net and other.layer == t.layer and gap(end, track(other.points, other.width)) <= TOUCH:
+            return True
+    return any(z.net == t.net and z.layer == t.layer and _near_fill(fills[i], grid, p, tol) for i, z in enumerate(board.zones))
+
+
+def _check_pours(board: Board, fills: dict[int, np.ndarray], grid: Grid, report: DrcReport) -> None:
+    """Every pour cell keeps the clearance (to one cell) from copper of other nets."""
+    c = board.rules.clearance
+    for i, zone in enumerate(board.zones):
+        foreign = grid.scratch()
+        for part in board.parts:
+            for pad in part.pads:
+                if pad.net != zone.net:
+                    grid.rect(pad.bbox, mask=foreign)
+        for t in board.tracks:
+            if t.net != zone.net and t.layer == zone.layer:
+                grid.polyline(t.points, t.width, mask=foreign)
+        for via in board.vias:
+            if via.net != zone.net:
+                grid.circle(via.center, via.diameter, mask=foreign)
+        if not np.any(foreign):
             continue
-        for a, b in zip(other.points, other.points[1:]):
-            if _dist_point_segment(p, a, b) <= tol + other.width / 2.0:
-                return True
-    return False
+        dist = cv2.distanceTransform((foreign == 0).astype(np.uint8), cv2.DIST_L2, 5) * grid.res
+        bad = (fills[i] > 0) & (dist + grid.res < c)
+        if np.any(bad):
+            report.add(CLEARANCE, f"zone {zone.net}: {int(bad.sum())} cells closer than {c:.4f}")
 
 
 def check(board: Board) -> DrcReport:
     """Run every check on *board*."""
     report = DrcReport()
     rules = board.rules
-    occ = Occupancy.for_window(board.bbox, rules.clearance / CELLS_PER_CLEARANCE)
+    items = _copper(board)
+    _check_clearance(board, items, report)
+    grid = Grid.for_window(board.bbox, rules.clearance / POUR_CELLS_PER_CLEARANCE)
+    fills = _fills(board, grid)
+    _check_pours(board, fills, grid, report)
 
-    def claim(mask: np.ndarray, net: str, what: str, clearance: float, exempt: np.ndarray | None = None) -> None:
-        checked = mask if exempt is None else np.where(exempt > 0, 0, mask).astype(np.uint8)
-        if occ.conflicts(checked, net, clearance, ignore_blocked=True):
-            report.add(CLEARANCE, what)
-        occ.stamp(mask, net)
-
-    # Copper vs. copper with clearance: vias, tracks, then pours (already cut by their clearance).
-    # Pads are given (footprint geometry; the pitch may be below the clearance): claimed without a
-    # check, and a track's fan-out inside its own pad's surroundings is exempt for the same reason.
-    forbidden = occ.scratch()
-    own_pads: dict[str, np.ndarray] = {}
-    for part in board.parts:
-        for pad in part.pads:
-            if pad.role in ("thermal", "nc") and pad.net is None:
-                occ.rect(pad.bbox, mask=forbidden)
-            if pad.net:
-                occ.stamp(occ.rect(pad.bbox), pad.net)
-                occ.rect(pad.bbox, inflate=rules.clearance, mask=own_pads.setdefault(pad.net, occ.scratch()))
-    for via in board.vias:
-        claim(occ.circle(via.center, via.diameter), via.net, f"via {via.net} @ {via.center}", rules.clearance,
-              own_pads.get(via.net))
-    for track in board.tracks:
-        claim(occ.polyline(track.points, track.width), track.net, f"track {track.net}", rules.clearance,
-              own_pads.get(track.net))
-    for zone in board.zones:
-        claim(zone_fill(board, zone, occ), zone.net, f"zone {zone.net}", 0.0)
-
-    # Track ends, forbidden pads, keep-out, widths.
     target = board.target
     target_nets = {p.net for p in target.pads if p.net} if target else set()
-    keep = occ.rect(target.keepout) if target else occ.scratch()
-    for track in board.tracks:
-        for end in (track.points[0], track.points[-1]):
-            if not _end_connected(board, track, end):
-                report.add(DANGLING, f"track {track.net} end {end}")
-        mask = occ.polyline(track.points, track.width)
-        if np.any((mask > 0) & (forbidden > 0)):
-            report.add(FORBIDDEN_PAD, f"track {track.net}")
-        if track.net not in target_nets and np.any((mask > 0) & (keep > 0)):
-            report.add(KEEPOUT, f"track {track.net}")
-        lo = min(rules.neck_down, rules.width("signal")) * 0.5
-        hi = rules.width("power") * 1.2
-        if not lo <= track.width <= hi:
-            report.add(WIDTH, f"track {track.net} width {track.width:.3f}")
-    for via in board.vias:
-        if via.net not in target_nets and np.any((occ.circle(via.center, via.diameter) > 0) & (keep > 0)):
-            report.add(KEEPOUT, f"via {via.net}")
+    keep = box(target.keepout) if target else None
+    lo = min(rules.neck_down, rules.width("signal")) * 0.5
+    hi = rules.width("power") * 1.2
+    for t in board.tracks:
+        for end in (t.points[0], t.points[-1]):
+            if not _end_connected(board, t, end, fills, grid):
+                report.add(DANGLING, f"track {t.net} end {end}")
+        if keep is not None and t.net not in target_nets and gap(track(t.points, t.width), keep) <= TOUCH:
+            report.add(KEEPOUT, f"track {t.net}")
+        if not lo <= t.width <= hi:
+            report.add(WIDTH, f"track {t.net} width {t.width:.3f}")
+    for v in board.vias:
+        if keep is not None and v.net not in target_nets and gap(disc(v.center, v.diameter), keep) <= TOUCH:
+            report.add(KEEPOUT, f"via {v.net}")
+    # Thermal pads carry vias only: any track touching one is wrong (whatever its net).
     for part in board.parts:
         for pad in part.pads:
-            if pad.role == "thermal" and pad.net:
-                if any(_track_touches(track, pad.bbox) for track in board.tracks):
-                    report.add(FORBIDDEN_PAD, f"track on thermal pad {part.ref}.{pad.pin}")
+            if pad.role != "thermal":
+                continue
+            for t in board.tracks:
+                if gap(track(t.points, t.width), box(pad.bbox)) <= TOUCH:
+                    report.add(FORBIDDEN_PAD, f"track {t.net} on thermal pad {part.ref}.{pad.pin}")
+    if target is not None:
+        _check_target_connected(board, fills, grid, report)
     return report
 
 
-def _track_touches(track: Track, bbox: tuple[float, float, float, float]) -> bool:
-    x0, y0, x1, y1 = bbox
-    for a, b in zip(track.points, track.points[1:]):
-        for t in np.linspace(0.0, 1.0, 16):
-            px, py = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
-            if x0 <= px <= x1 and y0 <= py <= y1:
-                return True
-    return False
+def _check_target_connected(board: Board, fills: dict[int, np.ndarray], grid: Grid, report: DrcReport) -> None:
+    """Every connected pin of the inspected part inside the window is reached by a track or via of
+    its net, or by a pour of its net."""
+    target = board.target
+    assert target is not None
+    x0, y0, x1, y1 = board.bbox
+    for pad in target.pads:
+        if not pad.net or pad.role == "nc":
+            continue
+        if not (x0 <= pad.center[0] <= x1 and y0 <= pad.center[1] <= y1):
+            continue
+        shape = box(pad.bbox)
+        if any(t.net == pad.net and gap(track(t.points, t.width), shape) <= TOUCH for t in board.tracks):
+            continue
+        if any(v.net == pad.net and gap(disc(v.center, v.diameter), shape) <= TOUCH for v in board.vias):
+            continue
+        pad_mask = grid.inflate(grid.rect(pad.bbox), grid.res)
+        if any(z.net == pad.net and np.any((pad_mask > 0) & (fills[i] > 0)) for i, z in enumerate(board.zones)):
+            continue
+        report.add(UNCONNECTED, f"pad {target.ref}.{pad.pin} ({pad.net})")

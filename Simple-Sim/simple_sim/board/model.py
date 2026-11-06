@@ -81,6 +81,7 @@ class Track:
     layer: str
     points: list[Vec]              # polyline in mm
     width: float                   # mm
+    part: str | None = None        # ref of the part whose fan-out stub (or relief spoke) this is
 
 
 @dataclass(slots=True)
@@ -91,6 +92,7 @@ class Via:
     diameter: float
     layers: tuple[str, str] = (TOP, BOTTOM)
     tented: bool = True
+    part: str | None = None        # ref of the part for vias in its thermal pad
 
 
 @dataclass(frozen=True, slots=True)

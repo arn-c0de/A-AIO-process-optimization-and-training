@@ -14,7 +14,12 @@ import numpy as np
 from simple_sim.board.footprints import PadSpec, chip_pads, part_from_pads
 from simple_sim.board.model import Board, Part, Vec
 
-REFDES_PREFIX = {"resistor": "R", "capacitor": "C", "sot": "Q", "soic": "U", "qfn": "U"}
+REFDES_PREFIX = {"resistor": "R", "capacitor": "C", "sot": "Q", "soic": "U", "qfn": "U", "sot6": "U", "array_r": "RN",
+                 "array_c": "CN", "inductor": "L", "power_inductor": "L", "led": "D"}
+
+
+def refdes_prefix(family: str) -> str:
+    return REFDES_PREFIX.get(family, "U")
 
 
 def pad_ref(pads: list[dict[str, int]]) -> float:
@@ -79,19 +84,22 @@ def neighbour_layout(pads: list[dict[str, int]], keepout: tuple[int, int, int, i
 
 
 def place_window(board: Board, *, footprint: str, family: str, target_pads: list[PadSpec], target_body_px: Vec,
-                 shape: tuple[int, int], neighbours: list[dict[str, Any]], px_to_mm: float) -> list[Part]:
-    """Add the inspected part (image centre) and the neighbour chips to *board*; returns the parts."""
+                 shape: tuple[int, int], neighbours: list[dict[str, Any]], px_to_mm: float,
+                 target_rotation: float = 0.0) -> list[Part]:
+    """Add the inspected part (image centre, where the pads and the body are drawn: ``w // 2``) and
+    the neighbour chips to *board*; returns the parts. *target_rotation*: body angle (0 / 90)."""
     h, w = shape
-    target = part_from_pads(f"{REFDES_PREFIX[family]}1", footprint, family, target_pads, (w / 2.0, h / 2.0),
-                            target_body_px, 0.0, px_to_mm, is_target=True)
+    target = part_from_pads(f"{refdes_prefix(family)}1", footprint, family, target_pads, (float(w // 2), float(h // 2)),
+                            target_body_px, float(target_rotation), px_to_mm, is_target=True)
     parts = [target]
     counters = {k: 1 for k in REFDES_PREFIX}
     for n in neighbours:
-        vertical = round(float(n["angle"])) % 180 == 90
+        # angle = 0 / 90 plus up to 1.5 degrees of jitter (round() would miss 91 as vertical)
+        vertical = abs(float(n["angle"]) % 180.0 - 90.0) < 45.0
         pads = chip_pads(n["center"], float(n["length"]), float(n["width"]), vertical)
         fam = str(n["family"])
-        counters[fam] += 1
-        parts.append(part_from_pads(f"{REFDES_PREFIX[fam]}{counters[fam]}", "chip_2pad", fam, pads, n["center"],
+        counters[fam] = counters.get(fam, 1) + 1
+        parts.append(part_from_pads(f"{refdes_prefix(fam)}{counters[fam]}", "chip_2pad", fam, pads, n["center"],
                                     (float(n["length"]), float(n["width"])), 90.0 if vertical else 0.0, px_to_mm))
     board.parts.extend(parts)
     return parts

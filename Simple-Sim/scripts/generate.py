@@ -29,6 +29,11 @@ def main(argv: list[str] | None = None) -> None:
         action='store_true',
         help='Disable 0/90/180/270 base orientation randomization (keep only augment.rotation_deg_range jitter)',
     )
+    parser.add_argument(
+        '--allow-renderer-mismatch',
+        action='store_true',
+        help='With --extend: append even if the dataset was rendered by another renderer version (mixes two looks)',
+    )
     add_json_flag(parser)
     args = parser.parse_args(argv)
 
@@ -37,6 +42,7 @@ def main(argv: list[str] | None = None) -> None:
         Path(args.out),
         extend=bool(args.extend),
         enable_cardinal_rotation_90=not bool(args.disable_cardinal_rotation_90),
+        allow_renderer_mismatch=bool(args.allow_renderer_mismatch),
     ), args.json)
 
 

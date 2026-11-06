@@ -1,5 +1,5 @@
 run:
-  run_id: "run_sot23_v1"
+  run_id: "run_sot23_v2"  # v2: sot23_transistor@2 (was @1)
   seed: 2026
   schema_version: 2
   component_profile: "sot23_transistor@2"

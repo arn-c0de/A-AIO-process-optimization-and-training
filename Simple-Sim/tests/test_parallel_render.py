@@ -122,3 +122,32 @@ def test_parallel_board_bake_matches_sequential(tmp_path, monkeypatch):
         ta, tb = a["board"].pop("texture"), b["board"].pop("texture")
         assert a == b
         assert np.array_equal(cv2.imread(ta), cv2.imread(tb))
+
+
+def test_generate_profile_dataset_parallel_matches_sequential(tmp_path, monkeypatch):
+    """Mixed-profile datasets keep one sampling rng per record into the render: the images must not
+    depend on the worker count either (separate path from ``generate_dataset``)."""
+    import cv2
+    import yaml
+
+    from simple_sim.generation.profile_dataset import generate_profile_dataset
+
+    root = Path(__file__).parent.parent
+    cfg = yaml.safe_load((root / "configs" / "run_profile_cls_quick.yaml").read_text(encoding="utf-8"))
+    cfg["run"]["component_profiles"] = cfg["run"]["component_profiles"][:2]
+    cfg["classes"] = {name: 2 for name in list(cfg["classes"])[:3]}
+    cfg["roi"].update(width_px=96, height_px=96)
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    outs = {}
+    for workers in ("1", "4"):
+        monkeypatch.setenv("SIMPLE_SIM_RENDER_WORKERS", workers)
+        out = tmp_path / f"ds_{workers}"
+        generate_profile_dataset(cfg_path, out, project_root=root)
+        outs[workers] = out
+    imgs = sorted(p.relative_to(outs["1"]) for p in (outs["1"] / "images").rglob("*.png"))
+    assert len(imgs) >= 6
+    for rel in imgs:
+        assert np.array_equal(cv2.imread(str(outs["1"] / rel)), cv2.imread(str(outs["4"] / rel)))
+    assert (outs["1"] / "labels.jsonl").read_text() == (outs["4"] / "labels.jsonl").read_text()

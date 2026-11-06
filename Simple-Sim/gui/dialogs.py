@@ -67,15 +67,31 @@ class _Dialog(tk.Toplevel):
         self.wait_window()
         return self.result
 
-    def buttons(self, specs: Sequence[tuple[str, Any, str | None]]) -> ttk.Frame:
-        """Bottom-right button row: ``[(text, command, style), ...]`` (first = default/Enter)."""
+    def buttons(self, specs: Sequence[tuple[str, Any, str | None]], *,
+                default: int | None = 0) -> ttk.Frame:
+        """Bottom-right button row: ``[(text, command, style), ...]`` (first = rightmost).
+
+        Enter invokes the focused button; when no button has focus it invokes
+        ``specs[default]`` (``None`` = Enter does nothing). Destructive dialogs
+        pass the index of "Cancel" so Enter never deletes anything by accident.
+        """
         bar = ttk.Frame(self.body)
         bar.pack(side="bottom", fill="x", pady=(SPACE.L, 0))
+        btns: list[ttk.Button] = []
         for i, (text, cmd, style) in enumerate(specs):  # first = rightmost (primary)
             b = ttk.Button(bar, text=text, command=cmd, **({"style": style} if style else {}))
             b.pack(side="right", padx=(0, SPACE.S if i else 0))
+            btns.append(b)
+
+        def on_return(_e: Any = None) -> None:
+            focus = self.focus_get()
+            if focus in btns:
+                focus.invoke()
+            elif default is not None and 0 <= default < len(specs):
+                specs[default][1]()
+
         if specs:
-            self.bind("<Return>", lambda _e: specs[0][1]())
+            self.bind("<Return>", on_return)
         return bar
 
     def ok(self, result: Any = True) -> None:
@@ -115,7 +131,7 @@ def confirm(parent: tk.Misc | None, title: str, message: str, *, danger: bool = 
     dlg.buttons([
         (ok_text or ("Delete" if danger else "OK"), lambda: dlg.ok(True), "Danger.TButton" if danger else "Accent.TButton"),
         ("Cancel", dlg.cancel, None),
-    ])
+    ], default=1 if danger else 0)  # danger: Enter = Cancel
     return bool(dlg.show())
 
 
@@ -147,6 +163,14 @@ def show_error(parent: tk.Misc | None, title: str, error: BaseException | str, *
             box.pack(fill="both", expand=True, pady=(SPACE.M, 0))
         else:
             box.pack_forget()
+        # show() fixed the geometry to the collapsed size; drop the explicit
+        # size so the window grows/shrinks with the details box (position kept).
+        try:
+            dlg.update_idletasks()
+            w = max(dlg.winfo_width(), dlg.winfo_reqwidth())
+            dlg.geometry(f"{w}x{dlg.winfo_reqheight()}")
+        except Exception:
+            pass
 
     ttk.Checkbutton(dlg.body, text="Show Details", variable=shown, command=toggle, style="Toolbutton").pack(
         anchor="w", pady=(SPACE.M, 0))
@@ -234,6 +258,13 @@ def pick_from_list(
 
     def sync_from_listbox() -> None:
         sel = {visible[i] for i in lb.curselection()}
+        if not multi:
+            # Single mode: the clicked entry replaces the choice, including a
+            # preselected entry that the filter currently hides.
+            if sel:
+                chosen.clear()
+                chosen.update(items[i] for i in sel)
+            return
         for idx in visible:
             if idx in sel:
                 chosen.add(items[idx])
@@ -264,7 +295,10 @@ def pick_from_list(
             dlg.ok([it for it in items if it in chosen])
         else:
             sel = lb.curselection()
-            dlg.ok([items[visible[sel[0]]]] if sel else None)
+            if sel:
+                dlg.ok([items[visible[sel[0]]]])
+            else:  # nothing visible selected: keep the (possibly hidden) choice
+                dlg.ok([next(it for it in items if it in chosen)] if chosen else None)
 
     lb.bind("<Double-Button-1>", lambda _e: accept())
     bar = dlg.buttons([(ok_text, accept, "Accent.TButton"), ("Cancel", dlg.cancel, None)])

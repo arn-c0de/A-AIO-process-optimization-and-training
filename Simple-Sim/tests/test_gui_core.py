@@ -8,7 +8,7 @@ import time
 
 from gui.core.context import AppContext
 from gui.core.events import EventBus
-from gui.core.tasks import TaskCancelled, TaskRunner, UiDispatcher
+from gui.core.tasks import TaskCancelled, TaskRunner, UiDispatcher, runner_for
 from gui.help.texts import HELP, SECTION_HELP, help_text
 from gui.theme.tokens import DARK, FONT_ROLES, LIGHT, class_color, font_name, palette_for
 
@@ -136,6 +136,131 @@ def test_task_runner_error_and_cancel() -> None:
     _wait_drain(disp, lambda: 2 in finals)
     assert h2.state == "cancelled" and done == []
     assert issubclass(TaskCancelled, Exception)
+
+
+class _FakeWidget:
+    """Records ``after`` calls like a Tk widget (no display needed)."""
+
+    def __init__(self) -> None:
+        self.scheduled: list = []
+        self.cancelled: list = []
+        self._n = 0
+
+    def after(self, ms, fn=None, *args):
+        self._n += 1
+        aid = f"after#{self._n}"
+        self.scheduled.append((aid, fn))
+        return aid
+
+    def after_cancel(self, aid) -> None:
+        self.cancelled.append(aid)
+
+
+def test_dispatcher_reschedules_before_draining() -> None:
+    """A drained callback that blocks (modal dialog) must find the next tick already scheduled."""
+    disp = UiDispatcher()
+    w = _FakeWidget()
+    seen: list[int] = []
+    disp.post(lambda: seen.append(len(w.scheduled)))
+    disp.attach(w)
+    assert seen == [1]  # next tick was scheduled before the callback ran
+    assert w.scheduled[-1][1] == disp._tick
+
+
+def test_dispatcher_keeps_ticking_when_callback_raises() -> None:
+    disp = UiDispatcher()
+    w = _FakeWidget()
+
+    def boom() -> None:
+        raise RuntimeError("x")
+
+    disp.post(boom)
+    disp.attach(w)
+    assert len(w.scheduled) == 1
+
+
+def test_dispatcher_attach_is_idempotent() -> None:
+    disp = UiDispatcher()
+    w = _FakeWidget()
+    disp.attach(w)
+    disp.attach(w)
+    assert w.cancelled == ["after#1"]  # the first polling chain was cancelled
+    assert disp._after_id == "after#2"
+
+
+def test_cancel_after_normal_return_stays_done() -> None:
+    """cancel() landing between the worker's return and the UI drain must not drop the result."""
+    disp = UiDispatcher()
+    runner = TaskRunner(disp.post)
+    returned = threading.Event()
+    results: list = []
+
+    def work(task):
+        returned.set()
+        return "ok"
+
+    h = runner.run(work, name="r", on_done=results.append)
+    returned.wait(2)
+    h.join(2)
+    h.cancel()  # too late: fn already returned normally
+    _wait_drain(disp, lambda: not h.running)
+    assert h.state == "done" and results == ["ok"]
+
+
+def test_progress_is_coalesced() -> None:
+    ctx = AppContext(sim_root=None)  # type: ignore[arg-type]
+    seen: list = []
+    ctx.bus.subscribe("task.progress", lambda task: seen.append(task.snapshot()))
+    go = threading.Event()
+
+    def work(task):
+        for i in range(1000):
+            task.progress((i + 1) / 1000, f"{i + 1}")
+        go.wait(2)
+        return None
+
+    h = ctx.tasks.run(work, name="p")
+    # Worker posted 1000 updates without a drain in between: only one is queued.
+    end = time.time() + 2
+    while h.message != "1000" and time.time() < end:
+        time.sleep(0.005)
+    ctx.dispatcher.drain()
+    assert len(seen) == 1 and seen[0] == (1.0, "1000")
+    h.progress(None, "again")  # flag was cleared on delivery -> new notification
+    ctx.dispatcher.drain()
+    assert seen[-1] == (1.0, "again") and len(seen) == 2
+    go.set()
+    _wait_drain(ctx.dispatcher, lambda: not h.running)
+
+
+def test_shutdown_waits_for_workers() -> None:
+    disp = UiDispatcher()
+    runner = TaskRunner(disp.post)
+    wrote: list = []
+
+    def work(task):
+        while not task.cancelled():
+            time.sleep(0.01)
+        time.sleep(0.05)  # finishing a write after the cancel request
+        wrote.append(1)
+
+    runner.run(work, name="w")
+    left = runner.shutdown(timeout=2.0)
+    assert left == [] and wrote == [1]
+
+
+def test_runner_for_falls_back_to_dispatcher_on_widget() -> None:
+    class _State:
+        ctx = None
+
+    w = _FakeWidget()
+    r1 = runner_for(_State(), w)
+    assert runner_for(_State(), w) is r1  # one fallback runner per widget
+    assert w.scheduled  # its dispatcher polls on the widget's loop
+    got: list = []
+    r1.post(lambda: got.append(threading.get_ident()))
+    w.scheduled[-1][1]()  # run the next tick, as Tk would
+    assert got == [threading.get_ident()]
 
 
 def test_help_texts_are_well_formed() -> None:

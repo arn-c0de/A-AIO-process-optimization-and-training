@@ -26,7 +26,7 @@ deterministic per seed.
 | Neighbour parts | Chip resistors/capacitors around the inspected part (pads, fillets, bodies), sized from its pads, possibly cut by the ROI border, never in its keep-out. 70 %: a row/column array of identical parts on a placement grid aligned with the inspected part (like real decoupling caps / resistor rows); otherwise 0-6 mixed parts at 0/90° |
 | Silkscreen | In 55 % of samples: white footprint outline (bars for passives, box + pin-1 dot for ICs) and a reference designator (`R123`, `C42`, `Q7`, `U12`), placed around the *nominal* footprint so it never moves with a defect |
 | Pads | Mask-defined opening with dark rim, ENIG (gold) or HASL (silver) finish visible at the pad edge. Large (thermal) pads without a part show window-pane stencil islands |
-| Solder | Height map with slight lumpiness, shaded as a rough mirror: flat areas reflect the overhead light, slopes reflect a light grey-green environment, highlight towards the light; frosted (lead-free) with a generous diffuse share, so joints read as bright grey blobs as in real photos. Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
+| Solder | `render.solder: legacy` (default; see [Solder joint model](#solder-joint-model-rendersolder) for `meniscus`): height map with slight lumpiness, shaded as a rough mirror: flat areas reflect the overhead light, slopes reflect a light grey-green environment, highlight towards the light; frosted (lead-free) with a generous diffuse share, so joints read as bright grey blobs as in real photos. Concave fillet rising to the terminal when a body touches the pad; flat reflowed paste when it does not (MISSING / lifted end) |
 | Chip body | Resistor: dark body, metallic end caps, white value code (`103`, `4R7`, ...). Capacitor (`component.type` contains `cap`): tan ceramic, nickel caps, no marking. Printed codes have blotchy ink |
 | IC body | SOT-23 / SOIC-16 / QFN: speckled mold compound, side walls, gloss, pin-1 dimple, grainy laser marking (two Hershey fonts, lines slightly offset); gull-wing leads for SOT/SOIC (shoulder bending out of the mold + flat tin-plated foot, laid out from the nominal footprint so they move rigidly with the body; SOT-23 body long axis along the pin-1/2 column); QFN gets real pad rows (`qfn_<N>` -> N/4 per side) plus the exposed thermal pad |
 | Shadows | Contact shadow around every body, cast shadow of the standing part for tombstones, lit facet for corner lifts |
@@ -54,10 +54,10 @@ baked for Blender):
 ```yaml
 render:
   board:
-    routing: escape          # legacy (default, bit-identical to v1.0.3) | none (no copper) | escape
+    routing: escape          # legacy (default: random copper, no board model) | none (no copper) | escape
     design_rules: consumer_dense   # consumer_dense | industrial | hdi (track widths, clearances, via sizes)
     pour_probability: 0.6    # share of boards with a ground pour
-    drc: off                 # off | warn (log violations) | strict (re-draw the routing until clean)
+    drc: off                 # off | warn (log violations) | strict (re-draw the routing until clean, else raise)
 ```
 
 With `routing: escape` the pipeline is footprints -> placement -> netlist -> pours -> routing ->
@@ -77,15 +77,54 @@ stitching vias -> DRC -> raster:
 - **Pours** keep `zone_clearance` to foreign copper, have thermal reliefs on their own pads and
   stitching vias on a jittered grid.
 - **Design rules** are drawn per board from the preset's ranges (variation stays), in mm at the
-  profile scale (`roi.mm_per_px`, passed to the renderer by every caller).
+  profile scale. The profiles do not share one physical scale (`roi.mm_per_px` is 0.01 for most,
+  0.03 for QFN-32, physical for the newer ones), so the renderer scales the rules with the drawn
+  pad size: `photoreal.board_rule_scale` = smallest pad in mm / 0.31 mm (the 0603 pad the presets
+  are tuned against), x2 for QFN and x1.5 for SOIC / SOT-6 (fine-pitch ICs: their real tracks are
+  about as wide as their pads), clipped to [0.3, 6].
 - **DRC** (`simple_sim/board/drc.py`): clearance, dangling track ends, copper on thermal/NC pads,
   foreign copper in the inspected part's keep-out, track widths. Used by the tests
   (`tests/test_board.py`) and optionally per sample.
 
 The board's random streams are keyed (`default_rng([board_seed, stage])`), so a change in the
 router never moves the neighbours or the netlist. Switching from `legacy` to `escape` changes
-every image of a seed once (the shared stream of solder and camera shifts too); datasets made
-with `legacy` keep rendering bit-identically. Timing is the same as the legacy generator.
+every image of a seed once (the shared stream of solder and camera shifts too). `legacy` only
+means "no board model": it is not pixel-identical to v1.0.3, since the realism changes of this
+release changed the copper, vias, colours and camera too. Datasets record the renderer version
+(`generator.renderer_version` in `dataset_manifest.json`, `simple_sim/generators/version.py`) and
+`generate --extend` refuses to mix versions (`--allow-renderer-mismatch` overrides);
+`tests/test_render_golden.py` pins the 2D output so that any change is deliberate (bump the
+version, regenerate the hashes). Timing is the same as the legacy generator.
+
+## Solder joint model (`render.solder`)
+
+`render.solder: legacy` (default) keeps the joints described in the table above, bit-identical to the
+earlier output. `render.solder: meniscus` (both backends; 3D: the joints of the baked neighbour parts)
+replaces them with a model calibrated against the public SolDef_AI macro crops (Calabrese et al.,
+CC BY 4.0), where the legacy joints read as matte grey slabs with a ruler-straight outline:
+
+| Aspect | `meniscus` |
+|---|---|
+| Outline | Contact line with rounded corners and a slightly wavy edge; on some pads a rim of bare ENIG/HASL finish stays visible |
+| Profile | Concave meniscus `(1 - s)^p` (p 1.7-2.6) from the terminal (s = 0) to the contact line (s = 1), mean slope capped at ~25° over the visible toe, small rounded lip at the contact line. `EXCESS_SOLDER`: convex, ~1.5x higher. Reflowed paste (no part): low domes, one per stencil window |
+| Surface | Low-frequency lumps plus fine grain (lead-free solder is frosted and wrinkled), so highlights break up into streaks |
+| Shading | Environment mirror: the reflected view ray picks the bright overhead area, the light (full ring light or 1-3 lamps at 25-60° elevation, saturated white streaks) or, on steep slopes, the mask colour and the black part body (dark green/grey band next to the terminal). 15-32 % frosted diffuse share |
+| End caps | Flat, matte tin top instead of the tube-like bright ridge |
+
+Lighting and surface parameters (`solder.SolderLook`) are drawn once per image, so all joints of an
+image share them. All meniscus randomness comes from a **side stream** of the sample generator
+(`solder.side_stream`, which does not advance it): with the same seed, everything except the joints,
+end caps, solder balls and bulges is pixel-identical to the legacy render, which makes A/B
+comparisons (arena, `tools/sim_to_real.py`) direct. Code: `simple_sim/generators/opencv2d/solder.py`.
+
+```yaml
+render:
+  backend: opencv_2d
+  solder: meniscus
+```
+
+`generate --extend` does not compare `render.solder` yet: do not extend a legacy-solder dataset with
+`meniscus` (or the other way round) unless you want both looks mixed.
 
 ## Real board backgrounds (`render.texture_dir`)
 

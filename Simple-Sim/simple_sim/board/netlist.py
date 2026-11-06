@@ -17,8 +17,10 @@ from simple_sim.board.model import GND, VCC, Board, Pad, Part
 # Share of connected pins per family (the rest are NC).
 CONNECTED = {"resistor": 1.0, "capacitor": 1.0, "sot": 1.0, "soic": 0.9, "qfn": 0.85}
 # Probability that one of a passive's pads sits on ground / supply.
-PASSIVE_GND = {"resistor": 0.25, "capacitor": 0.6}
-PASSIVE_VCC = {"resistor": 0.1, "capacitor": 0.35}
+# Two-terminal parts: chance that a pad sits on GND / VCC (inductors and ferrites mostly in supply
+# lines, LEDs to GND through the cathode).
+PASSIVE_GND = {"resistor": 0.25, "capacitor": 0.6, "inductor": 0.1, "power_inductor": 0.1, "led": 0.5}
+PASSIVE_VCC = {"resistor": 0.1, "capacitor": 0.35, "inductor": 0.5, "power_inductor": 0.5, "led": 0.2}
 
 
 def _set(part: Part, index: int, **changes) -> None:
@@ -48,7 +50,7 @@ def _assign_ic(part: Part, rng: np.random.Generator, new_signal) -> None:
         if p.role == "thermal":
             _set(part, i, net=GND)
     order = rng.permutation(pins)
-    n_connected = max(2, int(round(CONNECTED[part.family] * len(pins))))
+    n_connected = max(2, int(round(CONNECTED.get(part.family, 1.0) * len(pins))))
     connected, nc = order[:n_connected], order[n_connected:]
     for i in nc:
         _set(part, int(i), role="nc", net=None)
@@ -71,7 +73,7 @@ def assign_nets(board: Board, rng: np.random.Generator) -> None:
     parts = sorted(board.parts, key=lambda p: not p.is_target)
     target_signals: list[str] = []
     for part in parts:
-        if part.family in ("resistor", "capacitor"):
+        if part.family in PASSIVE_GND:
             _assign_passive(part, rng, target_signals, new_signal)
         elif part.family == "sot":
             order = rng.permutation(3)

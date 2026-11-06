@@ -220,7 +220,7 @@ def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, 
 
     mats = render_3d.get("materials") or {}
     L, W = float(body["length"]) * mmpp, float(body["width"]) * mmpp
-    H = min(comp_h_mm, _HEIGHT_RATIO[family] * min(L, W))
+    H = min(comp_h_mm, _HEIGHT_RATIO.get(family, 0.5) * min(L, W))  # new 2D-only families: generic height
     angle = -math.radians(float(body["rotation_deg"]))  # image y-down -> Blender y-up
     cx, cy = float(body["center"][0]) * mmpp, -float(body["center"][1]) * mmpp
     axis = Vector((math.cos(angle), math.sin(angle), 0.0))
