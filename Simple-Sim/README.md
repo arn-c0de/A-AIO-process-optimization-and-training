@@ -168,9 +168,9 @@ Included profiles:
 - `qfn32_ic@1`: 4-pad QFN-32 IC (OK/MISSING/MISALIGNED/TOMBSTONE)
 
 3D profiles are intentionally **separate profile IDs** to keep datasets distinct in the GUI:
-- `chip_0603_resistor_3d@1`
-- `sot23_transistor_3d@1`
-- `qfn32_ic_3d@1`
+- `chip_0603_resistor_3d@2`
+- `sot23_transistor_3d@2`
+- `qfn32_ic_3d@2`
 
 Reference run configs you can start from:
 - `configs/run_0001.yaml` (0603 resistor, 256×256 ROI)

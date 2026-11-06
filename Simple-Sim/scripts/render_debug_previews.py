@@ -12,10 +12,10 @@ This script:
 Examples:
   .venv/bin/python scripts/render_debug_previews.py
   .venv/bin/python scripts/render_debug_previews.py --backend opencv_2d --all
-  .venv/bin/python scripts/render_debug_previews.py --backend both --profiles chip_0603_resistor@1,chip_0603_resistor_3d@1
+  .venv/bin/python scripts/render_debug_previews.py --backend both --profiles chip_0603_resistor@1,chip_0603_resistor_3d@2
   .venv/bin/python scripts/render_debug_previews.py --all
-  .venv/bin/python scripts/render_debug_previews.py --profiles chip_0603_resistor_3d@1,sot23_transistor_3d@1
-  .venv/bin/python scripts/render_debug_previews.py --config configs/run_qfn32_3d.yaml --profiles qfn32_ic_3d@1
+  .venv/bin/python scripts/render_debug_previews.py --profiles chip_0603_resistor_3d@2,sot23_transistor_3d@2
+  .venv/bin/python scripts/render_debug_previews.py --config configs/run_qfn32_3d.yaml --profiles qfn32_ic_3d@2
 """
 
 from __future__ import annotations

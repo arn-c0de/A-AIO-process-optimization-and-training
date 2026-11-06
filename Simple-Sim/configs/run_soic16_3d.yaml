@@ -4,7 +4,7 @@ run:
   run_id: "run_soic16_v1_3d"
   seed: 2026
   schema_version: 2
-  component_profile: "soic16_ic_3d@1"
+  component_profile: "soic16_ic_3d@2"
 
 roi:
   width_px: 1024

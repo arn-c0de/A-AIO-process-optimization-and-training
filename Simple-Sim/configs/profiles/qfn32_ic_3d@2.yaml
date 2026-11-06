@@ -1,33 +1,32 @@
 # Component Profile (Schema v1, 3D)
 
 profile:
-  profile_id: "soic16_ic_3d@1"
+  profile_id: "qfn32_ic_3d@2"
   schema_version: 1
   supported_render_backends: ["blender_3d"]
-  description: "SOIC-16 3D (8 pads left, 8 pads right), black package"
-  created_at: "2026-02-16T00:00:00Z"
+  description: "QFN-32 3D (Blender/Cycles): simple PBR scene for AOI-style ROI"
+  created_at: "2026-11-06T00:00:00Z"
 
 component:
-  type: "soic_ic"
-  footprint: "soic_16"
-  package: "SOIC-16"
+  type: "qfn_ic"
+  footprint: "qfn_32"
+  package: "QFN-32"
   nominal_dims_mm:
-    length: 9.9
-    width: 3.9
-    height: 1.5
+    length: 5.0
+    width: 4.0
+    height: 0.85
 
 geometry_ranges:
   # Same semantics as the 2D profile: the Blender backend uses the 2D pad layout (pixels at roi.mm_per_px).
-  # Real SOIC-16 at 0.01 mm/px: body 3.9 mm (x) by 9.9 mm (y), pads 1.55 x 0.6 mm, pitch 1.27 mm.
-  pad_width: [55.0, 65.0]           # pad extent along the row (y)
-  pad_height: [140.0, 160.0]        # pad extent across the row (x)
-  pad_spacing: [530.0, 550.0]       # x distance between the two pad columns
-  pad_spacing_y: [880.0, 898.0]     # y span from first to last pad centre (7 x pitch)
-  component_length: [385.0, 395.0]  # body along x
-  component_width: [980.0, 1000.0]  # body along y
+  pad_width: [15.0, 18.0]
+  pad_height: [37.0, 43.0]
+  pad_spacing: [173.0, 187.0]
+  pad_spacing_y: [173.0, 187.0]
+  component_length: [162.0, 172.0]
+  component_width: [162.0, 172.0]
 
 tolerances:
-  ok_shift_px: 5.0
+  ok_shift_px: 2.0
   ok_rotation_deg: 3.0
   tombstone_tilt_deg: 70.0
 
@@ -40,17 +39,17 @@ defect_set:
 render_3d:
   camera:
     # AOI top camera: straight down (orthographic, framed to the ROI by the renderer).
-    location_mm: [0.0, 0.0, 38.0]
+    location_mm: [0.0, 0.0, 40.0]
     look_at_mm: [0.0, 0.0, 0.0]
-    focal_length_mm: 55.0
+    focal_length_mm: 60.0
   lighting:
     # AOI ring light around the camera axis; defaults are calibrated to the baked board colours.
     ring_light: {}
   materials:
     # Board (mask, copper, silkscreen) comes from the shared 2D generator; only the 3D parts are set here.
     body:
-      base_color: [0.00, 0.00, 0.00]
-      roughness: 0.62
+      base_color: [0.02, 0.02, 0.02]
+      roughness: 0.60
       metallic: 0.0
     solder:
       base_color: [0.70, 0.70, 0.72]

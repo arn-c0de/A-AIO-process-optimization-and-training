@@ -5,11 +5,11 @@
 # a dataset was generated with.
 #
 profile:
-  profile_id: "chip_0603_resistor_3d@1"
+  profile_id: "chip_0603_resistor_3d@2"
   schema_version: 1
   supported_render_backends: ["blender_3d"]
   description: "0603 resistor 3D (Blender/Cycles): simple PBR scene for AOI-style ROI"
-  created_at: "2026-02-14T00:00:00Z"
+  created_at: "2026-11-06T00:00:00Z"
 
 component:
   type: "chip_resistor"

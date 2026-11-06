@@ -1,11 +1,11 @@
 # Component Profile (Schema v1, 3D)
 
 profile:
-  profile_id: "sot23_transistor_3d@1"
+  profile_id: "sot23_transistor_3d@2"
   schema_version: 1
   supported_render_backends: ["blender_3d"]
   description: "SOT-23 3D (Blender/Cycles): simple PBR scene for AOI-style ROI"
-  created_at: "2026-02-14T00:00:00Z"
+  created_at: "2026-11-06T00:00:00Z"
 
 component:
   type: "sot_transistor"
