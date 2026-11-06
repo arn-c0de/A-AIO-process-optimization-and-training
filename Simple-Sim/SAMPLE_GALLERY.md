@@ -1,6 +1,6 @@
 # Sample Gallery
 
-Auto-generated reference images for all component profiles (2D and 3D). Last updated: 2026-11-06 10:29:32
+Auto-generated reference images for all component profiles (2D and 3D). Last updated: 2026-11-06 11:12:20
 
 Re-generate by running:
 ```bash
@@ -35,9 +35,11 @@ Re-generate by running:
 
 | Class | Sample |
 |-------|--------|
+| EXCESS_SOLDER | ![EXCESS_SOLDER](images/samples/chip_0603_resistor@2/EXCESS_SOLDER.png) |
 | MISALIGNED | ![MISALIGNED](images/samples/chip_0603_resistor@2/MISALIGNED.png) |
 | MISSING | ![MISSING](images/samples/chip_0603_resistor@2/MISSING.png) |
 | OK | ![OK](images/samples/chip_0603_resistor@2/OK.png) |
+| SOLDER_BALL | ![SOLDER_BALL](images/samples/chip_0603_resistor@2/SOLDER_BALL.png) |
 | TOMBSTONE | ![TOMBSTONE](images/samples/chip_0603_resistor@2/TOMBSTONE.png) |
 
 ### qfn32_ic@1
@@ -64,35 +66,43 @@ Re-generate by running:
 
 | Class | Sample |
 |-------|--------|
+| EXCESS_SOLDER | ![EXCESS_SOLDER](images/samples/chip_0603_resistor_3d@2/EXCESS_SOLDER.png) |
 | MISALIGNED | ![MISALIGNED](images/samples/chip_0603_resistor_3d@2/MISALIGNED.png) |
 | MISSING | ![MISSING](images/samples/chip_0603_resistor_3d@2/MISSING.png) |
 | OK | ![OK](images/samples/chip_0603_resistor_3d@2/OK.png) |
+| SOLDER_BALL | ![SOLDER_BALL](images/samples/chip_0603_resistor_3d@2/SOLDER_BALL.png) |
 | TOMBSTONE | ![TOMBSTONE](images/samples/chip_0603_resistor_3d@2/TOMBSTONE.png) |
 
 ### qfn32_ic_3d@2
 
 | Class | Sample |
 |-------|--------|
+| EXCESS_SOLDER | ![EXCESS_SOLDER](images/samples/qfn32_ic_3d@2/EXCESS_SOLDER.png) |
 | MISALIGNED | ![MISALIGNED](images/samples/qfn32_ic_3d@2/MISALIGNED.png) |
 | MISSING | ![MISSING](images/samples/qfn32_ic_3d@2/MISSING.png) |
 | OK | ![OK](images/samples/qfn32_ic_3d@2/OK.png) |
+| SOLDER_BALL | ![SOLDER_BALL](images/samples/qfn32_ic_3d@2/SOLDER_BALL.png) |
 | TOMBSTONE | ![TOMBSTONE](images/samples/qfn32_ic_3d@2/TOMBSTONE.png) |
 
 ### soic16_ic_3d@2
 
 | Class | Sample |
 |-------|--------|
+| EXCESS_SOLDER | ![EXCESS_SOLDER](images/samples/soic16_ic_3d@2/EXCESS_SOLDER.png) |
 | MISALIGNED | ![MISALIGNED](images/samples/soic16_ic_3d@2/MISALIGNED.png) |
 | MISSING | ![MISSING](images/samples/soic16_ic_3d@2/MISSING.png) |
 | OK | ![OK](images/samples/soic16_ic_3d@2/OK.png) |
+| SOLDER_BALL | ![SOLDER_BALL](images/samples/soic16_ic_3d@2/SOLDER_BALL.png) |
 | TOMBSTONE | ![TOMBSTONE](images/samples/soic16_ic_3d@2/TOMBSTONE.png) |
 
 ### sot23_transistor_3d@2
 
 | Class | Sample |
 |-------|--------|
+| EXCESS_SOLDER | ![EXCESS_SOLDER](images/samples/sot23_transistor_3d@2/EXCESS_SOLDER.png) |
 | MISALIGNED | ![MISALIGNED](images/samples/sot23_transistor_3d@2/MISALIGNED.png) |
 | MISSING | ![MISSING](images/samples/sot23_transistor_3d@2/MISSING.png) |
 | OK | ![OK](images/samples/sot23_transistor_3d@2/OK.png) |
+| SOLDER_BALL | ![SOLDER_BALL](images/samples/sot23_transistor_3d@2/SOLDER_BALL.png) |
 | TOMBSTONE | ![TOMBSTONE](images/samples/sot23_transistor_3d@2/TOMBSTONE.png) |
 
