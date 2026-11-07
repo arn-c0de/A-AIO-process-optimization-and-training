@@ -21,7 +21,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import UsageError, add_json_flag, run_cli
+from simple_sim.cli_utils import UsageError, add_data_arg, add_json_flag, add_model_arg, run_cli
+from simple_sim.devices import default_device_name, resolve_device
 from simple_sim.data_loader import load_image_bgr, preprocess_bgr
 from simple_sim.eval_utils import predict_probs
 from simple_sim.models import load_checkpoint_model
@@ -80,7 +81,7 @@ def sample_check(
     """
     model_path = Path(model_path)
     data_dir = Path(data_dir)
-    device = torch.device(device)
+    device = resolve_device(device)
 
     model, class_names, _ = load_checkpoint_model(model_path, device)
     chosen, id_to_meta = choose_samples(data_dir, class_names, split, int(per_class), seed)
@@ -131,13 +132,13 @@ def print_sample_check(result: dict[str, Any]) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Sample-check predictions vs GT")
-    ap.add_argument("--model", required=True, help="Path to checkpoint (.pt)")
-    ap.add_argument("--data", required=True, help="Dataset dir")
+    add_model_arg(ap, "Path to checkpoint (.pt)")
+    add_data_arg(ap, "Dataset dir")
     ap.add_argument("--split", default="test", choices=["train", "val", "test"])
     ap.add_argument("--per-class", type=int, default=5, help="How many samples per class")
     ap.add_argument("--seed", type=int, default=42, help="Sampling RNG seed")
     ap.add_argument("--batch-size", type=int, default=32)
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--device", default=default_device_name())
     add_json_flag(ap)
     args = ap.parse_args()
 

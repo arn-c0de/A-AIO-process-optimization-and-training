@@ -5,17 +5,18 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from tqdm import tqdm
 
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE, load_config, merge_profile_render, validate_config
 from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files
-from simple_sim.generation.blender import blender_settings, render_blender_records
+from simple_sim.generation.blender import blender_settings
 from simple_sim.generators.blender3d.bake import profile_component_height_mm
 from simple_sim.generation.common import (
     SPLIT_NAMES,
@@ -24,33 +25,43 @@ from simple_sim.generation.common import (
     finalize_splits,
     project_root as default_project_root,
     rel_profile_path,
-    render_2d_records,
     sample_domain,
     sample_record,
     summarize,
 )
 from simple_sim.filter_settings import load_image_filters_env, normalize_image_filters
-from simple_sim.generators.backends import Backend, backend_of
-from simple_sim.generators.opencv2d.spec import RenderSpec
+from simple_sim.generators.backends import backend_of
 from simple_sim.generators.version import RENDERER_VERSION
 from simple_sim.generation.render_options import look_differences
 from simple_sim.manifest import (RendererMismatchError, check_renderer_version, read_dataset_manifest, write_dataset_manifest,
                                  write_multi_profile_manifest)
-from simple_sim.profile_hash import hash_profile, load_profile
-from simple_sim.schema import LabelRow, MetaRow, append_jsonl_rows, read_jsonl, validate_jsonl_pair
+from simple_sim.profile_hash import hash_profile_dict, load_profile
+from simple_sim.schema import LabelRow, MetaRow, append_jsonl_rows, validate_jsonl_pair
 from simple_sim.splits import assert_no_overlap, read_split, write_splits
 from simple_sim.telemetry import emit
 
+if TYPE_CHECKING:
+    from simple_sim.generators.opencv2d.spec import RenderSpec
 
 log = logging.getLogger(__name__)
 
 
+class LabelKey(NamedTuple):
+    """The label fields of an existing row that ``--extend`` keeps (split coverage, class / profile
+    counts of the manifest and the summary); duck-types :class:`~simple_sim.schema.LabelRow` there."""
+
+    id: str
+    class_name: str
+    profile_id: str
+
+
 @dataclass
 class ExtendState:
-    """What ``--extend`` needs from the existing dataset."""
+    """What ``--extend`` needs from the existing dataset: its size, ids, labels and splits, never its
+    meta rows (both JSONL files are streamed once, plan S4)."""
 
-    meta_rows: list[MetaRow] = field(default_factory=list)
-    label_rows: list[LabelRow] = field(default_factory=list)
+    existing_count: int = 0
+    labels: list[LabelKey] = field(default_factory=list)
     splits: dict[str, list[str]] = field(default_factory=lambda: {k: [] for k in SPLIT_NAMES})
     manifest: dict[str, Any] | None = None
     manifest_version: int = 1
@@ -59,18 +70,22 @@ class ExtendState:
     start_index: int = 0
 
 
-def read_existing_max_index(meta_rows: list[MetaRow]) -> int:
+def _sample_index(row: MetaRow) -> int | None:
+    """Sample index of *row* (from a ``.../000042`` id or ``images/000042.png``), or None."""
+    try:
+        return int(str(row.id).split("/")[-1])
+    except ValueError:
+        try:
+            return int(Path(row.image_path).stem)
+        except ValueError:
+            return None
+
+
+def read_existing_max_index(meta_rows: Iterable[MetaRow]) -> int:
     """Highest sample index in *meta_rows* (from ``.../000042`` ids or ``images/000042.png``), or -1."""
     mx = -1
     for r in meta_rows:
-        idx: int | None
-        try:
-            idx = int(str(r.id).split("/")[-1])
-        except ValueError:
-            try:
-                idx = int(Path(r.image_path).stem)
-            except ValueError:
-                idx = None
+        idx = _sample_index(r)
         if idx is not None and idx > mx:
             mx = idx
     return mx
@@ -183,25 +198,39 @@ def load_extend_state(
     if config is not None:
         check_look_options(output_dir, config, allow_mismatch=allow_renderer_mismatch)
 
-    validate_jsonl_pair(meta_path, labels_path)
     state = ExtendState(
-        meta_rows=read_jsonl(meta_path, MetaRow),
-        label_rows=read_jsonl(labels_path, LabelRow),
         manifest=manifest,
         manifest_version=int(manifest.get("manifest_version", 1)),
         profiles=target_profiles,
         run_id=run_id,
     )
+    # One streamed pass over both files: validation (ids only) plus what extend needs.
+    scan: dict[str, Any] = {"max_index": -1, "first_run_id": None}
+
+    def on_meta(row: MetaRow) -> None:
+        state.existing_count += 1
+        if scan["first_run_id"] is None:
+            scan["first_run_id"] = row.run_id
+        idx = _sample_index(row)
+        if idx is not None and idx > scan["max_index"]:
+            scan["max_index"] = idx
+
+    intern = sys.intern
+
+    def on_label(row: LabelRow) -> None:
+        state.labels.append(LabelKey(row.id, intern(row.class_name), intern(row.profile_id)))
+
+    validate_jsonl_pair(meta_path, labels_path, on_meta=on_meta, on_label=on_label)
     dataset_run_id = str(manifest.get("run_id") or "").strip()
-    if not dataset_run_id and state.meta_rows:
-        dataset_run_id = str(state.meta_rows[0].run_id or "").strip()
+    if not dataset_run_id and state.existing_count:
+        dataset_run_id = str(scan["first_run_id"] or "").strip()
     if dataset_run_id and dataset_run_id != run_id:
         log.info(f"Extend mode: using existing dataset run_id '{dataset_run_id}' (config had '{run_id}')")
         state.run_id = dataset_run_id
 
-    state.start_index = read_existing_max_index(state.meta_rows) + 1
+    state.start_index = int(scan["max_index"]) + 1
     log.info(f"\nExtending dataset: {output_dir}")
-    log.info(f"Existing samples: {len(state.meta_rows)} (next index: {state.start_index})")
+    log.info(f"Existing samples: {state.existing_count} (next index: {state.start_index})")
     for s in SPLIT_NAMES:
         p = output_dir / "splits" / f"{s}.txt"
         if p.exists():
@@ -242,31 +271,50 @@ class RunInputs:
     tolerances: dict[str, Any] | None
     component_height_mm: float
     profile_render_3d: dict[str, Any]
+    domain_cameras: bool = True          # ``domains.<name>.camera`` applies (see :meth:`render_spec`)
 
     @property
     def backend(self) -> str:
         return backend_of(self.config.get("render")).backend.value
+
+    def render_spec(self) -> RenderSpec:
+        """The 2D :class:`~simple_sim.generators.opencv2d.spec.RenderSpec` of the run (loads the renderer).
+
+        Without :attr:`domain_cameras` every domain renders with the merged ``render`` section.
+        """
+        from dataclasses import replace
+
+        from simple_sim.generators.opencv2d.spec import RenderSpec
+
+        spec = RenderSpec.from_run_config(self.config, self.profile, tolerances=self.tolerances)
+        return spec if self.domain_cameras else replace(spec, domain_render={})
 
     @property
     def roi_size(self) -> tuple[int, int]:
         return int(self.config["roi"]["width_px"]), int(self.config["roi"]["height_px"])
 
 
-def resolve_run(config: Mapping[str, Any], *, profiles_dir: Path, root: Path) -> RunInputs:
+def resolve_run(config: Mapping[str, Any], *, profiles_dir: Path, root: Path, profile_id: str | None = None,
+                domain_cameras: bool = True) -> RunInputs:
     """Validate *config* (a copy is taken) and resolve its component profile from *profiles_dir*.
 
     Schema v1 configs may override the profile's tolerances / geometry ranges; the ``render``
     section gets the profile's defaults (``component_color``, ``component_type``, ``mm_per_px``).
+    *profile_id* resolves that profile instead of ``run.component_profile`` (the profile-classifier
+    generator resolves each of ``run.component_profiles``); the v1 overrides then do not apply.
+    *domain_cameras* is :attr:`RunInputs.domain_cameras`.
     """
     config = copy.deepcopy(dict(config))
     validate_config(config)
-    profile_id = config["run"].get("component_profile", DEFAULT_COMPONENT_PROFILE)
+    own_profile = profile_id is None
+    if profile_id is None:
+        profile_id = config["run"].get("component_profile", DEFAULT_COMPONENT_PROFILE)
     profile = load_profile(profile_id, profiles_dir)
     profile_path = Path(profiles_dir) / f"{profile_id}.yaml"
     geometry_ranges = profile.get("geometry_ranges")
     tolerances = profile.get("tolerances")
     # Backward compatibility: v1 configs can override from config
-    if config["run"]["schema_version"] == 1:
+    if own_profile and config["run"]["schema_version"] == 1:
         if "tolerances" in config:
             tolerances = config["tolerances"].get(profile["component"]["package"], tolerances)
         if "geometry_ranges" in config:
@@ -274,11 +322,12 @@ def resolve_run(config: Mapping[str, Any], *, profiles_dir: Path, root: Path) ->
     # Fill component_color/component_type from the profile (also persisted in config.yaml).
     config["render"] = merge_profile_render(config["render"], profile, config.get("roi"))
     return RunInputs(
-        config=config, profile_id=profile_id, profile=profile, profile_hash=hash_profile(profile_path),
+        config=config, profile_id=profile_id, profile=profile, profile_hash=hash_profile_dict(profile),
         profile_rel_path=rel_profile_path(profile_path, root), footprint=profile["component"]["footprint"],
         geometry_ranges=geometry_ranges, tolerances=tolerances,
         component_height_mm=profile_component_height_mm(profile),
         profile_render_3d=profile.get("render_3d") or {},
+        domain_cameras=domain_cameras,
     )
 
 
@@ -286,14 +335,22 @@ def resolve_run(config: Mapping[str, Any], *, profiles_dir: Path, root: Path) ->
 SampleProgress = Callable[[str, int, int, dict[str, Any]], None]
 
 
+#: Record key of the generator a record is rendered from when :func:`plan_records` ran with
+#: ``continue_rng=True`` (absent otherwise: the renderer reseeds from ``record["seed"]``).
+RENDER_RNG = "render_rng"
+
+
 def plan_records(run: RunInputs, *, start_index: int = 0, image_filters: dict[str, Any],
                  enable_cardinal_rotation_90: bool = True, labels_profile_id: str = "",
-                 progress: SampleProgress | None = None) -> list[dict[str, Any]]:
+                 progress: SampleProgress | None = None, domain: str | None = None,
+                 continue_rng: bool = False) -> list[dict[str, Any]]:
     """Sample geometry, defect, augmentation and seed of every image of the run (no rendering, no I/O).
 
     Indices count up from *start_index* over the classes in config order; each sample's domain is
-    :func:`~simple_sim.generation.common.sample_domain`. The label of a record is the one derived
-    from its geometry (a mismatch with the target class is logged).
+    :func:`~simple_sim.generation.common.sample_domain`, or *domain* for all of them. The label of
+    a record is the one derived from its geometry (a mismatch with the target class is logged).
+    With *continue_rng* each record keeps its sampling generator under :data:`RENDER_RNG`, so the
+    image continues those draws (the profile-classifier contract) instead of reseeding.
     """
     config = run.config
     records: list[dict[str, Any]] = []
@@ -312,8 +369,10 @@ def plan_records(run: RunInputs, *, start_index: int = 0, image_filters: dict[st
                 enable_cardinal_rotation_90=enable_cardinal_rotation_90,
                 footprint=run.footprint,
                 profile_id=labels_profile_id,
-                domain=sample_domain(config, sample_index),
+                domain=sample_domain(config, sample_index) if domain is None else domain,
             )
+            if continue_rng:
+                rec[RENDER_RNG] = _rng
             if rec["class_name"] != class_name:
                 # The derived label wins to keep labels consistent with geometry.
                 log.warning(f"\nLabel mismatch for sample {sample_index}: target={class_name}, derived={rec['class_name']}")
@@ -455,31 +514,14 @@ def generate_dataset(
         extra_render_meta=extra_render_meta,
     )
     def render(out_root: Path, jobs_filename: str, at_least: bool) -> None:
-        if backend == Backend.OPENCV_2D:
-            # Per-domain camera (domains.<name>.camera) on top of render.camera.
-            spec = RenderSpec.from_run_config(config, run.profile, tolerances=run.tolerances)
-            bar = tqdm(total=len(records), desc="render")
-            details = render_2d_records([(spec, r, None) for r in records], out_root,
-                                        progress=lambda done, _total: bar.update(1))
-            bar.close()
-            add_render_meta(meta_rows, details)  # e.g. board_drc, before the rows are written
-            return
-        render_blender_records(
-            records,
-            config=config,
-            roi_width=roi_width,
-            roi_height=roi_height,
-            footprint=run.footprint,
-            component_height_mm=run.component_height_mm,
-            profile_render_3d=run.profile_render_3d,
-            tolerances=run.tolerances,
-            output_root=out_root,
-            jobs_filename=jobs_filename,
-            expect_at_least=at_least,
-        )
+        # The backend's renderer (BackendInfo.render_records); details e.g. board_drc go into the
+        # rows before they are written.
+        details = backend_of(config["render"]).render_records([(run, records)], out_root, jobs_filename=jobs_filename,
+                                                             expect_at_least=at_least)
+        add_render_meta(meta_rows, details)
 
     log.info(f"\nWriting dataset to {output_dir}")
-    if ext is not None and ext.meta_rows:
+    if ext is not None and ext.existing_count:
         # Append mode: keep existing dataset, add new images + rows + update split files.
         (output_dir / "images").mkdir(parents=True, exist_ok=True)
         render(output_dir, "blender_jobs_extend.jsonl", True)
@@ -489,8 +531,9 @@ def generate_dataset(
         final_splits = {k: sorted(set(ext.splits.get(k, [])) | set(new_splits[k])) for k in SPLIT_NAMES}
         assert_no_overlap(final_splits)
         write_splits(output_dir, final_splits)
-        all_meta_rows = ext.meta_rows + meta_rows
-        all_label_rows = ext.label_rows + label_rows
+        all_label_rows: list[Any] = [*ext.labels, *label_rows]
+        # meta and label rows are one-to-one (validated); the manifest needs only their number.
+        all_meta_rows: list[Any] = all_label_rows
     else:
         with atomic_dataset_dir(output_dir) as temp_dir:
             render(temp_dir, "blender_jobs.jsonl", False)
@@ -555,5 +598,5 @@ def generate_dataset(
     log.info("=" * 60)
 
     result = summarize(output_dir, all_label_rows, final_splits, new_samples=len(meta_rows), elapsed_s=total_s)
-    result.update(run_id=run_id, profile_id=profile_id, backend=backend, extend=bool(ext is not None and ext.meta_rows))
+    result.update(run_id=run_id, profile_id=profile_id, backend=backend, extend=bool(ext is not None and ext.existing_count))
     return result

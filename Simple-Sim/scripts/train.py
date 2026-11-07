@@ -19,7 +19,18 @@ from tqdm import tqdm
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import PROFILE_MISMATCH_HINT, add_json_flag, run_cli, with_hint
+from simple_sim.cli_utils import (
+    PROFILE_MISMATCH_HINT,
+    add_amp_flags,
+    add_data_arg,
+    add_json_flag,
+    add_out_arg,
+    add_profile_mismatch_flag,
+    run_cli,
+    with_hint,
+)
+from simple_sim.dataset_files import CONFIG_YAML
+from simple_sim.devices import default_device_name, resolve_device
 from simple_sim.data_loader import ROIDataset, build_train_transform, make_loader_kwargs
 from simple_sim.eval_utils import (
     ThroughputMeter,
@@ -140,7 +151,7 @@ def validate(
 
 def load_dataset_config(data_dir: Path) -> dict[str, Any]:
     """Read ``<data_dir>/config.yaml``."""
-    return load_yaml(Path(data_dir) / 'config.yaml')
+    return load_yaml(Path(data_dir) / CONFIG_YAML)
 
 
 def build_training(
@@ -271,7 +282,7 @@ def train_model(
     data_dir = Path(data_dir)
     output_path_arg = Path(out)
     resume_path_arg = Path(resume) if resume else None
-    device = torch.device(device)
+    device = resolve_device(device)
     use_amp = bool(amp and device.type == "cuda")
     if threads is not None:
         if int(threads) <= 0:
@@ -510,27 +521,19 @@ def train_model(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Train ResNet18 classifier')
-    parser.add_argument('--data', type=str, required=True, help='Path to dataset directory')
-    parser.add_argument('--out', type=str, required=True, help='Output path for trained model')
+    add_data_arg(parser, 'Path to dataset directory')
+    add_out_arg(parser, 'Output path for trained model')
     parser.add_argument('--resume', type=str, default=None, help='Optional: checkpoint to resume from (.pt)')
-    parser.add_argument(
-        '--allow-profile-mismatch',
-        action='store_true',
-        help=(
-            "DANGEROUS: allow resuming from a checkpoint trained on a different component profile. "
-            "This disables the hard profile_id mismatch guard and continues with a warning."
-        ),
-    )
+    add_profile_mismatch_flag(parser, (
+        "DANGEROUS: allow resuming from a checkpoint trained on a different component profile. "
+        "This disables the hard profile_id mismatch guard and continues with a warning."
+    ))
     parser.add_argument('--extra-epochs', type=int, default=None,
                         help='Optional: train N additional epochs beyond the resumed epoch (default: use dataset config epochs)')
     parser.add_argument('--out-mode', choices=['best', 'last'], default='best',
                         help="Whether --out points to the best checkpoint ('best') or the latest epoch ('last'). Default: best")
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                        help='Device (cuda/cpu)')
-    amp_group = parser.add_mutually_exclusive_group()
-    amp_group.add_argument('--amp', dest='amp', action='store_true', help='Enable mixed precision on CUDA (default).')
-    amp_group.add_argument('--no-amp', dest='amp', action='store_false', help='Disable mixed precision.')
-    parser.set_defaults(amp=True)
+    parser.add_argument('--device', type=str, default=default_device_name(), help='Device (cuda/cpu)')
+    add_amp_flags(parser)
     parser.add_argument('--threads', type=int, default=None,
                         help='Torch intra-op threads for CPU training (default: torch picks; on hybrid CPUs the '
                              'number of performance cores is often faster than the default)')

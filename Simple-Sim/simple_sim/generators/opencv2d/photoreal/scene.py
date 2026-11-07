@@ -8,7 +8,7 @@ so a sample is fully determined by its seed.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 import cv2
@@ -80,6 +80,49 @@ def scaled_geometry(ctx: RenderContext, nominal: dict[str, float], defect_params
     return nom, dp
 
 
+@dataclass(frozen=True, slots=True)
+class SceneGeometry:
+    """The common scene prologue of both pipelines (:func:`_scene_setup`), supersampled pixels.
+
+    ``geo`` is :func:`body_geometry` of the scaled defect with ``rotation_deg`` already in the body
+    frame of the package (``+ nominal_body_angle(family)``), ``rect`` its ``cv2.boxPoints``; ``img`` is
+    the board image as :func:`draw_board` returned it (the pipelines keep drawing into it).
+    """
+
+    h: int
+    w: int
+    nom: dict[str, float]
+    dp: dict[str, Any]
+    family: str
+    img: np.ndarray
+    base: np.ndarray
+    pads: list[dict[str, int]]
+    finish: np.ndarray
+    geo: dict[str, Any]
+    rect: np.ndarray
+
+
+def _scene_setup(ctx: RenderContext, nominal: dict[str, float], defect_params: dict[str, Any],
+                 tolerances: dict[str, Any] | None, rng: np.random.Generator, footprint: str, canvas: tuple[int, int],
+                 crowd: float) -> SceneGeometry:
+    """Scaled geometry, family, board (:func:`draw_board`, the only rng consumer here), body pose and box.
+
+    *canvas*: (width, height) in camera pixels. ``body_geometry`` and ``boxPoints`` draw nothing, so
+    computing them right after the board keeps the random stream of both callers unchanged.
+    """
+    width, height = canvas
+    h, w = height * ctx.ss, width * ctx.ss
+    nom, dp = scaled_geometry(ctx, nominal, defect_params)
+    family = family_of(footprint, ctx.component_type)
+    img, base, pads, finish = draw_board(ctx, nom, footprint, family, (h, w), rng, crowd)
+    geo = body_geometry(nom, dp, tolerances, (h, w))
+    geo["rotation_deg"] += nominal_body_angle(family)  # body frame of the package (labels only use the deviation)
+    rect = cv2.boxPoints(((float(geo["center"][0]), float(geo["center"][1])), (float(geo["length"]), float(geo["width"])),
+                          geo["rotation_deg"]))
+    return SceneGeometry(h=h, w=w, nom=nom, dp=dp, family=family, img=img, base=base, pads=pads, finish=finish, geo=geo,
+                         rect=rect)
+
+
 def _render_board(ctx: RenderContext, 
     nominal: dict[str, float],
     defect_params: dict[str, Any],
@@ -91,13 +134,11 @@ def _render_board(ctx: RenderContext,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """:func:`render_board` with an explicit context."""
     width, height = size
-    h, w = height * ctx.ss, width * ctx.ss
-    nom, dp = scaled_geometry(ctx, nominal, defect_params)
-    family = family_of(footprint, ctx.component_type)
-    img, base, pads, finish = draw_board(ctx, nom, footprint, family, (h, w), rng, crowd)
-    pads_and_solder(ctx, img, base, pads, np.zeros((h, w), dtype=np.uint8), rng, finish, with_solder=False)
+    sg = _scene_setup(ctx, nominal, defect_params, tolerances, rng, footprint, size, crowd)
+    h, w, nom, dp, family, img, base, pads = sg.h, sg.w, sg.nom, sg.dp, sg.family, sg.img, sg.base, sg.pads
+    pads_and_solder(ctx, img, base, pads, np.zeros((h, w), dtype=np.uint8), rng, sg.finish, with_solder=False)
     if dp["type"] == DefectClass.SOLDER_BRIDGE:  # flat solder between neighbouring pads
-        geo = body_geometry(nom, dp, tolerances, (h, w))
+        geo = sg.geo
         img8 = clip8(img)
         draw_solder_bridge(img8, nom, footprint, geo["center"], (int(geo["length"]), int(geo["width"])),
                             param_selector(defect_params), geo["tilt_deg"])
@@ -110,11 +151,7 @@ def _render_board(ctx: RenderContext,
         "thermal_pad": thermal_pad_index(pads),
         "body": None,
     }
-    geo_ss = body_geometry(nom, dp, tolerances, (h, w))
-    rect = cv2.boxPoints(((float(geo_ss["center"][0]), float(geo_ss["center"][1])),
-                          (float(geo_ss["length"]), float(geo_ss["width"])),
-                          geo_ss["rotation_deg"] + nominal_body_angle(family)))
-    solder = solder_defect_layout(dp["type"], pads, rect, rng, ss=ctx.ss)
+    solder = solder_defect_layout(dp["type"], pads, sg.rect, rng, ss=ctx.ss)
     scene["excess"] = solder["excess"]
     scene["balls"] = [[(x - w / 2.0) / ctx.ss, (y - h / 2.0) / ctx.ss, r / ctx.ss] for x, y, r in solder["balls"]]
     if dp["type"] != DefectClass.MISSING:
@@ -132,60 +169,16 @@ def _render_board(ctx: RenderContext,
     return cv2.resize(clip8(img), (width, height), interpolation=cv2.INTER_AREA), scene
 
 
-def _render_photoreal_base(ctx: RenderContext, 
-    nominal: dict[str, float],
-    defect_params: dict[str, Any],
-    tolerances: dict[str, Any] | None,
-    rng: np.random.Generator,
-    footprint: str,
-    roi_size: tuple[int, int],
-    post: dict[str, float] | None = None,
-) -> np.ndarray:
-    """:func:`render_photoreal_base` with an explicit context (``ctx.post_roll_deg``: the caller's rotation)."""
-    post = post or {}
-    camera = ctx.camera  # render.camera, or the preset of render.look
-    cam = camera_settings(camera)
-    view_pose = sample_camera_pose(cam, rng, float(post.get("rotation_deg", 0.0)))
-    view_pose = fit_crop(view_pose, cam, rng, float(nominal["component_length"]), roi_size)
-    ss = effective_supersampling(ctx.ss, view_pose, cam)  # camera.max_oversampling: cheaper zoomed-out views
-    if ss != ctx.ss:
-        ctx = replace(ctx, ss=ss)
-    canvas = view_canvas(roi_size, view_pose)  # larger board area for a zoomed-out / oblique / rolled view
-    width, height = canvas
-    h, w = height * ctx.ss, width * ctx.ss
-    nom, dp = scaled_geometry(ctx, nominal, defect_params)
-    family = family_of(footprint, ctx.component_type)
-    base_color = np.array(ctx.component_color, dtype=np.float32)
-    defect_type = dp["type"]
-
-    crowd = canvas[0] * canvas[1] / float(roi_size[0] * roi_size[1])  # rendered area / ROI area
-    img, base, pads, finish = draw_board(ctx, nom, footprint, family, (h, w), rng, crowd)
-    geo = body_geometry(nom, dp, tolerances, (h, w))
-    geo["rotation_deg"] += nominal_body_angle(family)  # body frame of the package (labels only use the deviation)
+def _draw_part(ctx: RenderContext, img: np.ndarray, sg: SceneGeometry, footprint: str, pose: dict[str, Any] | None,
+               body_mask: np.ndarray, leads: list[dict[str, float]], base_color: np.ndarray, selector: int,
+               solder: dict[str, Any], rng: np.random.Generator) -> np.ndarray:
+    """The inspected part and its part-level defects on *img* (after the joints); returns the image
+    (a solder bridge replaces it by its uint8 round trip). *pose*: tombstone pose or ``None``;
+    *body_mask*: footprint of body and lead feet (contact shadow)."""
+    h, w, nom, family, base, pads, geo, rect = sg.h, sg.w, sg.nom, sg.family, sg.base, sg.pads, sg.geo, sg.rect
+    defect_type = sg.dp["type"]
     length, width_px = float(geo["length"]), float(geo["width"])
     cx, cy = geo["center"]
-    rect = cv2.boxPoints(((float(cx), float(cy)), (length, width_px), geo["rotation_deg"]))
-    selector = param_selector(defect_params)
-
-    body_mask = np.zeros((h, w), dtype=np.uint8)
-    pose = None
-    if defect_type != DefectClass.MISSING and geo["is_tombstone"]:
-        pose = tombstone_pose(geo, selector, (h, w))
-        body_mask = pose["mask"]
-    elif defect_type != DefectClass.MISSING:
-        pts = rect
-        if defect_type == DefectClass.CORNER_LIFT:
-            pts = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector)["lifted"]
-        cv2.fillPoly(body_mask, [np.round(pts).astype(np.int32)], 255)
-    leads = []
-    if defect_type != DefectClass.MISSING and pose is None:
-        leads = lead_layout(family, pads, (w // 2, h // 2), length, width_px, ss=ctx.ss)
-        if leads:  # solder wets the lead feet, so the fillets rise towards them
-            body_mask = np.maximum(body_mask, lead_feet_mask((h, w), leads, (float(cx), float(cy)), geo["rotation_deg"]))
-
-    solder = solder_defect_layout(defect_type, pads, rect, rng, ss=ctx.ss)
-    pads_and_solder(ctx, img, base, pads, body_mask, rng, finish, excess=frozenset(solder["excess"]))
-
     if pose is not None:
         draw_tombstone(ctx, img, family, pose, width_px, base_color, rng)
     elif defect_type != DefectClass.MISSING:
@@ -212,6 +205,58 @@ def _render_photoreal_base(ctx: RenderContext,
             img = img8.astype(np.float32)
         draw_excess(ctx, img, base, family, pads, solder["excess"], (float(cx), float(cy)), length, width_px, geo["rotation_deg"])
         draw_solder_balls(ctx, img, base, solder["balls"])
+    return img
+
+
+def _render_photoreal_base(ctx: RenderContext, 
+    nominal: dict[str, float],
+    defect_params: dict[str, Any],
+    tolerances: dict[str, Any] | None,
+    rng: np.random.Generator,
+    footprint: str,
+    roi_size: tuple[int, int],
+    post: dict[str, float] | None = None,
+) -> np.ndarray:
+    """:func:`render_photoreal_base` with an explicit context (``ctx.post_roll_deg``: the caller's rotation)."""
+    post = post or {}
+    camera = ctx.camera  # render.camera, or the preset of render.look
+    cam = camera_settings(camera)
+    view_pose = sample_camera_pose(cam, rng, float(post.get("rotation_deg", 0.0)))
+    view_pose = fit_crop(view_pose, cam, rng, float(nominal["component_length"]), roi_size)
+    ss = effective_supersampling(ctx.ss, view_pose, cam)  # camera.max_oversampling: cheaper zoomed-out views
+    if ss != ctx.ss:
+        ctx = replace(ctx, ss=ss)
+    canvas = view_canvas(roi_size, view_pose)  # larger board area for a zoomed-out / oblique / rolled view
+    base_color = np.array(ctx.component_color, dtype=np.float32)
+
+    crowd = canvas[0] * canvas[1] / float(roi_size[0] * roi_size[1])  # rendered area / ROI area
+    sg = _scene_setup(ctx, nominal, defect_params, tolerances, rng, footprint, canvas, crowd)
+    h, w, family, img, base, pads, geo, rect = sg.h, sg.w, sg.family, sg.img, sg.base, sg.pads, sg.geo, sg.rect
+    defect_type = sg.dp["type"]
+    length, width_px = float(geo["length"]), float(geo["width"])
+    cx, cy = geo["center"]
+    selector = param_selector(defect_params)
+
+    body_mask = np.zeros((h, w), dtype=np.uint8)
+    pose = None
+    if defect_type != DefectClass.MISSING and geo["is_tombstone"]:
+        pose = tombstone_pose(geo, selector, (h, w))
+        body_mask = pose["mask"]
+    elif defect_type != DefectClass.MISSING:
+        pts = rect
+        if defect_type == DefectClass.CORNER_LIFT:
+            pts = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector)["lifted"]
+        cv2.fillPoly(body_mask, [np.round(pts).astype(np.int32)], 255)
+    leads = []
+    if defect_type != DefectClass.MISSING and pose is None:
+        leads = lead_layout(family, pads, (w // 2, h // 2), length, width_px, ss=ctx.ss)
+        if leads:  # solder wets the lead feet, so the fillets rise towards them
+            body_mask = np.maximum(body_mask, lead_feet_mask((h, w), leads, (float(cx), float(cy)), geo["rotation_deg"]))
+
+    solder = solder_defect_layout(defect_type, pads, rect, rng, ss=ctx.ss)
+    pads_and_solder(ctx, img, base, pads, body_mask, rng, sg.finish, excess=frozenset(solder["excess"]))
+
+    img = _draw_part(ctx, img, sg, footprint, pose, body_mask, leads, base_color, selector, solder, rng)
 
     view = apply_view(cv2.resize(img, canvas, interpolation=cv2.INTER_AREA), view_pose, roi_size)
     # sensor_px_per_mm: one output pixel covers mm_per_px x zoom of the board

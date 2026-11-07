@@ -21,9 +21,10 @@ from typing import Any
 import yaml
 
 from simple_sim.cli_utils import add_json_flag, emit_result
+from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.io_utils import load_yaml, rel_to
 from simple_sim.manifest import read_dataset_manifest
-from simple_sim.model_bundle import is_bundle_dir
+from simple_sim.model_bundle import is_bundle_dir, list_bundle_checkpoints
 from simple_sim.reports import best_report, load_reports, metric_value, report_search_dirs, report_timestamp
 
 SIM_ROOT = Path(__file__).resolve().parents[1]
@@ -138,9 +139,9 @@ def _dataset_dirs(sim_data: Path) -> list[Path]:
 
 def _dataset_info(ds: Path, root: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"name": ds.name, "path": rel_to(root, ds), "manifest": None}
-    manifest_path = ds / "dataset_manifest.json"
+    manifest_path = ds / DATASET_MANIFEST
     if not manifest_path.exists():
-        info["has_labels"] = (ds / "labels.jsonl").exists()
+        info["has_labels"] = (ds / LABELS_JSONL).exists()
         return info
     try:
         m = read_dataset_manifest(manifest_path)
@@ -173,7 +174,7 @@ def _models(models_dir: Path, root: Path) -> list[dict[str, Any]]:
             out.append({"path": rel_to(root, p), "kind": "checkpoint", "size_bytes": p.stat().st_size})
         elif is_bundle_dir(p):
             out.append({"path": rel_to(root, p), "kind": "bundle",
-                        "profiles": sorted(x.stem for x in p.glob("*.pt") if not x.stem.endswith("_last"))})
+                        "profiles": sorted(x.stem for x in list_bundle_checkpoints(p))})
     return out
 
 

@@ -70,6 +70,7 @@ from gui.utils.pipeline_helpers import (
 )
 
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE
+from simple_sim.dataset_files import CONFIG_YAML, DATASET_MANIFEST, LABELS_JSONL, META_JSONL
 from simple_sim.io_utils import append_jsonl, load_yaml, now_tag, rel_to
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
@@ -1157,7 +1158,7 @@ class PipelineControlTab(BaseTab):
             self.ui.var_ds_size.set("DS: -")
             return
 
-        manifest_path = ds / "dataset_manifest.json"
+        manifest_path = ds / DATASET_MANIFEST
         if manifest_path.exists():
             try:
                 with open(manifest_path, encoding="utf-8") as f: manifest = json.load(f)
@@ -1200,7 +1201,7 @@ class PipelineControlTab(BaseTab):
 
     def _apply_dataset_settings(self, ds: Path) -> None:
         if not ds: return
-        if (config_path := ds / "config.yaml").exists(): self.ui.var_config.set(str(config_path))
+        if (config_path := ds / CONFIG_YAML).exists(): self.ui.var_config.set(str(config_path))
         if profile_id := self.logic.get_dataset_profile_id(ds): self._set_profile_value(profile_id)
         
         self.ui.var_name.set(ds.name)
@@ -1548,7 +1549,7 @@ class PipelineControlTab(BaseTab):
     def _check_profile_compatibility(self) -> None:
         try:
             if not (ds := self._selected_dataset_dir()): self.ui.var_profile_compat.set(""); return
-            manifest_path = ds / "dataset_manifest.json"
+            manifest_path = ds / DATASET_MANIFEST
             if not manifest_path.exists(): self.ui.var_profile_compat.set(""); return
 
             with open(manifest_path) as f: manifest = json.load(f)
@@ -1588,7 +1589,7 @@ class PipelineControlTab(BaseTab):
 
     def _show_dataset_profile_info(self) -> None:
         if not (ds := self._selected_dataset_dir()): self.ui.show_messagebox("info", "Dataset Profile", "No dataset selected"); return
-        manifest_path = ds / "dataset_manifest.json"
+        manifest_path = ds / DATASET_MANIFEST
         if not manifest_path.exists(): self.ui.show_messagebox("error", "No Manifest", f"Dataset has no manifest (legacy dataset).\n\nUse the backfill tool to add a manifest:\n  .venv/bin/python tools/backfill_manifest.py --data {ds}"); return
 
         try:
@@ -1638,17 +1639,17 @@ class PipelineControlTab(BaseTab):
         self._start_dataset_size_calc(ds)
 
         try:
-            if (meta_path := ds / "meta.jsonl").exists():
+            if (meta_path := ds / META_JSONL).exists():
                 meta_rows = read_jsonl(meta_path, MetaRow)
                 self._image_to_sample = {row.image_path: row.id for row in meta_rows}
                 self._meta_by_sample = {row.id: row for row in meta_rows}
                 self._meta_by_image_rel = {row.image_path: row for row in meta_rows}
-            if (labels_path := ds / "labels.jsonl").exists():
+            if (labels_path := ds / LABELS_JSONL).exists():
                 self._label_dict = {row.id: row.class_name for row in read_jsonl(labels_path, LabelRow)}
         except Exception as e: _LOG.warning("Failed to load metadata/labels: %s", e)
 
         try:
-            if (manifest_path := ds / "dataset_manifest.json").exists():
+            if (manifest_path := ds / DATASET_MANIFEST).exists():
                 with open(manifest_path) as f: manifest = json.load(f)
                 profile_id = manifest.get('component_profile', {}).get('profile_id', 'unknown')
                 profile_hash = manifest.get('component_profile', {}).get('profile_hash', '')

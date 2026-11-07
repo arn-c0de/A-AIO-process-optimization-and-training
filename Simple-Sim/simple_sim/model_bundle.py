@@ -66,6 +66,36 @@ def bundle_checkpoint_path(bundle_dir: Path, profile_id: str, *, kind: str = "be
     return bundle_dir / f"{base}.pt"
 
 
+def list_bundle_checkpoints(bundle_dir: Path, *, include_last: bool = False) -> list[Path]:
+    """``*.pt`` files directly in *bundle_dir*, sorted by path; ``*_last.pt`` only with *include_last*."""
+    return [pt for pt in sorted(Path(bundle_dir).glob("*.pt")) if include_last or not pt.stem.endswith("_last")]
+
+
+def resolve_bundle_checkpoint(model_path: Path, profile_id: str, *, hint: str = "", show_available: bool = False) -> Path:
+    """If *model_path* is a multi-model bundle dir, return its best checkpoint for *profile_id*.
+
+    Plain checkpoint paths are returned unchanged. A bundle without that checkpoint raises
+    ``FileNotFoundError("Multi-model bundle has no checkpoint for profile '<id>': ...")`` listing
+    the bundle and the expected path, with *show_available* the first 12 ``*.pt`` names in the
+    bundle, then *hint* (on its own line) when given.
+    """
+    model_path = Path(model_path)
+    if not model_path.is_dir():
+        return model_path
+    resolved = bundle_checkpoint_path(model_path, profile_id, kind="best")
+    if not resolved.exists():
+        lines = [
+            f"Multi-model bundle has no checkpoint for profile '{profile_id}':",
+            f"  bundle: {model_path}",
+            f"  expected: {resolved}",
+        ]
+        if show_available:
+            avail = sorted(p.name for p in model_path.glob("*.pt"))
+            lines.append(f"  available: {', '.join(avail[:12]) if avail else '(none)'}")
+        raise FileNotFoundError("\n".join(lines) + (f"\n{hint}" if hint else ""))
+    return resolved
+
+
 @dataclass(frozen=True)
 class BundleMeta:
     bundle_version: int
@@ -129,9 +159,7 @@ def scan_bundle_checkpoints(bundle_dir: Path) -> dict[str, str]:
     metadata when possible, otherwise the filename stem is used.
     """
     checkpoints: dict[str, str] = {}
-    for pt in sorted(Path(bundle_dir).glob("*.pt")):
-        if pt.stem.endswith("_last"):
-            continue
+    for pt in list_bundle_checkpoints(bundle_dir):
         pid = _checkpoint_profile_id(pt) or pt.stem
         checkpoints.setdefault(pid, pt.name)
     return checkpoints

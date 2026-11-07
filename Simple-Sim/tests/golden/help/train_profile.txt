@@ -1,0 +1,14 @@
+usage: train_profile.py [-h] --data DATA --out OUT [--device DEVICE]
+                        [--amp | --no-amp] [--json]
+
+Train profile classifier
+
+options:
+  -h, --help       show this help message and exit
+  --data DATA      Path to mixed-profile dataset directory
+  --out OUT        Output path for trained model (.pt)
+  --device DEVICE  Device (cuda/cpu)
+  --amp            Enable mixed precision on CUDA (default).
+  --no-amp         Disable mixed precision.
+  --json           Print a machine-readable result line ('SIMPLE_SIM_RESULT
+                   {...}') as last stdout line

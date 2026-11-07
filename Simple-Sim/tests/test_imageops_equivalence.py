@@ -138,3 +138,47 @@ def test_blend_bounding_box_equals_full_frame(dtype):
             ref *= 1.0 - alpha[..., None]
             ref += color * alpha[..., None]
             assert np.array_equal(out, ref)
+
+
+@pytest.mark.parametrize("shape", [(1, 1), (1, 7), (7, 1)])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_heightmap_normals_of_one_pixel_wide_maps(shape, dtype):
+    """Tiny solder features at small ROIs give 1-px height maps: flat along that axis, no crash."""
+    from simple_sim.generators.opencv2d.photoreal.imageops import heightmap_normals
+
+    hmap = np.arange(np.prod(shape), dtype=dtype).reshape(shape) * 0.5
+    n = heightmap_normals(hmap)
+    assert n.shape == (*shape, 3) and n.dtype == dtype and np.all(np.isfinite(n))
+    np.testing.assert_allclose(np.linalg.norm(n, axis=2), 1.0, rtol=1e-6)
+    if shape[0] == 1:
+        assert np.all(n[..., 1] == 0)
+    if shape[1] == 1:
+        assert np.all(n[..., 0] == 0)
+    if shape == (1, 7):
+        np.testing.assert_allclose(n[..., 0], -0.5 / np.sqrt(1.25), rtol=1e-6)
+
+
+def test_small_roi_tombstones_render():
+    """Regression: a 32 px ROI of run_0001 crashed in np.gradient on TOMBSTONE / solder classes."""
+    from pathlib import Path
+
+    from simple_sim.config import load_config, merge_profile_render
+    from simple_sim.filter_settings import normalize_image_filters
+    from simple_sim.generation.common import sample_record
+    from simple_sim.generators.opencv2d import render_roi
+    from simple_sim.profile_hash import load_profile
+
+    root = Path(__file__).resolve().parent.parent
+    cfg = load_config(root / "configs" / "run_0001.yaml")
+    cfg["roi"].update(width_px=32, height_px=32)
+    prof = load_profile(cfg["run"]["component_profile"], root / "configs" / "profiles")
+    render = merge_profile_render(cfg["render"], prof, cfg.get("roi"))
+    fp = prof["component"]["footprint"]
+    for cls in ("TOMBSTONE", "SOLDER_BALL", "EXCESS_SOLDER"):
+        for i in range(40):
+            rec, _ = sample_record(i, cls, config=cfg, run_seed=cfg["run"]["seed"], geometry_ranges=prof.get("geometry_ranges"),
+                                   tolerances=prof.get("tolerances"), image_filters=normalize_image_filters(None),
+                                   enable_cardinal_rotation_90=True, footprint=fp)
+            img = render_roi(rec["nominal"], rec["defect"], rec["augment"], (32, 32), render, prof.get("tolerances"),
+                             np.random.default_rng(i), footprint=fp)
+            assert img.shape == (32, 32, 3)

@@ -4,17 +4,21 @@ markings, tombstones and the populated neighbour parts.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import cv2
 import numpy as np
 
+from simple_sim.board.footprints import (KIND_ARRAY, KIND_CHIP, KIND_IC, KIND_POWER_INDUCTOR, MARK_ARRAY_CODE,
+                                         MARK_RESISTOR_CODE, part_family)
+
 from .context import RenderContext
 from .imageops import blend, blur_window, contact_shadow, local_coords, local_window, rect_alpha, rect_window, shade_solder, smooth_noise, text_layer
 from .imageops import WindowedNoise
 from .joints import pads_and_solder
-from .palette import (ARRAY_CODES, ARRAY_FAMILIES, CAP_ARRAY_BODY, CAP_LEN, CHIPS, FONTS, LEADED,
-                      LED_LENS, LIGHT, MARK_CHARS, RESISTOR_CODES, UNMARKED)
+from .palette import ARRAY_CODES, CAP_ARRAY_BODY, FONTS, LED_LENS, LIGHT, MARK_CHARS, RESISTOR_CODES
 
 
 def nominal_body_angle(family: str) -> float:
@@ -41,7 +45,7 @@ def lead_layout(family: str, pads: list[dict[str, int]], nominal_center: tuple[f
     Each lead: ``u`` (position along its body edge), ``side`` (+-1 across or along), ``axis``
     ('v' = leaves a long side, 'u' = leaves an end), ``edge`` (body edge), ``tip``, ``w`` (lead width). *ss*: supersampling factor of the pixel coordinates (tip clearance).
     """
-    if family not in LEADED:
+    if not part_family(family).leaded:
         return []
     inv = rot(-nominal_body_angle(family))
     hl, hw = length / 2.0, width / 2.0
@@ -134,12 +138,13 @@ def draw_leads(ctx: RenderContext, img: np.ndarray, leads: list[dict[str, float]
 def draw_marking(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[float, float], length: float, width: float,
              angle_deg: float, rng: np.random.Generator) -> None:
     h, w = img.shape[:2]
-    if family in UNMARKED:
+    spec = part_family(family)
+    if spec.unmarked:
         return
-    if family == "resistor":
+    if spec.marking == MARK_RESISTOR_CODE:
         lines = [str(rng.choice(RESISTOR_CODES))]
         text_h = width * 0.42
-    elif family == "array_r":  # 1-3 character code in the black strip between the terminal rows
+    elif spec.marking == MARK_ARRAY_CODE:  # 1-3 character code in the black strip between the terminal rows
         lines = [str(rng.choice(ARRAY_CODES))]
         text_h = min(width * 0.85, length / max(1, len(lines[0])) * 0.9)
     else:
@@ -163,7 +168,7 @@ def draw_marking(ctx: RenderContext, img: np.ndarray, family: str, center: tuple
         pos = np.array(center, dtype=np.float32) + perp * off + along * float(rng.uniform(-0.15, 0.15)) * text_h
         layer = np.maximum(layer, text_layer((h, w), text, (float(pos[0]), float(pos[1])), text_h, angle_deg,
                                               max(1, ctx.ss), font))
-    printed = family in ("resistor", "array_r")
+    printed = spec.printed
     color = np.array((225, 225, 220), dtype=np.float32) if printed else np.array((190, 190, 188), dtype=np.float32)
     layer = cv2.GaussianBlur(layer, (0, 0), 0.4 * ctx.ss)
     # Printed ink (resistors) is blotchy, laser marking (ICs) is a grainy, partly etched matte surface.
@@ -240,6 +245,97 @@ def draw_led_top(ctx: RenderContext, img: np.ndarray, u: np.ndarray, v: np.ndarr
     blend(img, np.array((70, 150, 60), dtype=np.float32), mark * 0.7)
 
 
+@dataclass(frozen=True, slots=True)
+class _Body:
+    """Body frame of :func:`draw_body` on its window, handed to the per-kind drawers."""
+
+    family: str
+    length: float
+    width: float
+    hl: float
+    hw: float
+    inset: float
+    u: np.ndarray
+    v: np.ndarray
+    au: np.ndarray
+    aa_body: np.ndarray
+    aa_top: np.ndarray
+    inside: np.ndarray
+    top: np.ndarray
+    body_col: np.ndarray
+
+
+def _draw_power_inductor_body(ctx: RenderContext, img: np.ndarray, b: _Body, rng: np.random.Generator,
+                              noise: WindowedNoise, marks: bool) -> None:
+    draw_power_inductor_top(ctx, img, b.u, b.v, b.aa_top, b.length, b.width, b.body_col, rng, noise)
+
+
+def _draw_chip_terminals(ctx: RenderContext, img: np.ndarray, b: _Body, rng: np.random.Generator,
+                         noise: WindowedNoise, marks: bool) -> None:
+    """End caps of a two-terminal chip (and the LED lens between them)."""
+    family, length, hl, hw, u, v, au, aa_top = b.family, b.length, b.hl, b.hw, b.u, b.v, b.au, b.aa_top
+    cap_len = ctx.look.cap_len.get(family, part_family(family).cap_len) * length
+    if family == "led":
+        draw_led_top(ctx, img, u, v, aa_top, hl - cap_len, hw, rng)
+    cap = b.inside & (au > hl - cap_len)
+    cap_col = ctx.look.end_cap * float(rng.uniform(0.9, 1.05))
+    v_across = np.clip(v / hw, 0, 1)
+    if ctx.look.flat_caps:  # scanner look: the flat tin top mirrors the dark camera (grey); the plating
+        # rolling over both cap edges faces the side lights and blazes (bright vertical bands on every terminal)
+        d_out, d_in = hl - au, au - (hl - cap_len)
+        edges = np.maximum(np.exp(-((d_out / (0.18 * cap_len)) ** 2)), 0.9 * np.exp(-((d_in / (0.16 * cap_len)) ** 2)))
+        shade = 0.7 + 0.7 * edges - 0.05 * v_across
+    else:
+        # Metallic end caps: bright ridge across the middle of each cap, darker towards the body.
+        ridge = np.exp(-(((au - (hl - cap_len * 0.45)) / (cap_len * 0.35)) ** 2))
+        if ctx.solder_look is not None:  # meniscus look: flat, matte tin top (no tube-like ridge), as in real crops
+            shade = 0.88 + 0.12 * ridge - 0.06 * v_across
+        else:
+            shade = 0.72 + 0.45 * ridge - 0.25 * v_across * 0.5
+    cap_img = cap_col * shade[..., None] * (1.0 + noise.normal(rng, 0.02, channels=1))
+    blend(img, cap_img, cap.astype(np.float32) * b.aa_body)
+
+
+def _draw_array_body(ctx: RenderContext, img: np.ndarray, b: _Body, rng: np.random.Generator,
+                     noise: WindowedNoise, marks: bool) -> None:
+    draw_array_terminals(img, b.family, b.u, b.v, b.inside, b.aa_body, b.length, b.width, rng, noise, ctx.look.end_cap)
+
+
+def _draw_ic_pin1(ctx: RenderContext, img: np.ndarray, b: _Body, rng: np.random.Generator,
+                  noise: WindowedNoise, marks: bool) -> None:
+    """Pin-1 indicator of a moulded package (only with *marks*: not on tombstones / neighbours)."""
+    if not marks:
+        return
+    length, width, hl, hw, u, v, aa_top, body_col = b.length, b.width, b.hl, b.hw, b.u, b.v, b.aa_top, b.body_col
+    # Pin-1 indicator (molded dimple / laser dot).
+    pin1 = np.array([-hl + 0.12 * length, -hw + 0.15 * width], dtype=np.float32)
+    r = max(1.5 * ctx.ss, 0.035 * min(length, width))
+    dot = np.clip(1.0 - (np.hypot(u - pin1[0], v - pin1[1]) - r) / ctx.ss, 0, 1)
+    blend(img, body_col * 0.55, dot * aa_top)
+    hi = np.clip(1.0 - (np.hypot(u - pin1[0] + r * 0.4, v - pin1[1] + r * 0.4) - r * 0.5) / ctx.ss, 0, 1)
+    blend(img, body_col * 1.6 + 25, hi * aa_top)
+    if b.family == "soic":
+        # Bevelled pin-1 edge (lighter strip along one long side).
+        # Pin 1 sits at (-u, -v); the strip runs along whichever of its two sides is the long one.
+        top, inset = b.top, b.inset
+        if width > length:
+            strip = top & (u < -hl + inset + 0.12 * length)
+        else:
+            strip = top & (v < -hw + inset + 0.08 * width)
+        img *= np.where(strip, 1.25, 1.0)[..., None]
+
+
+BodyDrawer = Callable[[RenderContext, np.ndarray, _Body, np.random.Generator, WindowedNoise, bool], None]
+# Body drawers keyed by PartFamily.kind (board.footprints.FAMILIES): what sits on the top face after the
+# common footprint, side walls and top face. A new family with an existing kind needs only a table row.
+_BODY_DRAWERS: dict[str, BodyDrawer] = {
+    KIND_POWER_INDUCTOR: _draw_power_inductor_body,
+    KIND_CHIP: _draw_chip_terminals,
+    KIND_ARRAY: _draw_array_body,
+    KIND_IC: _draw_ic_pin1,
+}
+
+
 def draw_body(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[float, float], length: float, width: float, angle_deg: float,
                base_color: np.ndarray, rng: np.random.Generator, *, marks: bool = True) -> None:
     """Part body seen from above. ``marks=False``: no marking/pin-1 (tombstone top face, small neighbour parts).
@@ -257,8 +353,8 @@ def draw_body(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[fl
     hl, hw = length / 2.0, width / 2.0
     # Visible slope at the body edge from above: chip parts have rounded edges, moulded SOT/SOIC a
     # small draft angle, sawn QFN packages vertical walls (practically invisible from above).
-    inset = max(1.0, {"qfn": 0.012, "soic": 0.035, "sot": 0.05, "sot6": 0.05, "array_r": 0.05,
-                      "array_c": 0.05}.get(family, 0.07) * min(length, width))
+    spec = part_family(family)
+    inset = max(1.0, spec.edge_inset * min(length, width))
 
     au, av = np.abs(u), np.abs(v)
     inside = (au <= hl) & (av <= hw)
@@ -287,63 +383,18 @@ def draw_body(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[fl
 
     # Top face: slight gradient towards the light, surface grain, mild gloss.
     grad = 1.0 + 0.10 * np.clip(-(u / hl) * light_u - (v / hw) * light_v, -1, 1)
-    grain_sd = {"resistor": 0.025, "capacitor": 0.025, "led": 0.015, "inductor": 0.05, "power_inductor": 0.07}.get(family, 0.06)
+    grain_sd = spec.grain_sd
     grain = 1.0 + noise.normal(rng, grain_sd)  # ferrite / iron powder: coarser
     top_img = body_col * (grad * grain)[..., None]
-    if family in ("qfn", "soic", "sot", "sot6"):
+    if spec.kind == KIND_IC:
         gloss = np.exp(-(((u + hl * 0.35) / (hl * 0.6)) ** 2 + ((v + hw * 0.35) / (hw * 0.6)) ** 2))
         top_img += (28.0 * gloss)[..., None]
     blend(img, top_img, aa_top)
 
-    if family == "power_inductor":
-        draw_power_inductor_top(ctx, img, u, v, aa_top, length, width, body_col, rng, noise)
-        if not marks:
-            return
-    elif family in CHIPS:
-        cap_len = ctx.look.cap_len.get(family, CAP_LEN[family]) * length
-        if family == "led":
-            draw_led_top(ctx, img, u, v, aa_top, hl - cap_len, hw, rng)
-        cap = inside & (au > hl - cap_len)
-        cap_col = ctx.look.end_cap * float(rng.uniform(0.9, 1.05))
-        v_across = np.clip(v / hw, 0, 1)
-        if ctx.look.flat_caps:  # scanner look: the flat tin top mirrors the dark camera (grey); the plating
-            # rolling over both cap edges faces the side lights and blazes (bright vertical bands on every terminal)
-            d_out, d_in = hl - au, au - (hl - cap_len)
-            edges = np.maximum(np.exp(-((d_out / (0.18 * cap_len)) ** 2)), 0.9 * np.exp(-((d_in / (0.16 * cap_len)) ** 2)))
-            shade = 0.7 + 0.7 * edges - 0.05 * v_across
-        else:
-            # Metallic end caps: bright ridge across the middle of each cap, darker towards the body.
-            ridge = np.exp(-(((au - (hl - cap_len * 0.45)) / (cap_len * 0.35)) ** 2))
-            if ctx.solder_look is not None:  # meniscus look: flat, matte tin top (no tube-like ridge), as in real crops
-                shade = 0.88 + 0.12 * ridge - 0.06 * v_across
-            else:
-                shade = 0.72 + 0.45 * ridge - 0.25 * v_across * 0.5
-        cap_img = cap_col * shade[..., None] * (1.0 + noise.normal(rng, 0.02, channels=1))
-        blend(img, cap_img, cap.astype(np.float32) * aa_body)
-        if not marks:
-            return
-    elif family in ARRAY_FAMILIES:
-        draw_array_terminals(img, family, u, v, inside, aa_body, length, width, rng, noise, ctx.look.end_cap)
-        if not marks:
-            return
-    elif not marks:
+    b = _Body(family, length, width, hl, hw, inset, u, v, au, aa_body, aa_top, inside, top, body_col)
+    _BODY_DRAWERS[spec.kind](ctx, img, b, rng, noise, marks)
+    if not marks:
         return
-    else:
-        # Pin-1 indicator (molded dimple / laser dot).
-        pin1 = np.array([-hl + 0.12 * length, -hw + 0.15 * width], dtype=np.float32)
-        r = max(1.5 * ctx.ss, 0.035 * min(length, width))
-        dot = np.clip(1.0 - (np.hypot(u - pin1[0], v - pin1[1]) - r) / ctx.ss, 0, 1)
-        blend(img, body_col * 0.55, dot * aa_top)
-        hi = np.clip(1.0 - (np.hypot(u - pin1[0] + r * 0.4, v - pin1[1] + r * 0.4) - r * 0.5) / ctx.ss, 0, 1)
-        blend(img, body_col * 1.6 + 25, hi * aa_top)
-        if family == "soic":
-            # Bevelled pin-1 edge (lighter strip along one long side).
-            # Pin 1 sits at (-u, -v); the strip runs along whichever of its two sides is the long one.
-            if width > length:
-                strip = top & (u < -hl + inset + 0.12 * length)
-            else:
-                strip = top & (v < -hw + inset + 0.08 * width)
-            img *= np.where(strip, 1.25, 1.0)[..., None]
 
     # Fine highlight on top-face edges facing the light.
     edge_top = (aa_top > 0) & (d_top > -1.2 * ctx.ss)
@@ -351,7 +402,7 @@ def draw_body(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[fl
 
     m_len = length - 2 * (0.22 * length if family == "resistor" else (0.3 * length if family == "array_r" else inset * 2))
     m_wid = width - 2 * inset
-    if m_wid > m_len and family not in CHIPS:  # markings run along the long side of the package
+    if m_wid > m_len and not spec.chip:  # markings run along the long side of the package
         draw_marking(ctx, full, family, center, m_wid, m_len, angle_deg + 90.0, rng)
     else:
         draw_marking(ctx, full, family, center, m_len, m_wid, angle_deg, rng)
@@ -432,7 +483,7 @@ def draw_tombstone(ctx: RenderContext, img: np.ndarray, family: str, pose: dict[
     u, v, m_end = rect_alpha(y1 - y0, x1 - x0, end_c, pose["end_len"], width, angle, y0, x0)
     n_end = np.array([*(axis * np.cos(tilt)), np.sin(tilt)], dtype=np.float32)
     lit = 0.55 + 0.6 * max(0.0, float(n_end @ LIGHT))
-    if family in CHIPS and family != "power_inductor":
+    if part_family(family).kind == KIND_CHIP:  # not the moulded power inductor
         # Tin-plated cap, slightly convex: shaded as metal like the solder, tilted with the part.
         su = np.clip(np.abs(u) / (pose["end_len"] / 2.0), 0.0, 1.0)
         sv = np.clip(np.abs(v) / (width / 2.0), 0.0, 1.0)

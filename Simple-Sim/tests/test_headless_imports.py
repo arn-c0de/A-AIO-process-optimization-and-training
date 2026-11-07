@@ -132,3 +132,37 @@ def test_board_lazy_exports_load_on_access() -> None:
         "assert 'simple_sim.board.pipeline' in sys.modules and 'cv2' in sys.modules\n"
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def test_validate_config_without_cv2() -> None:
+    """I7: ``validate_config`` checks render options against ``generators.options`` (no renderer import)."""
+    proc = _run(
+        "from pathlib import Path\n"
+        "from simple_sim.config import load_config, validate_config\n"
+        "n = 0\n"
+        "for p in sorted(Path('configs').glob('run_*.yaml')):\n"
+        "    validate_config(load_config(p)); n += 1\n"
+        "assert n > 0\n"
+        "cfg = load_config(Path('configs/run_0001.yaml'))\n"
+        "cfg['render'].update(look='quins', solder='meniscus', supersampling=3, post_filters='camera',\n"
+        "                     camera={'preset': 'phone', 'zoom': [1.0, 1.2]})\n"
+        "validate_config(cfg)\n"
+        "cfg['render']['look'] = 'nope'\n"
+        "try:\n    validate_config(cfg)\nexcept ValueError as e:\n    assert 'render.look must be one of' in str(e)\n"
+        "else:\n    raise SystemExit('expected ValueError')\n"
+        "bad = [m for m in sys.modules if m == 'cv2' or 'opencv2d' in m]\n"
+        "assert not bad, bad\n",
+        blocked=("cv2", "torch", "torchvision"),
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("module", [
+    "simple_sim.cli_utils",
+    "simple_sim.dataset_files",
+    "simple_sim.devices",
+    "simple_sim.generators.options",
+])
+def test_shared_helper_modules_are_light(module: str) -> None:
+    proc = _run(f"import {module}\n", blocked=("cv2", "torch", "torchvision", "yaml", "numpy"))
+    assert proc.returncode == 0, proc.stderr

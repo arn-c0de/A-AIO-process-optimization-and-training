@@ -73,9 +73,17 @@ def gradient(f: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def heightmap_normals(hmap: np.ndarray) -> np.ndarray:
-    """Unit surface normals (H, W, 3: x, y, up) of a height map in pixels (central differences)."""
+    """Unit surface normals (H, W, 3: x, y, up) of a height map in pixels (central differences).
+
+    A map one pixel high or wide (tiny solder features at small ROIs) is flat along that axis
+    (``np.gradient`` cannot difference a single sample); larger maps are unchanged."""
     h, w = hmap.shape
-    gy, gx = gradient(hmap)
+    if h < 2 or w < 2:
+        f = np.asarray(hmap, dtype=np.float64 if not np.issubdtype(hmap.dtype, np.inexact) else hmap.dtype)
+        gy = np.gradient(f, axis=0) if h >= 2 else np.zeros_like(f)
+        gx = np.gradient(f, axis=1) if w >= 2 else np.zeros_like(f)
+    else:
+        gy, gx = gradient(hmap)
     n = np.empty((h, w, 3), dtype=gx.dtype)
     np.negative(gx, out=n[..., 0])
     np.negative(gy, out=n[..., 1])

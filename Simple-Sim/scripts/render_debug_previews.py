@@ -30,7 +30,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, run_cli
+from simple_sim.cli_utils import add_json_flag, add_out_arg, run_cli
 from simple_sim.config import load_config, validate_config
 from simple_sim.filter_profiles import load_shared_filter_profiles, shared_settings_path
 from simple_sim.preview.render import (
@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Render per-profile debug previews (2D OpenCV and/or 3D Blender)")
     parser.add_argument("--profiles-dir", default="configs/profiles", help="Directory with component profile YAMLs")
     parser.add_argument("--configs-dir", default="configs", help="Directory with run_*.yaml configs (for auto matching)")
-    parser.add_argument("--out", default="outputs/debug_previews", help="Output directory root")
+    add_out_arg(parser, "Output directory root", required=False, default="outputs/debug_previews")
     parser.add_argument("--settings-file", default="", help="Shared GUI settings JSON (default: outputs/gui/settings.json)")
 
     parser.add_argument("--backend", choices=BACKEND_CHOICES, default="auto", help="Render backend: opencv_2d|blender_3d|both|auto")

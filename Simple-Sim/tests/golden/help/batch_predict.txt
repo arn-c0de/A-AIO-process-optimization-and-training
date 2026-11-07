@@ -1,0 +1,54 @@
+usage: batch_predict.py [-h] --model MODEL --data DATA
+                        [--split {train,val,test,all}] [--device DEVICE]
+                        [--batch-size BATCH_SIZE] [--num-workers NUM_WORKERS]
+                        [--max-samples MAX_SAMPLES] [--out-dir OUT_DIR]
+                        [--save-preds] [--topk TOPK]
+                        [--history-scope {model,dataset,all}]
+                        [--history-metric {accuracy,macro_f1,critical_fn_rate}]
+                        [--history-critical-class HISTORY_CRITICAL_CLASS]
+                        [--history-split {same,any}]
+                        [--history-limit HISTORY_LIMIT]
+                        [--history-dirs HISTORY_DIRS]
+                        [--profile-model PROFILE_MODEL] [--json]
+
+Batch predict and evaluate on a dataset split
+
+options:
+  -h, --help            show this help message and exit
+  --model MODEL         Path to checkpoint (.pt)
+  --data DATA           Dataset dir (has meta.jsonl/labels.jsonl/splits/)
+  --split {train,val,test,all}
+                        Which split to evaluate
+  --device DEVICE
+  --batch-size BATCH_SIZE
+                        Override batch size (default: from
+                        checkpoint.eval.batch_size or 64)
+  --num-workers NUM_WORKERS
+                        Override num_workers (default: from
+                        checkpoint.eval.num_workers or 0)
+  --max-samples MAX_SAMPLES
+                        Optional cap for quick checks
+  --out-dir OUT_DIR     Output dir for reports (default:
+                        outputs/models/history)
+  --save-preds          Write per-sample predictions JSONL
+  --topk TOPK           Top-k probabilities to store if --save-preds
+  --history-scope {model,dataset,all}
+                        Which previous reports to compare against (default:
+                        model)
+  --history-metric {accuracy,macro_f1,critical_fn_rate}
+                        Metric to rank reports by
+  --history-critical-class HISTORY_CRITICAL_CLASS
+                        Used when --history-metric=critical_fn_rate (default:
+                        MISALIGNED)
+  --history-split {same,any}
+                        Compare only same split as current or any split
+  --history-limit HISTORY_LIMIT
+                        How many history rows to print
+  --history-dirs HISTORY_DIRS
+                        Comma-separated list of dirs to search for reports
+                        (default: outputs/models and outputs/models/history)
+  --profile-model PROFILE_MODEL
+                        Optional path to profile classifier checkpoint (.pt)
+                        for two-stage evaluation
+  --json                Print a machine-readable result line
+                        ('SIMPLE_SIM_RESULT {...}') as last stdout line

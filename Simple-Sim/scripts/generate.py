@@ -13,7 +13,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from simple_sim.cli_utils import RENDERER_MISMATCH_HINT, add_json_flag, run_cli, with_hint
+from simple_sim.cli_utils import RENDERER_MISMATCH_HINT, add_json_flag, add_out_arg, run_cli, with_hint
 from simple_sim.manifest import RendererMismatchError
 from simple_sim.generation.dataset import generate_dataset  # noqa: F401 (re-exported for tests/tools)
 
@@ -23,7 +23,7 @@ COMMAND = "generate"
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description='Generate synthetic PCB defect dataset')
     parser.add_argument('--config', type=str, required=True, help='Path to YAML configuration file')
-    parser.add_argument('--out', type=str, required=True, help='Output directory for dataset')
+    add_out_arg(parser, 'Output directory for dataset')
     parser.add_argument('--extend', action='store_true', help='Append new samples to an existing dataset directory instead of overwriting')
     parser.add_argument(
         '--disable-cardinal-rotation-90',

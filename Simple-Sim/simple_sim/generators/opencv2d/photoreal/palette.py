@@ -11,7 +11,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from simple_sim.board.footprints import CHIP_FAMILIES
+from simple_sim.board.footprints import CHIP_FAMILIES, FAMILIES, KIND_ARRAY
 from simple_sim.board.placement import REFDES_PREFIX  # noqa: F401 (re-exported for silkscreen)
 
 
@@ -69,24 +69,25 @@ RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", 
 CAP_ARRAY_BODY = np.array((178, 186, 190), dtype=np.float32)  # light grey-beige ceramic (real crops: near white)
 
 
-ARRAY_FAMILIES = ("array_r", "array_c")
+# Part-family sets below are derived from board.footprints.FAMILIES (N1), in its order.
+ARRAY_FAMILIES = tuple(n for n, f in FAMILIES.items() if f.kind == KIND_ARRAY)
 
 
 ARRAY_CODES = ("0", "000", "101", "103", "220", "221", "330", "472", "473", "102", "4R7")
 
 
-LEADED = ("sot", "soic", "sot6")
+LEADED = tuple(n for n, f in FAMILIES.items() if f.leaded)
 
 
 # Two-terminal chip parts (chip_2pad): the board model's chip families.
 CHIPS = CHIP_FAMILIES
 
 
-UNMARKED = ("capacitor", "array_c", "inductor", "power_inductor", "led")  # no printed/laser code
+UNMARKED = tuple(n for n, f in FAMILIES.items() if f.unmarked)  # no printed/laser code
 
 
 # Chip terminal (end cap) length relative to the body; moulded power inductors have theirs underneath.
-CAP_LEN = {"capacitor": 0.26, "resistor": 0.22, "inductor": 0.25, "led": 0.16}
+CAP_LEN = {n: f.cap_len for n, f in FAMILIES.items() if f.cap_len is not None}
 
 
 LED_LENS = np.array((150, 208, 222), dtype=np.float32)   # yellowish translucent epoxy over the die

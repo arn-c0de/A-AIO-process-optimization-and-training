@@ -12,11 +12,11 @@ from typing import Any
 
 import numpy as np
 
-from simple_sim.board.footprints import PadSpec, chip_pads, part_from_pads
+from simple_sim.board.footprints import FAMILIES, PadSpec, chip_pads, part_from_pads
 from simple_sim.board.model import Board, Part, Vec
 
-REFDES_PREFIX = {"resistor": "R", "capacitor": "C", "sot": "Q", "soic": "U", "qfn": "U", "sot6": "U", "array_r": "RN",
-                 "array_c": "CN", "inductor": "L", "power_inductor": "L", "led": "D"}
+# family -> reference-designator prefix, derived from footprints.FAMILIES (N1; same keys and order as before).
+REFDES_PREFIX = {name: fam.refdes for name, fam in FAMILIES.items()}
 
 
 def refdes_prefix(family: str) -> str:

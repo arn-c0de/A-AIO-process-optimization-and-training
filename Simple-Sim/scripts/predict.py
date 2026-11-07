@@ -21,10 +21,11 @@ import torch
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import UsageError, add_json_flag, run_cli
+from simple_sim.cli_utils import UsageError, add_data_arg, add_json_flag, add_model_arg, run_cli
 from simple_sim.data_loader import load_image_bgr, preprocess_bgr
+from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL
+from simple_sim.devices import default_device_name, resolve_device
 from simple_sim.eval_utils import (
-    MANIFEST_NAME,
     dataset_profile,
     predict_probs,
     resolve_bundle_checkpoint,
@@ -37,14 +38,14 @@ def maybe_get_ground_truth(data_dir: Path | None, sample_id: str | None) -> str 
     """Ground-truth class of *sample_id* from ``labels.jsonl`` (None if unknown)."""
     if not data_dir or not sample_id:
         return None
-    label_rows = read_jsonl(Path(data_dir) / "labels.jsonl", LabelRow)
+    label_rows = read_jsonl(Path(data_dir) / LABELS_JSONL, LabelRow)
     return {r.id: r.class_name for r in label_rows}.get(sample_id)
 
 
 def maybe_get_image_from_id(data_dir: Path, sample_id: str) -> Path:
     """Image path of *sample_id* via ``meta.jsonl``; a bare index like ``42`` maps to ``images/000042.png``."""
     data_dir = Path(data_dir)
-    id_to_meta = {r.id: r for r in read_jsonl(data_dir / "meta.jsonl", MetaRow)}
+    id_to_meta = {r.id: r for r in read_jsonl(data_dir / META_JSONL, MetaRow)}
     if sample_id in id_to_meta:
         return data_dir / id_to_meta[sample_id].image_path
     try:
@@ -84,7 +85,7 @@ def predict_image(
     if not image_path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    device = torch.device(device)
+    device = resolve_device(device)
     # Multi-model bundle support: if --model is a directory, require --data to resolve profile.
     if model_path.is_dir():
         if not data_dir:
@@ -100,7 +101,7 @@ def predict_image(
     # GUARD: Validate profile compatibility if using dataset (hard fail, no override flag here).
     # Ensemble checkpoints (profile_id "multi") span several profiles and are not checked.
     ckpt_profile_id = (checkpoint.get("component_profile") or {}).get("profile_id")
-    if data_dir and ckpt_profile_id != "multi" and (data_dir / MANIFEST_NAME).exists():
+    if data_dir and ckpt_profile_id != "multi" and (data_dir / DATASET_MANIFEST).exists():
         profile_id, profile_hash = dataset_profile(data_dir)
         check_checkpoint_profile(checkpoint, profile_id, profile_hash, action="predict on")
 
@@ -142,11 +143,11 @@ def print_prediction(result: dict[str, Any]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Predict defect class for an image")
-    parser.add_argument("--model", required=True, help="Path to trained model checkpoint (.pt)")
+    add_model_arg(parser, "Path to trained model checkpoint (.pt)")
     parser.add_argument("--image", help="Path to image file (png/jpg)")
-    parser.add_argument("--data", help="Optional: dataset dir to lookup ground truth/ID (has meta.jsonl/labels.jsonl)")
+    add_data_arg(parser, "Optional: dataset dir to lookup ground truth/ID (has meta.jsonl/labels.jsonl)", required=False)
     parser.add_argument("--id", help="Optional: sample ID (to load image from dataset + show ground truth label)")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="cuda/cpu")
+    parser.add_argument("--device", default=default_device_name(), help="cuda/cpu")
     parser.add_argument("--topk", type=int, default=4, help="How many classes to show")
     add_json_flag(parser)
     args = parser.parse_args()

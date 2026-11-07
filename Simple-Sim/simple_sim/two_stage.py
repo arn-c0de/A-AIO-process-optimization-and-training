@@ -10,10 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import torch
 import torch.nn as nn
 
 from simple_sim.data_loader import load_image_bgr, preprocess_bgr
+from simple_sim.devices import resolve_device
 from simple_sim.eval_utils import predict_probs, top_prediction
 from simple_sim.model_bundle import bundle_checkpoint_path
 from simple_sim.models import load_checkpoint_model
@@ -48,7 +48,7 @@ class TwoStageClassifier:
         device: str = 'cpu',
         min_profile_confidence: float = 0.5,
     ) -> None:
-        self.device = torch.device(device)
+        self.device = resolve_device(device)
         self.min_profile_confidence = min_profile_confidence
         self.defect_bundle_path = Path(defect_bundle_path)
 

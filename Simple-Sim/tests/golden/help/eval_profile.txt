@@ -1,0 +1,12 @@
+usage: eval_profile.py [-h] --data DATA --model MODEL [--device DEVICE]
+                       [--json]
+
+Evaluate profile classifier on test set
+
+options:
+  -h, --help       show this help message and exit
+  --data DATA      Path to mixed-profile dataset directory
+  --model MODEL    Path to trained profile classifier checkpoint
+  --device DEVICE  Device (cuda/cpu)
+  --json           Print a machine-readable result line ('SIMPLE_SIM_RESULT
+                   {...}') as last stdout line

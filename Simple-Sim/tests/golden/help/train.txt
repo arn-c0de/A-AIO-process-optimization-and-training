@@ -1,0 +1,31 @@
+usage: train.py [-h] --data DATA --out OUT [--resume RESUME]
+                [--allow-profile-mismatch] [--extra-epochs EXTRA_EPOCHS]
+                [--out-mode {best,last}] [--device DEVICE] [--amp | --no-amp]
+                [--threads THREADS] [--json]
+
+Train ResNet18 classifier
+
+options:
+  -h, --help            show this help message and exit
+  --data DATA           Path to dataset directory
+  --out OUT             Output path for trained model
+  --resume RESUME       Optional: checkpoint to resume from (.pt)
+  --allow-profile-mismatch
+                        DANGEROUS: allow resuming from a checkpoint trained on
+                        a different component profile. This disables the hard
+                        profile_id mismatch guard and continues with a
+                        warning.
+  --extra-epochs EXTRA_EPOCHS
+                        Optional: train N additional epochs beyond the resumed
+                        epoch (default: use dataset config epochs)
+  --out-mode {best,last}
+                        Whether --out points to the best checkpoint ('best')
+                        or the latest epoch ('last'). Default: best
+  --device DEVICE       Device (cuda/cpu)
+  --amp                 Enable mixed precision on CUDA (default).
+  --no-amp              Disable mixed precision.
+  --threads THREADS     Torch intra-op threads for CPU training (default:
+                        torch picks; on hybrid CPUs the number of performance
+                        cores is often faster than the default)
+  --json                Print a machine-readable result line
+                        ('SIMPLE_SIM_RESULT {...}') as last stdout line

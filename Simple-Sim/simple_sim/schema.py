@@ -9,6 +9,7 @@ import dataclasses
 import json
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
+from collections.abc import Callable, Iterator
 from typing import Any, TypeVar
 from simple_sim.classes import VALID_CLASSES
 from simple_sim.io_utils import append_jsonl, atomic_write_jsonl
@@ -132,11 +133,21 @@ def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:
     Returns:
         List of validated dataclass instances
     """
+    return list(iter_jsonl(path, schema_cls))
+
+
+def iter_jsonl(path: Path, schema_cls: type[T]) -> Iterator[T]:
+    """:func:`read_jsonl` row by row (same validation and errors, nothing kept in memory).
+
+    The missing-file check runs on the call, not on the first ``next()``.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"JSONL file not found: {path}")
+    return _iter_jsonl(path, schema_cls)
 
-    rows = []
+
+def _iter_jsonl(path: Path, schema_cls: type[T]) -> Iterator[T]:
     # Per-file constants (hoisted out of the per-line loop; plan S1). The dataclass check stays
     # lazy so an empty file still returns [] for any class, as before.
     expected_fields: frozenset[str] | None = None
@@ -172,15 +183,22 @@ def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:
 
             try:
                 row = schema_cls(**data)
-                rows.append(row)
             except (TypeError, ValueError) as e:
                 raise ValueError(f"Schema validation failed at line {line_num}: {e}") from e
+            yield row
 
-    return rows
 
-
-def validate_jsonl_pair(meta_path: Path, labels_path: Path) -> None:
+def validate_jsonl_pair(
+    meta_path: Path,
+    labels_path: Path,
+    *,
+    on_meta: Callable[[MetaRow], None] | None = None,
+    on_label: Callable[[LabelRow], None] | None = None,
+) -> None:
     """Validate that meta.jsonl and labels.jsonl are consistent.
+
+    Streams both files (only the ids are kept). *on_meta* / *on_label* see every validated row in
+    file order (meta first), so a caller can collect what it needs in the same pass.
 
     Args:
         meta_path: Path to meta.jsonl
@@ -189,16 +207,26 @@ def validate_jsonl_pair(meta_path: Path, labels_path: Path) -> None:
     Raises:
         ValueError: If validation fails
     """
-    meta_rows = read_jsonl(meta_path, MetaRow)
-    label_rows = read_jsonl(labels_path, LabelRow)
+    meta_ids: set[str] = set()
+    n_meta = 0
+    for row in iter_jsonl(meta_path, MetaRow):
+        meta_ids.add(row.id)
+        n_meta += 1
+        if on_meta is not None:
+            on_meta(row)
+    label_ids: set[str] = set()
+    n_labels = 0
+    for lrow in iter_jsonl(labels_path, LabelRow):
+        label_ids.add(lrow.id)
+        n_labels += 1
+        if on_label is not None:
+            on_label(lrow)
 
     # Check counts match
-    if len(meta_rows) != len(label_rows):
-        raise ValueError(f"Row count mismatch: meta={len(meta_rows)}, labels={len(label_rows)}")
+    if n_meta != n_labels:
+        raise ValueError(f"Row count mismatch: meta={n_meta}, labels={n_labels}")
 
     # Check IDs match
-    meta_ids = {row.id for row in meta_rows}
-    label_ids = {row.id for row in label_rows}
 
     if meta_ids != label_ids:
         missing_in_labels = meta_ids - label_ids

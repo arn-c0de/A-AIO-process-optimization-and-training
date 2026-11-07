@@ -1,0 +1,57 @@
+usage: render_debug_previews.py [-h] [--profiles-dir PROFILES_DIR]
+                                [--configs-dir CONFIGS_DIR] [--out OUT]
+                                [--settings-file SETTINGS_FILE]
+                                [--backend {opencv_2d,blender_3d,both,auto}]
+                                [--profiles PROFILES] [--all]
+                                [--non-interactive] [--config CONFIG]
+                                [--seed SEED] [--variable-seeds]
+                                [--disable-cardinal-rotation-90]
+                                [--states STATES] [--blender BLENDER]
+                                [--samples SAMPLES] [--device DEVICE]
+                                [--roi ROI] [--dry-run]
+                                [--view {tk,browser,none}]
+                                [--open | --no-open] [--json]
+
+Render per-profile debug previews (2D OpenCV and/or 3D Blender)
+
+options:
+  -h, --help            show this help message and exit
+  --profiles-dir PROFILES_DIR
+                        Directory with component profile YAMLs
+  --configs-dir CONFIGS_DIR
+                        Directory with run_*.yaml configs (for auto matching)
+  --out OUT             Output directory root
+  --settings-file SETTINGS_FILE
+                        Shared GUI settings JSON (default:
+                        outputs/gui/settings.json)
+  --backend {opencv_2d,blender_3d,both,auto}
+                        Render backend: opencv_2d|blender_3d|both|auto
+  --profiles PROFILES   Comma-separated profile IDs to render
+  --all                 Render all discovered profiles (within backend
+                        selection)
+  --non-interactive     Do not prompt; auto-renders new/incomplete profiles
+                        when --profiles/--all is omitted
+  --config CONFIG       Optional run config YAML to use for ALL selected
+                        profiles (must match backend unless --backend=both)
+  --seed SEED           Base seed for deterministic previews
+  --variable-seeds      Generate different images on each run (like real
+                        pipeline)
+  --disable-cardinal-rotation-90
+                        Disable random 0/90/180/270 base orientation in
+                        previews (keep only rotation_deg_range jitter)
+  --states STATES       Comma-separated defect states to render (default: from
+                        profile.defect_set)
+  --blender BLENDER     (3D) Override blender executable (else from config)
+  --samples SAMPLES     (3D) Override Cycles samples (else from config)
+  --device DEVICE       (3D) Override device (CPU/GPU; else from config)
+  --roi ROI             Override ROI as WIDTHxHEIGHT@MM_PER_PX, e.g.
+                        256x256@0.01
+  --dry-run             Only write index/jobs; do not render (2D or 3D)
+  --view {tk,browser,none}
+                        How to open previews after run (default: tk)
+  --open                (legacy) open in browser after run
+  --no-open             (legacy) do not auto-open after run
+  --json                Print a machine-readable result line
+                        ('SIMPLE_SIM_RESULT {...}') as last stdout line
+
+--json implies --non-interactive and --view none.

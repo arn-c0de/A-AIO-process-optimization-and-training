@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, run_cli
+from simple_sim.cli_utils import add_json_flag, add_out_arg, run_cli
 from simple_sim.generation.profile_dataset import generate_profile_dataset
 
 COMMAND = "generate_profile_dataset"
@@ -25,7 +25,7 @@ COMMAND = "generate_profile_dataset"
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description='Generate mixed-profile dataset for profile classifier')
     parser.add_argument('--config', type=str, required=True, help='Path to YAML configuration file')
-    parser.add_argument('--out', type=str, required=True, help='Output directory for dataset')
+    add_out_arg(parser, 'Output directory for dataset')
     parser.add_argument(
         '--disable-cardinal-rotation-90',
         action='store_true',

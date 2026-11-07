@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from simple_sim.arena import detect_sim_root, write_arena_report
-from simple_sim.cli_utils import add_json_flag, run_cli
+from simple_sim.cli_utils import add_json_flag, add_out_arg, run_cli
 
 COMMAND = "arena_report"
 
@@ -46,7 +46,7 @@ def _run(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Generate ARENA_REPORT.md for Arena-tracked models")
     ap.add_argument("--sim-root", default=None, help="Simple-Sim root (default: auto-detect)")
-    ap.add_argument("--out", default=None, help="Output markdown path (default: <sim-root>/ARENA_REPORT.md)")
+    add_out_arg(ap, "Output markdown path (default: <sim-root>/ARENA_REPORT.md)", required=False)
     add_json_flag(ap)
     args = ap.parse_args(argv)
 

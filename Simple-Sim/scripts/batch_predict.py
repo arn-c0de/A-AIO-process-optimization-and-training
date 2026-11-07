@@ -30,13 +30,15 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, run_cli
+from simple_sim.cli_utils import add_data_arg, add_json_flag, add_model_arg, run_cli
 from simple_sim.data_loader import ROIDataset
+from simple_sim.dataset_files import DATASET_MANIFEST
 from simple_sim.dataset_index import DatasetIndex
+from simple_sim.devices import default_device_name, resolve_device
 from simple_sim.io_utils import append_jsonl, atomic_write_json, now_iso, now_tag, unique_path
 from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
 from simple_sim.metrics import compute_metrics, format_metrics
-from simple_sim.model_bundle import bundle_checkpoint_path
+from simple_sim.model_bundle import resolve_bundle_checkpoint
 from simple_sim.models import load_checkpoint_model
 from simple_sim.reports import load_reports, metric_value
 
@@ -100,22 +102,16 @@ def resolve_model_path(requested: Path, data_dir: Path) -> tuple[Path, str | Non
     """Return ``(checkpoint_path, bundle_profile_id)``; a bundle dir resolves via the dataset's profile."""
     if not requested.is_dir():
         return requested, None
-    manifest_path = data_dir / "dataset_manifest.json"
+    manifest_path = data_dir / DATASET_MANIFEST
     if not manifest_path.exists():
         raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
     profile_id, _ = resolve_dataset_profile(read_dataset_manifest(manifest_path))
-    resolved = bundle_checkpoint_path(requested, profile_id, kind="best")
-    if not resolved.exists():
-        # Help users diagnose what's actually inside the bundle dir.
-        avail = sorted(p.name for p in requested.glob("*.pt"))
-        raise FileNotFoundError(
-            f"Multi-model bundle has no checkpoint for profile '{profile_id}':\n"
-            f"  bundle: {requested}\n"
-            f"  expected: {resolved}\n"
-            f"  available: {', '.join(avail[:12]) if avail else '(none)'}\n\n"
-            f"To add it, train this dataset into the same bundle:\n"
-            f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {requested}"
-        )
+    # The error lists what is actually inside the bundle dir.
+    resolved = resolve_bundle_checkpoint(
+        requested, profile_id, show_available=True,
+        hint=("\nTo add it, train this dataset into the same bundle:\n"
+              f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {requested}"),
+    )
     return resolved, profile_id
 
 
@@ -339,7 +335,7 @@ def print_history(rows: list[tuple[float, dict[str, Any]]], *, scope: str, split
 def run(args: argparse.Namespace) -> dict[str, Any]:
     requested_model_path = Path(args.model)
     data_dir = Path(args.data)
-    device = torch.device(args.device)
+    device = resolve_device(args.device)
 
     # Multi-model bundle support: --model can be a directory containing per-profile checkpoints.
     effective_model_path, dataset_profile_id = resolve_model_path(requested_model_path, data_dir)
@@ -497,10 +493,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Batch predict and evaluate on a dataset split")
-    ap.add_argument("--model", required=True, help="Path to checkpoint (.pt)")
-    ap.add_argument("--data", required=True, help="Dataset dir (has meta.jsonl/labels.jsonl/splits/)")
+    add_model_arg(ap, "Path to checkpoint (.pt)")
+    add_data_arg(ap, "Dataset dir (has meta.jsonl/labels.jsonl/splits/)")
     ap.add_argument("--split", default="test", choices=["train", "val", "test", "all"], help="Which split to evaluate")
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--device", default=default_device_name())
     ap.add_argument("--batch-size", type=int, default=None, help="Override batch size (default: from checkpoint.eval.batch_size or 64)")
     ap.add_argument("--num-workers", type=int, default=None, help="Override num_workers (default: from checkpoint.eval.num_workers or 0)")
     ap.add_argument("--max-samples", type=int, default=None, help="Optional cap for quick checks")

@@ -20,8 +20,7 @@ from .photoreal import DEFAULT_SUPERSAMPLING, render_photoreal_base, solder_defe
 #   camera  the rotation is a camera roll before the camera model, the domain blur is combined with the
 #           lens blur and the domain noise with the read noise: one blur, one noise, no interpolated
 #           noise. Brightness/contrast/colour and the extended image filters are applied as before.
-POST_FILTER_MODES = ("legacy", "camera")
-DEFAULT_POST_FILTERS = "legacy"
+from simple_sim.generators.options import DEFAULT_POST_FILTERS, POST_FILTER_MODES  # noqa: E402 (I7: cv2-free)
 _CAMERA_KEYS = ("blur_sigma", "noise_stddev", "rotation_deg")
 
 

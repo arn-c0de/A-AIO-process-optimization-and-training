@@ -1,0 +1,19 @@
+usage: sample_check.py [-h] --model MODEL --data DATA
+                       [--split {train,val,test}] [--per-class PER_CLASS]
+                       [--seed SEED] [--batch-size BATCH_SIZE]
+                       [--device DEVICE] [--json]
+
+Sample-check predictions vs GT
+
+options:
+  -h, --help            show this help message and exit
+  --model MODEL         Path to checkpoint (.pt)
+  --data DATA           Dataset dir
+  --split {train,val,test}
+  --per-class PER_CLASS
+                        How many samples per class
+  --seed SEED           Sampling RNG seed
+  --batch-size BATCH_SIZE
+  --device DEVICE
+  --json                Print a machine-readable result line
+                        ('SIMPLE_SIM_RESULT {...}') as last stdout line

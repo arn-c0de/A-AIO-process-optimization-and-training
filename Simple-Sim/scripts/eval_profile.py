@@ -16,7 +16,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, run_cli
+from simple_sim.cli_utils import add_data_arg, add_json_flag, add_model_arg, run_cli
+from simple_sim.devices import default_device_name, resolve_device
 from simple_sim.data_loader import ProfileDataset
 from simple_sim.eval_utils import checkpoint_val_accuracy, eval_loader, metrics_summary, format_checkpoint_info, format_distribution
 from simple_sim.io_utils import atomic_write_json, now_iso
@@ -29,7 +30,7 @@ def run_eval_profile(data_dir: Path, model_path: Path, device: str | torch.devic
     """Evaluate a profile classifier on the test split and write ``report_profile_classifier_<stem>.json``."""
     data_dir = Path(data_dir)
     model_path = Path(model_path)
-    device = torch.device(device)
+    device = resolve_device(device)
 
     print("Profile classifier evaluation")
     print(f"  Dataset: {data_dir}")
@@ -89,10 +90,9 @@ def run_eval_profile(data_dir: Path, model_path: Path, device: str | torch.devic
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Evaluate profile classifier on test set')
-    parser.add_argument('--data', type=str, required=True, help='Path to mixed-profile dataset directory')
-    parser.add_argument('--model', type=str, required=True, help='Path to trained profile classifier checkpoint')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                        help='Device (cuda/cpu)')
+    add_data_arg(parser, 'Path to mixed-profile dataset directory')
+    add_model_arg(parser, 'Path to trained profile classifier checkpoint')
+    parser.add_argument('--device', type=str, default=default_device_name(), help='Device (cuda/cpu)')
     add_json_flag(parser)
     args = parser.parse_args()
 

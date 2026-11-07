@@ -10,6 +10,7 @@ from typing import Any
 from simple_sim.classes import VALID_CLASSES  # noqa: F401  (re-exported for existing importers)
 from simple_sim.config_schema import parse_config_typed
 from simple_sim.generators.backends import Backend, backend_of, parse_backend, supporting
+from simple_sim.generators.options import LOOKS, POST_FILTER_MODES, SOLDER_STYLES, SUPERSAMPLING_CHOICES, validate_camera_config
 from simple_sim.io_utils import load_yaml
 
 log = logging.getLogger(__name__)
@@ -354,11 +355,11 @@ def _validate_board_look(render: dict[str, Any]) -> None:
 
     texture_dir = render.get('texture_dir')
     if texture_dir is not None:
-        from simple_sim.generators.opencv2d.photoreal import texture_files
+        from simple_sim.images import is_image
 
         if not isinstance(texture_dir, str) or not Path(texture_dir).is_dir():
             raise ValueError(f"render.texture_dir must be an existing directory: {texture_dir!r}")
-        if not texture_files(texture_dir):
+        if not any(is_image(p) for p in Path(texture_dir).iterdir()):  # = photoreal texture_files() non-empty
             raise ValueError(f"render.texture_dir contains no images: {texture_dir!r}")
 
 
@@ -373,8 +374,6 @@ def _validate_supersampling(factor: Any) -> None:
     """``render.supersampling`` (both backends; 3D: the baked board): photoreal render scale, default 2."""
     if factor is None:
         return
-    from simple_sim.generators.opencv2d.photoreal import SUPERSAMPLING_CHOICES
-
     if isinstance(factor, bool) or factor not in SUPERSAMPLING_CHOICES:
         raise ValueError(f"render.supersampling must be one of {list(SUPERSAMPLING_CHOICES)}")
 
@@ -383,8 +382,6 @@ def _validate_solder(style: Any) -> None:
     """``render.solder`` (both backends; 3D: the baked neighbour joints): solder joint model, default legacy."""
     if style is None:
         return
-    from simple_sim.generators.opencv2d.photoreal.meniscus import SOLDER_STYLES
-
     if style not in SOLDER_STYLES:
         raise ValueError(f"render.solder must be one of {list(SOLDER_STYLES)}")
 
@@ -393,8 +390,6 @@ def _validate_look(look: Any) -> None:
     """``render.look`` (both backends; 3D: the baked board and the camera): target look, default legacy."""
     if look is None:
         return
-    from simple_sim.generators.opencv2d.photoreal import LOOKS
-
     if look not in LOOKS:
         raise ValueError(f"render.look must be one of {list(LOOKS)}")
 
@@ -404,8 +399,6 @@ def _validate_post_filters(render: dict[str, Any]) -> None:
     mode = render.get('post_filters')
     if mode is None:
         return
-    from simple_sim.generators.opencv2d.render import POST_FILTER_MODES
-
     if mode not in POST_FILTER_MODES:
         raise ValueError(f"render.post_filters must be one of {list(POST_FILTER_MODES)}")
     if mode == 'camera' and (not backend_of(render).post_filters_camera or render.get('style', 'photoreal') != 'photoreal'):
@@ -416,8 +409,6 @@ def _validate_camera(camera: Any) -> None:
     """``render.camera`` (both backends): preset and overrides of the camera model (photoreal.CAMERA_DEFAULTS)."""
     if camera is None:
         return
-    from simple_sim.generators.opencv2d.photoreal.camera import validate_camera_config
-
     validate_camera_config(camera)
 
 

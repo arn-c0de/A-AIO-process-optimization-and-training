@@ -15,24 +15,26 @@ from .imageops import clip8, grid, smooth_noise
 
 
 # Camera model parameters (``render.camera``); tools/calibrate_camera.py fits the AOI ones to real ROIs.
-# Ranges are sampled per image.
-CAMERA_DEFAULTS: dict[str, Any] = {
-    "blur_sigma": [0.55, 0.95],    # lens/optics blur (Gaussian sigma in camera pixels)
-    "read_noise": [1.0, 4.0],      # read noise variance (8-bit levels^2)
-    "shot_noise": 0.04,            # shot noise variance per intensity level
-    "tilt_deg": [0.0, 0.0],        # oblique view: angle between optical axis and board normal
-    "zoom": [1.0, 1.0],            # >1: camera farther away, the part appears this much smaller
-    "defocus": [0.0, 0.0],         # extra blur (sigma) at the far/near edge of a tilted view (depth of field)
-    "sharpen": [0.0, 0.0],         # phone ISP edge sharpening (unsharp mask amount)
-    "jpeg_quality": [100, 100],    # < 95 compresses
-    "capture_scale": [1.0, 1.0],   # sensor pixels per ROI pixel (<1: low-res capture, upscaled to the ROI like a small crop)
-    "chroma_shift": [0.0, 0.0],    # lateral chromatic aberration: R/B shift at the ROI border (sensor pixels)
-    "sensor_px_per_mm": [0.0, 0.0],  # > 0: sensor resolution; replaces capture_scale by sensor px/mm x roi.mm_per_px
-    "channel_shift": [0.0, 0.0],   # line-scanner RGB misregistration: B and R shifted apart along one axis (sensor px)
-    "channel_axis": "random",      # that axis: "random" (per image), "x" or "y" (a scanner's fixed scan direction)
-    "crop_part_lengths": [0.0, 0.0],  # > 0 (2D): field of view = this many body lengths; replaces zoom (< 1 magnifies)
-    "max_oversampling": 0.0,       # > 0 (2D): cap on supersampling x zoom (rendered px per output px and axis)
-}
+# Ranges are sampled per image. The defaults, the channel axes, the range limits and the config validator
+# live in the cv2-free ``simple_sim.generators.options`` (I7); this module re-exports them. Keys:
+#   blur_sigma: lens/optics blur (Gaussian sigma in camera pixels)
+#   read_noise: read noise variance (8-bit levels^2)
+#   shot_noise: shot noise variance per intensity level
+#   tilt_deg: oblique view: angle between optical axis and board normal
+#   zoom: >1: camera farther away, the part appears this much smaller
+#   defocus: extra blur (sigma) at the far/near edge of a tilted view (depth of field)
+#   sharpen: phone ISP edge sharpening (unsharp mask amount)
+#   jpeg_quality: < 95 compresses
+#   capture_scale: sensor pixels per ROI pixel (<1: low-res capture, upscaled to the ROI like a small crop)
+#   chroma_shift: lateral chromatic aberration: R/B shift at the ROI border (sensor pixels)
+#   sensor_px_per_mm: > 0: sensor resolution; replaces capture_scale by sensor px/mm x roi.mm_per_px
+#   channel_shift: line-scanner RGB misregistration: B and R shifted apart along one axis (sensor px)
+#   channel_axis: that axis: "random" (per image), "x" or "y" (a scanner's fixed scan direction)
+#   crop_part_lengths: > 0 (2D): field of view = this many body lengths; replaces zoom (< 1 magnifies)
+#   max_oversampling: > 0 (2D): cap on supersampling x zoom (rendered px per output px and axis)
+from simple_sim.generators.options import CAMERA_DEFAULTS, CHANNEL_AXES  # noqa: E402
+from simple_sim.generators.options import CAMERA_RANGE_LIMITS as _RANGE_LIMITS  # noqa: E402,F401
+from simple_sim.generators.options import validate_camera_config as _validate_camera_options  # noqa: E402
 
 
 # ``render.camera.preset``: a fixed AOI camera (default) or handheld phone photos.
@@ -50,10 +52,6 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
               # DeepVision cuts every QUINS crop at 3x the body length (measured: 3.02-3.04 for all chip forms).
               "crop_part_lengths": [3.0, 3.0]},
 }
-
-
-CHANNEL_AXES = ("random", "x", "y")
-_RANGE_LIMITS = {"tilt_deg": 60.0, "jpeg_quality": 100.0, "capture_scale": 1.0}
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -124,32 +122,11 @@ def validate_camera_config(camera: Any) -> None:
     """Raise ``ValueError`` unless *camera* is a valid ``render.camera`` mapping (preset + overrides).
 
     ``config._validate_camera`` runs this at config time, so typos and bad ranges fail before rendering.
+    The key/range checks are :func:`simple_sim.generators.options.validate_camera_config` (cv2-free).
     """
+    _validate_camera_options(camera)
     if camera is None:
         return
-    if not isinstance(camera, dict) or set(camera) - set(CAMERA_DEFAULTS) - {'preset'}:
-        raise ValueError(f"render.camera must be a mapping with keys from {sorted(set(CAMERA_DEFAULTS) | {'preset'})}")
-    if camera.get('preset', 'aoi') not in CAMERA_PRESETS:
-        raise ValueError(f"render.camera.preset must be one of {sorted(CAMERA_PRESETS)}")
-    for key, default in CAMERA_DEFAULTS.items():
-        if key not in camera or not isinstance(default, list):
-            continue
-        rng = camera[key]
-        limit = _RANGE_LIMITS.get(key, float('inf'))
-        if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(v, (int, float)) for v in rng)
-                and 0 <= rng[0] <= rng[1] <= limit):
-            raise ValueError(f"render.camera.{key} must be [min, max] with 0 <= min <= max <= {_RANGE_LIMITS.get(key, 'inf')}")
-    if 'capture_scale' in camera and camera['capture_scale'][0] < 0.05:
-        raise ValueError("render.camera.capture_scale must be in [0.05, 1] (sensor pixels per ROI pixel)")
-    if 'zoom' in camera and camera['zoom'][0] < 1:
-        raise ValueError("render.camera.zoom must be >= 1 (1 = profile scale, larger = farther away)")
-    if 'shot_noise' in camera and not (isinstance(camera['shot_noise'], (int, float)) and camera['shot_noise'] >= 0):
-        raise ValueError("render.camera.shot_noise must be a number >= 0")
-    if 'channel_axis' in camera and camera['channel_axis'] not in CHANNEL_AXES:
-        raise ValueError(f"render.camera.channel_axis must be one of {list(CHANNEL_AXES)}")
-    if 'max_oversampling' in camera and not (isinstance(camera['max_oversampling'], (int, float))
-                                             and camera['max_oversampling'] >= 0):
-        raise ValueError("render.camera.max_oversampling must be a number >= 0 (0 = off)")
     CameraSettings.from_config(camera)  # the merged settings must construct as well
 
 

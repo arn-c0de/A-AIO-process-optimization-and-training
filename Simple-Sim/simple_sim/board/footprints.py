@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from simple_sim.board.model import Pad, PadRole, Part, Vec
@@ -23,13 +24,87 @@ UP: Vec = (0.0, -1.0)
 DOWN: Vec = (0.0, 1.0)
 NONE: Vec = (0.0, 0.0)
 
-FAMILIES = ("resistor", "capacitor", "sot", "soic", "qfn", "sot6", "array_r", "array_c", "inductor", "power_inductor",
-            "led")
+# Body drawer kinds of the 2D renderer (``photoreal.parts`` dispatches on them).
+KIND_CHIP = "chip"                       # two-terminal chip with end caps (R, C, L, LED)
+KIND_POWER_INDUCTOR = "power_inductor"   # moulded block, terminals underneath
+KIND_ARRAY = "array"                     # 4-element R/C array (chip_array_8)
+KIND_IC = "ic"                           # moulded package: pin-1 mark, gloss, laser marking
+BODY_KINDS = (KIND_CHIP, KIND_POWER_INDUCTOR, KIND_ARRAY, KIND_IC)
+
+# Marking rules of the 2D renderer (``photoreal.parts.draw_marking``); ``None``: unmarked.
+MARK_RESISTOR_CODE = "resistor_code"     # printed 3-4 character value code
+MARK_ARRAY_CODE = "array_code"           # printed 1-3 character code between the terminal rows
+MARK_LASER = "laser"                     # laser marking (part number / date / lot, or a short SOT code)
+PRINTED_MARKINGS = (MARK_RESISTOR_CODE, MARK_ARRAY_CODE)
+
+
+@dataclass(frozen=True, slots=True)
+class PartFamily:
+    """Per-family facts the renderers, the board model and the copper rules share (cv2-free, N1).
+
+    The old per-module constants (``CHIP_FAMILIES``, ``FINE_PITCH_FAMILIES``, ``placement.REFDES_PREFIX``,
+    ``photoreal.palette`` ``CHIPS`` / ``LEADED`` / ``ARRAY_FAMILIES`` / ``UNMARKED`` / ``CAP_LEN``) are
+    derived from :data:`FAMILIES`, in its order.
+    """
+
+    name: str
+    kind: str                       # body drawer (:data:`BODY_KINDS`)
+    refdes: str                     # reference-designator prefix (silkscreen, board model refs)
+    marking: str | None             # marking rule (:data:`PRINTED_MARKINGS`, :data:`MARK_LASER`) or None
+    chip: bool = False              # two-terminal chip_2pad part (component_type picks the family)
+    leaded: bool = False            # gull-wing leads (SOT / SOIC)
+    fine_pitch: bool = False        # escape router necks tracks down / fans ground out
+    cap_len: float | None = None    # 2D chip terminal (end cap) length / body length
+    edge_inset: float = 0.07        # visible body edge slope from above / min(length, width)
+    grain_sd: float = 0.06          # top-face surface grain (normal noise sd)
+    height_ratio: float | None = None  # Blender body height / width (``render_batch._HEIGHT_RATIO``; None: 0.5)
+
+    @property
+    def unmarked(self) -> bool:
+        return self.marking is None
+
+    @property
+    def printed(self) -> bool:
+        """Printed ink marking (resistors) rather than laser marking (ICs)."""
+        return self.marking in PRINTED_MARKINGS
+
+
+# Every part family, in the legacy order of the former ``FAMILIES`` name tuple (iterating the mapping
+# yields the names, so ``for fam in FAMILIES`` / ``fam in FAMILIES`` work as before).
+FAMILIES: Mapping[str, PartFamily] = MappingProxyType({f.name: f for f in (
+    PartFamily("resistor", KIND_CHIP, "R", MARK_RESISTOR_CODE, chip=True, cap_len=0.22, grain_sd=0.025,
+               height_ratio=0.56),
+    PartFamily("capacitor", KIND_CHIP, "C", None, chip=True, cap_len=0.26, grain_sd=0.025, height_ratio=0.56),
+    PartFamily("sot", KIND_IC, "Q", MARK_LASER, leaded=True, edge_inset=0.05, height_ratio=0.75),
+    PartFamily("soic", KIND_IC, "U", MARK_LASER, leaded=True, fine_pitch=True, edge_inset=0.035, height_ratio=0.38),
+    PartFamily("qfn", KIND_IC, "U", MARK_LASER, fine_pitch=True, edge_inset=0.012, height_ratio=0.18),
+    PartFamily("sot6", KIND_IC, "U", MARK_LASER, leaded=True, fine_pitch=True, edge_inset=0.05),
+    PartFamily("array_r", KIND_ARRAY, "RN", MARK_ARRAY_CODE, fine_pitch=True, edge_inset=0.05),
+    PartFamily("array_c", KIND_ARRAY, "CN", None, fine_pitch=True, edge_inset=0.05),
+    PartFamily("inductor", KIND_CHIP, "L", None, chip=True, cap_len=0.25, grain_sd=0.05),
+    PartFamily("power_inductor", KIND_POWER_INDUCTOR, "L", None, chip=True, grain_sd=0.07),
+    PartFamily("led", KIND_CHIP, "D", None, chip=True, cap_len=0.16, grain_sd=0.015),
+)})
+FAMILY_NAMES = tuple(FAMILIES)
+
+# Unknown family names (not produced by family_of; kept drawable): a generic moulded IC, refdes "U".
+GENERIC_FAMILY = PartFamily("generic", KIND_IC, "U", MARK_LASER)
+
+
+def part_family(name: str) -> PartFamily:
+    """:class:`PartFamily` of *name* (:data:`GENERIC_FAMILY` for an unknown name)."""
+    return FAMILIES.get(name, GENERIC_FAMILY)
+
+
+def _names(pred) -> tuple[str, ...]:
+    return tuple(n for n, f in FAMILIES.items() if pred(f))
+
+
 # Two-terminal chip parts (chip_2pad); component_type picks the family.
-CHIP_FAMILIES = ("resistor", "capacitor", "inductor", "power_inductor", "led")
+CHIP_FAMILIES = _names(lambda f: f.chip)
 # Families with many small pads at a fine pitch: the escape router necks their tracks down at the
 # pad and fans their ground pins out, and the window board keeps their fan-out corridor clear.
-FINE_PITCH_FAMILIES = ("soic", "qfn", "sot6", "array_r", "array_c")
+FINE_PITCH_FAMILIES = _names(lambda f: f.fine_pitch)
 
 
 def is_fine_pitch(family: str) -> bool:

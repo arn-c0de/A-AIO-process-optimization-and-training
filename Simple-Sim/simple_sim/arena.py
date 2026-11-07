@@ -14,7 +14,7 @@ from typing import Any
 
 from simple_sim.coerce import as_int
 from simple_sim.io_utils import format_bytes, path_size_bytes, read_json, rel_to
-from simple_sim.model_bundle import read_bundle_meta
+from simple_sim.model_bundle import list_bundle_checkpoints, read_bundle_meta
 from simple_sim.reports import load_reports, metric_value, report_search_dirs, report_timestamp
 from simple_sim.svg_charts import write_svg_barh, write_svg_heatmap, write_svg_pie_with_legend
 
@@ -105,7 +105,7 @@ def _bundle_details(bundle_dir: Path) -> dict[str, Any]:
             checkpoints = len(meta.checkpoints)
             created = meta.created_at or "-"
         else:
-            pts = [p for p in bundle_dir.glob("*.pt") if p.is_file()]
+            pts = [p for p in list_bundle_checkpoints(bundle_dir, include_last=True) if p.is_file()]
             checkpoints = len(pts)
             profiles = sorted({p.stem.replace("_last", "") for p in pts})
         if created == "-":

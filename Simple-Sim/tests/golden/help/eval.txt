@@ -1,0 +1,23 @@
+usage: eval.py [-h] --data DATA --model MODEL [--allow-profile-mismatch]
+               [--device DEVICE] [--tta] [--calibration] [--json]
+
+Evaluate trained model on test set
+
+options:
+  -h, --help            show this help message and exit
+  --data DATA           Path to dataset directory
+  --model MODEL         Path to trained model checkpoint
+  --allow-profile-mismatch
+                        DANGEROUS: allow evaluating a checkpoint on a dataset
+                        with a different component profile. This disables the
+                        hard profile_id mismatch guard and continues with a
+                        warning.
+  --device DEVICE       Device (cuda/cpu)
+  --tta                 Test-time augmentation: average the softmax over
+                        horizontal/vertical flips and 90-degree rotations (8
+                        views; for cardinal-rotation-augmented datasets)
+  --calibration         Also report calibration: expected calibration error
+                        (15 bins), negative log-likelihood and Brier score
+                        (metrics.calibration in the report)
+  --json                Print a machine-readable result line
+                        ('SIMPLE_SIM_RESULT {...}') as last stdout line

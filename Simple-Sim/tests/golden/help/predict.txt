@@ -1,0 +1,17 @@
+usage: predict.py [-h] --model MODEL [--image IMAGE] [--data DATA] [--id ID]
+                  [--device DEVICE] [--topk TOPK] [--json]
+
+Predict defect class for an image
+
+options:
+  -h, --help       show this help message and exit
+  --model MODEL    Path to trained model checkpoint (.pt)
+  --image IMAGE    Path to image file (png/jpg)
+  --data DATA      Optional: dataset dir to lookup ground truth/ID (has
+                   meta.jsonl/labels.jsonl)
+  --id ID          Optional: sample ID (to load image from dataset + show
+                   ground truth label)
+  --device DEVICE  cuda/cpu
+  --topk TOPK      How many classes to show
+  --json           Print a machine-readable result line ('SIMPLE_SIM_RESULT
+                   {...}') as last stdout line

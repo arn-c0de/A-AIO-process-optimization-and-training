@@ -1,0 +1,11 @@
+usage: arena_report.py [-h] [--sim-root SIM_ROOT] [--out OUT] [--json]
+
+Generate ARENA_REPORT.md for Arena-tracked models
+
+options:
+  -h, --help           show this help message and exit
+  --sim-root SIM_ROOT  Simple-Sim root (default: auto-detect)
+  --out OUT            Output markdown path (default: <sim-
+                       root>/ARENA_REPORT.md)
+  --json               Print a machine-readable result line
+                       ('SIMPLE_SIM_RESULT {...}') as last stdout line

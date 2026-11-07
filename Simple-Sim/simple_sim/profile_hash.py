@@ -12,7 +12,7 @@ import hashlib
 import yaml
 from pathlib import Path
 from typing import Any
-from simple_sim.io_utils import load_yaml
+from simple_sim.io_utils import load_yaml, sha256_tag
 
 
 def canonicalize_profile(profile_dict: dict[str, Any]) -> dict[str, Any]:
@@ -52,12 +52,27 @@ def canonicalize_profile(profile_dict: dict[str, Any]) -> dict[str, Any]:
     return _canonicalize(profile_dict)
 
 
-def hash_profile(profile_path: Path) -> str:
-    """Compute SHA256 hash of component profile.
+def hash_profile_dict(profile_dict: dict[str, Any]) -> str:
+    """SHA256 hash of an already loaded profile (same value as :func:`hash_profile` of its file).
 
-    The hash is computed on the canonical form of the profile,
-    making it stable across formatting changes but sensitive to
-    semantic changes in geometry, tolerances, etc.
+    The hash is computed on the canonical form of the profile (:func:`canonicalize_profile`),
+    making it stable across formatting changes but sensitive to semantic changes in geometry,
+    tolerances, etc. Use it after :func:`load_profile` instead of re-reading the YAML.
+
+    Returns:
+        Hash string in format "sha256:hexdigest"
+    """
+    # Canonicalize: remove metadata, sort keys, normalize floats
+    canonical = canonicalize_profile(profile_dict)
+
+    # Convert to deterministic YAML string
+    canonical_yaml = yaml.dump(canonical, sort_keys=True, default_flow_style=False)
+
+    return sha256_tag(hashlib.sha256(canonical_yaml.encode('utf-8')))
+
+
+def hash_profile(profile_path: Path) -> str:
+    """Compute SHA256 hash of component profile file (see :func:`hash_profile_dict`).
 
     Args:
         profile_path: Path to profile YAML file
@@ -73,17 +88,7 @@ def hash_profile(profile_path: Path) -> str:
     if not profile_path.exists():
         raise FileNotFoundError(f"Profile not found: {profile_path}")
 
-    profile_dict = load_yaml(profile_path)
-
-    # Canonicalize: remove metadata, sort keys, normalize floats
-    canonical = canonicalize_profile(profile_dict)
-
-    # Convert to deterministic YAML string
-    canonical_yaml = yaml.dump(canonical, sort_keys=True, default_flow_style=False)
-
-    # Compute SHA256 hash
-    hash_obj = hashlib.sha256(canonical_yaml.encode('utf-8'))
-    return f"sha256:{hash_obj.hexdigest()}"
+    return hash_profile_dict(load_yaml(profile_path))
 
 
 def load_profile(profile_id: str, profiles_dir: Path) -> dict[str, Any]:

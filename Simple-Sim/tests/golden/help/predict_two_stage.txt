@@ -1,0 +1,18 @@
+usage: predict_two_stage.py [-h] --profile-model PROFILE_MODEL --defect-bundle
+                            DEFECT_BUNDLE --image IMAGE [--device DEVICE]
+                            [--min-confidence MIN_CONFIDENCE] [--json]
+
+Two-stage predict: profile + defect
+
+options:
+  -h, --help            show this help message and exit
+  --profile-model PROFILE_MODEL
+                        Path to profile classifier checkpoint (.pt)
+  --defect-bundle DEFECT_BUNDLE
+                        Path to defect model bundle directory
+  --image IMAGE         Path to image file
+  --device DEVICE       Device (cpu/cuda)
+  --min-confidence MIN_CONFIDENCE
+                        Minimum profile confidence threshold (default: 0.5)
+  --json                Print a machine-readable result line
+                        ('SIMPLE_SIM_RESULT {...}') as last stdout line

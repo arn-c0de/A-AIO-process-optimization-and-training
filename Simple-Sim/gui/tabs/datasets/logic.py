@@ -7,9 +7,11 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
+
 
 def _load_manifest(ds: Path) -> dict:
-    manifest_path = ds / "dataset_manifest.json"
+    manifest_path = ds / DATASET_MANIFEST
     if not manifest_path.exists():
         return {}
     try:
@@ -21,7 +23,7 @@ def _load_manifest(ds: Path) -> dict:
 
 def dataset_created_display(ds: Path) -> str:
     """``YYYY-MM-DD HH:MM`` from the manifest's ``created_at``, else the folder mtime, else ``-``."""
-    manifest_path = ds / "dataset_manifest.json"
+    manifest_path = ds / DATASET_MANIFEST
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -55,7 +57,7 @@ def dataset_details_text(ds: Path) -> str:
         total_samples = ds_stats.get("total_samples")
         split_stats = ds_stats.get("splits") or {}
 
-    labels_path = ds / "labels.jsonl"
+    labels_path = ds / LABELS_JSONL
     if total_samples is None and labels_path.exists():
         try:
             with labels_path.open("r", encoding="utf-8") as fh:

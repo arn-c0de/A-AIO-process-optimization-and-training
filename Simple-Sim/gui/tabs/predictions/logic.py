@@ -13,6 +13,7 @@ from typing import Any
 from gui.utils.dataset_catalog import list_dataset_dirs
 from gui.utils.paths import list_model_paths, model_root, newest_file
 from gui.utils.process import run_streaming, terminate_process
+from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL
 from simple_sim.model_bundle import bundle_checkpoint_path
 
 
@@ -76,13 +77,13 @@ class PredictionsLogic:
                     if self.stop_evt.is_set():
                         break
 
-                    if not (data_dir / "meta.jsonl").exists() or not (data_dir / "labels.jsonl").exists():
+                    if not (data_dir / META_JSONL).exists() or not (data_dir / LABELS_JSONL).exists():
                         self.log_q.put(f"[error] dataset missing meta.jsonl/labels.jsonl: {data_dir}\n")
                         continue
 
                     model_arg_path = model_path
                     if model_path.exists() and model_path.is_dir():
-                        manifest_path = data_dir / "dataset_manifest.json"
+                        manifest_path = data_dir / DATASET_MANIFEST
                         if not manifest_path.exists():
                             self.log_q.put(f"[error] dataset manifest missing: {manifest_path}\n")
                             continue
@@ -242,7 +243,7 @@ class PredictionsLogic:
     def _load_gt_profile_map_from_labels(self, data_dir: Path | None) -> dict[str, str]:
         if not data_dir:
             return {}
-        labels_path = data_dir / "labels.jsonl"
+        labels_path = data_dir / LABELS_JSONL
         if not labels_path.exists():
             return {}
 

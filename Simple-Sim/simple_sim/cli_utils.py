@@ -36,6 +36,39 @@ def add_json_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Shared argparse fragments (plan D2). The help text is passed by each script, so ``--help``
+# output stays exactly as it was; values are plain strings (callers wrap them in ``Path``).
+# ---------------------------------------------------------------------------
+
+def add_data_arg(parser: argparse.ArgumentParser, help: str, *, required: bool = True) -> None:
+    """Add ``--data`` (dataset directory)."""
+    parser.add_argument("--data", type=str, required=required, help=help)
+
+
+def add_model_arg(parser: argparse.ArgumentParser, help: str, *, required: bool = True) -> None:
+    """Add ``--model`` (checkpoint ``.pt`` or model bundle directory)."""
+    parser.add_argument("--model", type=str, required=required, help=help)
+
+
+def add_out_arg(parser: argparse.ArgumentParser, help: str, *, required: bool = True, default: str | None = None) -> None:
+    """Add ``--out`` (output path or directory; *default* only applies when not *required*)."""
+    parser.add_argument("--out", type=str, required=required, default=default, help=help)
+
+
+def add_amp_flags(parser: argparse.ArgumentParser) -> None:
+    """Add the mutually exclusive ``--amp`` / ``--no-amp`` pair (``args.amp``, default True)."""
+    amp_group = parser.add_mutually_exclusive_group()
+    amp_group.add_argument('--amp', dest='amp', action='store_true', help='Enable mixed precision on CUDA (default).')
+    amp_group.add_argument('--no-amp', dest='amp', action='store_false', help='Disable mixed precision.')
+    parser.set_defaults(amp=True)
+
+
+def add_profile_mismatch_flag(parser: argparse.ArgumentParser, help: str) -> None:
+    """Add ``--allow-profile-mismatch`` (``args.allow_profile_mismatch``); see :data:`PROFILE_MISMATCH_HINT`."""
+    parser.add_argument("--allow-profile-mismatch", action="store_true", help=help)
+
+
 def emit_result(command: str, payload: dict[str, Any] | None = None, *, ok: bool = True, error: str | None = None) -> None:
     """Print the result line (call only when ``--json`` is set)."""
     obj: dict[str, Any] = {"ok": ok, "command": command.replace("_", "-")}

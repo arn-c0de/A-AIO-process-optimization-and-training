@@ -17,7 +17,8 @@ from gui.utils.dataset_catalog import dataset_display_name, sorted_dataset_dirs
 from gui.utils.paths import list_model_paths, model_root, newest_file
 from gui.utils.process import run_streaming, terminate_process
 from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, now_tag, read_json, rel_to
-from simple_sim.model_bundle import bundle_checkpoint_path
+from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
+from simple_sim.model_bundle import resolve_bundle_checkpoint
 from simple_sim.reports import load_reports, report_search_dirs
 import yaml
 
@@ -279,25 +280,18 @@ class WeightsLogic:
 
     def _predict_cmd(self, model_path: Path, data_dir: Path, split: str, device: str, max_samples_s: str, save_preds: bool) -> tuple[list[str], Path]:
         if model_path.exists() and model_path.is_dir():
-            manifest_path = data_dir / "dataset_manifest.json"
+            manifest_path = data_dir / DATASET_MANIFEST
             if not manifest_path.exists():
                 raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             profile_id = str((manifest.get("component_profile") or {}).get("profile_id") or "").strip()
             if not profile_id:
                 raise ValueError(f"Dataset manifest missing component_profile.profile_id: {manifest_path}")
-            expected = bundle_checkpoint_path(model_path, profile_id, kind="best")
-            if not expected.exists():
-                avail = sorted([p.name for p in model_path.glob("*.pt")])[:12]
-                raise FileNotFoundError(
-                    f"Multi-model bundle has no checkpoint for profile '{profile_id}':\n"
-                    f"  bundle: {model_path}\n"
-                    f"  expected: {expected}\n"
-                    f"  available: {', '.join(avail) if avail else '(none)'}\n\n"
-                    f"Train this dataset into the same bundle to add it:\n"
-                    f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {model_path}\n"
-                )
-            model_path = expected
+            model_path = resolve_bundle_checkpoint(
+                model_path, profile_id, show_available=True,
+                hint=("\nTrain this dataset into the same bundle to add it:\n"
+                      f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {model_path}\n"),
+            )
 
         out_dir = data_dir / "predictions" / "weights_tab"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -466,7 +460,7 @@ class WeightsLogic:
 
     def describe_dataset_samples(self, ds: Path) -> str:
         try:
-            manifest_path = ds / "dataset_manifest.json"
+            manifest_path = ds / DATASET_MANIFEST
             if manifest_path.exists():
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 stats = manifest.get("dataset_stats") or {}
@@ -479,7 +473,7 @@ class WeightsLogic:
                     if all(isinstance(x, int) for x in (tr, va, te)):
                         return f"Samples: {total} (t{tr}/v{va}/s{te})"
                     return f"Samples: {total}"
-            labels_path = ds / "labels.jsonl"
+            labels_path = ds / LABELS_JSONL
             if labels_path.exists():
                 n = 0
                 with labels_path.open("r", encoding="utf-8") as f:
@@ -493,7 +487,7 @@ class WeightsLogic:
 
     def get_dataset_classes(self, ds: Path) -> list[str]:
         classes: set[str] = set()
-        labels_path = ds / "labels.jsonl"
+        labels_path = ds / LABELS_JSONL
         if not labels_path.exists():
             return []
         try:

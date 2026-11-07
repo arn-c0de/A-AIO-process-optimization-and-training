@@ -19,7 +19,7 @@ from gui.utils.paths import model_root
 from simple_sim.board import BOARD_ROUTERS, DRC_MODES
 from simple_sim.board.rules import PRESETS as DESIGN_RULE_PRESETS
 from simple_sim.classes import STANDARD_CLASSES
-from simple_sim.generators.opencv2d.photoreal.look import LOOKS
+from simple_sim.generators.options import LOOKS
 from simple_sim.io_utils import load_yaml
 
 PYTHON = "./.venv/bin/python"

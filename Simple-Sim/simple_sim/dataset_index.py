@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable
 
+from simple_sim.dataset_files import LABELS_JSONL, META_JSONL, SPLITS_DIR
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl
 from simple_sim.splits import read_split
 
@@ -97,14 +98,14 @@ class DatasetIndex:
 
     @property
     def meta_path(self) -> Path:
-        return self.data_dir / "meta.jsonl"
+        return self.data_dir / META_JSONL
 
     @property
     def labels_path(self) -> Path:
-        return self.data_dir / "labels.jsonl"
+        return self.data_dir / LABELS_JSONL
 
     def split_path(self, split: str) -> Path:
-        return self.data_dir / "splits" / f"{split}.txt"
+        return self.data_dir / SPLITS_DIR / f"{split}.txt"
 
     def meta_rows(self) -> tuple[MetaRow, ...]:
         return _cached(self.meta_path, "meta", _load_meta)[0]

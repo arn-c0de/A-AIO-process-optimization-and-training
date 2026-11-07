@@ -1,0 +1,20 @@
+usage: generate.py [-h] --config CONFIG --out OUT [--extend]
+                   [--disable-cardinal-rotation-90]
+                   [--allow-renderer-mismatch] [--json]
+
+Generate synthetic PCB defect dataset
+
+options:
+  -h, --help            show this help message and exit
+  --config CONFIG       Path to YAML configuration file
+  --out OUT             Output directory for dataset
+  --extend              Append new samples to an existing dataset directory
+                        instead of overwriting
+  --disable-cardinal-rotation-90
+                        Disable 0/90/180/270 base orientation randomization
+                        (keep only augment.rotation_deg_range jitter)
+  --allow-renderer-mismatch
+                        With --extend: append even if the dataset was rendered
+                        by another renderer version (mixes two looks)
+  --json                Print a machine-readable result line
+                        ('SIMPLE_SIM_RESULT {...}') as last stdout line

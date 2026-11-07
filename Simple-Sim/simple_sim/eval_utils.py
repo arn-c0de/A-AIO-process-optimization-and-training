@@ -18,8 +18,9 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from simple_sim.dataset_files import DATASET_MANIFEST
 from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
-from simple_sim.model_bundle import bundle_checkpoint_path
+from simple_sim.model_bundle import resolve_bundle_checkpoint  # noqa: F401  (re-exported for the scripts)
 from simple_sim.telemetry import emit
 
 if TYPE_CHECKING:
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     import torch.nn as nn
     from torch.utils.data import DataLoader, Dataset
 
-MANIFEST_NAME = "dataset_manifest.json"
+MANIFEST_NAME = DATASET_MANIFEST  # kept for existing importers
 
 
 # ---------------------------------------------------------------------------
@@ -289,21 +290,3 @@ def require_manifest(data_dir: Path) -> Path:
 def dataset_profile(data_dir: Path) -> tuple[str, str]:
     """``(profile_id, profile_hash)`` of a dataset (requires its manifest)."""
     return resolve_dataset_profile(read_dataset_manifest(require_manifest(data_dir)))
-
-
-def resolve_bundle_checkpoint(model_path: Path, profile_id: str, *, hint: str = "") -> Path:
-    """If *model_path* is a multi-model bundle dir, return its best checkpoint for *profile_id*.
-
-    Plain checkpoint paths are returned unchanged.
-    """
-    model_path = Path(model_path)
-    if not model_path.is_dir():
-        return model_path
-    resolved = bundle_checkpoint_path(model_path, profile_id, kind="best")
-    if not resolved.exists():
-        raise FileNotFoundError(
-            f"Multi-model bundle has no checkpoint for profile '{profile_id}':\n"
-            f"  bundle: {model_path}\n"
-            f"  expected: {resolved}" + (f"\n{hint}" if hint else "")
-        )
-    return resolved

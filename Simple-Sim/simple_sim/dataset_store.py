@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 import yaml
 
+from simple_sim.dataset_files import CONFIG_YAML, LABELS_JSONL, META_JSONL
 from simple_sim.schema import LabelRow, MetaRow, validate_jsonl_pair, write_jsonl
 
 
@@ -22,11 +23,11 @@ def validate_dataset_files(data_dir: Path) -> None:
         ValueError: If a required file/dir is missing or meta/labels are inconsistent.
     """
     data_dir = Path(data_dir)
-    for filename in ("meta.jsonl", "labels.jsonl", "config.yaml"):
+    for filename in (META_JSONL, LABELS_JSONL, CONFIG_YAML):
         if not (data_dir / filename).exists():
             raise ValueError(f"Missing required file: {filename}")
 
-    validate_jsonl_pair(data_dir / "meta.jsonl", data_dir / "labels.jsonl")
+    validate_jsonl_pair(data_dir / META_JSONL, data_dir / LABELS_JSONL)
 
     images_dir = data_dir / "images"
     if not images_dir.is_dir():
@@ -61,9 +62,9 @@ def write_dataset_files(
 ) -> None:
     """Write ``meta.jsonl``, ``labels.jsonl`` and ``config.yaml`` into *data_dir*, then validate it."""
     data_dir = Path(data_dir)
-    write_jsonl(data_dir / "meta.jsonl", meta_rows)
-    write_jsonl(data_dir / "labels.jsonl", label_rows)
-    with open(data_dir / "config.yaml", "w", encoding="utf-8") as f:
+    write_jsonl(data_dir / META_JSONL, meta_rows)
+    write_jsonl(data_dir / LABELS_JSONL, label_rows)
+    with open(data_dir / CONFIG_YAML, "w", encoding="utf-8") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
     validate_dataset_files(data_dir)
 

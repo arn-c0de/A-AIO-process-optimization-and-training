@@ -67,6 +67,15 @@ def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
             f.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
+#: Prefix of the content hashes stored in manifests and checkpoints (``sha256:<hex>``).
+SHA256_PREFIX = "sha256:"
+
+
+def sha256_tag(digest: Any) -> str:
+    """``sha256:<hex>`` for a finished ``hashlib.sha256()`` object (manifest / profile hash format)."""
+    return f"{SHA256_PREFIX}{digest.hexdigest()}"
+
+
 def now_iso(*, utc: bool = False, timespec: str = "auto") -> str:
     """Current time as ISO 8601: naive local time (manifests, reports), or UTC with a ``Z`` suffix."""
     if utc:

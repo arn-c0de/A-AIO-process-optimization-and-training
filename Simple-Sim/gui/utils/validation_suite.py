@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import cv2
 
+from simple_sim.dataset_files import LABELS_JSONL, META_JSONL
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from tools.validate_dataset import validate_dataset
 
@@ -78,7 +79,7 @@ def detect_image_outliers(dataset_dir: Path,
         List of outlier dictionaries with sample_id, metric, value, reason
     """
     dataset_dir = Path(dataset_dir)
-    meta_rows = read_jsonl(dataset_dir / 'meta.jsonl', MetaRow)
+    meta_rows = read_jsonl(dataset_dir / META_JSONL, MetaRow)
 
     # Collect metrics for all images
     blur_scores = []
@@ -137,7 +138,7 @@ def detect_duplicate_images(dataset_dir: Path,
         return []
 
     dataset_dir = Path(dataset_dir)
-    meta_rows = read_jsonl(dataset_dir / 'meta.jsonl', MetaRow)
+    meta_rows = read_jsonl(dataset_dir / META_JSONL, MetaRow)
 
     # Compute hashes
     hashes: dict[str, Any] = {}
@@ -182,8 +183,8 @@ def detect_edge_cases(dataset_dir: Path) -> list[dict[str, Any]]:
         List of edge case dictionaries
     """
     dataset_dir = Path(dataset_dir)
-    meta_rows = read_jsonl(dataset_dir / 'meta.jsonl', MetaRow)
-    label_rows = read_jsonl(dataset_dir / 'labels.jsonl', LabelRow)
+    meta_rows = read_jsonl(dataset_dir / META_JSONL, MetaRow)
+    label_rows = read_jsonl(dataset_dir / LABELS_JSONL, LabelRow)
 
     id_to_label = {row.id: row.class_name for row in label_rows}
 

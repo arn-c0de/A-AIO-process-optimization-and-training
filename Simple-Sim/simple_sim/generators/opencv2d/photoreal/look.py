@@ -41,7 +41,7 @@ from simple_sim.board.placement import LEGACY_PACKING, Packing
 from .meniscus import SolderLook, sample_look, sample_scanner_look
 from .palette import CAP_BODY, COPPER_UNDER_MASK, END_CAP, LEAD, MASK_PALETTE
 
-DEFAULT_LOOK = "legacy"
+from simple_sim.generators.options import DEFAULT_LOOK  # noqa: E402 (I7: cv2-free definition)
 MASK_GLOSS_PROBABILITY = 0.5  # legacy share of images with a glossy reflection on the mask (``render.mask_gloss``)
 REWORK_PROBABILITY = 0.15     # legacy share of images with rework residue (``render.rework_artifacts``)
 

@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from simple_sim import __version__ as _VERSION
-from simple_sim.io_utils import atomic_write_json, load_json, now_iso
+from simple_sim.dataset_files import DATASET_MANIFEST
+from simple_sim.io_utils import atomic_write_json, load_json, now_iso, sha256_tag
 
 
 log = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def hash_file(file_path: Path) -> str:
         while chunk := f.read(8192):
             hash_obj.update(chunk)
 
-    return f"sha256:{hash_obj.hexdigest()}"
+    return sha256_tag(hash_obj)
 
 
 @lru_cache(maxsize=1)
@@ -89,6 +90,30 @@ def dataset_stats(meta_rows: list[Any], label_rows: list[Any], splits: dict[str,
     }
 
 
+def _history_entry(samples_added: int, git_commit: str | None, renderer_version: str | None) -> dict[str, Any]:
+    """One ``extend_history`` entry: ``timestamp``, ``samples_added``, ``git_commit`` [, ``renderer_version``]."""
+    entry: dict[str, Any] = {
+        'timestamp': now_iso(),
+        'samples_added': samples_added,
+        'git_commit': git_commit,
+    }
+    if renderer_version is not None:
+        entry['renderer_version'] = renderer_version
+    return entry
+
+
+def _generator_block(script_name: str, git_commit: str | None, renderer_version: str | None) -> dict[str, Any]:
+    """The ``generator`` block: ``version``, ``git_commit``, ``script`` [, ``renderer_version``]."""
+    generator: dict[str, Any] = {
+        'version': _VERSION,
+        'git_commit': git_commit,
+        'script': script_name,
+    }
+    if renderer_version is not None:
+        generator['renderer_version'] = renderer_version
+    return generator
+
+
 def write_dataset_manifest(
     output_dir: Path,
     run_id: str,
@@ -127,7 +152,7 @@ def write_dataset_manifest(
         ValueError: If extend=True and profile mismatch detected
     """
     output_dir = Path(output_dir)
-    manifest_path = output_dir / "dataset_manifest.json"
+    manifest_path = output_dir / DATASET_MANIFEST
 
     git_commit = git_commit if git_commit is not None else _get_git_commit()
     if extend and manifest_path.exists():
@@ -153,15 +178,9 @@ def write_dataset_manifest(
             )
 
         # Update extend history
-        entry = {
-            'timestamp': now_iso(),
-            'samples_added': len(meta_rows),
-            'git_commit': git_commit
-        }
         if renderer_version is not None:
-            entry['renderer_version'] = renderer_version
             manifest.setdefault('generator', {})['renderer_version'] = renderer_version
-        manifest['extend_history'].append(entry)
+        manifest['extend_history'].append(_history_entry(len(meta_rows), git_commit, renderer_version))
 
         # Update stats (add to existing counts)
         manifest['dataset_stats']['total_samples'] += len(meta_rows)
@@ -192,23 +211,12 @@ def write_dataset_manifest(
                 'profile_path': profile_path
             },
 
-            'generator': {
-                'version': _VERSION,
-                'git_commit': git_commit,
-                'script': script_name
-            },
+            'generator': _generator_block(script_name, git_commit, renderer_version),
 
             'dataset_stats': dataset_stats(meta_rows, label_rows, splits),
 
-            'extend_history': [{
-                'timestamp': now_iso(),
-                'samples_added': len(meta_rows),
-                'git_commit': git_commit
-            }]
+            'extend_history': [_history_entry(len(meta_rows), git_commit, renderer_version)]
         }
-        if renderer_version is not None:
-            manifest['generator']['renderer_version'] = renderer_version
-            manifest['extend_history'][0]['renderer_version'] = renderer_version
 
     atomic_write_json(manifest_path, manifest)
     log.info(f"Dataset manifest written: {manifest_path}")
@@ -396,7 +404,7 @@ def write_multi_profile_manifest(
         git_commit: see :func:`write_dataset_manifest`.
     """
     output_dir = Path(output_dir)
-    manifest_path = output_dir / "dataset_manifest.json"
+    manifest_path = output_dir / DATASET_MANIFEST
 
     git_commit = git_commit if git_commit is not None else _get_git_commit()
 
@@ -407,29 +415,20 @@ def write_multi_profile_manifest(
         if pid:
             profile_counts[pid] = profile_counts.get(pid, 0) + 1
 
-    history_entry = {
-        'timestamp': now_iso(),
-        'samples_added': len(meta_rows),
-        'git_commit': git_commit,
-    }
+    samples_added = len(meta_rows)
+    if existing:
+        prev_total = int((existing.get('dataset_stats') or {}).get('total_samples') or 0)
+        samples_added = max(0, len(meta_rows) - prev_total)
+    if renderer_version is None and existing:
+        renderer_version = (existing.get('generator') or {}).get('renderer_version')
+    history_entry = _history_entry(samples_added, git_commit, renderer_version)
     created_at = now_iso()
     extend_history = [history_entry]
     if existing:
         created_at = existing.get('created_at') or created_at
-        prev_total = int((existing.get('dataset_stats') or {}).get('total_samples') or 0)
-        history_entry['samples_added'] = max(0, len(meta_rows) - prev_total)
         extend_history = list(existing.get('extend_history') or []) + [history_entry]
 
-    generator: dict[str, Any] = {
-        'version': _VERSION,
-        'git_commit': git_commit,
-        'script': script_name,
-    }
-    if renderer_version is None and existing:
-        renderer_version = (existing.get('generator') or {}).get('renderer_version')
-    if renderer_version is not None:
-        generator['renderer_version'] = renderer_version
-        history_entry['renderer_version'] = renderer_version
+    generator = _generator_block(script_name, git_commit, renderer_version)
 
     manifest = {
         'manifest_version': 2,

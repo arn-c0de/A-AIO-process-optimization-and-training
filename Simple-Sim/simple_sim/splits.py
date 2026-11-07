@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from simple_sim.classes import SPLIT_NAMES
+from simple_sim.dataset_files import SPLITS_DIR
 from simple_sim.schema import MetaRow, LabelRow
 
 
@@ -154,7 +155,7 @@ def write_splits(output_dir: Path, splits: dict[str, list[str]]) -> None:
         splits: Dictionary of split name to sample ID lists
     """
     output_dir = Path(output_dir)
-    splits_dir = output_dir / 'splits'
+    splits_dir = output_dir / SPLITS_DIR
     splits_dir.mkdir(parents=True, exist_ok=True)
 
     for split_name, sample_ids in splits.items():

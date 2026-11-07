@@ -19,6 +19,7 @@ import yaml
 from gui.utils.checkpoint_meta import CheckpointMetaCache
 from gui.utils.paths import list_model_paths, model_root
 from gui.utils.process import terminate_process
+from simple_sim.dataset_files import CONFIG_YAML, DATASET_MANIFEST, LABELS_JSONL, META_JSONL, SPLITS_DIR
 from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, now_tag, path_size_bytes, read_json, rel_to
 from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
@@ -418,7 +419,7 @@ class PipelineLogic:
 
     def get_dataset_profile_id(self, ds: Path) -> str | None:
         if not ds: return None
-        manifest = read_json(ds / "dataset_manifest.json")
+        manifest = read_json(ds / DATASET_MANIFEST)
         if manifest is None: return None
         try:
             mver = int(manifest.get("manifest_version", 1) or 1)
@@ -429,7 +430,7 @@ class PipelineLogic:
 
     def get_dataset_profile_hash(self, ds: Path) -> str | None:
         if not ds: return None
-        manifest = read_json(ds / "dataset_manifest.json")
+        manifest = read_json(ds / DATASET_MANIFEST)
         if manifest is None: return None
         try:
             mver = int(manifest.get("manifest_version", 1) or 1)
@@ -506,15 +507,15 @@ class PipelineLogic:
     def ensure_dataset_skeleton(self, profile_id: str, config_path: Path, out_dir: Path, log_callback: Callable[[str], None]) -> bool:
         if not config_path.exists(): return False
         out_dir = out_dir.resolve()
-        manifest_path = out_dir / "dataset_manifest.json"
+        manifest_path = out_dir / DATASET_MANIFEST
         if manifest_path.exists(): return False
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "images").mkdir(exist_ok=True)
-        (out_dir / "splits").mkdir(exist_ok=True)
-        for split in ["train", "val", "test"]: (out_dir / "splits" / f"{split}.txt").write_text("", encoding="utf-8")
-        Path(out_dir / "meta.jsonl").write_text("", encoding="utf-8")
-        Path(out_dir / "labels.jsonl").write_text("", encoding="utf-8")
-        try: shutil.copy2(config_path, out_dir / "config.yaml")
+        (out_dir / SPLITS_DIR).mkdir(exist_ok=True)
+        for split in ["train", "val", "test"]: (out_dir / SPLITS_DIR / f"{split}.txt").write_text("", encoding="utf-8")
+        Path(out_dir / META_JSONL).write_text("", encoding="utf-8")
+        Path(out_dir / LABELS_JSONL).write_text("", encoding="utf-8")
+        try: shutil.copy2(config_path, out_dir / CONFIG_YAML)
         except Exception: pass
 
         cfg_data, run_block = (load_yaml(config_path) or {}), {}
@@ -590,7 +591,7 @@ class PipelineLogic:
         self,
         sources: list[Path],
     ) -> tuple[str, dict[str, dict[str, str]], dict[str, dict[str, str]], dict, str, tuple[str, ...], int, int]:
-        cfg0_path = sources[0] / "config.yaml"
+        cfg0_path = sources[0] / CONFIG_YAML
         if not cfg0_path.exists():
             raise FileNotFoundError(f"Missing config.yaml in {sources[0]}")
         cfg0_text = cfg0_path.read_text(encoding="utf-8")
@@ -607,7 +608,7 @@ class PipelineLogic:
         all_profiles: dict[str, dict[str, str]] = {}
         run_id = sources[0].name
         for ds in sources:
-            manifest_path = ds / "dataset_manifest.json"
+            manifest_path = ds / DATASET_MANIFEST
             if not manifest_path.exists():
                 raise FileNotFoundError(f"Missing dataset_manifest.json in {ds}")
             manifest = read_dataset_manifest(manifest_path)
@@ -644,7 +645,7 @@ class PipelineLogic:
 
         target_w, target_h = (roi0_w if roi0_w > 0 else None), (roi0_h if roi0_h > 0 else None)
         for ds in sources[1:]:
-            cfg_path = ds / "config.yaml"
+            cfg_path = ds / CONFIG_YAML
             if not cfg_path.exists():
                 raise FileNotFoundError(f"Missing config.yaml in {ds}")
             try:
@@ -691,8 +692,8 @@ class PipelineLogic:
                 shutil.copy2(src, dst)
 
         for ds in sources:
-            meta_rows = read_jsonl(ds / "meta.jsonl", MetaRow)
-            label_map = {row.id: row for row in read_jsonl(ds / "labels.jsonl", LabelRow)}
+            meta_rows = read_jsonl(ds / META_JSONL, MetaRow)
+            label_map = {row.id: row for row in read_jsonl(ds / LABELS_JSONL, LabelRow)}
             prof = src_default_profiles.get(str(ds.resolve())) or {}
             default_pid = str(prof.get("profile_id") or "")
 
@@ -755,7 +756,7 @@ class PipelineLogic:
         out_dir.mkdir(parents=True, exist_ok=False)
         images_dir = out_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=False)
-        (out_dir / "splits").mkdir(parents=True, exist_ok=False)
+        (out_dir / SPLITS_DIR).mkdir(parents=True, exist_ok=False)
 
         if not sources: raise ValueError("No sources provided")
 
@@ -769,17 +770,17 @@ class PipelineLogic:
             target_h=target_h,
         )
 
-        write_jsonl(out_dir / "meta.jsonl", meta_out)
-        write_jsonl(out_dir / "labels.jsonl", label_out)
-        for split in ["train", "val", "test"]: Path(out_dir / "splits" / f"{split}.txt").write_text("\n".join(splits[split]) + "\n", encoding="utf-8")
+        write_jsonl(out_dir / META_JSONL, meta_out)
+        write_jsonl(out_dir / LABELS_JSONL, label_out)
+        for split in ["train", "val", "test"]: Path(out_dir / SPLITS_DIR / f"{split}.txt").write_text("\n".join(splits[split]) + "\n", encoding="utf-8")
         
         try:
             cfg_out = dict(cfg0) if isinstance(cfg0, dict) else {}
             roi_out = dict(cfg_out.get("roi") or {})
             roi_out["width_px"], roi_out["height_px"] = target_w, target_h
             cfg_out["roi"] = roi_out
-            Path(out_dir / "config.yaml").write_text(yaml.safe_dump(cfg_out, sort_keys=False), encoding="utf-8")
-        except Exception: Path(out_dir / "config.yaml").write_text(cfg0_text, encoding="utf-8")
+            Path(out_dir / CONFIG_YAML).write_text(yaml.safe_dump(cfg_out, sort_keys=False), encoding="utf-8")
+        except Exception: Path(out_dir / CONFIG_YAML).write_text(cfg0_text, encoding="utf-8")
 
         uniq_profiles: dict[str, dict[str, str]] = dict(all_profiles)
         for row in label_out:

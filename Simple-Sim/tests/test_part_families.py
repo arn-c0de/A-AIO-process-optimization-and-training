@@ -1,0 +1,94 @@
+"""N1: the PartFamily table (``board.footprints.FAMILIES``) and the constants derived from it."""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import pytest
+import yaml
+
+from simple_sim.board import footprints as fp
+from simple_sim.board.footprints import (BODY_KINDS, FAMILIES, GENERIC_FAMILY, PartFamily, family_of, part_family,
+                                         profile_footprint)
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _profile_families() -> set[str]:
+    out = set()
+    for path in sorted((ROOT / "configs" / "profiles").glob("*.yaml")):
+        prof = yaml.safe_load(path.read_text())
+        out.add(family_of(profile_footprint(prof), str((prof.get("component") or {}).get("type", ""))))
+    return out
+
+
+def test_every_rendered_family_has_an_entry():
+    """Every family family_of yields (all shipped profiles, every footprint, neighbours) is in the table."""
+    seen = _profile_families()
+    for footprint in ("chip_2pad", "sot23", "qfn_32", "soic_16", "tssop_14", "tssop_20", "sot_6", "chip_array_8"):
+        for ct in ("", "chip_resistor", "chip_capacitor", "ferrite_bead", "inductor", "power_inductor",
+                   "molded_inductor", "led"):
+            seen.add(family_of(footprint, ct))
+    seen.update(("resistor", "capacitor"))  # neighbour parts (placement.neighbour_layout)
+    assert seen <= set(FAMILIES)
+    assert set(FAMILIES) == seen  # no dead rows either
+
+
+def test_table_rows_are_consistent():
+    for name, fam in FAMILIES.items():
+        assert isinstance(fam, PartFamily) and fam.name == name
+        assert fam.kind in BODY_KINDS
+        assert fam.refdes
+        assert (fam.cap_len is not None) == (fam.kind == fp.KIND_CHIP)
+        assert fam.marking in (None, *fp.PRINTED_MARKINGS, fp.MARK_LASER)
+    with pytest.raises(AttributeError):
+        FAMILIES["resistor"].refdes = "X"  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        FAMILIES["x"] = GENERIC_FAMILY  # type: ignore[index]
+    assert part_family("no_such_family") is GENERIC_FAMILY
+    assert tuple(FAMILIES) == fp.FAMILY_NAMES
+
+
+def test_legacy_constants_equal_the_derived_ones():
+    """The old per-module names keep their values (and order) and agree with the table."""
+    from simple_sim.board import placement
+    from simple_sim.generators.opencv2d.photoreal import copper, palette
+
+    assert fp.FAMILY_NAMES == ("resistor", "capacitor", "sot", "soic", "qfn", "sot6", "array_r", "array_c", "inductor",
+                               "power_inductor", "led")
+    assert fp.CHIP_FAMILIES == ("resistor", "capacitor", "inductor", "power_inductor", "led")
+    assert fp.FINE_PITCH_FAMILIES == ("soic", "qfn", "sot6", "array_r", "array_c")
+    assert palette.CHIPS == fp.CHIP_FAMILIES == tuple(n for n, f in FAMILIES.items() if f.chip)
+    assert palette.LEADED == ("sot", "soic", "sot6")
+    assert palette.ARRAY_FAMILIES == ("array_r", "array_c")
+    assert palette.UNMARKED == ("capacitor", "array_c", "inductor", "power_inductor", "led")
+    assert palette.CAP_LEN == {"capacitor": 0.26, "resistor": 0.22, "inductor": 0.25, "led": 0.16}
+    legacy_refdes = {"resistor": "R", "capacitor": "C", "sot": "Q", "soic": "U", "qfn": "U", "sot6": "U",
+                     "array_r": "RN", "array_c": "CN", "inductor": "L", "power_inductor": "L", "led": "D"}
+    assert placement.REFDES_PREFIX == legacy_refdes
+    assert list(placement.REFDES_PREFIX) == list(legacy_refdes)
+    assert palette.REFDES_PREFIX is placement.REFDES_PREFIX
+    assert copper.RULE_CHIP_FAMILIES == (*fp.CHIP_FAMILIES, "array_r", "array_c")
+    # The former inline dicts of parts.draw_body.
+    insets = {"qfn": 0.012, "soic": 0.035, "sot": 0.05, "sot6": 0.05, "array_r": 0.05, "array_c": 0.05}
+    grains = {"resistor": 0.025, "capacitor": 0.025, "led": 0.015, "inductor": 0.05, "power_inductor": 0.07}
+    for name, fam in FAMILIES.items():
+        assert fam.edge_inset == insets.get(name, 0.07)
+        assert fam.grain_sd == grains.get(name, 0.06)
+        assert (fam.kind == fp.KIND_IC) == (name in ("qfn", "soic", "sot", "sot6"))  # gloss, pin-1, silk dot
+        assert fam.printed == (name in ("resistor", "array_r"))
+
+
+def test_every_kind_has_a_body_drawer():
+    from simple_sim.generators.opencv2d.photoreal import parts
+
+    assert set(parts._BODY_DRAWERS) == set(BODY_KINDS)
+
+
+def test_blender_height_ratio_matches_the_table():
+    """render_batch.py (Blender, stdlib-only) still types its own height table (D35); keep it in sync."""
+    tree = ast.parse((ROOT / "simple_sim" / "blender" / "render_batch.py").read_text())
+    ratio = next(ast.literal_eval(node.value) for node in tree.body
+                 if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "_HEIGHT_RATIO")
+    assert ratio == {n: f.height_ratio for n, f in FAMILIES.items() if f.height_ratio is not None}

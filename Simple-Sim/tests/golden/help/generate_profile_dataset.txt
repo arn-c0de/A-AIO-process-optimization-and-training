@@ -1,0 +1,14 @@
+usage: generate_profile_dataset.py [-h] --config CONFIG --out OUT
+                                   [--disable-cardinal-rotation-90] [--json]
+
+Generate mixed-profile dataset for profile classifier
+
+options:
+  -h, --help            show this help message and exit
+  --config CONFIG       Path to YAML configuration file
+  --out OUT             Output directory for dataset
+  --disable-cardinal-rotation-90
+                        Disable 0/90/180/270 base orientation randomization
+                        (keep only augment.rotation_deg_range jitter)
+  --json                Print a machine-readable result line
+                        ('SIMPLE_SIM_RESULT {...}') as last stdout line

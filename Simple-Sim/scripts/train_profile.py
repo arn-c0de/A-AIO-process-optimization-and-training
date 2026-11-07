@@ -17,7 +17,9 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import add_json_flag, run_cli
+from simple_sim.cli_utils import add_amp_flags, add_data_arg, add_json_flag, add_out_arg, run_cli
+from simple_sim.dataset_files import LABELS_JSONL
+from simple_sim.devices import default_device_name, resolve_device
 from simple_sim.data_loader import ProfileDataset, make_loader_kwargs
 from simple_sim.eval_utils import format_distribution, require_manifest
 from simple_sim.manifest import hash_file, read_dataset_manifest
@@ -31,7 +33,7 @@ def dataset_profile_names(data_dir: Path, manifest: dict[str, Any]) -> list[str]
     """Sorted profile IDs of a dataset: from a v2 manifest, else scanned from labels.jsonl."""
     if manifest.get('manifest_version', 1) == 2:
         return sorted(p['profile_id'] for p in manifest['component_profiles'])
-    label_rows = read_jsonl(Path(data_dir) / 'labels.jsonl', LabelRow)
+    label_rows = read_jsonl(Path(data_dir) / LABELS_JSONL, LabelRow)
     return sorted({r.profile_id for r in label_rows if r.profile_id})
 
 
@@ -41,7 +43,7 @@ def train_profile_model(
     """Train a profile classifier on a mixed-profile dataset; return a summary dict."""
     data_dir = Path(data_dir)
     output_path = Path(out)
-    device = torch.device(device)
+    device = resolve_device(device)
     use_amp = bool(amp and device.type == "cuda")
 
     config = load_dataset_config(data_dir)
@@ -147,14 +149,10 @@ def train_profile_model(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Train profile classifier')
-    parser.add_argument('--data', type=str, required=True, help='Path to mixed-profile dataset directory')
-    parser.add_argument('--out', type=str, required=True, help='Output path for trained model (.pt)')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                        help='Device (cuda/cpu)')
-    amp_group = parser.add_mutually_exclusive_group()
-    amp_group.add_argument('--amp', dest='amp', action='store_true', help='Enable mixed precision on CUDA (default).')
-    amp_group.add_argument('--no-amp', dest='amp', action='store_false', help='Disable mixed precision.')
-    parser.set_defaults(amp=True)
+    add_data_arg(parser, 'Path to mixed-profile dataset directory')
+    add_out_arg(parser, 'Output path for trained model (.pt)')
+    parser.add_argument('--device', type=str, default=default_device_name(), help='Device (cuda/cpu)')
+    add_amp_flags(parser)
     add_json_flag(parser)
     args = parser.parse_args()
 

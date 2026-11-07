@@ -30,8 +30,7 @@ import numpy as np
 
 from .imageops import gradient, grid, heightmap_normals, smooth_noise
 
-SOLDER_STYLES = ("legacy", "meniscus")
-DEFAULT_SOLDER_STYLE = "legacy"
+from simple_sim.generators.options import DEFAULT_SOLDER_STYLE, SOLDER_STYLES  # noqa: E402 (I7: cv2-free definition)
 
 SOLDER_TINT = (1.0, 0.985, 0.96)  # SAC alloy under white light: neutral, faintly cool (BGR factors)
 _BODY_DARK = np.array((22.0, 22.0, 24.0), dtype=np.float32)    # black resistor body / moulding, mirrored

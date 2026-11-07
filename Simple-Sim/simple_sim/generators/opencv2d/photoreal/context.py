@@ -19,8 +19,8 @@ from .look import LEGACY_LOOK, Look, camera_config, get_look, mask_gloss, rework
 
 DEFAULT_COMPONENT_COLOR = (20, 20, 20)  # render.component_color when the config has none
 
-DEFAULT_SUPERSAMPLING = 2
-SUPERSAMPLING_CHOICES = (1, 2, 3, 4)  # 4 = "ultra": 16 rendered sub-pixels per camera pixel
+# 4 = "ultra": 16 rendered sub-pixels per camera pixel (defined in the cv2-free generators.options, I7)
+from simple_sim.generators.options import DEFAULT_SUPERSAMPLING, SUPERSAMPLING_CHOICES  # noqa: E402
 
 
 def supersampling(config: dict[str, Any] | None) -> int:

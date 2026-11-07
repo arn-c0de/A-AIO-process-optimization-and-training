@@ -6,9 +6,11 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from simple_sim.board.footprints import KIND_IC, part_family
+
 from .context import RenderContext
 from .imageops import blend, smooth_noise, text_layer
-from .palette import CHIPS, REFDES_PREFIX, SILKSCREEN
+from .palette import CHIPS, SILKSCREEN
 
 
 def draw_silkscreen(ctx: RenderContext, img: np.ndarray, keepout: tuple[int, int, int, int], family: str, rng: np.random.Generator) -> None:
@@ -26,11 +28,11 @@ def draw_silkscreen(ctx: RenderContext, img: np.ndarray, keepout: tuple[int, int
         cv2.line(outline, (x1 + gap, y0 - gap), (x1 + gap, y1 + gap), 255, thick)
     else:
         cv2.rectangle(outline, (x0 - gap, y0 - gap), (x1 + gap, y1 + gap), 255, thick)
-        if family in ("soic", "qfn", "sot", "sot6"):
+        if part_family(family).kind == KIND_IC:  # moulded ICs: pin-1 dot
             cv2.circle(outline, (x0 - gap - 3 * ctx.ss, y0 - gap - 3 * ctx.ss), int(1.5 * ctx.ss), 255, -1)
     layer = np.maximum(layer, outline.astype(np.float32) / 255.0)
 
-    refdes = f"{REFDES_PREFIX[family]}{int(rng.integers(1, 400))}"
+    refdes = f"{part_family(family).refdes}{int(rng.integers(1, 400))}"
     text_h = 9.0 * ctx.ss
     above = y0 - gap - text_h * 1.2
     cy = above if above > text_h else y1 + gap + text_h * 1.2

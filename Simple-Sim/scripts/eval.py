@@ -15,7 +15,16 @@ from torch.utils.data import DataLoader
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.cli_utils import PROFILE_MISMATCH_HINT, add_json_flag, run_cli, with_hint
+from simple_sim.cli_utils import (
+    PROFILE_MISMATCH_HINT,
+    add_data_arg,
+    add_json_flag,
+    add_model_arg,
+    add_profile_mismatch_flag,
+    run_cli,
+    with_hint,
+)
+from simple_sim.devices import default_device_name, resolve_device
 from simple_sim.data_loader import ROIDataset
 from simple_sim.eval_utils import (
     checkpoint_eval_config,
@@ -88,7 +97,7 @@ def run_eval(
     """
     data_dir = Path(data_dir)
     requested_model_path = model_path = Path(model_path)
-    device = torch.device(device)
+    device = resolve_device(device)
 
     print("Evaluation configuration:")
     print(f"  Dataset: {data_dir}")
@@ -177,18 +186,13 @@ def run_eval(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Evaluate trained model on test set')
-    parser.add_argument('--data', type=str, required=True, help='Path to dataset directory')
-    parser.add_argument('--model', type=str, required=True, help='Path to trained model checkpoint')
-    parser.add_argument(
-        '--allow-profile-mismatch',
-        action='store_true',
-        help=(
-            "DANGEROUS: allow evaluating a checkpoint on a dataset with a different component profile. "
-            "This disables the hard profile_id mismatch guard and continues with a warning."
-        ),
-    )
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                        help='Device (cuda/cpu)')
+    add_data_arg(parser, 'Path to dataset directory')
+    add_model_arg(parser, 'Path to trained model checkpoint')
+    add_profile_mismatch_flag(parser, (
+        "DANGEROUS: allow evaluating a checkpoint on a dataset with a different component profile. "
+        "This disables the hard profile_id mismatch guard and continues with a warning."
+    ))
+    parser.add_argument('--device', type=str, default=default_device_name(), help='Device (cuda/cpu)')
     parser.add_argument('--tta', action='store_true',
                         help='Test-time augmentation: average the softmax over horizontal/vertical flips and '
                              '90-degree rotations (8 views; for cardinal-rotation-augmented datasets)')

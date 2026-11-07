@@ -9,6 +9,7 @@ import numpy as np
 from gui.utils.checkpoint_meta import read_checkpoint_dict
 from gui.utils.dataset_catalog import sim_data_roots
 from gui.utils.model_inference import load_model, ModelWrapper
+from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from simple_sim.manifest import hash_file
 from simple_sim.io_utils import atomic_write_json
@@ -24,8 +25,8 @@ class AnalysisLogic:
         return sim_data_roots(self.sim_root)
 
     def load_dataset(self, dataset_dir: Path) -> tuple[dict[str, MetaRow], dict[str, str], dict[str, str], list[str]]:
-        meta_rows = read_jsonl(dataset_dir / "meta.jsonl", MetaRow)
-        label_rows = read_jsonl(dataset_dir / "labels.jsonl", LabelRow)
+        meta_rows = read_jsonl(dataset_dir / META_JSONL, MetaRow)
+        label_rows = read_jsonl(dataset_dir / LABELS_JSONL, LabelRow)
         meta_dict = {row.id: row for row in meta_rows}
         label_dict = {row.id: row.class_name for row in label_rows}
         profile_dict = {row.id: row.profile_id for row in label_rows}
@@ -35,7 +36,7 @@ class AnalysisLogic:
     def try_load_model(self, dataset_dir: Path, current_model_path: Path | None) -> ModelWrapper | None:
         self.model = None
         manifest_hash = None
-        manifest_path = dataset_dir / "dataset_manifest.json"
+        manifest_path = dataset_dir / DATASET_MANIFEST
         if manifest_path.exists():
             try:
                 manifest_hash = hash_file(manifest_path)

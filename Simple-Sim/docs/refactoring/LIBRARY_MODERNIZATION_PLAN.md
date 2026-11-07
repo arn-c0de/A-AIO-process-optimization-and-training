@@ -129,6 +129,10 @@ S < 0.5 d, M 0.5-2 d, L > 2 d.
   Move all `render.*` option constants and validators into a light
   `generators/options.py` (camera presets, supersampling choices, solder styles, texture
   dir). S.
+  **Done 2026-11-07:** `simple_sim/generators/options.py` (look names, solder styles, supersampling
+  choices, post-filter modes, camera defaults/preset names + `validate_camera_config`); `config.py` imports only
+  from it, the photoreal definitions stay and `tests/test_generator_options.py` fails on drift;
+  `test_validate_config_without_cv2`.
 - **I8** GUI heavy imports at module level: `gui/tabs/pipeline/logic.py:18 import cv2`
   (only for merge resize), `gui/tabs/merge/logic.py:10 import torch`,
   `gui/tabs/weights/logic.py:22` (torch). Lazy-import inside functions. S.
@@ -178,22 +182,22 @@ Each row is one helper to write and N copies to delete.
 
 | ID | Helper | Copies |
 |---|---|---|
-| D1 | `resolve_device(spec) -> torch.device` + `default_device_name()` | `scripts/train.py:223,452`, `train_profile.py:44,152`, `eval.py:69,158`, `eval_profile.py:33,93`, `predict.py:87,149`, `batch_predict.py:352,513`, `sample_check.py:74,131`, `gui/utils/model_inference.py:39`, `two_stage.py:51` (`predict_two_stage.py:415` defaults to cpu, inconsistent) |
-| D2 | argparse fragments `add_data_arg/add_model_arg/add_out_arg/add_amp_flags/add_profile_mismatch_flag` in `cli_utils` (torch-free) | `--amp/--no-amp` group `train.py:454-457` = `train_profile.py:154-157`; `--allow-profile-mismatch` `train.py:440-447` = `eval.py:150-157`; `--data/--model/--out` in 10 scripts |
+| D1 | `resolve_device(spec) -> torch.device` + `default_device_name()` | `scripts/train.py:223,452`, `train_profile.py:44,152`, `eval.py:69,158`, `eval_profile.py:33,93`, `predict.py:87,149`, `batch_predict.py:352,513`, `sample_check.py:74,131`, `gui/utils/model_inference.py:39`, `two_stage.py:51` (`predict_two_stage.py:415` defaults to cpu, inconsistent) **Done 2026-11-07:** `simple_sim/devices.py` (torch imported on call); 7 scripts + `two_stage.py`; `gui/utils/model_inference.py` and `predict_two_stage.py` (cpu default) left |
+| D2 | argparse fragments `add_data_arg/add_model_arg/add_out_arg/add_amp_flags/add_profile_mismatch_flag` in `cli_utils` (torch-free) | `--amp/--no-amp` group `train.py:454-457` = `train_profile.py:154-157`; `--allow-profile-mismatch` `train.py:440-447` = `eval.py:150-157`; `--data/--model/--out` in 10 scripts **Done 2026-11-07:** `cli_utils.add_*` (help text passed by the caller) in 11 scripts; `--help` pinned by `tests/test_script_help.py` + `tests/golden/help/` |
 | D3 | `rel_to(root, p)` / `abs_from(root, p)` | `io_utils.py:99-104`, `generation/common.py:27-32`, `model_bundle.py:177-180`, `generation/profile_dataset.py:71` (no fallback, raises for a profile outside root), `arena.py:48-58`, `gui/tabs/pipeline/tab.py:584,1314`, `gui/tabs/predictions/tab.py:90,107` |
 | D4 | `class_counts(label_rows)` | `manifest.py:67-72`, `generation/common.py:180`, `scripts/batch_predict.py:84`, `gui/utils/dataset_ops.py:227` |
-| D5 | Manifest history / generator blocks | `manifest.py:146-153`, `:185-201`, `:390-412` (three hand-built copies in one file) |
+| D5 | Manifest history / generator blocks | `manifest.py:146-153`, `:185-201`, `:390-412` (three hand-built copies in one file) **Done 2026-11-07:** `manifest._history_entry` / `_generator_block` (same keys and order) |
 | D6 | Manifest v1/v2 (`component_profile` vs `component_profiles`) branching | `manifest.py:207-219,257-281`, `cli.py:142-145`, `generation/dataset.py:69-111`, `scripts/train.py`, `scripts/train_profile.py`, `tools/create_multi_dataset.py`, `gui/utils/pipeline_helpers.py`, `gui/tabs/pipeline/logic.py:421-440`, `gui/tabs/predictions/logic.py:84-98` (X7) |
-| D7 | Dataset file-name constants (`dataset_manifest.json`, `meta.jsonl`, `labels.jsonl`, `config.yaml`) | `manifest.py:119,379`, `cli.py:133`, `generation/dataset.py:120-123`, `eval_utils.py:26`, `dataset_store.py:25`, `data_loader.py:85-86`, +20 in gui/scripts/tools |
+| D7 | Dataset file-name constants (`dataset_manifest.json`, `meta.jsonl`, `labels.jsonl`, `config.yaml`) | `manifest.py:119,379`, `cli.py:133`, `generation/dataset.py:120-123`, `eval_utils.py:26`, `dataset_store.py:25`, `data_loader.py:85-86`, +20 in gui/scripts/tools **Done 2026-11-07:** `simple_sim/dataset_files.py` (`DATASET_MANIFEST`, `META_JSONL`, `LABELS_JSONL`, `CONFIG_YAML`, `SPLITS_DIR`) at the path joins in `simple_sim/` (not `generation/`), `scripts/`, `gui/`; message strings and `generation/`, `tools/` left |
 | D8 | `config.yaml` loader for a dataset dir | `scripts/train.py:133-136`, `tools/create_multi_dataset.py:150-155`, `tools/backfill_manifest.py:76`, `cli.py:112` |
-| D9 | Bundle checkpoint listing (`*.pt` minus `_last`) | `model_bundle.py:122-126`, `cli.py:164-168`, `arena.py:114-116` |
-| D10 | Bundle checkpoint resolution with the identical error text "Multi-model bundle has no checkpoint for profile" | `eval_utils.py:232-247` (canonical), `scripts/batch_predict.py:109-129`, `gui/tabs/weights/logic.py:281-301`, `gui/tabs/predictions/logic.py:83-131` |
-| D11 | Profile YAML parsed twice per load (`load_profile` then `hash_profile` re-reads) | `generation/dataset.py:237-239`, `profile_dataset.py:64-69`, `profile_hash.py:75-76,112-113`; add `hash_profile_dict` |
+| D9 | Bundle checkpoint listing (`*.pt` minus `_last`) | `model_bundle.py:122-126`, `cli.py:164-168`, `arena.py:114-116` **Done 2026-11-07:** `model_bundle.list_bundle_checkpoints(include_last=)` |
+| D10 | Bundle checkpoint resolution with the identical error text "Multi-model bundle has no checkpoint for profile" | `eval_utils.py:232-247` (canonical), `scripts/batch_predict.py:109-129`, `gui/tabs/weights/logic.py:281-301`, `gui/tabs/predictions/logic.py:83-131` **Done 2026-11-07:** `model_bundle.resolve_bundle_checkpoint(hint=, show_available=)` (re-exported by `eval_utils`), used by `batch_predict` and the weights tab with their exact texts; `predictions/logic.py` (log lines, auto-train) left |
+| D11 | Profile YAML parsed twice per load (`load_profile` then `hash_profile` re-reads) | `generation/dataset.py:237-239`, `profile_dataset.py:64-69`, `profile_hash.py:75-76,112-113`; add `hash_profile_dict` **Done 2026-11-07** (helper): `profile_hash.hash_profile_dict`; the two callers in `generation/` still call `hash_profile(path)` |
 | D12 | Split-name constant | `generation/common.py:19`, `schema.py:47`, `config.py:124`, `splits.py:56`, `scripts/batch_predict.py:74,98,101`, `tools/validate_dataset.py:145`, gui x5 |
 | D13 | Defect-class string sets | `config.py:37`, `defects.py:68,105-115`, `metrics.py:12`, `opencv2d/draw.py:199`, `opencv2d/render.py:17`, `preview/render.py:32`, `tools/update_sample_gallery.py:43`, gui x6 |
 | D14 | Numeric/bool coercion `_to_bool/_to_float/_to_int` | `arena.py:83-87`, `filter_profiles.py:35-43`, `generators/filter_settings.py:134-158`, `gui/components/filter_popup/models.py:12-29` |
 | D15 | Timestamps (naive local ISO, UTC `Z`, `%Y%m%dT%H%M%SZ`, `%Y-%m-%d %H:%M:%S`) | `manifest.py:147,176,194,391,395`, `model_bundle.py:132,154`, `arena.py:421,601,622`, `io_utils.now_tag:46`, `scripts/eval.py:119`, `eval_profile.py:62`, `batch_predict.py:439`; `datetime.utcnow()` (deprecated 3.12) at `gui/tabs/pipeline/logic.py:531`, `gui/tabs/merge/logic.py:144,191` |
-| D16 | SHA-256 with `sha256:` prefix | `manifest.hash_file:22-43`, `profile_hash.hash_profile:54-86`, prefix stripped at `gui/utils/checkpoint_meta.py:29` |
+| D16 | SHA-256 with `sha256:` prefix | `manifest.hash_file:22-43`, `profile_hash.hash_profile:54-86`, prefix stripped at `gui/utils/checkpoint_meta.py:29` **Done 2026-11-07:** `io_utils.sha256_tag` / `SHA256_PREFIX` |
 | D17 | `format_bytes` | `io_utils.py:61`, `gui/utils/formatting.py:8` |
 | D18 | JSON/JSONL I/O without the io_utils helpers | `manifest.py:124-125,240-241` (`json.load(open(path))`, no encoding), `schema.py:106-125` (own atomic write with `.tmp` suffix), `schema.py:150` |
 | D19 | YAML readers | `config.load_config:48-67`, `profile_hash.load_profile:112-113`, `cli.py:112`, `tools/profile_editor/yaml_io.load_yaml` |
@@ -423,7 +427,7 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
 | Phase | Status | Evidence |
 |---|---|---|
 | 0, 1 | done | `tests/test_headless_imports.py` guards I1/I8; `print(` only in `cli*.py` + Blender script |
-| 2 shared helpers | open except D14/D17/D18/D19/D23-D25 | D1 device pick at 7 script sites; D5 three history blocks `manifest.py:146,186,399`; D7 108 literal file-name sites; D11 `hash_profile` re-reads YAML; D16 `sha256:` built twice; I5 done 2026-11-07 (torch/tqdm lazy in `eval_utils`, 0.74 -> 0.05 s warm; was 2.8 s cold); I7 `validate_config` still loads cv2 via the photoreal option constants (`config.py:357,376,386,396,407,419`); its board part (`_validate_board`) is cv2-free since I4 (`test_board_options_validate_without_cv2`); I4 done 2026-11-07 (`board/options.py` + `board/pipeline.py`, lazy `board/__init__.py`) |
+| 2 shared helpers | open except D14/D17/D18/D19/D23-D25 (and D1/D2/D5/D7/D9/D10/D11/D16/I7: done 2026-11-07, see section 3) | D1 device pick at 7 script sites; D5 three history blocks `manifest.py:146,186,399`; D7 108 literal file-name sites; D11 `hash_profile` re-reads YAML; D16 `sha256:` built twice; I5 done 2026-11-07 (torch/tqdm lazy in `eval_utils`, 0.74 -> 0.05 s warm; was 2.8 s cold); I7 `validate_config` still loads cv2 via the photoreal option constants (`config.py:357,376,386,396,407,419`); its board part (`_validate_board`) is cv2-free since I4 (`test_board_options_validate_without_cv2`); I4 done 2026-11-07 (`board/options.py` + `board/pipeline.py`, lazy `board/__init__.py`) |
 | 3 typed records | open | `_path` key in 6 places, `load_checkpoint_model` 3-tuple, `parse_config_typed` result discarded (`config.py:79`), 11-positional `write_dataset_manifest` |
 | 4 logic into library | open | none of `training/evaluation/batch_predict/validation/dataset_merge/dataset_edit/inference/...` exist; `train_model` 256 lines / 44 prints; `gui/utils/validation_suite.py:13` is the only `gui -> tools` import; `simple_sim/preview/viewer_tk.py:219` the only `simple_sim -> gui` import |
 | 5 command registry | open | `cli.py:264 subprocess.call`, `:75 "add_json_flag" in src`; the 7 sim-to-real tools are in `COMMANDS` since 2026-11-07 (N12); 40 `sys.path.insert` (the 6 in those tools now only fire when run as a script, `real_crops.py` has none) |
@@ -500,6 +504,11 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   (kind, cap_len, unmarked, refdes, edge inset, height_ratio, marking rule) in a `FAMILIES`
   table in `board/footprints.py`; `parts.py` dispatches via a drawer registry keyed by `kind`;
   Blender reads the same table from the baked scene (closes half of D35). Pixel-safe. M.
+  **Done 2026-11-07** (2D side): `PartFamily` + read-only `FAMILIES` (name -> row; iterates the names as the
+  old tuple did), `part_family()`, `BODY_KINDS`; `CHIP_FAMILIES`, `FINE_PITCH_FAMILIES`, `placement.REFDES_PREFIX`,
+  palette `CHIPS/LEADED/ARRAY_FAMILIES/UNMARKED/CAP_LEN` derived from it; `parts._BODY_DRAWERS` by kind;
+  silkscreen/marking read the table. Blender side open (D35): `render_batch.py` is stdlib-only and the bake
+  golden hashes the scene dict; `tests/test_part_families.py` pins `_HEIGHT_RATIO` to `height_ratio`.
 - **N2 Render config dict re-resolved per image.** `config` is passed through
   `draw_board/_render_board/_render_photoreal_base` (`scene.py:35,82,135`) and read for
   `texture_dir`, `component_type`, `component_color`, `marking_probability`, `mm_per_px`,
@@ -515,12 +524,23 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   both do scaled_geometry, family_of, draw_board, body_geometry, boxPoints,
   solder_defect_layout; the latter has 10 args. Extract `_scene_setup() -> SceneGeometry`
   (frozen) and `_draw_part()`. Pixel-safe by whole-block moves. M.
+  **Done 2026-11-07:** `scene.SceneGeometry` / `_scene_setup()` (scaling, family, `draw_board`, body pose + box,
+  no rng after `draw_board`) used by both pipelines; `_draw_part()` holds the part block of
+  `_render_photoreal_base`. RNG order and both golden tests unchanged.
 - **N4 Backend dispatch.** Add a lazily imported `render_records` to `BackendInfo` (or a
   `RenderBackend` Protocol); removes `dataset.py:456-475` and `preview/render.py:34-35`. S.
+  **Done 2026-11-07:** `BackendInfo.renderer`/`previewer` (`module:function`, imported on call;
+  `RecordRenderer` protocol), adapters in `generation/render_backends.py`; no backend-name
+  comparison left in `generate_dataset` / `render_profile_backend`; `render_previews` batches by
+  the `needs_blender` capability. `tests/test_generation_backends.py`.
 - **N5 `generate_profile_dataset` is a second `generate_dataset`** (`profile_dataset.py:35-168`):
   own profile loop, own sampling loop, hard-coded `profiles_dir`, `load_image_filters_env()`
   inside, ignores the R4 split. Reuse `resolve_run` + `plan_records` with an
   "rng continues into render" flag (keeps `:119-121`). M.
+  **Done 2026-11-07:** `resolve_run(profile_id=, domain_cameras=)` per profile, `plan_records(domain=,
+  continue_rng=)`, rendering via N4; `profiles_dir=` and mapping input; `$IMAGE_FILTERS` stays the
+  default for `image_filters=None` (`scripts/generate_profile_dataset.py` does not pass it yet).
+  Byte-identical: `tests/test_profile_dataset_golden.py` (hashes written by the old code).
 - **N6 Defect types as raw strings** at 14 renderer sites (`scene.py:99,120,171-212`,
   `solder_defects.py:30,33`) and in `defects.py:85,94,118-127`, `batch_predict.py:518`,
   although `DefectClass(StrEnum)` exists. S. **Done 2026-11-07** for the renderer (`scene.py`,
@@ -606,6 +626,10 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
 - **S4 `--extend` holds the whole old dataset in lists** (`dataset.py:186-187,488-489`;
   `records/tmp_meta/tmp_labels/meta_rows` coexist in `common.py:191-207`). Stream rows, keep only
   ids/splits of the old set. M.
+  **Done 2026-11-07:** one streamed pass (`validate_jsonl_pair(on_meta=, on_label=)`, `iter_jsonl`);
+  kept per old row only `LabelKey(id, class, profile)` (coverage + manifest counts need the class).
+  15k rows, 32 px, +90 samples: 1.45 -> 0.74 s, RSS 390 -> 133 MiB, tracemalloc peak 237 -> 8 MiB.
+  `build_rows` still holds `tmp_meta` for the new records only (not the old set).
 - **S5 Report/arena scans re-read and re-walk.** `reports.load_reports` parses every report per
   call (`reports.py:44-63`, called by `cli.status`, `arena`, `batch_predict.history_rows`);
   `arena.best_rows_by_model` re-parses timestamps inside sort keys (`:176-187`);

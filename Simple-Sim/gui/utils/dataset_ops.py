@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 from collections.abc import Iterable
 
+from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL, SPLITS_DIR
 from simple_sim.io_utils import atomic_write_json, atomic_write_text
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, write_jsonl
 
@@ -70,8 +71,8 @@ def delete_samples(dataset_dir: Path, sample_ids: Iterable[str]) -> DatasetEditS
     keep_meta = [row for row in meta_rows if row.id not in selected]
     keep_labels = [row for row in label_rows if row.id not in selected]
 
-    write_jsonl(dataset_dir / "meta.jsonl", keep_meta)
-    write_jsonl(dataset_dir / "labels.jsonl", keep_labels)
+    write_jsonl(dataset_dir / META_JSONL, keep_meta)
+    write_jsonl(dataset_dir / LABELS_JSONL, keep_labels)
     split_files = _read_split_files(dataset_dir)
     if split_files:
         _write_split_files(dataset_dir, _remove_from_splits(split_files, set(selected)))
@@ -184,10 +185,10 @@ def move_samples(
                 )
             )
 
-        write_jsonl(src_dataset_dir / "meta.jsonl", new_src_meta)
-        write_jsonl(src_dataset_dir / "labels.jsonl", new_src_labels)
-        write_jsonl(dst_dataset_dir / "meta.jsonl", new_dst_meta)
-        write_jsonl(dst_dataset_dir / "labels.jsonl", new_dst_labels)
+        write_jsonl(src_dataset_dir / META_JSONL, new_src_meta)
+        write_jsonl(src_dataset_dir / LABELS_JSONL, new_src_labels)
+        write_jsonl(dst_dataset_dir / META_JSONL, new_dst_meta)
+        write_jsonl(dst_dataset_dir / LABELS_JSONL, new_dst_labels)
 
         if src_splits:
             _write_split_files(src_dataset_dir, _remove_from_splits(src_splits, selected_set))
@@ -212,7 +213,7 @@ def move_samples(
 def recompute_manifest_stats(dataset_dir: Path) -> None:
     """Recompute dataset_stats in dataset_manifest.json when present."""
     dataset_dir = Path(dataset_dir)
-    manifest_path = dataset_dir / "dataset_manifest.json"
+    manifest_path = dataset_dir / DATASET_MANIFEST
     if not manifest_path.exists():
         return
 
@@ -240,7 +241,7 @@ def recompute_manifest_stats(dataset_dir: Path) -> None:
 
 def _read_split_files(dataset_dir: Path) -> dict[str, list[str]]:
     """Return ``{split_name: [ids]}`` for every ``splits/*.txt`` file present."""
-    splits_dir = Path(dataset_dir) / "splits"
+    splits_dir = Path(dataset_dir) / SPLITS_DIR
     if not splits_dir.is_dir():
         return {}
     out: dict[str, list[str]] = {}
@@ -256,7 +257,7 @@ def _remove_from_splits(splits: dict[str, list[str]], removed: set[str]) -> dict
 
 def _write_split_files(dataset_dir: Path, splits: dict[str, list[str]]) -> None:
     """Atomically (tmp + replace) write each split file."""
-    splits_dir = Path(dataset_dir) / "splits"
+    splits_dir = Path(dataset_dir) / SPLITS_DIR
     splits_dir.mkdir(parents=True, exist_ok=True)
     for split_name, ids in splits.items():
         atomic_write_text(splits_dir / f"{split_name}.txt", "".join(sid + "\n" for sid in ids))
@@ -264,8 +265,8 @@ def _write_split_files(dataset_dir: Path, splits: dict[str, list[str]]) -> None:
 
 def _read_rows(dataset_dir: Path) -> tuple[list[MetaRow], list[LabelRow]]:
     dataset_dir = Path(dataset_dir)
-    meta_rows = read_jsonl(dataset_dir / "meta.jsonl", MetaRow)
-    label_rows = read_jsonl(dataset_dir / "labels.jsonl", LabelRow)
+    meta_rows = read_jsonl(dataset_dir / META_JSONL, MetaRow)
+    label_rows = read_jsonl(dataset_dir / LABELS_JSONL, LabelRow)
     return meta_rows, label_rows
 
 
@@ -334,7 +335,7 @@ def _ensure_profile_compatibility(src_dataset_dir: Path, dst_dataset_dir: Path) 
 
 
 def _read_profile_id(dataset_dir: Path) -> str | None:
-    manifest_path = Path(dataset_dir) / "dataset_manifest.json"
+    manifest_path = Path(dataset_dir) / DATASET_MANIFEST
     if not manifest_path.exists():
         return None
     try:
