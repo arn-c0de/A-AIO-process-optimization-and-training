@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 
 from simple_sim.board.footprints import CHIP_FAMILIES, FAMILIES, KIND_ARRAY
+# Marking vocabularies: one definition, shared with the Blender scene (D35).
+from simple_sim.board.footprints import ARRAY_CODES, MARK_CHARS, RESISTOR_CODES  # noqa: F401 (re-exported)
 from simple_sim.board.placement import REFDES_PREFIX  # noqa: F401 (re-exported for silkscreen)
 
 
@@ -59,9 +61,6 @@ CAP_BODY = np.array((120, 152, 170), dtype=np.float32)  # tan MLCC ceramic (real
 END_CAP = np.array((168, 171, 174), dtype=np.float32)
 
 
-RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
-
-
 # REFDES_PREFIX (family -> reference-designator prefix) lives in the board layer (D28: one definition).
 
 
@@ -71,9 +70,6 @@ CAP_ARRAY_BODY = np.array((178, 186, 190), dtype=np.float32)  # light grey-beige
 
 # Part-family sets below are derived from board.footprints.FAMILIES (N1), in its order.
 ARRAY_FAMILIES = tuple(n for n, f in FAMILIES.items() if f.kind == KIND_ARRAY)
-
-
-ARRAY_CODES = ("0", "000", "101", "103", "220", "221", "330", "472", "473", "102", "4R7")
 
 
 LEADED = tuple(n for n, f in FAMILIES.items() if f.leaded)
@@ -91,9 +87,6 @@ CAP_LEN = {n: f.cap_len for n, f in FAMILIES.items() if f.cap_len is not None}
 
 
 LED_LENS = np.array((150, 208, 222), dtype=np.float32)   # yellowish translucent epoxy over the die
-
-
-MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
 
 
 FONTS = (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX)

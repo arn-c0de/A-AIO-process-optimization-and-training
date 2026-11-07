@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import tkinter as tk
 from tkinter import ttk, filedialog
 from pathlib import Path
@@ -16,7 +15,9 @@ from gui.state import UiState
 from gui.utils.checkpoint_meta import profile_label_suffix
 from gui.utils.dataset_catalog import sim_data_roots, unique_dataset_labels
 from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
-from gui.core.tasks import as_task_fn, runner_for
+from gui.core.tasks import DispatchQueue, as_task_fn, runner_for
+from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
+from simple_sim.file_cache import FileCache
 from simple_sim.io_utils import now_iso, path_size_bytes
 from simple_sim.models import load_checkpoint
 from simple_sim.reports import metric_value, report_timestamp
@@ -30,7 +31,8 @@ class WeightsTab(BaseTab):
 
     def __init__(self, parent: ttk.Frame, sim_root: Path, state: UiState) -> None:
         super().__init__(parent, sim_root, state)
-        self.log_q: queue.Queue[str] = queue.Queue()
+        # WeightsLogic only put()s; DispatchQueue drains on the Tk thread (no after() poll).
+        self.log_q: DispatchQueue = DispatchQueue()
         self.ui = WeightsUI(self, self.frame)
         self.logic = WeightsLogic(sim_root, self.log_q)
 
@@ -51,7 +53,8 @@ class WeightsTab(BaseTab):
         self._cmp_dataset_labels: list[str] = []
         self._cmp_dataset_by_label: dict[str, Path] = {}
 
-        self._ui_tick_id: str | None = None
+        # Stat-first caches: manifest/labels are re-read only when the files change (S6).
+        self._ds_file_cache = FileCache(max_entries=128)
         self._profile_info_cache: dict[tuple[str, float], str] = {}
 
     def build_ui(self) -> None:
@@ -65,7 +68,7 @@ class WeightsTab(BaseTab):
         self._refresh_reports()
         self._load_persisted_settings()
         self._wire_settings_autosave()
-        self._tick_ui()
+        self.bind_queue(self.log_q, self._on_log_lines)
 
     def on_activate(self) -> None:
         """Build lazily once, then auto-refresh model categorization on each open."""
@@ -80,7 +83,7 @@ class WeightsTab(BaseTab):
         self.ui.var_dataset.set(str(self.state.dataset_dir))
         active = self.logic._model_root() / f"{self.state.dataset_dir.name}.pt"
         self.ui.var_active_model.set(str(active))
-        self.ui.var_dataset_samples.set(self.logic.describe_dataset_samples(self.state.dataset_dir))
+        self.ui.var_dataset_samples.set(self._describe_dataset_samples(self.state.dataset_dir))
         if hasattr(self.ui, "list_cmp_datasets") and self.ui.list_cmp_datasets.size() > 0:
             if not self.ui.list_cmp_datasets.curselection(): self._select_current_dataset_for_compare()
 
@@ -139,11 +142,18 @@ class WeightsTab(BaseTab):
     def on_close(self) -> None:
         self.logic.stop_prediction()
 
-    def _tick_ui(self) -> None:
-        while True:
-            try: self.ui.append_log(self.log_q.get_nowait())
-            except queue.Empty: break
-        self._ui_tick_id = self.frame.after(150, self._tick_ui)
+    def _on_log_lines(self, lines: list[str]) -> None:
+        for line in lines: self.ui.append_log(line)
+
+    def _describe_dataset_samples(self, ds: Path) -> str:
+        # The text depends on the manifest and (fallback) labels.jsonl only.
+        return self._ds_file_cache.cached(("samples", str(ds)), (ds / DATASET_MANIFEST, ds / LABELS_JSONL),
+                                          lambda: self.logic.describe_dataset_samples(ds))
+
+    def _dataset_classes(self, ds: Path) -> list[str]:
+        # Worker thread: FileCache is thread-safe; a copy keeps the cached list immutable.
+        return list(self._ds_file_cache.cached(("classes", str(ds)), (ds / LABELS_JSONL,),
+                                               lambda: tuple(self.logic.get_dataset_classes(ds))))
 
     def _refresh_cmp_datasets(self) -> None:
         cand = self.logic.get_cmp_datasets()
@@ -659,7 +669,7 @@ class WeightsTab(BaseTab):
 
         try:
             self.ui.var_status.set(f"status: running (selected({p.name}))")
-            self.logic.run_predict(p, self.state.dataset_dir, f"selected({p.name})", self.ui.var_split.get().strip(), self.ui.var_device.get().strip(), self.ui.var_max_samples.get().strip(), self.ui.chk_save_preds.get(), lambda *res: self.frame.after(0, self._on_predict_complete, *res))
+            self.logic.run_predict(p, self.state.dataset_dir, f"selected({p.name})", self.ui.var_split.get().strip(), self.ui.var_device.get().strip(), self.ui.var_max_samples.get().strip(), self.ui.chk_save_preds.get(), lambda *res: self.post(lambda: self._on_predict_complete(*res)))
         except Exception as e:
             self.ui.var_status.set("status: failed")
             dialogs.show_error(self.frame, "Evaluation Failed", e)
@@ -691,7 +701,7 @@ class WeightsTab(BaseTab):
 
             for ds in ds_dirs:
                 if self.logic.stop_evt.is_set() or task.cancelled(): break
-                if (ds_classes := self.logic.get_dataset_classes(ds)):
+                if (ds_classes := self._dataset_classes(ds)):
                     if cls_a and sorted(ds_classes) != sorted(cls_a):
                         self.log_q.put(f"\n[skip] A({a.name}) incompatible with dataset {ds.name}: model classes={cls_a} dataset classes={ds_classes}\n")
                         continue

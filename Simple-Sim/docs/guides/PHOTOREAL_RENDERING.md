@@ -327,7 +327,7 @@ split of a generated dataset (`images/real/`, `meta.jsonl` with `render_backend:
 ```bash
 python -m simple_sim generate --config configs/run_0402_c_quins.yaml --out data/run_0402_c_quins
 python tools/mix_real.py --data data/run_0402_c_quins --real real_train/ --limit 200   # OK/, MISSING@empty_pad/
-python scripts/train.py --data data/run_0402_c_quins --out models/run_0402_c_quins.pt
+python -m simple_sim train --data data/run_0402_c_quins --out models/run_0402_c_quins.pt
 python tools/eval_real.py --checkpoint models/run_0402_c_quins.pt --real real_eval/   # crops never mixed in
 ```
 

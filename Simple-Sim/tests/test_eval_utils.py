@@ -144,11 +144,11 @@ TINY_CONFIG = {
 
 
 def test_script_cores_end_to_end(tmp_path):
-    from scripts.eval import run_eval
-    from scripts.generate import generate_dataset
-    from scripts.predict import predict_image
-    from scripts.sample_check import sample_check
-    from scripts.train import train_model
+    from simple_sim.evaluation import run_eval
+    from simple_sim.generation.dataset import generate_dataset
+    from simple_sim.inference import predict_image
+    from simple_sim.inference import sample_check
+    from simple_sim.training import train_model
 
     cfg = tmp_path / "cfg.yaml"
     cfg.write_text(yaml.dump(TINY_CONFIG), encoding="utf-8")
@@ -188,10 +188,10 @@ def test_ensemble_and_bundle_eval_predict(tmp_path):
     """Ensembles (no top-level config/epoch) evaluate and predict; bundle reports sit next to the bundle dir."""
     import shutil
 
-    from scripts.eval import run_eval
-    from scripts.generate import generate_dataset
-    from scripts.predict import predict_image
-    from scripts.train import train_model
+    from simple_sim.evaluation import run_eval
+    from simple_sim.generation.dataset import generate_dataset
+    from simple_sim.inference import predict_image
+    from simple_sim.training import train_model
     from simple_sim.eval_utils import dataset_profile
     from simple_sim.model_bundle import bundle_checkpoint_path
     from simple_sim.models import ENSEMBLE_FORMAT, load_checkpoint

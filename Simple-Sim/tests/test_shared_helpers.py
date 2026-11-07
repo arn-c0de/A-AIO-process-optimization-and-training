@@ -143,7 +143,7 @@ def test_resolve_bundle_checkpoint_error_text(tmp_path: Path) -> None:
 
 
 def test_batch_predict_bundle_error_text_unchanged(tmp_path: Path) -> None:
-    from scripts.batch_predict import resolve_model_path
+    from simple_sim.batch_predict import resolve_model_path
 
     data = tmp_path / "ds"
     data.mkdir()
@@ -159,7 +159,7 @@ def test_batch_predict_bundle_error_text_unchanged(tmp_path: Path) -> None:
         f"  expected: {bundle / 'p@1.pt'}\n"
         f"  available: (none)\n\n"
         f"To add it, train this dataset into the same bundle:\n"
-        f"  ./.venv/bin/python scripts/train.py --data {data} --out {bundle}"
+        f"  python -m simple_sim train --data {data} --out {bundle}"
     )
 
 
@@ -184,7 +184,7 @@ def test_weights_tab_bundle_error_text_unchanged(tmp_path: Path) -> None:
         f"  expected: {bundle / 'p@1.pt'}\n"
         f"  available: q@1.pt\n\n"
         f"Train this dataset into the same bundle to add it:\n"
-        f"  ./.venv/bin/python scripts/train.py --data {data} --out {bundle}\n"
+        f"  python -m simple_sim train --data {data} --out {bundle}\n"
     )
 
 

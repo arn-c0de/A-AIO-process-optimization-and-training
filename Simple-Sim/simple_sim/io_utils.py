@@ -172,7 +172,14 @@ def rel_to(root: Path, p: Path) -> str:
 
 
 def parse_iso_ts(s: Any) -> float:
-    """Parse an ISO timestamp to epoch seconds; ``0.0`` if unparseable."""
+    """Parse an ISO timestamp to epoch seconds; ``0.0`` if unparseable.
+
+    Failure contract (plan A6): never raises; a missing, empty or malformed value gives the
+    sentinel ``0.0`` ("unknown", i.e. the epoch), so the result can be used directly as a sort key
+    and tested with ``if ts:``. This differs on purpose from
+    :func:`simple_sim.reports.metric_value`, which returns ``None`` for a missing metric because
+    ``0.0`` is a valid metric value; a real timestamp is never the epoch.
+    """
     try:
         return datetime.fromisoformat(str(s)).timestamp()
     except (TypeError, ValueError):

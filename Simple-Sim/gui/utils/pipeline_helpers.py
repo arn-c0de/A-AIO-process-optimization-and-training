@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import sys
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -19,10 +20,12 @@ from gui.utils.paths import model_root
 from simple_sim.board import BOARD_ROUTERS, DRC_MODES
 from simple_sim.board.rules import PRESETS as DESIGN_RULE_PRESETS
 from simple_sim.classes import STANDARD_CLASSES
+from simple_sim.cli import argv_for
 from simple_sim.generators.options import LOOKS
 from simple_sim.io_utils import load_yaml
 
-PYTHON = "./.venv/bin/python"
+#: Interpreter for spawned commands: the one running the GUI (its venv), not a hard-coded path (plan P4).
+PYTHON = sys.executable
 
 # (SettingsStore key, PipelineUI variable attribute) pairs persisted by the Pipeline tab.
 PERSISTED_FIELD_MAP: tuple[tuple[str, str], ...] = (
@@ -422,18 +425,15 @@ def chain_commands(argvs: list[list[str]]) -> str:
 
 
 def validate_argv(ds: Path) -> list[str]:
-    return [PYTHON, "tools/validate_dataset.py", "--data", str(ds)]
+    return argv_for("validate", python=PYTHON, data=ds)
 
 
 def train_argv(ds: Path, model_out: Path) -> list[str]:
-    return [PYTHON, "scripts/train.py", "--data", str(ds), "--out", str(model_out)]
+    return argv_for("train", python=PYTHON, data=ds, out=model_out)
 
 
 def eval_argv(ds: Path, model_in: Path, *, allow_profile_mismatch: bool = False) -> list[str]:
-    argv = [PYTHON, "scripts/eval.py", "--data", str(ds), "--model", str(model_in)]
-    if allow_profile_mismatch:
-        argv.append("--allow-profile-mismatch")
-    return argv
+    return argv_for("eval", python=PYTHON, data=ds, model=model_in, allow_profile_mismatch=allow_profile_mismatch)
 
 
 def continue_train_argv(ds: Path, model: Path, *, extra_epochs: int, out_mode: str, allow_profile_mismatch: bool = False) -> list[str]:

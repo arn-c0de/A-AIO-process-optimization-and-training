@@ -8,12 +8,16 @@ This module provides functions for:
 
 from __future__ import annotations
 
+import copy
+import functools
 import logging
 import hashlib
 import subprocess
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from simple_sim import __version__ as _VERSION
 from simple_sim.dataset_files import DATASET_MANIFEST
@@ -114,9 +118,214 @@ def _generator_block(script_name: str, git_commit: str | None, renderer_version:
     return generator
 
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _legacy_positional(n_positional: int, names: tuple[str, ...]) -> Callable[[_F], _F]:
+    """Accept the pre-A6 positional form of a writer whose parameters after the first
+    *n_positional* are keyword-only now (plan A6).
+
+    Extra positional arguments are mapped onto *names* (the old parameter order), silently for
+    now (callers in scripts/GUI still use it); passing one of them both ways raises ``TypeError``
+    like a normal call.
+    """
+    def deco(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if len(args) > n_positional:
+                extra = args[n_positional:]
+                if len(extra) > len(names):
+                    raise TypeError(f"{fn.__name__}() takes at most {n_positional + len(names)} "
+                                    f"positional arguments ({len(args)} given)")
+                for name, value in zip(names, extra):
+                    if name in kwargs:
+                        raise TypeError(f"{fn.__name__}() got multiple values for argument '{name}'")
+                    kwargs[name] = value
+                args = args[:n_positional]
+            return fn(*args, **kwargs)
+        return wrapper  # type: ignore[return-value]
+    return deco
+
+
+_PROFILE_FIELDS = ("profile_id", "profile_hash", "profile_path")
+
+
+@dataclass(frozen=True)
+class ProfileRef:
+    """One ``component_profile`` / ``component_profiles[i]`` entry of a dataset manifest.
+
+    ``from_dict``/``to_dict`` round-trip exactly: values are kept as stored (no ``str()``), unknown
+    keys live in ``extra``, and ``key_order`` records the original key order (a known field missing
+    from the source dict is ``""`` here and absent from ``to_dict``).
+    """
+
+    profile_id: str = ""
+    profile_hash: str = ""
+    profile_path: str = ""
+    extra: Mapping[str, Any] = field(default_factory=dict)
+    key_order: tuple[str, ...] = _PROFILE_FIELDS
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "ProfileRef":
+        known = {k: d[k] for k in _PROFILE_FIELDS if k in d}
+        extra = {k: copy.deepcopy(v) for k, v in d.items() if k not in _PROFILE_FIELDS}
+        return cls(**known, extra=extra, key_order=tuple(d.keys()))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: (getattr(self, k) if k in _PROFILE_FIELDS else copy.deepcopy(self.extra[k]))
+                for k in self.key_order}
+
+
+_PROFILES_V1 = "component_profile"
+_PROFILES_V2 = "component_profiles"
+
+
+def _profiles_shape_ok(key: str, value: Any) -> bool:
+    if key == _PROFILES_V1:
+        return isinstance(value, Mapping)
+    return isinstance(value, list) and all(isinstance(p, Mapping) for p in value)
+
+
+_MANIFEST_FIELDS = ("manifest_version", "created_at", "run_id", "generator", "dataset_stats", "extend_history")
+
+
+@dataclass(frozen=True)
+class DatasetManifest:
+    """Typed view of ``dataset_manifest.json`` (v1 single-profile and v2 multi-profile; plan A2).
+
+    ``DatasetManifest.from_dict(d).to_dict() == d`` including key order, so writing ``to_dict()``
+    with :func:`simple_sim.io_utils.atomic_write_json` reproduces the file byte for byte. Top-level
+    keys this class does not model (``real_crops`` logs of ``tools/mix_real.py``, future fields)
+    are kept in ``extra``. ``profiles`` holds ``component_profile`` (v1, one entry) or
+    ``component_profiles`` (v2); ``profiles_key`` names which one the source used (``None`` when
+    neither has the expected shape, the raw value then stays in ``extra``).
+
+    Instances are read-only by contract: the nested ``generator`` / ``dataset_stats`` /
+    ``extend_history`` values are plain containers (picklable) that must not be mutated, and
+    :func:`simple_sim.dataset_index.DatasetIndex.manifest` shares one instance per file.
+    ``to_dict()`` returns deep copies.
+    """
+
+    manifest_version: int = 1
+    created_at: str = ""
+    run_id: str = ""
+    profiles: tuple[ProfileRef, ...] = ()
+    generator: Mapping[str, Any] = field(default_factory=dict)
+    dataset_stats: Mapping[str, Any] = field(default_factory=dict)
+    extend_history: tuple[Mapping[str, Any], ...] = ()
+    extra: Mapping[str, Any] = field(default_factory=dict)
+    profiles_key: str | None = None
+    key_order: tuple[str, ...] = ()
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "DatasetManifest":
+        """Wrap a parsed manifest (no validation; :func:`load_dataset_manifest` validates)."""
+        known: dict[str, Any] = {}
+        extra: dict[str, Any] = {}
+        profiles: tuple[ProfileRef, ...] = ()
+        usable = [k for k in (_PROFILES_V1, _PROFILES_V2) if _profiles_shape_ok(k, d.get(k))]
+        try:
+            multi = int(d.get("manifest_version", 1) or 1) == 2
+        except (TypeError, ValueError):
+            multi = False
+        if multi:
+            usable.reverse()  # the key the version's readers use wins when both are present
+        profiles_key: str | None = usable[0] if usable else None
+        for k, v in d.items():
+            if k == "extend_history" and isinstance(v, list):
+                known[k] = tuple(copy.deepcopy(v))
+            elif k in _MANIFEST_FIELDS and k != "extend_history":
+                known[k] = copy.deepcopy(v)
+            elif k == profiles_key:
+                profiles = ((ProfileRef.from_dict(v),) if k == _PROFILES_V1
+                            else tuple(ProfileRef.from_dict(p) for p in v))
+            else:
+                extra[k] = copy.deepcopy(v)
+        return cls(**known, profiles=profiles, extra=extra, profiles_key=profiles_key,
+                   key_order=tuple(d.keys()))
+
+    def to_dict(self) -> dict[str, Any]:
+        """The manifest as written: same keys, order and values as the source of :meth:`from_dict`."""
+        out: dict[str, Any] = {}
+        for k in self.key_order:
+            if k == self.profiles_key:
+                out[k] = (self.profiles[0].to_dict() if k == _PROFILES_V1
+                          else [p.to_dict() for p in self.profiles])
+            elif k == "extend_history" and k not in self.extra:
+                out[k] = copy.deepcopy(list(self.extend_history))
+            elif k in _MANIFEST_FIELDS and k not in self.extra:
+                out[k] = copy.deepcopy(getattr(self, k))
+            else:
+                out[k] = copy.deepcopy(self.extra[k])
+        return out
+
+    # -- derived views ---------------------------------------------------------------------------
+
+    @property
+    def version(self) -> int:
+        """``manifest_version`` as int (``1`` when missing or empty, as the readers always did)."""
+        return int(self.manifest_version or 1)
+
+    @property
+    def is_multi_profile(self) -> bool:
+        return self.profiles_key == _PROFILES_V2
+
+    @property
+    def profile_ids(self) -> tuple[str, ...]:
+        """Profile ids in manifest order (one for v1, all of ``component_profiles`` for v2)."""
+        return tuple(str(p.profile_id) for p in self.profiles)
+
+    @property
+    def renderer_version(self) -> str | None:
+        """``generator.renderer_version`` (``None`` for v1.0.3-and-older and merged datasets)."""
+        gen = self.generator if isinstance(self.generator, Mapping) else {}
+        v = gen.get("renderer_version")
+        return None if v is None else str(v)
+
+    @property
+    def git_commit(self) -> str | None:
+        gen = self.generator if isinstance(self.generator, Mapping) else {}
+        return gen.get("git_commit")
+
+    def _stats(self) -> Mapping[str, Any]:
+        return self.dataset_stats if isinstance(self.dataset_stats, Mapping) else {}
+
+    @property
+    def total_samples(self) -> int:
+        return int(self._stats().get("total_samples") or 0)
+
+    @property
+    def split_counts(self) -> dict[str, int]:
+        return dict(self._stats().get("splits") or {})
+
+    @property
+    def class_counts(self) -> dict[str, int]:
+        return dict(self._stats().get("classes") or {})
+
+    @property
+    def profile_counts(self) -> dict[str, int]:
+        """``dataset_stats.profile_counts`` (v2 only; empty for v1)."""
+        return dict(self._stats().get("profile_counts") or {})
+
+    def profile(self, profile_id: str) -> ProfileRef | None:
+        """The entry for *profile_id* (last one wins, like the former ``{id: p}`` readers)."""
+        found = None
+        for p in self.profiles:
+            if p.profile_id == profile_id:
+                found = p
+        return found
+
+    def resolve_profile(self) -> tuple[str, str]:
+        """``(profile_id, profile_hash)`` as :func:`resolve_dataset_profile` (v2 -> ``"multi"``)."""
+        return resolve_dataset_profile(self)
+
+
+@_legacy_positional(2, ("profile_id", "profile_hash", "profile_path", "meta_rows", "label_rows", "splits",
+                            "extend", "script_name", "renderer_version", "git_commit"))
 def write_dataset_manifest(
     output_dir: Path,
     run_id: str,
+    *,
     profile_id: str,
     profile_hash: str,
     profile_path: str,
@@ -129,6 +338,9 @@ def write_dataset_manifest(
     git_commit: str | None = None,
 ) -> None:
     """Write or update dataset manifest.
+
+    Everything after *run_id* is keyword-only (plan A6); the old positional form is still
+    accepted (legacy, silently).
 
     Args:
         output_dir: Dataset output directory
@@ -222,13 +434,21 @@ def write_dataset_manifest(
     log.info(f"Dataset manifest written: {manifest_path}")
 
 
-def resolve_dataset_profile(manifest: dict[str, Any]) -> tuple[str, str]:
-    """Return (profile_id, profile_hash) for a dataset manifest.
+def resolve_dataset_profile(manifest: Mapping[str, Any] | DatasetManifest) -> tuple[str, str]:
+    """Return (profile_id, profile_hash) for a dataset manifest (dict or :class:`DatasetManifest`).
 
     v1 manifests carry a single ``component_profile``; v2 (multi-profile)
     manifests are mapped to the logical profile ``"multi"``.
     """
-    mver = int(manifest.get('manifest_version', 1) or 1)
+    if isinstance(manifest, DatasetManifest):
+        mver = manifest.version
+        if mver == 1:
+            if manifest.profiles_key != _PROFILES_V1:
+                raise KeyError('component_profile')
+            cp_ref = manifest.profiles[0]
+            return cp_ref.profile_id, cp_ref.profile_hash
+    else:
+        mver = int(manifest.get('manifest_version', 1) or 1)
     if mver == 1:
         cp = manifest['component_profile']
         return cp['profile_id'], cp['profile_hash']
@@ -298,6 +518,11 @@ def read_dataset_manifest(manifest_path: Path) -> dict[str, Any]:
         raise ValueError(f"Unsupported manifest_version: {version}")
 
     return manifest
+
+
+def load_dataset_manifest(manifest_path: Path) -> DatasetManifest:
+    """:func:`read_dataset_manifest` (same validation and errors) as a :class:`DatasetManifest`."""
+    return DatasetManifest.from_dict(read_dataset_manifest(Path(manifest_path)))
 
 
 class ProfileMismatchError(ValueError):
@@ -374,9 +599,12 @@ def check_checkpoint_profile(
     return ckpt_profile_id
 
 
+@_legacy_positional(2, ("profiles", "meta_rows", "label_rows", "splits", "script_name", "existing",
+                        "renderer_version", "git_commit"))
 def write_multi_profile_manifest(
     output_dir: Path,
     run_id: str,
+    *,
     profiles: list[dict[str, str]],
     meta_rows: list[Any],
     label_rows: list[Any],
@@ -387,6 +615,9 @@ def write_multi_profile_manifest(
     git_commit: str | None = None,
 ) -> None:
     """Write a multi-profile dataset manifest (manifest_version 2).
+
+    Everything after *run_id* is keyword-only (plan A6); the old positional form is still
+    accepted (legacy, silently).
 
     Args:
         output_dir: Dataset output directory

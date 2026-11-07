@@ -10,11 +10,12 @@ torch and tqdm are imported inside the functions that need them, so importing th
 from __future__ import annotations
 
 import contextlib
+import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 
@@ -29,6 +30,10 @@ if TYPE_CHECKING:
     from torch.utils.data import DataLoader, Dataset
 
 MANIFEST_NAME = DATASET_MANIFEST  # kept for existing importers
+
+log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +203,37 @@ def run_inference(
         num_samples=num_samples,
         probs=(np.concatenate(probs_all) if probs_all else np.zeros((0, 0), dtype=np.float32)) if collect_probs else None,
     )
+
+
+def is_cuda_oom(exc: BaseException) -> bool:
+    """True for a CUDA / cuDNN out-of-memory ``RuntimeError``."""
+    msg = str(exc).lower()
+    return isinstance(exc, RuntimeError) and ("out of memory" in msg) and ("cuda" in msg or "cudnn" in msg)
+
+
+def oom_retry(fn: Callable[[int], _T], batch_size: int, device: torch.device) -> _T:
+    """``fn(batch_size)``, halving the batch size after each CUDA OOM down to 1.
+
+    Only CUDA out-of-memory errors on a CUDA *device* are retried; anything else propagates.
+    """
+    bs = max(1, int(batch_size))
+    while True:
+        try:
+            return fn(bs)
+        except RuntimeError as e:
+            if getattr(device, "type", "") != "cuda" or not is_cuda_oom(e):
+                raise
+            if bs == 1:
+                raise RuntimeError(
+                    "CUDA OOM even at batch_size=1. Keep GPU selected but reduce memory pressure "
+                    "(close other GPU jobs, use a smaller model, or lower input size)."
+                ) from e
+            new_bs = max(1, bs // 2)
+            log.warning(f"CUDA OOM at batch_size={bs}. Retrying on GPU with batch_size={new_bs}.")
+            bs = new_bs
+            import torch
+
+            torch.cuda.empty_cache()
 
 
 def predict_probs(model: nn.Module, x: torch.Tensor) -> np.ndarray:

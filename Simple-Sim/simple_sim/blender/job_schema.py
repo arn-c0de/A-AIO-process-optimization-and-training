@@ -50,6 +50,30 @@ class SceneBody(TypedDict, total=False):
     raised_sign: float       # tombstones only: which end of the axis is lifted (+1 / -1)
 
 
+class SceneMarking(TypedDict):
+    """``part.marking``: the marking text Blender prints on the body top."""
+
+    codes: list[str]           # non-empty: one printed code picked from it (resistor value codes)
+    chars: str                 # otherwise ``lines`` lines of random characters from this alphabet
+    lines: int
+    length: list[int]          # [min, max] characters per line (inclusive)
+    size: list[float | None]   # [a, b]: text size = min(a * body width, b * body length); b None: a * width
+
+
+class ScenePart(TypedDict):
+    """``part`` of a :class:`BoardScene`: how ``render_batch.py`` builds the part (``board.footprints.scene_part``,
+    one row of ``FAMILIES``); ratios relative to the body (``length`` L, ``width`` W, height H)."""
+
+    body: str                  # "chip": two end caps | "ic": pin-1 dimple, laser marking
+    height_ratio: float        # H / min(L, W), capped by ``component_height_mm``
+    standoff: float            # body lift above the board / H
+    body_material: str         # "ceramic" (fixed tan) | "mold" (``render_3d.materials.body``)
+    cap_len: float | None      # end cap length / L ("chip")
+    leads: bool                # gull-wing leads from the body edge to the pads
+    lead_width: list[float]    # [a, b]: lead width = min(a * min(pad w, h), b * max(L, W))
+    marking: SceneMarking | None
+
+
 class BoardScene(TypedDict):
     """``board`` of a :class:`PreparedJob`: the baked texture and the layout Blender builds geometry for."""
 
@@ -62,6 +86,7 @@ class BoardScene(TypedDict):
     excess: list[int]            # pad indices with too much solder
     balls: list[list[float]]     # [x, y, r] solder balls on the mask
     body: SceneBody | None
+    part: ScenePart
 
 
 class JobFields(TypedDict):
@@ -110,4 +135,5 @@ __all__ = [
     "BOARD_SCALE", "DEFAULT_BLENDER_EXECUTABLE", "DEFAULT_CAMERA_POSE", "DEFAULT_COMPONENT_HEIGHT_MM",
     "DEFAULT_CYCLES_SAMPLES", "DEFAULT_DEVICE", "DEFAULT_ENGINE",
     "BakeOptions", "BlenderJob", "BoardScene", "CameraPose", "JobFields", "PreparedJob", "SceneBody",
+    "SceneMarking", "ScenePart",
 ]

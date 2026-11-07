@@ -5,12 +5,13 @@ from __future__ import annotations
 import itertools
 import random
 from collections import defaultdict
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Sequence
 
 from simple_sim.classes import SPLIT_NAMES
 from simple_sim.dataset_files import SPLITS_DIR
-from simple_sim.schema import MetaRow, LabelRow
+from simple_sim.rows import MetaRow, LabelRow
 
 
 
@@ -20,17 +21,10 @@ def generate_splits(
     config: dict[str, Any],
     run_seed: int
 ) -> dict[str, list[str]]:
-    """Generate stratified train/val/test splits.
+    """Generate stratified train/val/test splits from a run config's ``splits`` section.
 
-    Stratifies by (domain, profile_id, class) to ensure balanced distribution.
-    profile_id comes from v2 label rows ("" for single-profile datasets).
-    Per-group counts use largest-remainder rounding; when a group has at
-    least 3 samples, every split with frac > 0 gets at least 1 (taken from train).
-
-    ``splits.{train,val,test}_domains`` restrict which splits a domain's samples may land in:
-    a domain listed only under ``val_domains`` and ``test_domains`` is split between val and test
-    with the fractions renormalised over those two (a held-out domain measures generalisation).
-    A domain listed everywhere (the usual single-domain config) is split as before.
+    Thin wrapper over :func:`stratified_splits` (plan A6): reads ``splits.{train,val,test}_frac``
+    (``KeyError`` when missing, as before) and ``splits.{train,val,test}_domains``.
 
     Args:
         meta_rows: List of metadata rows
@@ -41,6 +35,42 @@ def generate_splits(
     Returns:
         Dictionary with keys 'train', 'val', 'test' mapping to lists of sample IDs
     """
+    sc = config['splits']
+    return stratified_splits(
+        meta_rows, label_rows,
+        train_frac=sc['train_frac'], val_frac=sc['val_frac'], test_frac=sc['test_frac'],
+        seed=run_seed,
+        split_domains={name: sc.get(f'{name}_domains') or [] for name in SPLIT_NAMES},
+    )
+
+
+def stratified_splits(
+    meta_rows: Iterable[MetaRow],
+    label_rows: Iterable[LabelRow],
+    *,
+    train_frac: float,
+    val_frac: float,
+    test_frac: float,
+    seed: int,
+    split_domains: Mapping[str, Iterable[str]] | None = None,
+) -> dict[str, list[str]]:
+    """Stratified train/val/test splits from the three fractions.
+
+    Stratifies by (domain, profile_id, class) to ensure balanced distribution.
+    profile_id comes from v2 label rows ("" for single-profile datasets).
+    Per-group counts use largest-remainder rounding; when a group has at
+    least 3 samples, every split with frac > 0 gets at least 1 (taken from train).
+
+    *split_domains* (``{"train": [...], "val": [...], "test": [...]}``, the config's
+    ``splits.<name>_domains``) restricts which splits a domain's samples may land in: a domain
+    listed only under ``val`` and ``test`` is split between val and test with the fractions
+    renormalised over those two (a held-out domain measures generalisation). A domain listed
+    everywhere, or not listed at all, is split over all three.
+
+    Returns:
+        ``{"train", "val", "test"}`` -> sorted sample ids. Deterministic for a given *seed*.
+    """
+    label_rows = list(label_rows)
     # Create ID to label mapping
     id_to_label = {row.id: row.class_name for row in label_rows}
 
@@ -55,18 +85,14 @@ def generate_splits(
         class_name = id_to_label[sample_id]
         groups[(meta_row.domain, profile_id, class_name)].append(sample_id)
 
-    # Extract split fractions
-    train_frac = config['splits']['train_frac']
-    val_frac = config['splits']['val_frac']
-    test_frac = config['splits']['test_frac']
-
     # Initialize splits
     splits: dict[str, list[str]] = {'train': [], 'val': [], 'test': []}
 
     # Create RNG for splitting
-    rng = random.Random(run_seed)
+    rng = random.Random(seed)
 
-    allowed = {name: set(config['splits'].get(f'{name}_domains') or []) for name in SPLIT_NAMES}
+    split_domains = split_domains or {}
+    allowed = {name: set(split_domains.get(name) or []) for name in SPLIT_NAMES}
 
     # Split each group stratified
     for (domain, _profile, _class), sample_ids in groups.items():

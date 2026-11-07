@@ -6,7 +6,6 @@ Blender quality) before generating a dataset. Rendering runs in a worker thread.
 
 from __future__ import annotations
 
-import queue
 import random
 import subprocess
 import sys
@@ -24,6 +23,7 @@ import numpy as np
 from PIL import Image, ImageTk
 
 from gui.components.overlay_renderer import draw_defect_overlay
+from gui.core.tasks import DispatchQueue
 from gui.tabs.core.base import BaseTab
 from gui.utils.pipeline_helpers import BOARD_DRC_CHOICES, BOARD_ROUTING_CHOICES, BOARD_RULES_CHOICES, LOOK_CHOICES
 from gui.utils.settings_store import bind_persisted_vars
@@ -53,13 +53,18 @@ THUMB_SIZES = [128, 192, 256, 384, 512]
 MAX_PER_STATE = 50
 
 
+#: Refresh of the "... Ns elapsed" status while rendering (the results themselves are pushed).
+_ELAPSED_TICK_MS = 500
+
+
 class ProfilePreviewTab(BaseTab):
     def __init__(self, parent: ttk.Frame, sim_root: Path, state: UiState) -> None:
         super().__init__(parent, sim_root, state)
         self.logic = ProfilePreviewLogic(sim_root)
         self._profiles: dict[str, set[str]] = {}
         self._profile_data: dict[str, dict[str, Any]] = {}
-        self._queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        # Worker put()s (kind, payload); drained on the Tk thread via the dispatcher (no 100 ms poll).
+        self._queue: DispatchQueue = DispatchQueue()
         self._worker: threading.Thread | None = None
         self._stop = threading.Event()
         self._images: list[PreviewImage] = []
@@ -419,9 +424,10 @@ class ProfilePreviewTab(BaseTab):
             except Exception as e:  # noqa: BLE001 - shown in the GUI
                 self._queue.put(("error", f"{type(e).__name__}: {e}"))
 
+        self.bind_queue(self._queue, self._on_render_items)
         self._worker = threading.Thread(target=run, daemon=True)
         self._worker.start()
-        self._poll()
+        self._tick_elapsed()
 
     def _request_stop(self) -> None:
         """Stop takes effect between images; a running Blender render/board bake finishes first."""
@@ -429,39 +435,47 @@ class ProfilePreviewTab(BaseTab):
         self.btn_stop.configure(state="disabled")
         self.var_status.set("Stopping ... finishing the image/bake in progress")
 
-    def _poll(self) -> None:
-        finished = False
-        try:
-            while True:
-                kind, payload = self._queue.get_nowait()
-                if kind == "image":
-                    self._images.append(payload)
-                    n_cells = len(self._cells)
-                    self._add_thumb(len(self._images) - 1, payload)
-                    if len(self._cells) == n_cells:
-                        self._log(f"[warn] {payload.state} #{payload.variant}: image missing or unreadable "
-                                  f"({payload.path})")
-                    self.progress.configure(value=len(self._images))
-                    self._last_image_s = payload.seconds
-                elif kind == "log":
-                    self._log(payload)
-                else:
-                    finished = True
-                    self._finish(kind, payload)
-        except queue.Empty:
-            pass
-        if not finished:
-            # Live elapsed time, so a slow first image (3D: board bake + Blender start) does not look frozen.
-            elapsed = time.perf_counter() - self._t_start
-            last = f" | last image {self._last_image_s:.1f}s" if self._last_image_s else ""
-            if self._stop.is_set():
-                self.var_status.set(f"Stopping ... finishing the image/bake in progress ({elapsed:.0f}s elapsed)")
+    def _on_render_items(self, items: list[tuple[str, Any]]) -> None:
+        """Worker results, in order, on the Tk thread (``DispatchQueue`` handler)."""
+        for kind, payload in items:
+            if kind == "image":
+                self._images.append(payload)
+                n_cells = len(self._cells)
+                self._add_thumb(len(self._images) - 1, payload)
+                if len(self._cells) == n_cells:
+                    self._log(f"[warn] {payload.state} #{payload.variant}: image missing or unreadable "
+                              f"({payload.path})")
+                self.progress.configure(value=len(self._images))
+                self._last_image_s = payload.seconds
+            elif kind == "log":
+                self._log(payload)
             else:
-                self.var_status.set(f"Rendering image {min(len(self._images) + 1, self._expected)}/{self._expected} "
-                                    f"... {elapsed:.0f}s elapsed{last}")
-            self._poll_id = self.frame.after(100, self._poll)
+                self._finish(kind, payload)
+                return
+        if self._poll_id is not None:
+            self._show_elapsed()
+
+    def _show_elapsed(self) -> None:
+        # Live elapsed time, so a slow first image (3D: board bake + Blender start) does not look frozen.
+        elapsed = time.perf_counter() - self._t_start
+        last = f" | last image {self._last_image_s:.1f}s" if self._last_image_s else ""
+        if self._stop.is_set():
+            self.var_status.set(f"Stopping ... finishing the image/bake in progress ({elapsed:.0f}s elapsed)")
+        else:
+            self.var_status.set(f"Rendering image {min(len(self._images) + 1, self._expected)}/{self._expected} "
+                                f"... {elapsed:.0f}s elapsed{last}")
+
+    def _tick_elapsed(self) -> None:
+        """Clock only (no queue work): results arrive through ``_on_render_items``."""
+        self._show_elapsed()
+        self._poll_id = self.frame.after(_ELAPSED_TICK_MS, self._tick_elapsed)
 
     def _finish(self, kind: str, payload: Any) -> None:
+        if self._poll_id is not None:
+            try:
+                self.frame.after_cancel(self._poll_id)
+            except Exception:
+                pass
         self._poll_id = None
         self.btn_render.configure(state="normal")
         self.btn_stop.configure(state="disabled")

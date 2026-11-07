@@ -1,9 +1,25 @@
-"""Typed config schema helpers for runtime config dictionaries."""
+"""Deprecated (plan A4): typed view of four config sections that nothing consumed.
+
+:func:`simple_sim.config.validate_config` no longer builds (and discards) a
+:class:`SimulationConfig`; the same casts and error messages live in
+:func:`simple_sim.config.core_section_values`. This module is kept as a thin shim for external
+importers and warns on import; it will be removed with the next major cleanup.
+"""
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Any
+
+from simple_sim.config import core_section_values
+
+warnings.warn(
+    "simple_sim.config_schema is deprecated; validation lives in simple_sim.config.validate_config "
+    "(casts: simple_sim.config.core_section_values)",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 @dataclass(frozen=True)
@@ -48,45 +64,7 @@ class SimulationConfig:
 
 
 def parse_config_typed(cfg: dict[str, Any]) -> SimulationConfig:
-    """Parse minimal typed config view used for strict baseline checks."""
-    try:
-        run_raw = cfg["run"]
-        roi_raw = cfg["roi"]
-        train_raw = cfg["train"]
-        eval_raw = cfg["eval"]
-    except (KeyError, TypeError) as exc:
-        raise ValueError(f"Missing required top-level section: {exc}") from exc
-
-    section = "run"
-    try:
-        run = RunConfig(
-            run_id=str(run_raw.get("run_id", "")),
-            seed=int(run_raw.get("seed", -1)),
-            schema_version=int(run_raw.get("schema_version", -1)),
-            mode=str(run_raw.get("mode", "")),
-        )
-        section = "roi"
-        roi = RoiConfig(
-            width_px=float(roi_raw.get("width_px", 0)),
-            height_px=float(roi_raw.get("height_px", 0)),
-            mm_per_px=float(roi_raw.get("mm_per_px", 0)),
-        )
-        section = "train"
-        train = TrainConfig(
-            model=str(train_raw.get("model", "")),
-            epochs=int(train_raw.get("epochs", 0)),
-            batch_size=int(train_raw.get("batch_size", 0)),
-            lr=float(train_raw.get("lr", 0.0)),
-            optimizer=str(train_raw.get("optimizer", "")),
-            weight_decay=float(train_raw.get("weight_decay", 0.0)),
-            pretrained=train_raw.get("pretrained", None),
-            num_workers=train_raw.get("num_workers", None),
-        )
-        section = "eval"
-        eval_cfg = EvalConfig(
-            batch_size=int(eval_raw.get("batch_size", 0)),
-            num_workers=eval_raw.get("num_workers", None),
-        )
-    except (TypeError, ValueError, AttributeError) as exc:
-        raise ValueError(f"Invalid value in config section '{section}': {exc}") from exc
-    return SimulationConfig(run=run, roi=roi, train=train, eval=eval_cfg)
+    """Deprecated: :func:`simple_sim.config.core_section_values` wrapped in dataclasses."""
+    v = core_section_values(cfg)
+    return SimulationConfig(run=RunConfig(**v["run"]), roi=RoiConfig(**v["roi"]),
+                            train=TrainConfig(**v["train"]), eval=EvalConfig(**v["eval"]))

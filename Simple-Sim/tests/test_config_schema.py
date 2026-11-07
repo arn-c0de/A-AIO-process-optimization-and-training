@@ -1,4 +1,8 @@
-from simple_sim.config_schema import parse_config_typed
+import warnings
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)  # plan A4: deprecated shim, still tested
+    from simple_sim.config_schema import parse_config_typed
 
 
 def test_parse_config_typed_minimal() -> None:

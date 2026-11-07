@@ -8,7 +8,6 @@ from typing import Any
 
 
 from simple_sim.classes import VALID_CLASSES  # noqa: F401  (re-exported for existing importers)
-from simple_sim.config_schema import parse_config_typed
 from simple_sim.generators.backends import Backend, backend_of, parse_backend, supporting
 from simple_sim.generators.options import LOOKS, POST_FILTER_MODES, SOLDER_STYLES, SUPERSAMPLING_CHOICES, validate_camera_config
 from simple_sim.io_utils import load_yaml
@@ -36,6 +35,57 @@ def merge_profile_render(render_cfg: dict[str, Any], profile: dict[str, Any],
     if roi and roi.get("mm_per_px"):
         out["mm_per_px"] = float(roi["mm_per_px"])
     return out
+
+def core_section_values(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Primitive casts of ``run`` / ``roi`` / ``train`` / ``eval`` (plan A4).
+
+    The first check of :func:`validate_config`, formerly ``config_schema.parse_config_typed``
+    (whose typed result nothing used). Raises ``ValueError("Missing required top-level section:
+    ...")`` or ``ValueError("Invalid value in config section '<name>': ...")``; returns the cast
+    values per section (the fields of the deprecated ``config_schema`` dataclasses).
+    """
+    try:
+        run_raw = cfg["run"]
+        roi_raw = cfg["roi"]
+        train_raw = cfg["train"]
+        eval_raw = cfg["eval"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"Missing required top-level section: {exc}") from exc
+
+    section = "run"
+    try:
+        run = dict(
+            run_id=str(run_raw.get("run_id", "")),
+            seed=int(run_raw.get("seed", -1)),
+            schema_version=int(run_raw.get("schema_version", -1)),
+            mode=str(run_raw.get("mode", "")),
+        )
+        section = "roi"
+        roi = dict(
+            width_px=float(roi_raw.get("width_px", 0)),
+            height_px=float(roi_raw.get("height_px", 0)),
+            mm_per_px=float(roi_raw.get("mm_per_px", 0)),
+        )
+        section = "train"
+        train = dict(
+            model=str(train_raw.get("model", "")),
+            epochs=int(train_raw.get("epochs", 0)),
+            batch_size=int(train_raw.get("batch_size", 0)),
+            lr=float(train_raw.get("lr", 0.0)),
+            optimizer=str(train_raw.get("optimizer", "")),
+            weight_decay=float(train_raw.get("weight_decay", 0.0)),
+            pretrained=train_raw.get("pretrained", None),
+            num_workers=train_raw.get("num_workers", None),
+        )
+        section = "eval"
+        eval_cfg = dict(
+            batch_size=int(eval_raw.get("batch_size", 0)),
+            num_workers=eval_raw.get("num_workers", None),
+        )
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError(f"Invalid value in config section '{section}': {exc}") from exc
+    return {"run": run, "roi": roi, "train": train, "eval": eval_cfg}
+
 
 _SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 _SUPPORTED_MODELS = {'resnet18'}
@@ -76,8 +126,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
     Raises:
         ValueError: If validation fails
     """
-    # Typed baseline parse keeps core sections/primitive casts explicit.
-    parse_config_typed(cfg)
+    # Primitive casts of the core sections first (their error messages predate the validators below).
+    core_section_values(cfg)
     schema_version, mode = _validate_run(cfg)
     required_sections = _required_sections(schema_version, mode)
 

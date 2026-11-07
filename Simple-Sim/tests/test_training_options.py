@@ -334,8 +334,7 @@ def test_train_options_are_validated():
 
 
 def test_cosine_lr_factor():
-    sys.path.insert(0, str(ROOT / "scripts"))
-    from train import LR_FLOOR, build_scheduler, lr_factor
+    from simple_sim.training import LR_FLOOR, build_scheduler, lr_factor
 
     f = [lr_factor(e, 10, scheduler="cosine", warmup_epochs=2) for e in range(10)]
     assert f[0] == pytest.approx(0.5) and f[1] == pytest.approx(1.0) and f[2] == pytest.approx(1.0)
@@ -354,9 +353,9 @@ def test_cosine_lr_factor():
 
 def test_pipeline_with_all_options(tmp_path):
     """generate -> train -> eval with the xdomain options on a tiny dataset (CPU, 1 epoch)."""
-    from scripts.eval import run_eval
-    from scripts.generate import generate_dataset
-    from scripts.train import train_model
+    from simple_sim.evaluation import run_eval
+    from simple_sim.generation.dataset import generate_dataset
+    from simple_sim.training import train_model
 
     cfg = yaml.safe_load((ROOT / "configs" / "run_0001_xdomain.yaml").read_text(encoding="utf-8"))
     cfg["roi"] = {"width_px": 64, "height_px": 64, "mm_per_px": 0.04}
@@ -391,8 +390,7 @@ def test_pipeline_with_all_options(tmp_path):
 
 def test_freeze_stages_stops_gradients_and_keeps_bn_stats():
     from simple_sim.models import RESNET_STAGES, build_resnet18, freeze_stages, trainable_parameters
-    sys.path.insert(0, str(ROOT / "scripts"))
-    from train import train_epoch
+    from simple_sim.training import train_epoch
 
     model = build_resnet18(3)
     n_all = len(list(model.parameters()))

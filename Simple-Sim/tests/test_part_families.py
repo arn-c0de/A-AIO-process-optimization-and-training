@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import pytest
@@ -86,9 +85,18 @@ def test_every_kind_has_a_body_drawer():
     assert set(parts._BODY_DRAWERS) == set(BODY_KINDS)
 
 
-def test_blender_height_ratio_matches_the_table():
-    """render_batch.py (Blender, stdlib-only) still types its own height table (D35); keep it in sync."""
-    tree = ast.parse((ROOT / "simple_sim" / "blender" / "render_batch.py").read_text())
-    ratio = next(ast.literal_eval(node.value) for node in tree.body
-                 if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "_HEIGHT_RATIO")
-    assert ratio == {n: f.height_ratio for n, f in FAMILIES.items() if f.height_ratio is not None}
+def test_blender_part_table():
+    """The Blender build (D35) is a row of the table; render_batch.py no longer types its own."""
+    from simple_sim.board.footprints import BLENDER_CHIP, BLENDER_GENERIC, scene_part
+
+    src = (ROOT / "simple_sim" / "blender" / "render_batch.py").read_text()
+    for gone in ("_HEIGHT_RATIO", "_RESISTOR_CODES", "_MARK_CHARS", '"capacitor"', '"sot"', '"soic"'):
+        assert gone not in src
+    ratios = {n: f.blender.height_ratio for n, f in FAMILIES.items() if f.blender is not BLENDER_GENERIC}
+    assert ratios == {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18}
+    # X12: the Blender chip height (0.56) differs from the 2D tombstone thickness ratio (0.55) on purpose.
+    from simple_sim.generators.opencv2d.photoreal.parts import THICKNESS_RATIO
+    assert THICKNESS_RATIO == 0.55 and FAMILIES["resistor"].blender.height_ratio == 0.56
+    assert {n for n, f in FAMILIES.items() if f.blender.body == BLENDER_CHIP} == {"resistor", "capacitor"}
+    assert {n for n, f in FAMILIES.items() if f.blender.leads} == {"sot", "soic"}
+    assert scene_part("unknown") == scene_part("sot6")  # generic moulded IC

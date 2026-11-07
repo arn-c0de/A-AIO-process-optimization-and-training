@@ -29,11 +29,17 @@ python -m simple_sim status --json       # profiles, run configs, datasets (+man
 python -m simple_sim <command> --help    # options of a command
 ```
 
-Every other command (`generate`, `validate`, `train`, `eval`, `batch-predict`, `arena-report`, ...)
-runs the matching script in `scripts/` or `tools/` with the same Python and passes all
-arguments through unchanged, so `python -m simple_sim train --data D --out M` equals
-`python scripts/train.py --data D --out M`. `commands --json` is generated from the script
-sources and is the authoritative list.
+Every other command is registered in `simple_sim.cli.COMMANDS`. Library commands (`generate`,
+`train`, `eval`, `predict`, `batch-predict`, `sample-check`, `arena-report`, ...) live in
+`simple_sim/commands/<name>.py` and run in-process; `scripts/<name>.py` are shims of the same
+`main`, so `python -m simple_sim train --data D --out M` equals `python scripts/train.py --data D --out M`.
+The helper tools (`validate`, `create-multi-dataset`, the sim-to-real tools, ...) still run
+`tools/*.py` as a subprocess. `commands --json` is read from the command sources (descriptions,
+`SUPPORTS_JSON`) and is the authoritative list.
+
+To spawn a command from another program use `simple_sim.cli.argv_for("train", data=D, out=M)`
+(`[sys.executable, "-m", "simple_sim", "train", "--data", D, "--out", M]`); read the result with
+`--json` and `cli_utils.parse_result` / `parse_result_line`, not by scraping `Report saved to:`.
 
 `status` is tk-free and torch-free; use `--root DIR` to inspect another checkout.
 
@@ -155,12 +161,17 @@ Rendering parallelism: `SIMPLE_SIM_RENDER_WORKERS` (count), `SIMPLE_SIM_RENDER_E
   (atomic writes, JSON/JSONL/YAML, `now_iso`/`now_tag`), `classes` (`DefectClass`, `Split`,
   `Backend`, class sets), `coerce` (`as_bool`/`as_float`/`as_int`), `cli_utils` (`--json`
   convention, `configure_cli_logging`, `with_hint`), `reports`, `manifest`, `config`, `schema`.
+  Model lifecycle: `training` (`train_model`, `train_profile_model`, `make_checkpoint`),
+  `evaluation` (`run_eval`, `run_eval_profile`, `write_report`), `inference` (`Classifier`,
+  `predict_image`, `sample_check`), `batch_predict` (`BatchPredictOptions`, `run_batch_predict`),
+  `two_stage`, `model_store` (snapshot naming). `simple_sim/commands/` - argparse + console output
+  of every library command (`print` is allowed there and in `cli.py` only).
   `simple_sim/board/` - PCB model (footprints, nets, router, pours, DRC, raster) behind
   `render.board` (`routing: legacy | none | escape`); `generators/` - the 2D/3D renderers
   (`generators/opencv2d/photoreal/` one module per layer; render one image from a config with
   `opencv2d.RenderSpec.from_run_config(cfg, profile)` + `render_sample`; a whole dataset from a config
   dict with `generation.dataset.generate_dataset(cfg, out_dir, image_filters=...)`; backend capabilities in
   `generators/backends.py`).
-- `scripts/` - pipeline CLIs; `tools/` - dataset maintenance CLIs, `tools/_common.sh`
+- `scripts/` - shims of `simple_sim/commands/` (kept for `python scripts/<name>.py`); `tools/` - dataset maintenance CLIs, `tools/_common.sh`
   (venv/python detection for the `*.sh` launchers), `tools/profile_editor/` (Tk GUI).
 - `gui/` - Tk monitor GUI (`./run.sh`). `configs/` - run configs and `profiles/`.

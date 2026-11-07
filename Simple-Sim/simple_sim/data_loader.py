@@ -15,7 +15,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 from simple_sim.dataset_index import DatasetIndex
-from simple_sim.schema import LabelRow
+from simple_sim.rows import LabelRow
 
 log = logging.getLogger(__name__)
 

@@ -19,7 +19,7 @@ from simple_sim.generators.opencv2d import apply_image_filter_overrides, sample_
 from simple_sim.generators.opencv2d.spec import RenderSpec, render_record_with_meta
 from simple_sim.parallel import imap_ordered, render_executor, render_processes, render_workers
 from simple_sim.rng import derive_sample_seed, make_sample_id
-from simple_sim.schema import LabelRow, MetaRow
+from simple_sim.rows import LabelRow, MetaRow
 from simple_sim.splits import SPLIT_NAMES, assert_no_overlap, check_class_coverage, generate_splits, write_splits
 
 log = logging.getLogger(__name__)

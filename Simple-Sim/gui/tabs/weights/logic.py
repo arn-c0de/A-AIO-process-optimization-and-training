@@ -14,11 +14,15 @@ from typing import Any
 
 from gui.utils.checkpoint_meta import checkpoint_class_names
 from gui.utils.dataset_catalog import dataset_display_name, sorted_dataset_dirs
-from gui.utils.paths import list_model_paths, model_root, newest_file
+from gui.utils.paths import list_model_paths, model_root
 from gui.utils.process import run_streaming, terminate_process
+from simple_sim.cli import argv_for
+from simple_sim.cli_utils import parse_result_line
+from simple_sim.eval_utils import dataset_profile
 from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, now_tag, read_json, rel_to
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.model_bundle import resolve_bundle_checkpoint
+from simple_sim.model_store import SNAPSHOT_RUN_RE, snapshot_checkpoint, snapshot_path
 from simple_sim.reports import load_reports, report_search_dirs
 import yaml
 
@@ -91,40 +95,25 @@ class WeightsLogic:
                 arena.pop(rel, None)
 
     def generate_arena_report(self) -> None:
-        script = self.sim_root / "scripts" / "arena_report.py"
-        if not script.exists():
-            raise FileNotFoundError(f"Script not found: {script}")
-
-        cmd = ["python3", str(script), "--sim-root", str(self.sim_root)]
+        # The GUI's own interpreter (its venv), not the system python3 (plan X11/P4).
+        cmd = argv_for("arena-report", sim_root=self.sim_root)
         self.log_q.put(f"\n$ {' '.join(cmd)}\n")
 
         def worker() -> None:
             try:
                 rc = run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q)
                 if rc != 0:
-                    self.log_q.put(f"\n[error] arena_report.py exited with code {rc}\n")
+                    self.log_q.put(f"\n[error] arena-report exited with code {rc}\n")
             except Exception as e:
-                self.log_q.put(f"\n[error] Failed to run arena_report.py: {e}\n")
+                self.log_q.put(f"\n[error] Failed to run arena-report: {e}\n")
 
         threading.Thread(target=worker, daemon=True).start()
 
     def snapshot_active_model(self, active_model_path: Path) -> Path:
-        dst = self._snapshot_path_for(active_model_path)
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(active_model_path, dst)
-        return dst
+        return snapshot_checkpoint(self._model_root(), active_model_path)
 
     def _snapshot_path_for(self, model_path: Path) -> Path:
-        tag = now_tag(micro=False)
-        root = self._model_root() / "versions" / model_path.stem
-        base = root / f"{model_path.stem}_{tag}.pt"
-        if not base.exists():
-            return base
-        for i in range(1, 1000):
-            cand = root / f"{model_path.stem}_{tag}_{i:03d}.pt"
-            if not cand.exists():
-                return cand
-        return base
+        return snapshot_path(self._model_root(), model_path)
 
     def import_model(self, src_p: Path) -> Path:
         tag = now_tag(micro=False)
@@ -279,31 +268,29 @@ class WeightsLogic:
         self.proc = proc
 
     def _predict_cmd(self, model_path: Path, data_dir: Path, split: str, device: str, max_samples_s: str, save_preds: bool) -> tuple[list[str], Path]:
+        """``batch-predict --json`` command line and its report dir; a bundle dir resolves to the dataset's profile.
+
+        The profile comes from the manifest via :func:`simple_sim.manifest.resolve_dataset_profile`, so
+        multi-profile (v2) datasets resolve to the bundle's ``multi`` checkpoint (plan X7).
+        """
         if model_path.exists() and model_path.is_dir():
-            manifest_path = data_dir / DATASET_MANIFEST
-            if not manifest_path.exists():
-                raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            profile_id = str((manifest.get("component_profile") or {}).get("profile_id") or "").strip()
-            if not profile_id:
-                raise ValueError(f"Dataset manifest missing component_profile.profile_id: {manifest_path}")
+            profile_id = dataset_profile(data_dir)[0]
             model_path = resolve_bundle_checkpoint(
                 model_path, profile_id, show_available=True,
                 hint=("\nTrain this dataset into the same bundle to add it:\n"
-                      f"  ./.venv/bin/python scripts/train.py --data {data_dir} --out {model_path}\n"),
+                      f"  python -m simple_sim train --data {data_dir} --out {model_path}\n"),
             )
 
         out_dir = data_dir / "predictions" / "weights_tab"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        cmd: list[str] = [
-            "bash", str(self.sim_root / "predict.sh"), "--model", str(model_path), "--data", str(data_dir), "--split", split, "--out-dir", str(out_dir),
-        ]
-        if device != "auto": cmd.extend(["--device", device])
         if max_samples_s:
             int(max_samples_s)
-            cmd.extend(["--max-samples", max_samples_s])
-        if save_preds: cmd.append("--save-preds")
+        cmd = argv_for(
+            "batch-predict", model=model_path, data=data_dir, split=split, out_dir=out_dir,
+            device=None if device == "auto" else device, max_samples=max_samples_s or None,
+            save_preds=bool(save_preds), json=True,
+        )
         return cmd, out_dir
 
     def run_predict(self, model_path: Path, data_dir: Path, label: str, split: str, device: str, max_samples_s: str, save_preds: bool, on_complete: callable) -> None:
@@ -312,29 +299,27 @@ class WeightsLogic:
 
         def worker() -> None:
             report_path: Path | None = None
-            out_dir: Path | None = None
 
             def on_line(line: str) -> None:
                 nonlocal report_path
-                if "Report saved to:" in line: report_path = Path(line.split("Report saved to:", 1)[-1].strip())
+                if (res := parse_result_line(line)) is not None and res.get("report_path"):
+                    report_path = Path(res["report_path"])
 
             try:
-                cmd, out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
+                cmd, _out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
                 self.log_q.put(f"\n$ {' '.join(cmd)}\n")
                 rc = run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q, stop_evt=self.stop_evt, on_line=on_line, on_start=self._set_proc)
                 if self.stop_evt.is_set(): self.log_q.put("\n[stopped]\n")
-                elif rc != 0: self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
-            except Exception as e: self.log_q.put(f"\n[error] Failed to run predict.sh: {e}\n")
+                elif rc != 0: self.log_q.put(f"\n[error] batch-predict exited with code {rc}\n")
+            except Exception as e: self.log_q.put(f"\n[error] Failed to run batch-predict: {e}\n")
             finally:
-                if report_path is None and out_dir is not None:
-                    report_path = newest_file(out_dir, "batch_report_*.json")
                 on_complete(report_path, self.stop_evt.is_set())
 
         threading.Thread(target=worker, daemon=True).start()
 
     def run_predict_blocking(self, model_path: Path, data_dir: Path, label: str, split: str, device: str, max_samples_s: str, save_preds: bool) -> dict[str, Any] | None:
         try:
-            cmd, out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
+            cmd, _out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
         except Exception as e:
             self.log_q.put(f"[error] {e}\n")
             return None
@@ -343,13 +328,12 @@ class WeightsLogic:
         if self.stop_evt.is_set(): return None
         self.log_q.put(f"\n$ {' '.join(cmd)}\n")
         self.log_q.put(f"[run] {label}\n")
-        report_path: Path | None = None
-        class_mismatch = False
+        result: dict[str, Any] | None = None
 
         def on_line(line: str) -> None:
-            nonlocal report_path, class_mismatch
-            if "do not match dataset classes" in line: class_mismatch = True
-            if "Report saved to:" in line: report_path = Path(line.split("Report saved to:", 1)[-1].strip())
+            nonlocal result
+            if (res := parse_result_line(line)) is not None:
+                result = res
 
         try:
             # Track as self.proc (via on_start) so stop_prediction() can terminate it and the "already running" guard sees it.
@@ -359,19 +343,19 @@ class WeightsLogic:
                 self.log_q.put("\n[stopped]\n")
                 return None
             if rc != 0:
-                if class_mismatch: self.log_q.put("[skip] incompatible model/dataset (class mismatch)\n")
-                else: self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
+                error = str((result or {}).get("error") or "")
+                if "do not match dataset classes" in error: self.log_q.put("[skip] incompatible model/dataset (class mismatch)\n")
+                else: self.log_q.put(f"\n[error] batch-predict exited with code {rc}\n")
                 return None
         except Exception as e:
-            self.log_q.put(f"\n[error] Failed to run predict.sh: {e}\n")
+            self.log_q.put(f"\n[error] Failed to run batch-predict: {e}\n")
             return None
 
-        if report_path is None:
-            report_path = newest_file(out_dir, "batch_report_*.json")
+        report_path = Path(result["report_path"]) if result and result.get("report_path") else None
         if not report_path or not report_path.exists(): return None
         return read_json(report_path)
 
-    _RE_SNAP_RUN = re.compile(r"_run(?P<run>\d+)(?:_|\.|$)")
+    _RE_SNAP_RUN = SNAPSHOT_RUN_RE
 
     def runs_for_model(self, p: Path) -> str:
         """Pipeline run count of a checkpoint: ``<ckpt>.meta.json`` run_iteration, else ``_runNNN`` in the name."""

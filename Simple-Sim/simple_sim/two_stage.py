@@ -10,16 +10,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import torch.nn as nn
+import torch
 
 from simple_sim.data_loader import load_image_bgr, preprocess_bgr
 from simple_sim.devices import resolve_device
 from simple_sim.eval_utils import predict_probs, top_prediction
+from simple_sim.inference import Classifier
 from simple_sim.model_bundle import bundle_checkpoint_path
-from simple_sim.models import load_checkpoint_model
 
 
-@dataclass
+@dataclass(slots=True)
 class TwoStageResult:
     """Result from two-stage classification."""
     profile_id: str
@@ -37,7 +37,7 @@ class TwoStageClassifier:
     Args:
         profile_model_path: Path to trained profile classifier checkpoint (.pt)
         defect_bundle_path: Path to defect model bundle directory (.bundle or dir)
-        device: Torch device string
+        device: Torch device or device string (``cpu``, ``cuda``, ``cuda:1``)
         min_profile_confidence: Threshold below which review_flag is set
     """
 
@@ -45,20 +45,21 @@ class TwoStageClassifier:
         self,
         profile_model_path: Path,
         defect_bundle_path: Path,
-        device: str = 'cpu',
+        device: str | torch.device = 'cpu',
         min_profile_confidence: float = 0.5,
     ) -> None:
         self.device = resolve_device(device)
         self.min_profile_confidence = min_profile_confidence
         self.defect_bundle_path = Path(defect_bundle_path)
 
-        self.profile_model, self.profile_names, _ = load_checkpoint_model(Path(profile_model_path), self.device)
+        self._profile = Classifier(Path(profile_model_path), self.device)
+        self.profile_model, self.profile_names = self._profile.model, self._profile.class_names
 
-        # Lazy-loaded per-profile defect models: profile_id -> (model, class_names)
-        self._defect_models: dict[str, tuple[nn.Module, list[str]]] = {}
+        # Lazy-loaded per-profile defect classifiers: profile_id -> Classifier
+        self._defect_models: dict[str, Classifier] = {}
 
-    def _get_defect_model(self, profile_id: str) -> tuple[nn.Module, list[str]]:
-        """Lazy-load defect model for the given profile."""
+    def _get_defect_model(self, profile_id: str) -> Classifier:
+        """Lazy-load the defect classifier for the given profile."""
         if profile_id not in self._defect_models:
             ckpt_path = bundle_checkpoint_path(self.defect_bundle_path, profile_id, kind="best")
             if not ckpt_path.exists():
@@ -66,8 +67,7 @@ class TwoStageClassifier:
                     f"No defect model for profile '{profile_id}' in bundle: {self.defect_bundle_path}\n"
                     f"Expected: {ckpt_path}"
                 )
-            model, class_names, _ = load_checkpoint_model(ckpt_path, self.device)
-            self._defect_models[profile_id] = (model, class_names)
+            self._defect_models[profile_id] = Classifier(ckpt_path, self.device)
         return self._defect_models[profile_id]
 
     def predict_array(self, img_bgr: np.ndarray) -> TwoStageResult:
@@ -80,9 +80,9 @@ class TwoStageClassifier:
         )
 
         # Stage 2: Defect classification using predicted profile's model
-        defect_model, defect_class_names = self._get_defect_model(profile_id)
+        defect = self._get_defect_model(profile_id)
         defect_class, defect_conf, defect_probs = top_prediction(
-            predict_probs(defect_model, x)[0], defect_class_names
+            predict_probs(defect.model, x)[0], defect.class_names
         )
 
         return TwoStageResult(

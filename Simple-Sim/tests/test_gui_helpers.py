@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -305,10 +306,12 @@ def test_dataset_paths_json_round_trip(tmp_path: Path) -> None:
 
 def test_command_builders() -> None:
     ds_a, ds_b, model = Path("/d/a b"), Path("/d/c"), Path("/m/x.pt")
-    assert chain_commands([train_argv(ds_a, model)]) == shlex.join(["./.venv/bin/python", "scripts/train.py", "--data", "/d/a b", "--out", "/m/x.pt"])
+    # P4/N9: the GUI's own interpreter and ``python -m simple_sim <command>``, no hard-coded venv or script path.
+    assert chain_commands([train_argv(ds_a, model)]) == shlex.join(
+        [sys.executable, "-m", "simple_sim", "train", "--data", "/d/a b", "--out", "/m/x.pt"])
     assert " && " in chain_commands([train_argv(ds_a, model), train_argv(ds_b, model)])
     assert eval_argv(ds_b, model, allow_profile_mismatch=True)[-1] == "--allow-profile-mismatch"
-    assert continue_train_argv(ds_b, model, extra_epochs=3, out_mode="last", allow_profile_mismatch=True)[6:] == [
+    assert continue_train_argv(ds_b, model, extra_epochs=3, out_mode="last", allow_profile_mismatch=True)[8:] == [
         "--resume", "/m/x.pt", "--allow-profile-mismatch", "--extra-epochs", "3", "--out-mode", "last",
     ]
 

@@ -38,7 +38,7 @@ echo "Config: $CONFIG"
 echo "Output: $DATA_DIR"
 echo ""
 
-"${PYTHON}" scripts/generate.py \
+"${PYTHON}" -m simple_sim generate \
     --config "$CONFIG" \
     --out "$DATA_DIR" \
     $([[ "${DATASET_MODE}" == "extend" ]] && echo "--extend")
@@ -53,7 +53,7 @@ echo "STEP 2: Validating dataset"
 echo "============================================================"
 echo ""
 
-if ! "${PYTHON}" tools/validate_dataset.py --data "$DATA_DIR"; then
+if ! "${PYTHON}" -m simple_sim validate --data "$DATA_DIR"; then
     echo ""
     echo "Dataset validation failed"
     exit 1
@@ -72,30 +72,17 @@ echo ""
 # DATA_DIR is passed via the environment so paths with quotes don't break the Python source.
 DATA_DIR="$DATA_DIR" "${PYTHON}" -c "
 import os
-import sys
-from pathlib import Path
-sys.path.insert(0, '.')
-from simple_sim.schema import read_jsonl, LabelRow
-from simple_sim.splits import read_split
+from simple_sim.dataset_index import DatasetIndex
 
-data_dir = Path(os.environ['DATA_DIR'])
-label_rows = read_jsonl(data_dir / 'labels.jsonl', LabelRow)
-
-# Class distribution
-class_counts = {}
-for row in label_rows:
-    class_counts[row.class_name] = class_counts.get(row.class_name, 0) + 1
-
+index = DatasetIndex(os.environ['DATA_DIR'])
+counts = index.class_distribution()
 print('Overall class distribution:')
-for class_name in sorted(class_counts.keys()):
-    print(f'  {class_name}: {class_counts[class_name]}')
-
-# Split sizes
+for name in sorted(counts):
+    print(f'  {name}: {counts[name]}')
 print()
 print('Split sizes:')
-for split_name in ['train', 'val', 'test']:
-    split_ids = read_split(data_dir / 'splits' / f'{split_name}.txt')
-    print(f'  {split_name}: {len(split_ids)} samples')
+for name, n in index.split_sizes().items():
+    print(f'  {name}: {n} samples')
 "
 
 echo ""
@@ -107,7 +94,7 @@ echo "============================================================"
 echo "Model will be saved to: $MODEL_PATH"
 echo ""
 
-"${PYTHON}" scripts/train.py \
+"${PYTHON}" -m simple_sim train \
     --data "$DATA_DIR" \
     --out "$MODEL_PATH"
 
@@ -121,7 +108,7 @@ echo "STEP 5: Evaluating on test set"
 echo "============================================================"
 echo ""
 
-"${PYTHON}" scripts/eval.py \
+"${PYTHON}" -m simple_sim eval \
     --data "$DATA_DIR" \
     --model "$MODEL_PATH"
 
@@ -137,7 +124,7 @@ echo ""
 echo "Generated files:"
 echo "  Dataset: $DATA_DIR"
 echo "  Model: $MODEL_PATH"
-# eval.py writes the report next to the model.
+# eval writes the report next to the model (report_<model stem>.json; `eval --json` returns report_path).
 REPORT_PATH="$(dirname "$MODEL_PATH")/report_$(basename "${MODEL_PATH%.*}").json"
 echo "  Report: $REPORT_PATH"
 echo ""

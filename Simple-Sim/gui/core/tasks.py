@@ -29,6 +29,8 @@ class UiDispatcher:
 
     def __init__(self, interval_ms: int = 40) -> None:
         self._q: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
+        # Callbacks for the *next* drain: lets a consumer yield to Tk between batches.
+        self._next: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
         self.interval_ms = int(interval_ms)
         self._widget: Any = None
         self._after_id: str | None = None
@@ -36,8 +38,28 @@ class UiDispatcher:
     def post(self, fn: Callable[[], None]) -> None:
         self._q.put(fn)
 
+    def post_next_tick(self, fn: Callable[[], None]) -> None:
+        """Like ``post`` but never runs inside the drain that is currently executing:
+        ``fn`` runs at the start of the next ``drain()`` (next Tk tick)."""
+        self._next.put(fn)
+
     def drain(self, max_items: int = 500) -> int:
         n = 0
+        # Move deferred callbacks first (in order) so they run before newer posts.
+        deferred: list[Callable[[], None]] = []
+        while True:
+            try:
+                deferred.append(self._next.get_nowait())
+            except queue.Empty:
+                break
+        for fn in deferred:
+            n += 1
+            try:
+                fn()
+            except Exception:
+                import traceback
+
+                traceback.print_exc()
         while n < max_items:
             try:
                 fn = self._q.get_nowait()
@@ -81,6 +103,78 @@ class UiDispatcher:
             self._after_id = None
             return
         self.drain()
+
+
+class DispatchQueue(queue.Queue):
+    """``queue.Queue`` that drains itself on the UI thread instead of being polled.
+
+    Producers keep calling ``put`` / ``put_nowait`` (so logic classes that take a
+    ``queue.Queue`` stay unchanged); the first ``put`` after a drain posts one drain
+    callback through ``post``. The drain hands up to ``max_items`` items, in FIFO order,
+    to ``handler(items)`` and, if more are left, reschedules itself via ``post_next``
+    (default: ``post``) so a flood is processed in batches with Tk events in between,
+    like the old ``after(120)`` tick that took at most N items per tick.
+
+    Without ``bind`` (no handler yet) it is a plain queue; ``bind`` drains what was
+    queued before. ``get_nowait`` still works (tests, legacy consumers).
+    """
+
+    def __init__(self, maxsize: int = 0) -> None:
+        super().__init__(maxsize)
+        self._sched_lock = threading.Lock()
+        self._scheduled = False
+        self._post: Callable[[Callable[[], None]], None] | None = None
+        self._post_next: Callable[[Callable[[], None]], None] | None = None
+        self._handler: Callable[[list[Any]], None] | None = None
+        self.max_items = 200
+
+    def bind(
+        self,
+        post: Callable[[Callable[[], None]], None],
+        handler: Callable[[list[Any]], None],
+        *,
+        max_items: int = 200,
+        post_next: Callable[[Callable[[], None]], None] | None = None,
+    ) -> DispatchQueue:
+        self._post, self._post_next, self._handler = post, post_next, handler
+        self.max_items = max(1, int(max_items))
+        if not self.empty():
+            self._schedule(post)
+        return self
+
+    def put(self, item: Any, block: bool = True, timeout: float | None = None) -> None:
+        super().put(item, block, timeout)
+        if self._post is not None:
+            self._schedule(self._post)
+
+    def _schedule(self, post: Callable[[Callable[[], None]], None]) -> None:
+        with self._sched_lock:
+            if self._scheduled:
+                return
+            self._scheduled = True
+        post(self.drain_now)
+
+    def drain_now(self) -> int:
+        """Hand up to ``max_items`` queued items to the handler (UI thread). Returns the count."""
+        with self._sched_lock:
+            # Cleared before reading: a put() racing with this drain schedules a new one.
+            self._scheduled = False
+        handler = self._handler
+        if handler is None:
+            return 0
+        items: list[Any] = []
+        while len(items) < self.max_items:
+            try:
+                items.append(self.get_nowait())
+            except queue.Empty:
+                break
+        try:
+            if items:
+                handler(items)
+        finally:
+            if not self.empty():
+                self._schedule(self._post_next or self._post)  # type: ignore[arg-type]
+        return len(items)
 
 
 class TaskCancelled(Exception):
@@ -277,6 +371,24 @@ def as_task_fn(fn: Callable[..., Any]) -> Callable[[TaskHandle], Any]:
     return fn if wants_handle else (lambda _h: fn())
 
 
+def dispatcher_for(state: Any, widget: Any) -> UiDispatcher:
+    """The app's ``ctx.dispatcher`` when available, else a private ``UiDispatcher``
+    attached to ``widget`` (created once per widget). Thread-safe ``post`` target."""
+    ctx = getattr(state, "ctx", None)
+    disp = getattr(ctx, "dispatcher", None) if ctx is not None else None
+    if disp is not None:
+        return disp
+    disp = getattr(widget, "_simple_sim_dispatcher", None)
+    if disp is None:
+        disp = UiDispatcher()
+        disp.attach(widget)
+        try:
+            widget._simple_sim_dispatcher = disp
+        except Exception:
+            pass
+    return disp
+
+
 def runner_for(state: Any, widget: Any) -> TaskRunner:
     """The app's ``ctx.tasks`` when available, else a private runner whose
     callbacks are marshalled onto ``widget``'s Tk loop by a ``UiDispatcher``.
@@ -289,9 +401,7 @@ def runner_for(state: Any, widget: Any) -> TaskRunner:
         return tasks
     runner = getattr(widget, "_simple_sim_task_runner", None)
     if runner is None:
-        dispatcher = UiDispatcher()
-        dispatcher.attach(widget)
-        runner = TaskRunner(dispatcher.post)
+        runner = TaskRunner(dispatcher_for(state, widget).post)
         try:
             widget._simple_sim_task_runner = runner
         except Exception:

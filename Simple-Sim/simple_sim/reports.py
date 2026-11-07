@@ -9,7 +9,9 @@ from __future__ import annotations
 import os
 import threading
 from collections import OrderedDict
+from collections.abc import Iterator, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from simple_sim.io_utils import parse_iso_ts, read_json
@@ -46,6 +48,73 @@ def clear_report_cache() -> None:
         _REPORT_CACHE.clear()
 
 
+PATH_KEY = "_path"
+
+
+class Report(Mapping[str, Any]):
+    """One evaluation report file: its *path* and its parsed JSON *data* (plan A2).
+
+    Replaces the dicts with an injected ``"_path"`` key. For consumers that still index it like
+    that dict, a report is a read-only :class:`~collections.abc.Mapping` over *data* that also
+    answers ``report["_path"]`` / ``report.get("_path")`` with ``str(report.path)`` (iterated last,
+    where the old key was appended; a ``"_path"`` key inside the file is shadowed, as before).
+    ``dict(report)`` / :meth:`to_dict` give the old dict. New code uses ``report.path`` and
+    ``report.data``.
+
+    *data* is the parsed file shared with the :func:`load_reports` cache: it is exposed read-only
+    at the top level, and nested values must not be mutated.
+    """
+
+    __slots__ = ("_data", "_path", "_path_str")
+
+    def __init__(self, path: Path | str, data: Mapping[str, Any]) -> None:
+        self._path = Path(path)
+        self._path_str = str(path)
+        self._data = data
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def data(self) -> Mapping[str, Any]:
+        return MappingProxyType(self._data) if isinstance(self._data, dict) else self._data
+
+    def __getitem__(self, key: str) -> Any:
+        if key == PATH_KEY:
+            return self._path_str
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        for k in self._data:
+            if k != PATH_KEY:
+                yield k
+        yield PATH_KEY
+
+    def __len__(self) -> int:
+        return len(self._data) + (PATH_KEY not in self._data)
+
+    def __contains__(self, key: object) -> bool:
+        return key == PATH_KEY or key in self._data
+
+    def to_dict(self) -> dict[str, Any]:
+        """The former ``load_reports`` dict: a shallow copy of *data* plus ``"_path"``."""
+        out = dict(self._data)
+        out[PATH_KEY] = self._path_str
+        return out
+
+    def __repr__(self) -> str:
+        return f"Report(path={self._path_str!r}, keys={len(self._data)})"
+
+
+def report_path(report: Mapping[str, Any]) -> str | None:
+    """Source path of *report*: :attr:`Report.path` or the legacy ``"_path"`` key of a plain dict."""
+    if isinstance(report, Report):
+        return str(report.path)
+    p = report.get(PATH_KEY)
+    return str(p) if p else None
+
+
 def report_search_dirs(sim_root: Path) -> list[Path]:
     """All directories where eval/batch reports are written, de-duplicated, in stable order."""
     sim_root = Path(sim_root)
@@ -72,18 +141,19 @@ def report_search_dirs(sim_root: Path) -> list[Path]:
     return out
 
 
-def load_reports(dirs: list[Path], model_stem: str | None = None) -> list[dict[str, Any]]:
-    """Load valid reports (dicts with ``metrics``) from *dirs*, newest file first.
+def load_reports(dirs: list[Path], model_stem: str | None = None) -> list[Report]:
+    """Load valid reports (JSON objects with ``metrics``) from *dirs*, newest file first.
 
     With *model_stem*, only ``report_<stem>.json`` and ``batch_report_<stem>_*.json`` are read.
-    Each report gets its source path under the ``_path`` key.
+    Each item is a :class:`Report` (``report.path``, ``report.data``; still answers the legacy
+    ``report["_path"]``).
 
     Parsed files are cached per path and stat signature, so repeated scans (status, arena, GUI
-    refreshes) only parse new or changed reports. Every call returns fresh top-level dicts; nested
-    values are shared with the cache and must not be mutated.
+    refreshes) only parse new or changed reports. Every call returns fresh :class:`Report`
+    objects over the cached data, which is read-only (see :class:`Report`).
     """
     globs = (f"report_{model_stem}.json", f"batch_report_{model_stem}_*.json") if model_stem else REPORT_GLOBS
-    reports: list[dict[str, Any]] = []
+    reports: list[Report] = []
     seen: set[str] = set()
     for d in dirs:
         if not Path(d).is_dir():
@@ -96,13 +166,11 @@ def load_reports(dirs: list[Path], model_stem: str | None = None) -> list[dict[s
             seen.add(sp)
             obj = _read_report(p, stats[p])
             if isinstance(obj, dict) and "metrics" in obj:
-                obj = dict(obj)
-                obj["_path"] = sp
-                reports.append(obj)
+                reports.append(Report(sp, obj))
     return reports
 
 
-def metric_value(report: dict[str, Any], key: str, critical_class: str | None = None) -> float | None:
+def metric_value(report: Mapping[str, Any], key: str, critical_class: str | None = None) -> float | None:
     """Scalar metric from a report: any top-level metric key, or ``critical_fn_rate`` for *critical_class*."""
     metrics = report.get("metrics") or {}
     try:
@@ -117,12 +185,12 @@ def metric_value(report: dict[str, Any], key: str, critical_class: str | None = 
         return None
 
 
-def report_timestamp(report: dict[str, Any]) -> float:
+def report_timestamp(report: Mapping[str, Any]) -> float:
     """Report time in epoch seconds: ``timestamp`` field, else file mtime, else ``0.0``."""
     ts = parse_iso_ts(report.get("timestamp"))
     if ts:
         return ts
-    p = report.get("_path")
+    p = report_path(report)
     if p:
         try:
             return os.path.getmtime(str(p))
@@ -131,7 +199,7 @@ def report_timestamp(report: dict[str, Any]) -> float:
     return 0.0
 
 
-def best_report(reports: list[dict[str, Any]], key: str, critical_class: str | None = None) -> dict[str, Any] | None:
+def best_report(reports: list[Report], key: str, critical_class: str | None = None) -> Report | None:
     """Report with the highest value of *key* (``None`` if no report has it)."""
     scored = [(v, r) for r in reports if (v := metric_value(r, key, critical_class)) is not None]
     return max(scored, key=lambda t: t[0])[1] if scored else None

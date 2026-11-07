@@ -6,14 +6,17 @@ import json
 import queue
 import subprocess
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
 from gui.utils.dataset_catalog import list_dataset_dirs
-from gui.utils.paths import list_model_paths, model_root, newest_file
+from gui.utils.paths import list_model_paths, model_root
 from gui.utils.process import run_streaming, terminate_process
-from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL
+from simple_sim.cli import argv_for
+from simple_sim.cli_utils import parse_result_line
+from simple_sim.dataset_files import LABELS_JSONL, META_JSONL
+from simple_sim.dataset_index import DatasetIndex
+from simple_sim.eval_utils import dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
 
 
@@ -70,7 +73,6 @@ class PredictionsLogic:
             last_dataset_dir: Path | None = None
             multi_results: list[dict[str, Any]] = []
             multi_result_by_key: dict[str, dict[str, Any]] = {}
-            started_s = time.time()
 
             try:
                 for idx, data_dir in enumerate(dataset_dirs, 1):
@@ -83,26 +85,23 @@ class PredictionsLogic:
 
                     model_arg_path = model_path
                     if model_path.exists() and model_path.is_dir():
-                        manifest_path = data_dir / DATASET_MANIFEST
-                        if not manifest_path.exists():
-                            self.log_q.put(f"[error] dataset manifest missing: {manifest_path}\n")
-                            continue
+                        # v1 and v2 manifests (v2 -> the bundle's "multi" checkpoint, as train writes it; plan X7).
                         try:
-                            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                            profile_id = str((manifest.get("component_profile") or {}).get("profile_id") or "").strip()
+                            profile_id = str(dataset_profile(data_dir)[0] or "").strip()
+                        except FileNotFoundError:
+                            self.log_q.put(f"[error] dataset manifest missing: {data_dir}\n")
+                            continue
                         except Exception as e:
-                            self.log_q.put(f"[error] failed to read dataset manifest: {manifest_path} ({e})\n")
+                            self.log_q.put(f"[error] failed to read dataset manifest: {data_dir} ({e})\n")
                             continue
                         if not profile_id:
-                            self.log_q.put(f"[error] dataset manifest missing component_profile.profile_id: {manifest_path}\n")
+                            self.log_q.put(f"[error] dataset manifest has no profile id: {data_dir}\n")
                             continue
                         expected = bundle_checkpoint_path(model_path, profile_id, kind="best")
                         if not expected.exists():
                             if auto_train_bundle:
-                                py = self.sim_root / ".venv" / "bin" / "python"
-                                cmd_train: list[str] = [str(py), "scripts/train.py", "--data", str(data_dir), "--out", str(model_path)]
-                                if device != "auto":
-                                    cmd_train.extend(["--device", device])
+                                cmd_train = argv_for("train", data=data_dir, out=model_path,
+                                                     device=None if device == "auto" else device)
                                 self.log_q.put(f"[bundle] missing '{profile_id}.pt' -> training into bundle...\n")
                                 self.log_q.put("[cmd] " + " ".join(cmd_train) + "\n")
                                 try:
@@ -118,10 +117,10 @@ class PredictionsLogic:
                                         self.log_q.put("\n[stopped]\n")
                                         break
                                     if rc != 0:
-                                        self.log_q.put(f"\n[error] train.py exited with code {rc}\n")
+                                        self.log_q.put(f"\n[error] train exited with code {rc}\n")
                                         continue
                                 except Exception as e:
-                                    self.log_q.put(f"\n[error] failed to run train.py: {e}\n")
+                                    self.log_q.put(f"\n[error] failed to run train: {e}\n")
                                     continue
                                 if not expected.exists():
                                     self.log_q.put(f"[error] bundle still missing checkpoint for profile '{profile_id}'\n")
@@ -134,15 +133,11 @@ class PredictionsLogic:
                     out_dir = data_dir / "predictions"
                     out_dir.mkdir(parents=True, exist_ok=True)
 
-                    cmd: list[str] = ["bash", str(self.sim_root / "predict.sh"), "--model", str(model_arg_path), "--data", str(data_dir), "--split", split, "--out-dir", str(out_dir)]
-                    if device != "auto":
-                        cmd.extend(["--device", device])
-                    if max_samples:
-                        cmd.extend(["--max-samples", max_samples])
-                    if save_preds:
-                        cmd.append("--save-preds")
-                    if profile_model_path is not None:
-                        cmd.extend(["--profile-model", str(profile_model_path)])
+                    cmd = argv_for(
+                        "batch-predict", model=model_arg_path, data=data_dir, split=split, out_dir=out_dir,
+                        device=None if device == "auto" else device, max_samples=max_samples or None,
+                        save_preds=bool(save_preds), profile_model=profile_model_path, json=True,
+                    )
 
                     self.log_q.put(f"\n[dataset {idx}/{len(dataset_dirs)}] {data_dir}\n")
                     self.log_q.put("[cmd] " + " ".join(cmd) + "\n")
@@ -151,17 +146,11 @@ class PredictionsLogic:
                     preds_path: Path | None = None
 
                     def on_line(line: str) -> None:
+                        # The --json result line carries the paths (plan D22: no scraping of human output).
                         nonlocal report_path, preds_path
-                        if "Report saved to:" in line:
-                            try:
-                                report_path = Path(line.split("Report saved to:", 1)[-1].strip())
-                            except Exception:
-                                report_path = None
-                        if "Predictions saved to:" in line:
-                            try:
-                                preds_path = Path(line.split("Predictions saved to:", 1)[-1].strip())
-                            except Exception:
-                                preds_path = None
+                        if (res := parse_result_line(line)) is not None:
+                            report_path = Path(res["report_path"]) if res.get("report_path") else None
+                            preds_path = Path(res["preds_path"]) if res.get("preds_path") else None
 
                     rc = run_streaming(
                         cmd,
@@ -175,14 +164,9 @@ class PredictionsLogic:
                         self.log_q.put("\n[stopped]\n")
                         break
                     if rc != 0:
-                        self.log_q.put(f"\n[error] predict.sh exited with code {rc}\n")
+                        self.log_q.put(f"\n[error] batch-predict exited with code {rc}\n")
                         continue
-                    
-                    if report_path is None:
-                        report_path = newest_file(out_dir, "batch_report_*.json", min_mtime=started_s - 0.5)
-                    if save_preds and preds_path is None:
-                        preds_path = newest_file(out_dir, "batch_preds_*.jsonl", min_mtime=started_s - 0.5)
-                    
+
                     try:
                         key = str(data_dir.resolve())
                         label = data_dir.name
@@ -241,27 +225,13 @@ class PredictionsLogic:
                 r["profile_correct"] = bool(str(r.get("pred_profile")) == str(r.get("gt_profile")))
 
     def _load_gt_profile_map_from_labels(self, data_dir: Path | None) -> dict[str, str]:
-        if not data_dir:
+        """Sample id -> GT ``profile_id`` from ``labels.jsonl`` (shared :class:`DatasetIndex`, plan L11)."""
+        if not data_dir or not (data_dir / LABELS_JSONL).exists():
             return {}
-        labels_path = data_dir / LABELS_JSONL
-        if not labels_path.exists():
+        try:
+            return DatasetIndex(data_dir).profile_map()
+        except (OSError, ValueError, TypeError, KeyError):
             return {}
-
-        gt_profile_map: dict[str, str] = {}
-        with open(labels_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    sid = str(obj.get("id") or "")
-                    pid = str(obj.get("profile_id") or "")
-                    if sid and pid:
-                        gt_profile_map[sid] = pid
-                except Exception:
-                    continue
-        return gt_profile_map
 
     def resolve_model_path(self, s: str) -> Path:
         p = Path(s)

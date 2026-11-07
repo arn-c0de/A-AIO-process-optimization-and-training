@@ -545,42 +545,30 @@ class PipelineUI:
     fmt_bytes = staticmethod(fmt_bytes)
 
     def refresh_thumbnails(self, recent_imgs: list[str], dataset_dir: Path | None, label_dict: dict[str, str], image_to_sample: dict[str, str], meta_by_sample: dict[str, MetaRow], meta_by_image_rel: dict[str, MetaRow], draw_defect_overlay_func: Callable[..., Any]) -> None:
+        """Synchronous decode + show (the tab uses ``prepare_thumbnails`` in a worker instead)."""
+        self.show_thumbnails(self.prepare_thumbnails(recent_imgs, dataset_dir, label_dict, image_to_sample,
+                                                     meta_by_sample, meta_by_image_rel, draw_defect_overlay_func))
+
+    def prepare_thumbnails(self, recent_imgs: list[str], dataset_dir: Path | None, label_dict: dict[str, str], image_to_sample: dict[str, str], meta_by_sample: dict[str, MetaRow], meta_by_image_rel: dict[str, MetaRow], draw_defect_overlay_func: Callable[..., Any]) -> list[tuple[Image.Image | None, str]]:
+        """Tk-free part (safe on a worker thread): one ``(PIL thumbnail or None, caption)`` per slot."""
+        return prepare_thumbnail_cells(len(self.img_labels), recent_imgs, dataset_dir, label_dict, image_to_sample,
+                                       meta_by_sample, meta_by_image_rel, draw_defect_overlay_func)
+
+    def show_thumbnails(self, prepared: list[tuple[Image.Image | None, str]]) -> None:
+        """Tk part: PhotoImages must be created on the Tk thread."""
         self._thumb_refs.clear()
-        for i, lbl in enumerate(self.img_labels):
-            if i >= len(recent_imgs):
-                lbl.configure(image="", text="(no image)", compound="top")
+        for lbl, (img_pil, text) in zip(self.img_labels, prepared):
+            if img_pil is None:
+                lbl.configure(image="", text=text, compound="top")
                 continue
-
-            path = Path(recent_imgs[-1 - i])
             try:
-                img_bgr = cv2.imread(str(path))
-                if img_bgr is None: raise ValueError("Failed to read image")
-
-                class_label, meta_row = "", None
-                if dataset_dir:
-                    try:
-                        rel_path_str = str(path.relative_to(dataset_dir)).replace('\\', '/')
-                        if sample_id := image_to_sample.get(rel_path_str):
-                            if class_name := label_dict.get(sample_id): class_label = class_name
-                            meta_row = meta_by_sample.get(sample_id)
-                        if meta_row is None: meta_row = meta_by_image_rel.get(rel_path_str)
-                    except ValueError: pass
-                
-                if meta_row is not None:
-                    try: img_bgr = draw_defect_overlay_func(img_bgr, meta_row.defect, meta_row.nominal)
-                    except Exception: pass
-
-                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-                img_pil = Image.fromarray(img_rgb)
-                img_pil.thumbnail((120, 90))
                 tkimg = ImageTk.PhotoImage(img_pil)
-                self._thumb_refs.append(tkimg)
-
-                display_text = path.name if not class_label else f"{path.name}\n[{class_label}]"
-                lbl.configure(image=tkimg, text=display_text, compound="top")
-                lbl.image = tkimg
             except Exception:
-                lbl.configure(image="", text=f"(failed) {path.name}", compound="top")
+                lbl.configure(image="", text=f"(failed) {text.splitlines()[0] if text else ''}", compound="top")
+                continue
+            self._thumb_refs.append(tkimg)
+            lbl.configure(image=tkimg, text=text, compound="top")
+            lbl.image = tkimg
 
     def set_dataset_samples_info(self, text: str, color: str) -> None:
         self.var_ds_samples.set(text)
@@ -640,3 +628,44 @@ class PipelineUI:
             self.dataset_multi_entry.pack_forget()
             self.btn_dataset_multi_pick.pack_forget()
             self.dataset_combo.pack(side="left", fill="x", expand=True)
+
+
+def prepare_thumbnail_cells(n_slots: int, recent_imgs: list[str], dataset_dir: Path | None, label_dict: dict[str, str],
+                            image_to_sample: dict[str, str], meta_by_sample: dict[str, MetaRow],
+                            meta_by_image_rel: dict[str, MetaRow],
+                            draw_defect_overlay_func: Callable[..., Any]) -> list[tuple[Image.Image | None, str]]:
+    """Decode the newest ``n_slots`` images (newest first), draw the defect overlay, shrink to 120x90.
+
+    Tk-free: runs on a worker thread. A slot without image yields ``(None, "(no image)")``, an
+    unreadable one ``(None, "(failed) <name>")`` - the captions the label showed before.
+    """
+    out: list[tuple[Image.Image | None, str]] = []
+    for i in range(n_slots):
+        if i >= len(recent_imgs):
+            out.append((None, "(no image)"))
+            continue
+        path = Path(recent_imgs[-1 - i])
+        try:
+            img_bgr = cv2.imread(str(path))
+            if img_bgr is None: raise ValueError("Failed to read image")
+
+            class_label, meta_row = "", None
+            if dataset_dir:
+                try:
+                    rel_path_str = str(path.relative_to(dataset_dir)).replace('\\', '/')
+                    if sample_id := image_to_sample.get(rel_path_str):
+                        if class_name := label_dict.get(sample_id): class_label = class_name
+                        meta_row = meta_by_sample.get(sample_id)
+                    if meta_row is None: meta_row = meta_by_image_rel.get(rel_path_str)
+                except ValueError: pass
+
+            if meta_row is not None:
+                try: img_bgr = draw_defect_overlay_func(img_bgr, meta_row.defect, meta_row.nominal)
+                except Exception: pass
+
+            img_pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+            img_pil.thumbnail((120, 90))
+            out.append((img_pil, path.name if not class_label else f"{path.name}\n[{class_label}]"))
+        except Exception:
+            out.append((None, f"(failed) {path.name}"))
+    return out

@@ -53,7 +53,7 @@ not, and each disappears when the duplicate is deleted.
 | X9 | `tools/sim_to_real.py` and `tools/calibrate_camera.py` use `--json PATH` (a file) against the project-wide result-line convention; neither is in `cli.COMMANDS` | `tools/sim_to_real.py:99`, `tools/calibrate_camera.py:108` |
 | X10 | Fast-3D preview derives pad layouts itself (qfn as 4 pads) instead of `board.footprints.footprint_pads` | `tools/profile_editor/preview_3d.py:374-523` |
 | X11 | GUI arena favourites key by relative path, `simple_sim.arena` by absolute path; GUI report generation spawns system `python3` instead of the venv | `gui/tabs/weights/logic.py:43-110` vs `simple_sim/arena.py:61-80` |
-| X12 | 2D renderer constants are re-typed in the Blender script and already drift (thickness 0.55 vs 0.56, paste dome exponent 3 vs 2.5 in `solder.py`) | `photoreal.py:111,124,126,1033` vs `blender/render_batch.py:36-38,258`; `opencv2d/solder.py:148` |
+| X12 | 2D renderer constants are re-typed in the Blender script and already drift (thickness 0.55 vs 0.56, paste dome exponent 3 vs 2.5 in `solder.py`) | `photoreal.py:111,124,126,1033` vs `blender/render_batch.py:36-38,258`; `opencv2d/solder.py:148`. **Done 2026-11-07** (D35): Blender reads the family table from the scene; 0.56 vs 0.55 and dome 3 vs 2.5 kept and documented as intended differences (`BlenderPart` docstring, `render_batch._PASTE_DOME_EXPONENT`) |
 
 ## 3. Findings
 
@@ -187,7 +187,7 @@ Each row is one helper to write and N copies to delete.
 | D3 | `rel_to(root, p)` / `abs_from(root, p)` | `io_utils.py:99-104`, `generation/common.py:27-32`, `model_bundle.py:177-180`, `generation/profile_dataset.py:71` (no fallback, raises for a profile outside root), `arena.py:48-58`, `gui/tabs/pipeline/tab.py:584,1314`, `gui/tabs/predictions/tab.py:90,107` |
 | D4 | `class_counts(label_rows)` | `manifest.py:67-72`, `generation/common.py:180`, `scripts/batch_predict.py:84`, `gui/utils/dataset_ops.py:227` |
 | D5 | Manifest history / generator blocks | `manifest.py:146-153`, `:185-201`, `:390-412` (three hand-built copies in one file) **Done 2026-11-07:** `manifest._history_entry` / `_generator_block` (same keys and order) |
-| D6 | Manifest v1/v2 (`component_profile` vs `component_profiles`) branching | `manifest.py:207-219,257-281`, `cli.py:142-145`, `generation/dataset.py:69-111`, `scripts/train.py`, `scripts/train_profile.py`, `tools/create_multi_dataset.py`, `gui/utils/pipeline_helpers.py`, `gui/tabs/pipeline/logic.py:421-440`, `gui/tabs/predictions/logic.py:84-98` (X7) |
+| D6 | Manifest v1/v2 (`component_profile` vs `component_profiles`) branching | `manifest.py:207-219,257-281`, `cli.py:142-145`, `generation/dataset.py:69-111`, `scripts/train.py`, `scripts/train_profile.py`, `tools/create_multi_dataset.py`, `gui/utils/pipeline_helpers.py`, `gui/tabs/pipeline/logic.py:421-440`, `gui/tabs/predictions/logic.py:84-98` (X7). *Library/tools part done 2026-11-07:* `generation/dataset._existing_profile`, `tools/create_multi_dataset.source_profiles`, `tools/backfill_labels_v2` read `DatasetManifest`; cli/scripts/gui/training sites open |
 | D7 | Dataset file-name constants (`dataset_manifest.json`, `meta.jsonl`, `labels.jsonl`, `config.yaml`) | `manifest.py:119,379`, `cli.py:133`, `generation/dataset.py:120-123`, `eval_utils.py:26`, `dataset_store.py:25`, `data_loader.py:85-86`, +20 in gui/scripts/tools **Done 2026-11-07:** `simple_sim/dataset_files.py` (`DATASET_MANIFEST`, `META_JSONL`, `LABELS_JSONL`, `CONFIG_YAML`, `SPLITS_DIR`) at the path joins in `simple_sim/` (not `generation/`), `scripts/`, `gui/`; message strings and `generation/`, `tools/` left |
 | D8 | `config.yaml` loader for a dataset dir | `scripts/train.py:133-136`, `tools/create_multi_dataset.py:150-155`, `tools/backfill_manifest.py:76`, `cli.py:112` |
 | D9 | Bundle checkpoint listing (`*.pt` minus `_last`) | `model_bundle.py:122-126`, `cli.py:164-168`, `arena.py:114-116` **Done 2026-11-07:** `model_bundle.list_bundle_checkpoints(include_last=)` |
@@ -221,7 +221,7 @@ Renderer-internal duplicates (all pixel-safe if the single rng draw is kept):
 | D32 | Preview augment sampling re-implements `augment.py:168-176` and hard-codes the neutral subset | `preview/render.py:295-330`, `gui/components/filter_popup/preview_render.py:21-27` (X2) |
 | D33 | Pour raster resolution | `board/zones.py:130` (`clearance / 4.0`) vs `board/drc.py:31` (`POUR_CELLS_PER_CLEARANCE = 4`) |
 | D34 | `Vec`/`BBox` aliases; 4-tuple bbox spelled out 14x; vector helpers in `routing/base.py:50-60` imported by `zones.py:18` (layer inversion) | `board/model.py:16`, `board/geometry.py:14`, `routing/base.py:72-101`, `escape.py:37-60` |
-| D35 | 2D constants re-typed in the Blender script (X12) | see X12; bake the per-part decisions into the scene dict so `render_batch.py` only builds geometry |
+| D35 | 2D constants re-typed in the Blender script (X12) | see X12; bake the per-part decisions into the scene dict so `render_batch.py` only builds geometry. **Done 2026-11-07**: `PartFamily.blender` (`BlenderPart`) -> scene `part` (`scene_part`, `job_schema.ScenePart`); `render_batch.part_params` reads only the scene; geometry pinned by `tests/test_blender_part_params.py` |
 
 ### R. Renderer structure
 
@@ -240,10 +240,13 @@ Renderer-internal duplicates (all pixel-safe if the single rng draw is kept):
 
 - **A1** `simple_sim/__init__.py`: lazy (PEP 562) exports for `load_config`, `validate_config`, `MetaRow`, `LabelRow`, `read_jsonl`, `write_jsonl`, `read_dataset_manifest`, `generate_dataset`, `ROIDataset`, `build_resnet18`, `load_checkpoint_model`, `compute_metrics`, `run_inference`, `TwoStageClassifier`, `load_reports`, `best_report`, `write_arena_report`, `render_sample` (torch modules resolved lazily); `__all__` in every module; a `NullHandler` logger. S.
 - **A2** Typed records instead of dicts with magic keys: `DatasetManifest` (`from_dict/to_dict`, `profile_ids`; kills D6), `EvalReport` + `write_eval_report` (B14 in scripts), `Checkpoint` + `save_checkpoint`, `LoadedModel(model, class_names, checkpoint)` instead of the 3-tuple from `models.load_checkpoint_model:61-63`, `Report(path, data)` instead of the injected `"_path"` key (`reports.py:64`, consumed at `arena.py:220`, `cli.py:176`), `ModelRanking` instead of 10-key dicts (`arena.py:246-257`). M.
+  *Done 2026-11-07 (library part):* `manifest.DatasetManifest` / `ProfileRef` (exact round trip), `load_dataset_manifest`, `DatasetIndex.manifest()`; `reports.Report` (read-only mapping, still answers `["_path"]`), `reports.report_path`; `arena.ModelRanking`. Open: `EvalReport`, `Checkpoint`, `LoadedModel` (scripts / `models.py`, other owners), moving script/GUI consumers to the types.
 - **A3** `simple_sim/classes.py` with `DefectClass(StrEnum)` and derived sets (`CRITICAL_CLASSES`, `PLACEMENT_CLASSES`, `SOLDER_ONLY_CLASSES`, `NEVER_TOMBSTONE`), plus `Split(StrEnum)`, `Backend`, `RenderStyle`, `SolderStyle`, `Routing`, `DrcMode`. String values unchanged so JSON/YAML stay identical; `dataset_store.py:67` must still dump plain strings. The class set is currently closed and enforced in `MetaRow/LabelRow.__post_init__` (`schema.py:73,100`); consider an `allowed_classes` parameter so another program can define its own classes. S-M.
 - **A4** `config.py` (473 lines) vs `config_schema.py` (92): `parse_config_typed` is called at `config.py:80` and its result discarded; it covers only run/roi/train/eval and has no other consumer besides one test. Either make `SimulationConfig` the real typed model (L) or delete `config_schema.py` and move `merge_profile_render` to `generation/common.py` (S). Rename `schema.py` to `rows.py` to end the schema/config_schema confusion.
+  *Done 2026-11-07 (S option):* `config_schema.py` is a deprecated shim (warns on import); `validate_config` runs `config.core_section_values` (same casts and messages, no dataclasses). `schema.py` -> `rows.py`, `schema` is an alias of the same module. `merge_profile_render` stays in `config.py` (it never lived in `config_schema`; 10+ callers).
 - **A5** Compute functions that print, call `sys.exit`, or take `argparse.Namespace`: `manifest.check_checkpoint_profile` (`:317-346`, prints and hard-codes `--allow-profile-mismatch`), `metrics.check_success_criteria` (`:102-125`, print-only with an `ascii_only` flag), `models.build_resnet18:24` (bare `except Exception` + print), `data_loader.make_loader_kwargs:55-58`, `eval_utils.print_checkpoint_info/print_distribution`, `eval_utils.require_manifest:218-222` (hint mentions `.venv/bin/python tools/backfill_manifest.py`), `generation/common.finalize_splits` (`mark="✓ "`), `tools/create_multi_dataset.py` (8 `SystemExit`), `scripts/render_debug_previews.py` (9), `tools/sim_to_real.py:41,48,107`, `tools/calibrate_camera.py:43`, `scripts/arena_report.py:36`, `tools/update_sample_gallery.py:288,308,444`. Pattern: return structured results with `warnings: list[str]`, raise `UsageError`, `logging` for progress, `warnings.warn` for user warnings (already used in `model_bundle.py:163`, `data_loader.py:98`); the CLI layer appends the `--flag` hints. M across many files, low test risk (tests assert return values).
 - **A6** Smaller API fixes: `splits.generate_splits` takes the whole config for three fractions (`splits.py:14-53`); `manifest.write_dataset_manifest` has 11 positional parameters (`:84-96`); `TwoStageClassifier.__init__(device: str)` vs `str | torch.device` elsewhere; `parse_iso_ts` returns `0.0` on failure while `metric_value` returns `None`; `schema.read_jsonl` special-cases `LabelRow/MetaRow` compat (`:171-176`) and rejects unknown fields (`:166-168`), blocking forward compatibility; `model_bundle.kind: str = "best"` should be `Literal["best","last"]`; `eval_utils.run_inference` hard-wires tqdm and `emit` (`:100,127`), add `progress`/`on_batch`.
+  *Done 2026-11-07:* manifest writers keyword-only after `output_dir, run_id` (legacy positional calls still accepted silently), `splits.stratified_splits(..., train_frac=, val_frac=, test_frac=, seed=, split_domains=)` with `generate_splits` as wrapper, `parse_iso_ts` contract documented (0.0 sentinel kept), `model_bundle.CheckpointKind`. Open: `TwoStageClassifier` device type, `read_jsonl` forward compat, `run_inference` hooks (other owners).
 
 ### M. Modernization leftovers
 
@@ -388,7 +391,7 @@ Third round (2026-11-07, D27-D35 and the job contract; both golden tests unchang
   (`copper.py:216`). Not unified: `footprints.pads_px` multiplies by the reciprocal and rounds,
   `occupancy.Grid` divides with ceil/round, `part_from_pads` multiplies: different numerics, a shared
   helper would change pixels.
-- D35: skipped. The per-part decisions re-typed in the Blender script (`_HEIGHT_RATIO`, cap fraction,
+- D35: skipped in this round (done later on 2026-11-07, see the D35 row). The per-part decisions re-typed in the Blender script (`_HEIGHT_RATIO`, cap fraction,
   standoff, lead width, marking vocabularies; X12's 0.56 vs `parts.THICKNESS_RATIO` 0.55, dome
   exponent 3 vs 2.5) would have to be written by `scene.render_board` into the scene dict (owned by
   the look session) and the bake golden hashes that dict; the constants belong in `job_schema` once
@@ -429,11 +432,11 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
 | 0, 1 | done | `tests/test_headless_imports.py` guards I1/I8; `print(` only in `cli*.py` + Blender script |
 | 2 shared helpers | open except D14/D17/D18/D19/D23-D25 (and D1/D2/D5/D7/D9/D10/D11/D16/I7: done 2026-11-07, see section 3) | D1 device pick at 7 script sites; D5 three history blocks `manifest.py:146,186,399`; D7 108 literal file-name sites; D11 `hash_profile` re-reads YAML; D16 `sha256:` built twice; I5 done 2026-11-07 (torch/tqdm lazy in `eval_utils`, 0.74 -> 0.05 s warm; was 2.8 s cold); I7 `validate_config` still loads cv2 via the photoreal option constants (`config.py:357,376,386,396,407,419`); its board part (`_validate_board`) is cv2-free since I4 (`test_board_options_validate_without_cv2`); I4 done 2026-11-07 (`board/options.py` + `board/pipeline.py`, lazy `board/__init__.py`) |
 | 3 typed records | open | `_path` key in 6 places, `load_checkpoint_model` 3-tuple, `parse_config_typed` result discarded (`config.py:79`), 11-positional `write_dataset_manifest` |
-| 4 logic into library | open | none of `training/evaluation/batch_predict/validation/dataset_merge/dataset_edit/inference/...` exist; `train_model` 256 lines / 44 prints; `gui/utils/validation_suite.py:13` is the only `gui -> tools` import; `simple_sim/preview/viewer_tk.py:219` the only `simple_sim -> gui` import |
-| 5 command registry | open | `cli.py:264 subprocess.call`, `:75 "add_json_flag" in src`; the 7 sim-to-real tools are in `COMMANDS` since 2026-11-07 (N12); 40 `sys.path.insert` (the 6 in those tools now only fire when run as a script, `real_crops.py` has none) |
-| 6 renderer | mostly done | R2, R5, R6, R9, X5, D23-D25 done. Partly: R1 (5 callers still hand-merge via `merge_profile_render`: `profile_dataset.py:101`, `preview/render.py:377`, `filter_popup/preview_render.py:58`, `profile_preview/logic.py:190`, `update_sample_gallery.py:148`), R3 (`backends.py` holds capabilities only; dispatch `if backend == Backend.OPENCV_2D` at `dataset.py:456-475`), R4 (`generate_dataset` 208 lines, `generate_profile_dataset` 134 lines not decomposed), R7 (job contract still dicts), R8 (env read inside `realism.py:135`), D26, D28 (`REFDES_PREFIX` twice: `board/placement.py:18-19` and `photoreal/palette.py:64-66`, same mapping; fix: `palette.py` imports it from `board.placement`), D29, X8 (escape side done 2026-11-07: `board.footprints.FINE_PITCH_FAMILIES` / `is_fine_pitch` is the single source, `escape.py` and `pipeline.py` import it; `copper.py:164` `RULE_CHIP_FAMILIES` is a different predicate (rule-scale boost for `sot, soic, qfn, sot6`; arrays are not boosted) and cannot use `is_fine_pitch` bit-identically). Open: D27, D30, D31, D33, D34, D35/X12, R10 |
+| 4 logic into library | partly | none of `training/evaluation/batch_predict/validation/dataset_merge/dataset_edit/inference/...` exist; `train_model` 256 lines / 44 prints; `gui/utils/validation_suite.py:13` is the only `gui -> tools` import; `simple_sim/preview/viewer_tk.py:219` the only `simple_sim -> gui` import **Partly done 2026-11-07:** L1 `training.py`, L2 `evaluation.py`, L3 `batch_predict.py` (`BatchPredictOptions`), L7 `inference.py` (`Classifier`, closes X1), L23 sample-check core, L12 snapshot naming (`model_store.py`, closes X6), L19 command lines via `cli.argv_for`; X4, X7 (GUI side), X11 (`python3`) closed. Still open: L4-L6, L8-L11 rest, L13-L18, L20-L22, the `gui -> tools` and `simple_sim -> gui` imports. |
+| 5 command registry | done (tools still subprocess) | `cli.py:264 subprocess.call`, `:75 "add_json_flag" in src`; the 7 sim-to-real tools are in `COMMANDS` since 2026-11-07 (N12); 40 `sys.path.insert` (the 6 in those tools now only fire when run as a script, `real_crops.py` has none). **Done 2026-11-07 (P2, P4, D22, N9; P3 for the launchers):** `cli.COMMANDS: dict[str, CommandSpec]`, library commands in `simple_sim/commands/` run in-process (`main(argv, prog=) -> int`, `SUPPORTS_JSON` read from the source), `scripts/*.py` are shims, `tools/*.py` still subprocess; `cli.argv_for`; GUI parses `--json` result lines (`cli_utils.parse_result_line`); `predict.sh`/`sample_predict.sh`/`run_pipeline.sh` use `python -m simple_sim`. Open: `tools/*.py` into `commands/`, X9, the `run_pipeline.sh` stats heredoc as a command, `gui/tabs/predictions/tab.py` still scrapes `Report saved to:` from the log. |
+| 6 renderer | mostly done | R2, R5, R6, R9, X5, D23-D25 done. Partly: R1 (5 callers still hand-merge via `merge_profile_render`: `profile_dataset.py:101`, `preview/render.py:377`, `filter_popup/preview_render.py:58`, `profile_preview/logic.py:190`, `update_sample_gallery.py:148`), R3 (`backends.py` holds capabilities only; dispatch `if backend == Backend.OPENCV_2D` at `dataset.py:456-475`), R4 (`generate_dataset` 208 lines, `generate_profile_dataset` 134 lines not decomposed), R7 (job contract still dicts), R8 (env read inside `realism.py:135`), D26, D28 (`REFDES_PREFIX` twice: `board/placement.py:18-19` and `photoreal/palette.py:64-66`, same mapping; fix: `palette.py` imports it from `board.placement`), D29, X8 (escape side done 2026-11-07: `board.footprints.FINE_PITCH_FAMILIES` / `is_fine_pitch` is the single source, `escape.py` and `pipeline.py` import it; `copper.py:164` `RULE_CHIP_FAMILIES` is a different predicate (rule-scale boost for `sot, soic, qfn, sot6`; arrays are not boosted) and cannot use `is_fine_pitch` bit-identically). Open: D27, D30, D31, D33, D34, R10 (D35/X12 done 2026-11-07) |
 | 7 GUI | open | `pipeline/tab.py` 2033 lines / 105 methods; threads in 6 tabs; GUI plan phase 4 untouched |
-| X1-X12 | only X5 closed | X1 `model_inference.py:22`, X2 `preview_render.py:24`, X3 `validation_suite.py:18`, X4 `train_profile.py:98`, X6, X7 `predictions/logic.py:91`, X9, X10 `preview_3d.py:475`, X11 `weights/logic.py:97` |
+| X1-X12 | X1, X4, X5, X6, X7 (GUI), X11 closed 2026-11-07 | X1 `model_inference.py:22`, X2 `preview_render.py:24`, X3 `validation_suite.py:18`, X4 `train_profile.py:98`, X6, X7 `predictions/logic.py:91`, X9, X10 `preview_3d.py:475`, X11 `weights/logic.py:97` |
 
 ### 6.2 Regression in the working tree (fix before commit)
 
@@ -507,7 +510,7 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   **Done 2026-11-07** (2D side): `PartFamily` + read-only `FAMILIES` (name -> row; iterates the names as the
   old tuple did), `part_family()`, `BODY_KINDS`; `CHIP_FAMILIES`, `FINE_PITCH_FAMILIES`, `placement.REFDES_PREFIX`,
   palette `CHIPS/LEADED/ARRAY_FAMILIES/UNMARKED/CAP_LEN` derived from it; `parts._BODY_DRAWERS` by kind;
-  silkscreen/marking read the table. Blender side open (D35): `render_batch.py` is stdlib-only and the bake
+  silkscreen/marking read the table. Blender side done 2026-11-07 (D35, scene `part`). Was open (D35): `render_batch.py` is stdlib-only and the bake
   golden hashes the scene dict; `tests/test_part_families.py` pins `_HEIGHT_RATIO` to `height_ratio`.
 - **N2 Render config dict re-resolved per image.** `config` is passed through
   `draw_board/_render_board/_render_photoreal_base` (`scene.py:35,82,135`) and read for
@@ -575,6 +578,19 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   `pipeline/tab.py:1082`, `weights/tab.py:146`, `predictions/tab.py:206`, `profile_preview/tab.py:432`,
   `monitor.py:399`, `profile_editor/app.py:465,511`; logic classes take `queue.Queue` and
   `dict[str, StringVar]` although `UiDispatcher.post` (`gui/core/tasks.py:36`) exists. M.
+  **Done 2026-11-07** (tab side; the `*/logic.py` files were owned by another session): the queue
+  drains are push-based. `gui/core/tasks.py`: `DispatchQueue` (a `queue.Queue` whose `put` posts one
+  coalesced drain through the dispatcher, at most N items per drain, the rest on the next tick via
+  the new `UiDispatcher.post_next_tick`), `dispatcher_for`; `BaseTab.post` / `bind_queue` /
+  `quiet_tasks`. Pipeline (log 200 + events 120 per drain, as before), Weights, Predictions and
+  Profile Preview drain via the dispatcher; the profile editor's HQ status uses its own
+  `UiDispatcher(100 ms)`. All `frame.after(0, ...)` calls from worker threads (pipeline, weights,
+  predictions, board detection) now `post`. The logic classes keep their `queue.Queue` interface
+  (a `DispatchQueue` is one). Timers kept, without queue work: pipeline `_tick_status` 250 ms
+  (process liveness / run buttons / dataset size), the thumbnail throttle is a one-shot timer,
+  profile preview "N s elapsed" 500 ms, `monitor.py` perf 1 s (cheap: GPU is sampled in a thread),
+  profile editor registry 1.4 s (now stat-only, S6). Open: `PipelineLogic` still takes
+  `status_vars: dict[str, StringVar]` (logic file not editable here). Tests: `tests/test_gui_dispatch.py`.
 - **N12 Helper tools outside the registry** (D21 grew to 5 copies of the image-folder loader:
   `sim_to_real`, `calibrate_camera`, `look_stats`, `eval_real`, `look_montage`, all importing
   `IMAGE_EXTENSIONS` from `photoreal/substrate.py`); tests load them via
@@ -646,6 +662,18 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   synchronously; `weights/logic.py:467-515` reopens manifests per dataset; profile editor
   parses every YAML every 1.4 s (`profile_registry.py:54-70` from `app.py:511`). `DatasetIndex`
   via TaskRunner, thumbnails in a worker, stat-first mtime cache (L10 `catalog.py`). M.
+  **Done 2026-11-07** except the weights/logic part inside the logic file: `simple_sim/file_cache.py`
+  (`FileCache`, `file_signature`: value per key recomputed only when a dependency's
+  inode/size/mtime/ctime changes; a hit is one `stat`). Pipeline dataset selection: meta/labels via
+  `DatasetIndex` + the image listing in a worker (`load_dataset_view`), thumbnails decoded in a
+  worker (`ui.prepare_thumbnail_cells`; only PhotoImages on the Tk thread; stale jobs dropped,
+  overlapping requests coalesced); model dropdown reads the manifest through a `FileCache` and
+  resolves each checkpoint once (`CheckpointMetaCache` already was stat-first). Weights tab:
+  `describe_dataset_samples` / `get_dataset_classes` wrapped in a `FileCache` on manifest + labels
+  (tab side). Profile editor: `ProfileRegistry` caches parsed YAML per file and `changed()` lists +
+  stats first, parsing only on a change (repo configs, 22 profiles + 25 runs: 83 -> 0.26 ms per
+  1.4 s poll). Not done: L10 `simple_sim/catalog.py` itself; `list_model_paths` globbing stays
+  synchronous (callers read the combo values right after `_refresh_models`).
 - **S7 Per-image render hot spots (profile, 256² ss 2: legacy 55.7 ms, quins 49.8 ms):** `blend`
   ~10 ms/img (`cv2.boundingRect((alpha>0))` on full-frame alphas, `imageops.py:48`),
   `procedural_substrate` ~9 ms (rng-bound, not skippable), `camera_model` 7 ms,

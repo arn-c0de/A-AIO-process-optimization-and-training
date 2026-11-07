@@ -83,7 +83,7 @@ def test_manifest_git_commit_parameter(tmp_path, monkeypatch):
 
     monkeypatch.setattr(manifest, "_get_git_commit", lambda: pytest.fail("must not resolve"))
     manifest.write_multi_profile_manifest(
-        tmp_path, "r", [{"profile_id": "p@1", "profile_hash": "sha256:x", "profile_path": "p.yaml"}],
+        tmp_path, "r", profiles=[{"profile_id": "p@1", "profile_hash": "sha256:x", "profile_path": "p.yaml"}],
         meta_rows=[], label_rows=[LabelRow(schema_version=2, id="a", class_name="OK", profile_id="p@1")],
         splits={"train": ["a"], "val": [], "test": []}, git_commit="abc1234",
     )
@@ -111,9 +111,10 @@ def test_load_reports_cache_and_invalidation(tmp_path, monkeypatch):
     first = reports.load_reports([d])
     assert sorted(r["metrics"]["accuracy"] for r in first) == [0.5, 0.7]
     assert len(reads) == 3
-    first[0]["_mutated"] = True  # top-level dicts are per call
+    with pytest.raises(TypeError):  # Report is a read-only mapping over the cached data (plan A2)
+        first[0]["_mutated"] = True  # type: ignore[index]
     again = reports.load_reports([d])
-    assert len(reads) == 3 and all("_mutated" not in r for r in again)
+    assert len(reads) == 3 and all(a is not b for a, b in zip(again, first))
     assert [r["_path"] for r in again] == [r["_path"] for r in first]
 
     _write_report(d / "report_m1.json", 0.95)  # size changes

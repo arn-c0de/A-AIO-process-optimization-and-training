@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 from simple_sim.cli_utils import add_json_flag, run_cli  # noqa: E402
 from simple_sim.config import load_config  # noqa: E402
 from simple_sim.manifest import (  # noqa: E402
-    read_dataset_manifest,
+    load_dataset_manifest,
     write_dataset_manifest,
     write_multi_profile_manifest,
 )
@@ -68,19 +68,13 @@ def source_profiles(ds: Path, profiles_dir: Path) -> tuple[dict[str, str] | None
     """
     manifest_path = ds / "dataset_manifest.json"
     if manifest_path.exists():
-        manifest = read_dataset_manifest(manifest_path)
-        if int(manifest.get("manifest_version", 1) or 1) == 1:
-            cp = manifest["component_profile"]
-            prof = _profile_entry(
-                str(cp["profile_id"]), str(cp.get("profile_hash") or ""), str(cp.get("profile_path") or "")
-            )
-            return prof, [prof]
+        manifest = load_dataset_manifest(manifest_path)
         profs = [
-            _profile_entry(
-                str(p["profile_id"]), str(p.get("profile_hash") or ""), str(p.get("profile_path") or "")
-            )
-            for p in manifest["component_profiles"]
+            _profile_entry(str(p.profile_id), str(p.profile_hash or ""), str(p.profile_path or ""))
+            for p in manifest.profiles
         ]
+        if manifest.version == 1:
+            return profs[0], profs[:1]
         return None, profs
 
     prof = _profile_from_config(ds, profiles_dir)

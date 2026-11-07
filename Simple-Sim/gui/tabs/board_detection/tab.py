@@ -89,8 +89,8 @@ class BoardDetectionTab(BaseTab):
             device=self.ui._device_var.get(),
             min_profile_confidence=min_conf,
             # Callbacks run on the worker thread: marshal UI updates onto the Tk main loop.
-            on_complete=lambda result: self.frame.after(0, self._on_predict_complete, result),
-            on_error=lambda msg: self.frame.after(0, self.ui.show_error, msg),
+            on_complete=lambda result: self.post(lambda: self._on_predict_complete(result)),
+            on_error=lambda msg: self.post(lambda: self.ui.show_error(msg)),
         )
 
     def _on_predict_complete(self, result: TwoStageResult) -> None:

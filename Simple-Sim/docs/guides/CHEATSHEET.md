@@ -23,7 +23,7 @@ pip install -r requirements.txt
 
 ### Generate Dataset
 ```bash
-python3 scripts/generate.py \
+python -m simple_sim generate \
   --config configs/run_0001.yaml \
   --out outputs/sim_data/runs/run_0001
 ```
@@ -37,12 +37,12 @@ python3 tools/validate_dataset.py \
 ### Train Model
 ```bash
 # With GPU (default)
-python3 scripts/train.py \
+python -m simple_sim train \
   --data outputs/sim_data/runs/run_0001 \
   --out outputs/models/run_0001.pt
 
 # With CPU only
-python3 scripts/train.py \
+python -m simple_sim train \
   --data outputs/sim_data/runs/run_0001 \
   --out outputs/models/run_0001.pt \
   --device cpu
@@ -50,7 +50,7 @@ python3 scripts/train.py \
 
 ### Evaluate Model
 ```bash
-python3 scripts/eval.py \
+python -m simple_sim eval \
   --data outputs/sim_data/runs/run_0001 \
   --model outputs/models/run_0001.pt \
   [--tta] [--calibration]   # flips + quarter turns averaged; ECE / NLL / Brier in the report
@@ -92,8 +92,8 @@ wc -l outputs/sim_data/runs/run_0001/splits/*.txt
 
 ```bash
 # Generate twice
-python3 scripts/generate.py --config configs/run_0001.yaml --out outputs/test_a
-python3 scripts/generate.py --config configs/run_0001.yaml --out outputs/test_b
+python -m simple_sim generate --config configs/run_0001.yaml --out outputs/test_a
+python -m simple_sim generate --config configs/run_0001.yaml --out outputs/test_b
 
 # Compare labels (should be identical)
 diff outputs/test_a/labels.jsonl outputs/test_b/labels.jsonl
@@ -110,7 +110,7 @@ cp configs/run_0001.yaml configs/my_experiment.yaml
 nano configs/my_experiment.yaml
 
 # Generate with custom config
-python3 scripts/generate.py \
+python -m simple_sim generate \
   --config configs/my_experiment.yaml \
   --out outputs/sim_data/runs/my_experiment
 ```
@@ -189,7 +189,7 @@ pip install -r requirements.txt --upgrade
 
 ```bash
 # Use GPU for training
-python3 scripts/train.py ... --device cuda
+python -m simple_sim train ... --device cuda
 
 # Reduce batch size if OOM
 # Edit config: train.batch_size: 16
@@ -198,7 +198,7 @@ python3 scripts/train.py ... --device cuda
 # Edit config: classes.OK: 10 (for each class)
 
 # CPU training: thread count (hybrid CPUs: try the number of performance cores)
-python3 scripts/train.py ... --device cpu --threads 8
+python -m simple_sim train ... --device cpu --threads 8
 
 # Keep decoded images in RAM after the first epoch (~200 KB per 256 px image)
 # Edit config: train.cache_images: true
@@ -262,9 +262,9 @@ pip install -r requirements.txt
 
 ```bash
 # Script help
-python3 scripts/generate.py --help
-python3 scripts/train.py --help
-python3 scripts/eval.py --help
+python -m simple_sim generate --help
+python -m simple_sim train --help
+python -m simple_sim eval --help
 python3 tools/validate_dataset.py --help
 ```
 

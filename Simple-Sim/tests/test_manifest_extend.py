@@ -1,11 +1,16 @@
 import json
 from pathlib import Path
 
+import warnings
+
 import pytest
 
-from simple_sim.config_schema import parse_config_typed
 from simple_sim.manifest import write_multi_profile_manifest
-from simple_sim.schema import LabelRow
+from simple_sim.rows import LabelRow
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)  # plan A4: deprecated shim, still tested
+    from simple_sim.config_schema import parse_config_typed
 
 
 def _rows(n: int, profile_id: str) -> tuple[list[LabelRow], list[LabelRow]]:
@@ -23,13 +28,14 @@ def test_multi_profile_manifest_extend_preserves_history(tmp_path: Path) -> None
         {"profile_id": "b", "profile_hash": "sha256:b", "profile_path": "b.yaml"},
     ]
     meta, labels = _rows(4, "a")
-    write_multi_profile_manifest(tmp_path, "run", profiles, meta, labels, {"train": [r.id for r in meta]})
+    write_multi_profile_manifest(tmp_path, "run", profiles=profiles, meta_rows=meta, label_rows=labels,
+                                 splits={"train": [r.id for r in meta]})
     first = json.loads((tmp_path / "dataset_manifest.json").read_text())
 
     meta2, labels2 = _rows(6, "a")
     write_multi_profile_manifest(
-        tmp_path, "run", profiles, meta2, labels2, {"train": [r.id for r in meta2]},
-        script_name="scripts/generate.py", existing=first,
+        tmp_path, "run", profiles=profiles, meta_rows=meta2, label_rows=labels2,
+        splits={"train": [r.id for r in meta2]}, script_name="scripts/generate.py", existing=first,
     )
     second = json.loads((tmp_path / "dataset_manifest.json").read_text())
 

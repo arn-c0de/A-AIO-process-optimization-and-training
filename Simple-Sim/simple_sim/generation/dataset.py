@@ -33,10 +33,10 @@ from simple_sim.filter_settings import load_image_filters_env, normalize_image_f
 from simple_sim.generators.backends import backend_of
 from simple_sim.generators.version import RENDERER_VERSION
 from simple_sim.generation.render_options import look_differences
-from simple_sim.manifest import (RendererMismatchError, check_renderer_version, read_dataset_manifest, write_dataset_manifest,
-                                 write_multi_profile_manifest)
+from simple_sim.manifest import (DatasetManifest, RendererMismatchError, check_renderer_version, read_dataset_manifest,
+                                 write_dataset_manifest, write_multi_profile_manifest)
 from simple_sim.profile_hash import hash_profile_dict, load_profile
-from simple_sim.schema import LabelRow, MetaRow, append_jsonl_rows, validate_jsonl_pair
+from simple_sim.rows import LabelRow, MetaRow, append_jsonl_rows, validate_jsonl_pair
 from simple_sim.splits import assert_no_overlap, read_split, write_splits
 from simple_sim.telemetry import emit
 
@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 
 class LabelKey(NamedTuple):
     """The label fields of an existing row that ``--extend`` keeps (split coverage, class / profile
-    counts of the manifest and the summary); duck-types :class:`~simple_sim.schema.LabelRow` there."""
+    counts of the manifest and the summary); duck-types :class:`~simple_sim.rows.LabelRow` there."""
 
     id: str
     class_name: str
@@ -92,21 +92,24 @@ def read_existing_max_index(meta_rows: Iterable[MetaRow]) -> int:
 
 
 def _existing_profile(
-    manifest: dict[str, Any], *, profile_id: str, profile_hash: str, profile_rel_path: str
+    manifest: DatasetManifest, *, profile_id: str, profile_hash: str, profile_rel_path: str
 ) -> tuple[str, str, list[dict[str, str]]]:
     """Return ``(existing_profile_id, existing_profile_hash, target_profiles)`` from a dataset manifest.
 
     A multi-profile (v2) dataset may gain a new profile, which is appended to target_profiles.
+    A ``component_profile`` key wins over ``component_profiles`` (as before the typed record).
     """
-    version = int(manifest.get("manifest_version", 1))
-    if "component_profile" in manifest:
-        cp = manifest.get("component_profile") or {}
+    version = int(manifest.manifest_version)
+    if "component_profile" in manifest.key_order:
+        cp = (manifest.profiles[0].to_dict() if manifest.profiles_key == "component_profile"
+              else manifest.extra.get("component_profile")) or {}
         return str(cp.get("profile_id") or "").strip(), str(cp.get("profile_hash") or "").strip(), []
-    if "component_profiles" not in manifest:
+    if "component_profiles" not in manifest.key_order:
         raise ValueError(
             f"Invalid dataset manifest (manifest_version={version}): missing component_profile/component_profiles."
         )
-    profiles = manifest.get("component_profiles") or []
+    profiles = ([p.to_dict() for p in manifest.profiles] if manifest.is_multi_profile
+                else manifest.extra.get("component_profiles")) or []
     if not isinstance(profiles, list) or not profiles:
         raise ValueError(
             f"Invalid dataset manifest (manifest_version={version}): missing usable component profile information."
@@ -170,8 +173,9 @@ def load_extend_state(
         )
 
     manifest = read_dataset_manifest(manifest_path)
+    typed = DatasetManifest.from_dict(manifest)
     existing_id, existing_hash, target_profiles = _existing_profile(
-        manifest, profile_id=profile_id, profile_hash=profile_hash, profile_rel_path=profile_rel_path
+        typed, profile_id=profile_id, profile_hash=profile_hash, profile_rel_path=profile_rel_path
     )
     if not existing_id or not existing_hash:
         raise ValueError(
@@ -200,7 +204,7 @@ def load_extend_state(
 
     state = ExtendState(
         manifest=manifest,
-        manifest_version=int(manifest.get("manifest_version", 1)),
+        manifest_version=int(typed.manifest_version),
         profiles=target_profiles,
         run_id=run_id,
     )

@@ -161,7 +161,7 @@ cd Simple-Sim
 ### 3. Evaluate a Trained Model
 
 ```bash
-.venv/bin/python scripts/eval.py \
+python -m simple_sim eval \
   --data outputs/sim_data/runs/run_0001 \
   --model outputs/models/run_0001.pt
 ```

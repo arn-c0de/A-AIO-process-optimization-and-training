@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from simple_sim.board import family_of, footprint_pads, neighbour_layout
+from simple_sim.board.footprints import scene_part
 from simple_sim.board.placement import pad_ref
 from simple_sim.classes import DefectClass
 
@@ -150,6 +151,7 @@ def _render_board(ctx: RenderContext,
                  for p in pads],
         "thermal_pad": thermal_pad_index(pads),
         "body": None,
+        "part": scene_part(family),  # how render_batch.py builds the part (FAMILIES[family].blender, D35)
     }
     solder = solder_defect_layout(dp["type"], pads, sg.rect, rng, ss=ctx.ss)
     scene["excess"] = solder["excess"]
@@ -272,7 +274,8 @@ def render_board(nominal: dict[str, float], defect_params: dict[str, Any], confi
     Returns ``(BGR uint8 image of *size*, scene)``. ``scene`` holds, in camera pixels relative to the image
     centre (x right, y down): ``family``, ``pads`` as ``[cx, cy, w, h]``, ``body`` (``None`` when MISSING)
     with the same pose semantics as the 2D renderer including the tombstone pivot, ``excess`` (pad
-    indices with too much solder) and ``balls`` (``[x, y, r]``), from :func:`solder_defect_layout`.
+    indices with too much solder) and ``balls`` (``[x, y, r]``), from :func:`solder_defect_layout`, and
+    ``part`` (:func:`~simple_sim.board.footprints.scene_part`: the Blender build of the family).
     """
     ctx = RenderContext.for_render(config, rng)
     return _render_board(ctx, nominal, defect_params, tolerances, rng, footprint, size, crowd)

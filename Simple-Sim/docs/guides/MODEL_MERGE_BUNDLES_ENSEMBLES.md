@@ -70,7 +70,7 @@ If you train with `--out <name>.bundle`, training writes into the bundle using t
 
 ```bash
 cd Simple-Sim
-./.venv/bin/python scripts/train.py \
+python -m simple_sim train \
   --data outputs/sim_data/runs/Transistor-v1 \
   --out outputs/models/my_multi.bundle
 ```

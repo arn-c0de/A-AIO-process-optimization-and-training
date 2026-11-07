@@ -17,4 +17,4 @@ cd "${SCRIPT_DIR}"
 source "${SCRIPT_DIR}/tools/_common.sh"
 sim_require_python
 
-exec "${PYTHON}" scripts/sample_check.py "$@"
+exec "${PYTHON}" -m simple_sim sample-check "$@"

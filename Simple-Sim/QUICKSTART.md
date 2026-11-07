@@ -49,7 +49,7 @@ This will:
 ### Step 1: Generate Dataset
 
 ```bash
-python3 scripts/generate.py \
+python -m simple_sim generate \
   --config configs/run_0001.yaml \
   --out outputs/sim_data/runs/run_0001
 ```
@@ -70,7 +70,7 @@ python3 tools/validate_dataset.py \
 ### Step 3: Train Model
 
 ```bash
-python3 scripts/train.py \
+python -m simple_sim train \
   --data outputs/sim_data/runs/run_0001 \
   --out outputs/models/run_0001.pt
 ```
@@ -81,7 +81,7 @@ python3 scripts/train.py \
 ### Step 4: Evaluate
 
 ```bash
-python3 scripts/eval.py \
+python -m simple_sim eval \
   --data outputs/sim_data/runs/run_0001 \
   --model outputs/models/run_0001.pt
 ```
@@ -138,7 +138,7 @@ pytest tests/test_pipeline_e2e.py -v
 ### CUDA out of memory
 **Solution**: Add `--device cpu` to train/eval commands:
 ```bash
-python3 scripts/train.py --data ... --out ... --device cpu
+python -m simple_sim train --data ... --out ... --device cpu
 ```
 
 ### Import errors
@@ -170,7 +170,7 @@ Create a new config file:
 ```bash
 cp configs/run_0001.yaml configs/my_config.yaml
 # Edit my_config.yaml with your parameters
-python3 scripts/generate.py \
+python -m simple_sim generate \
   --config configs/my_config.yaml \
   --out outputs/sim_data/runs/my_run
 ```
@@ -181,8 +181,8 @@ Verify reproducibility:
 
 ```bash
 # Generate twice with same config
-python3 scripts/generate.py --config configs/run_0001.yaml --out outputs/test_a
-python3 scripts/generate.py --config configs/run_0001.yaml --out outputs/test_b
+python -m simple_sim generate --config configs/run_0001.yaml --out outputs/test_a
+python -m simple_sim generate --config configs/run_0001.yaml --out outputs/test_b
 
 # Compare labels (should be identical)
 diff outputs/test_a/labels.jsonl outputs/test_b/labels.jsonl

@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import queue
 import threading
 import time
 import tkinter as tk
@@ -17,6 +16,7 @@ import shlex
 import yaml
 
 from gui import dialogs
+from gui.core.tasks import DispatchQueue
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.components.overlay_renderer import draw_defect_overlay
@@ -72,7 +72,9 @@ from gui.utils.pipeline_helpers import (
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE
 from simple_sim.dataset_files import CONFIG_YAML, DATASET_MANIFEST, LABELS_JSONL, META_JSONL
 from simple_sim.io_utils import append_jsonl, load_yaml, now_tag, rel_to
-from simple_sim.schema import read_jsonl, LabelRow, MetaRow
+from simple_sim.dataset_index import DatasetIndex
+from simple_sim.file_cache import FileCache
+from simple_sim.schema import MetaRow
 from simple_sim.model_bundle import bundle_checkpoint_path
 
 from .ui import PipelineUI
@@ -80,19 +82,51 @@ from .logic import PipelineLogic
 
 _LOG = logging.getLogger(__name__)
 
+#: Period of the remaining status timer (process liveness, run buttons, dataset size); log lines and
+#: events are pushed through the dispatcher and do not wait for it.
+_STATUS_TICK_MS = 250
+
+def load_dataset_view(ds: Path, n_recent: int = 12) -> dict[str, Any]:
+    """Tk-free (worker thread): lookups for thumbnails/overlays + the newest images of ``ds``.
+
+    meta/labels come from :class:`DatasetIndex` (parsed once per file version, shared with the
+    library). Same content as the former inline ``read_jsonl`` calls; a read error leaves the maps
+    empty and is reported in ``"error"`` (logged by the caller, as before).
+    """
+    out: dict[str, Any] = {"image_to_sample": {}, "meta_by_sample": {}, "meta_by_image_rel": {},
+                           "label_dict": {}, "recent_imgs": [], "has_images": False, "error": None}
+    try:
+        idx = DatasetIndex(ds)
+        if (ds / META_JSONL).exists():
+            meta_rows = idx.meta_rows()
+            out["image_to_sample"] = {row.image_path: row.id for row in meta_rows}
+            out["meta_by_sample"] = {row.id: row for row in meta_rows}
+            out["meta_by_image_rel"] = {row.image_path: row for row in meta_rows}
+        if (ds / LABELS_JSONL).exists():
+            out["label_dict"] = {row.id: row.class_name for row in idx.label_rows()}
+    except Exception as e:
+        out["error"] = e
+    if (img_dir := ds / "images").exists():
+        out["has_images"] = True
+        out["recent_imgs"] = [str(p) for p in sorted(img_dir.glob("*.png"))[-n_recent:]]
+    return out
+
+
 class PipelineControlTab(BaseTab):
     """Tab 1: Pipeline control with enhanced monitoring."""
 
     def __init__(self, parent: ttk.Frame, sim_root: Path, state: UiState) -> None:
         super().__init__(parent, sim_root, state)
 
-        self.log_q: queue.Queue[str] = queue.Queue()
-        self.event_q: queue.Queue[dict[str, Any]] = queue.Queue()
+        # PipelineLogic only put()s into these; DispatchQueue drains them on the Tk thread
+        # through the app dispatcher (bound in build_ui) instead of an after(120) poll.
+        self.log_q: DispatchQueue = DispatchQueue()
+        self.event_q: DispatchQueue = DispatchQueue()
         self.event_log_path = self.sim_root / "outputs" / "live" / "events.jsonl"
 
         self.ui = PipelineUI(self, self.frame)
         self.logic = PipelineLogic(sim_root, self.log_q, self.event_q, self.event_log_path)
-        self.logic.ui_call = lambda fn: self.frame.after(0, fn)
+        self.logic.ui_call = self.post  # thread-safe hop onto the Tk loop
 
         self._thumb_refs = []  # keep PhotoImage references
         self._recent_imgs: list[str] = []
@@ -124,13 +158,21 @@ class PipelineControlTab(BaseTab):
         self._last_ds_size_ts: float = 0.0
         self._prev_proc_running: bool = False
         self._dataset_size_job_id: int = 0
-        self._dataset_size_q: queue.Queue[tuple[int, int, str]] = queue.Queue()
         self._milestone_thresholds = [1000, 5000, 10000]
         self._last_thumb_refresh_ts: float = 0.0
         self._thumb_refresh_min_interval_s: float = 0.35
         self._thumb_refresh_pending: bool = False
+        self._thumb_after_id: str | None = None
+        self._thumb_gen: int = 0  # bumps per thumbnail job; stale worker results are dropped
+        self._thumb_busy: bool = False
+        self._thumb_rerun: bool = False
+        self._ds_load_gen: int = 0  # bumps per dataset selection; stale index loads are dropped
+        self._status_after_id: str | None = None
+        # Stat-first cache of per-dataset manifest facts (profile id/hash) for the model dropdown.
+        self._manifest_cache = FileCache(max_entries=128)
 
         self._model_paths: list[Path] = []
+        self._model_resolved: dict[Path, Path] = {}  # path -> resolve(), filled by _refresh_models
         self._all_model_combo_values: list[str] = []
         self._model_profile_cache: dict[str, tuple[str | None, str | None]] = {}
         self._model_meta_gen: int = 0  # bumps per _refresh_models so stale background loads are dropped
@@ -161,7 +203,9 @@ class PipelineControlTab(BaseTab):
         self._wire_settings_autosave()
         self._apply_profile_model_lock()
         self.ui.var_model.trace("w", lambda *args: self._schedule_profile_compat_check())
-        self._tick_ui()
+        self.bind_queue(self.log_q, self._on_log_batch, max_items=200)
+        self.bind_queue(self.event_q, self._on_event_batch, max_items=120)
+        self._tick_status()
 
     def _ensure_initial_placeholder_dataset(self) -> None:
         runs = self.sim_root / "outputs" / "sim_data" / "runs"
@@ -953,8 +997,8 @@ class PipelineControlTab(BaseTab):
             run_specs=run_specs, run_count=run_count, dataset_mode=runtime_dataset_mode, task=effective_task,
             image_filters=image_filters,
             event_callback=self._handle_event, log_callback=self._append_log,
-            ui_update_callback=lambda: self.frame.after(0, self._after_pipeline_run_ui_update),
-            ui_reset_callback=lambda: self.frame.after(0, self._reset_ui_on_pipeline_end),
+            ui_update_callback=lambda: self.post(self._after_pipeline_run_ui_update),
+            ui_reset_callback=lambda: self.post(self._reset_ui_on_pipeline_end),
             status_vars=status_vars,
             run_complete_callback=run_complete_callback,
         )
@@ -1071,54 +1115,71 @@ class PipelineControlTab(BaseTab):
         if self._recent_imgs and self._recent_imgs[-1] == name: return
         self._recent_imgs.append(name)
         self._recent_imgs = self._recent_imgs[-12:]
-        # Rendering 12 thumbnails can be expensive; schedule refresh on UI tick.
+        # Rendering 12 thumbnails can be expensive: throttled (min interval) and decoded off the Tk thread.
         self._thumb_refresh_pending = True
+        self._schedule_thumb_refresh()
+
+    def _schedule_thumb_refresh(self) -> None:
+        """One timer per pending refresh, at most every ``_thumb_refresh_min_interval_s``."""
+        if self._thumb_after_id is not None:
+            return
+        wait_s = self._thumb_refresh_min_interval_s - (time.time() - self._last_thumb_refresh_ts)
+        try: self._thumb_after_id = self.frame.after(max(0, int(wait_s * 1000)), self._on_thumb_timer)
+        except Exception: self._thumb_after_id = None
+
+    def _on_thumb_timer(self) -> None:
+        self._thumb_after_id = None
+        self._maybe_refresh_thumbnails()
 
     def _maybe_refresh_thumbnails(self) -> None:
         if not self._thumb_refresh_pending:
             return
         now = time.time()
         if now - self._last_thumb_refresh_ts < self._thumb_refresh_min_interval_s:
+            self._schedule_thumb_refresh()
             return
         self._last_thumb_refresh_ts = now
         self._thumb_refresh_pending = False
         self._refresh_thumbnails()
 
     def _refresh_thumbnails(self) -> None:
-        self.ui.refresh_thumbnails(self._recent_imgs, self.state.dataset_dir, self._label_dict,
-                                   self._image_to_sample, self._meta_by_sample, self._meta_by_image_rel, draw_defect_overlay)
+        """Decode + overlay the recent images in a worker; only the PhotoImages are made on the Tk thread."""
+        if self._thumb_busy:
+            self._thumb_rerun = True  # coalesce: one more pass with the newest list when this one ends
+            return
+        self._thumb_busy, self._thumb_rerun = True, False
+        self._thumb_gen += 1
+        gen = self._thumb_gen
+        args = (list(self._recent_imgs), self.state.dataset_dir, self._label_dict,
+                self._image_to_sample, self._meta_by_sample, self._meta_by_image_rel, draw_defect_overlay)
+        prepare = self.ui.prepare_thumbnails
 
-    def _tick_ui(self) -> None:
-        # Keep UI responsive even under heavy log/event throughput.
-        log_batch: list[str] = []
-        for _ in range(200):
-            try:
-                log_batch.append(self.log_q.get_nowait())
-            except queue.Empty:
-                break
-        if log_batch:
-            self._append_log("".join(log_batch))
+        def on_done(prepared: Any) -> None:
+            if gen == self._thumb_gen:
+                self.ui.show_thumbnails(prepared)
 
-        for _ in range(120):
-            try:
-                self._handle_event(self.event_q.get_nowait())
-            except queue.Empty:
-                break
+        def on_finally() -> None:
+            self._thumb_busy = False
+            if self._thumb_rerun:
+                self._refresh_thumbnails()
 
+        self.quiet_tasks.run(lambda _t: prepare(*args), name="Thumbnails", on_done=on_done, on_finally=on_finally)
+
+    def _on_log_batch(self, lines: list[str]) -> None:
+        # Up to 200 lines per drain, appended as one block (keeps the UI responsive under heavy output).
+        self._append_log("".join(lines))
+
+    def _on_event_batch(self, events: list[dict[str, Any]]) -> None:
+        for evt in events: self._handle_event(evt)
+
+    def _tick_status(self) -> None:
+        """Cheap timer for state that is polled, not pushed (process alive, run buttons, dataset size)."""
         try:
-            while True:
-                job_id, size_b, ds_name = self._dataset_size_q.get_nowait()
-                if job_id == self._dataset_size_job_id:
-                    self.ui.var_ds_size.set(f"DS: {self.ui.fmt_bytes(size_b)} ({ds_name})")
-        except queue.Empty:
-            pass
-        
-        if not self.logic.is_busy():
-            if self.ui.btn_start["state"] == "disabled" or self.ui.btn_start_generate["state"] == "disabled": self.ui.set_run_buttons_state(False)
-
-        self._maybe_refresh_thumbnails()
-        self._maybe_update_stats()
-        self.frame.after(120, self._tick_ui)
+            if not self.logic.is_busy():
+                if self.ui.btn_start["state"] == "disabled" or self.ui.btn_start_generate["state"] == "disabled": self.ui.set_run_buttons_state(False)
+            self._maybe_update_stats()
+        finally:
+            self._status_after_id = self.frame.after(_STATUS_TICK_MS, self._tick_status)
 
     def _maybe_update_stats(self) -> None:
         now = time.time()
@@ -1146,8 +1207,12 @@ class PipelineControlTab(BaseTab):
         job_id = self._dataset_size_job_id
         self.ui.var_ds_size.set("DS: calculating...")
         
-        def update_ui(size_b: int) -> None:
-            self._dataset_size_q.put((job_id, size_b, ds.name))
+        def apply(size_b: int) -> None:
+            if job_id == self._dataset_size_job_id:
+                self.ui.var_ds_size.set(f"DS: {self.ui.fmt_bytes(size_b)} ({ds.name})")
+
+        def update_ui(size_b: int) -> None:  # worker thread
+            self.post(lambda: apply(size_b))
 
         self.logic.start_dataset_size_calc(ds, update_ui)
 
@@ -1332,8 +1397,11 @@ class PipelineControlTab(BaseTab):
         self._model_profile_cache.clear()
         self._model_meta_gen += 1
         gen, uncached = self._model_meta_gen, []
+        # One resolve per path; cached_checkpoint_meta is stat-first (path, mtime_ns, size) and never
+        # opens a checkpoint it has already read, so this loop is one stat per file.
+        self._model_resolved = resolved = {p: p.resolve() for p in paths}
         for p in self._model_paths:
-            key = str(p.resolve())
+            key = str(resolved[p])
             if p.is_dir(): self._model_profile_cache[key] = ("multi", None); continue
             if (meta := self.logic.cached_checkpoint_meta(p)) is None: uncached.append(p); continue
             self._model_profile_cache[key] = self._profile_from_meta(meta)
@@ -1346,11 +1414,12 @@ class PipelineControlTab(BaseTab):
                     if gen != self._model_meta_gen: return
                     self._model_profile_cache.update(res)
                     self._update_model_dropdown_for_dataset(); self._schedule_profile_compat_check()
-                try: self.frame.after(0, apply)
+                try: self.post(apply)
                 except Exception: pass
             threading.Thread(target=worker, daemon=True).start()
 
-        values = [str(p.resolve().relative_to(self.sim_root.resolve())) if p.is_relative_to(self.sim_root) else str(p) for p in paths]
+        root_resolved = self.sim_root.resolve()
+        values = [str(resolved[p].relative_to(root_resolved)) if p.is_relative_to(self.sim_root) else str(p) for p in paths]
         self._all_model_combo_values = values
         self._update_model_dropdown_for_dataset()
 
@@ -1358,19 +1427,21 @@ class PipelineControlTab(BaseTab):
         ds = self.state.dataset_dir
         values = list(self._all_model_combo_values)
         if ds:
-            profile_id = self.logic.get_dataset_profile_id(ds)
-            profile_hash = self.logic.get_dataset_profile_hash(ds)
+            profile_id, profile_hash = self._dataset_profile(ds)
             if profile_id:
                 exact, id_only, multi, legacy = [], [], [], []
+                resolved = self._model_resolved
+                root_resolved = self.sim_root.resolve()
                 for p in self._model_paths:
-                    rel_path = str(p.resolve())
+                    rp = resolved.get(p) or p.resolve()
+                    rel_path = str(rp)
                     pid, phash = self._model_profile_cache.get(rel_path, (None, None))
                     if pid == "multi" or (isinstance(pid, str) and pid.lower().startswith("multi")):
-                        try: multi.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+                        try: multi.append(str(rp.relative_to(root_resolved)))
                         except Exception: multi.append(str(p))
                         continue
                     if pid is None:
-                        try: legacy.append(str(p.resolve().relative_to(self.sim_root.resolve())))
+                        try: legacy.append(str(rp.relative_to(root_resolved)))
                         except Exception: legacy.append(str(p))
                         continue
                     if pid != profile_id: continue
@@ -1382,6 +1453,11 @@ class PipelineControlTab(BaseTab):
         if values:
             if self.ui.var_model.get().strip() not in values: self.ui.var_model.set(values[0])
         else: self.ui.var_model.set("")
+
+    def _dataset_profile(self, ds: Path) -> tuple[str | None, str | None]:
+        """(profile_id, profile_hash) of ``ds``'s manifest; parsed again only when the manifest changes."""
+        return self._manifest_cache.cached(("profile", str(ds)), (ds / DATASET_MANIFEST,),
+                                           lambda: (self.logic.get_dataset_profile_id(ds), self.logic.get_dataset_profile_hash(ds)))
 
     def _add_new_model(self) -> None:
         dss = self._selected_dataset_dirs()
@@ -1577,7 +1653,7 @@ class PipelineControlTab(BaseTab):
                         try: self.logic.read_checkpoint_meta(model_path)
                         finally:
                             def done() -> None: self._compat_loading.discard(key); self._schedule_profile_compat_check(0)
-                            try: self.frame.after(0, done)
+                            try: self.post(done)
                             except Exception: pass
                     threading.Thread(target=worker, daemon=True).start()
                 return
@@ -1637,16 +1713,9 @@ class PipelineControlTab(BaseTab):
         self.state.dataset_dir, self._recent_imgs = ds, []
         self._label_dict, self._image_to_sample, self._meta_by_sample, self._meta_by_image_rel = {}, {}, {}, {}
         self._start_dataset_size_calc(ds)
-
-        try:
-            if (meta_path := ds / META_JSONL).exists():
-                meta_rows = read_jsonl(meta_path, MetaRow)
-                self._image_to_sample = {row.image_path: row.id for row in meta_rows}
-                self._meta_by_sample = {row.id: row for row in meta_rows}
-                self._meta_by_image_rel = {row.image_path: row for row in meta_rows}
-            if (labels_path := ds / LABELS_JSONL).exists():
-                self._label_dict = {row.id: row.class_name for row in read_jsonl(labels_path, LabelRow)}
-        except Exception as e: _LOG.warning("Failed to load metadata/labels: %s", e)
+        # meta/labels (DatasetIndex, stat-cached) and the image listing are read in a worker; the
+        # thumbnails follow when they are in (S6). The rest below only reads the small manifest.
+        self._start_dataset_index_load(ds)
 
         try:
             if (manifest_path := ds / DATASET_MANIFEST).exists():
@@ -1666,15 +1735,27 @@ class PipelineControlTab(BaseTab):
 
         self._schedule_profile_compat_check(); self._apply_dataset_settings(ds)
 
-        if (img_dir := ds / "images").exists():
-            for p in sorted(img_dir.glob("*.png"))[-12:]: self._recent_imgs.append(str(p))
-            self._refresh_thumbnails()
-
         try: self.parent.event_generate("<<DatasetChanged>>", when="tail")
         except Exception: pass
         
         try: self._refresh_models()
         except Exception: pass
+
+    def _start_dataset_index_load(self, ds: Path) -> None:
+        self._ds_load_gen += 1
+        gen = self._ds_load_gen
+
+        def on_done(res: dict[str, Any]) -> None:
+            if gen != self._ds_load_gen or self.state.dataset_dir != ds: return  # another dataset was picked
+            if res.get("error"): _LOG.warning("Failed to load metadata/labels: %s", res["error"])
+            self._image_to_sample, self._meta_by_sample = res["image_to_sample"], res["meta_by_sample"]
+            self._meta_by_image_rel, self._label_dict = res["meta_by_image_rel"], res["label_dict"]
+            if res["has_images"]:
+                # Images pushed by a run in the meantime stay newest.
+                self._recent_imgs = (res["recent_imgs"] + [p for p in self._recent_imgs if p not in res["recent_imgs"]])[-12:]
+                self._refresh_thumbnails()
+
+        self.quiet_tasks.run(lambda _t: load_dataset_view(ds), name="Dataset index", on_done=on_done)
 
     def _delete_dataset(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
@@ -1843,7 +1924,7 @@ class PipelineControlTab(BaseTab):
                     for fn in filenames: link_or_copy_file(Path(dirpath) / fn, dst / rel / fn)
                 self.log_q.put(f"[snapshot dataset] done: {dst}\n")
             except Exception as e: self.log_q.put(f"[snapshot dataset] failed: {e}\n"); shutil.rmtree(dst, ignore_errors=True)
-            finally: self.frame.after(0, self._refresh_datasets)
+            finally: self.post(self._refresh_datasets)
         threading.Thread(target=worker, daemon=True).start()
 
     def _rename_dataset_selected(self) -> None:
@@ -1967,12 +2048,12 @@ class PipelineControlTab(BaseTab):
                             cmd = chain_commands([train_argv(out_ds, model_out)])
                             self._run_simple_cmd([cmd], cleanup_dir=out_ds if delete_after else None)
 
-                        self.frame.after(0, kick_off_train)
+                        self.post(kick_off_train)
                     except Exception as e:
                         self.log_q.put(f"[merge] failed: {e}\n")
                         if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
                         def _merge_failed_ui() -> None: self.logic.loop_running = False
-                        self.frame.after(0, _merge_failed_ui)
+                        self.post(_merge_failed_ui)
                 self.ui.set_run_buttons_state(True)
                 try: threading.Thread(target=worker, daemon=True).start()
                 except Exception: self.logic.loop_running = False; raise

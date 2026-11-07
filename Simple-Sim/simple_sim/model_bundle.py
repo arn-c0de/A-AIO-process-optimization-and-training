@@ -15,6 +15,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from simple_sim.io_utils import atomic_write_json, read_json
 
@@ -52,7 +53,10 @@ def _safe_profile_filename(profile_id: str) -> str:
     return s
 
 
-def bundle_checkpoint_path(bundle_dir: Path, profile_id: str, *, kind: str = "best") -> Path:
+CheckpointKind = Literal["best", "last"]
+
+
+def bundle_checkpoint_path(bundle_dir: Path, profile_id: str, *, kind: CheckpointKind = "best") -> Path:
     """Return the checkpoint path inside a bundle for the given profile.
 
     kind:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import queue
 import re
 from pathlib import Path
 
@@ -19,6 +18,7 @@ if __package__ in {None, ""}:
     from tools.profile_editor.preview_3d import Preview3D
     from tools.profile_editor.state_store import EditorStateStore
     from tools.profile_editor.system_monitor import format_system_stats, read_system_stats
+    from gui.core.tasks import UiDispatcher
     from gui.utils.system_stats import SystemStatsSampler
     from tools.profile_editor.sync_controller import SyncController
     from tools.profile_editor.yaml_editor import YamlEditorPanel
@@ -31,6 +31,7 @@ else:
     from .preview_3d import Preview3D
     from .state_store import EditorStateStore
     from .system_monitor import format_system_stats, read_system_stats
+    from gui.core.tasks import UiDispatcher
     from gui.utils.system_stats import SystemStatsSampler
     from .sync_controller import SyncController
     from .yaml_editor import YamlEditorPanel
@@ -48,8 +49,8 @@ class ProfileEditorApp:
         self.store.add_listener(self._on_state_event)
 
         self._hq_after_id: str | None = None
-        # Worker thread posts (status, image_path) here; drained on the Tk thread.
-        self._hq_status_queue: queue.Queue[tuple[str, Path | None]] = queue.Queue()
+        # The Blender worker thread posts status callbacks here; they run on the Tk thread.
+        self._dispatcher = UiDispatcher(interval_ms=100)
         self._worker = BlenderLivePreviewWorker(self.sim_root, self._on_hq_status_from_worker)
         self._closed = False
         self._stats_sampler = SystemStatsSampler()
@@ -65,7 +66,7 @@ class ProfileEditorApp:
         self._load_initial_choices()
         self._schedule_registry_poll()
         self._schedule_system_stats()
-        self._poll_hq_status_queue()
+        self._dispatcher.attach(self.root)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -451,18 +452,7 @@ class ProfileEditorApp:
     def _on_hq_status_from_worker(self, status: str, image_path: Path | None) -> None:
         # Called on the Blender worker thread: never touch Tk here.
         if not self._closed:
-            self._hq_status_queue.put((status, image_path))
-
-    def _poll_hq_status_queue(self) -> None:
-        if self._closed:
-            return
-        while True:
-            try:
-                status, image_path = self._hq_status_queue.get_nowait()
-            except queue.Empty:
-                break
-            self._apply_hq_status(status, image_path)
-        self.root.after(100, self._poll_hq_status_queue)
+            self._dispatcher.post(lambda: None if self._closed else self._apply_hq_status(status, image_path))
 
     def _apply_hq_status(self, status: str, image_path: Path | None) -> None:
         if status == "rendering":
@@ -572,6 +562,7 @@ class ProfileEditorApp:
             return
         self._flush_session_settings()
         self._closed = True
+        self._dispatcher.detach()
         self._stats_sampler.stop()
         try:
             self._worker.stop()

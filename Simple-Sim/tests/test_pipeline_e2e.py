@@ -8,7 +8,7 @@ import sys
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.generate import generate_dataset
+from simple_sim.generation.dataset import generate_dataset
 from tools.validate_dataset import validate_dataset
 
 

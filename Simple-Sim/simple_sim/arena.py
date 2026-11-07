@@ -7,7 +7,8 @@ Reads ``outputs/models/arena.json`` (tracked models), scans eval/batch reports
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,7 @@ from typing import Any
 from simple_sim.coerce import as_int
 from simple_sim.io_utils import format_bytes, path_size_bytes, read_json, rel_to
 from simple_sim.model_bundle import list_bundle_checkpoints, read_bundle_meta
-from simple_sim.reports import load_reports, metric_value, report_search_dirs, report_timestamp
+from simple_sim.reports import Report, load_reports, metric_value, report_path, report_search_dirs, report_timestamp
 from simple_sim.svg_charts import write_svg_barh, write_svg_heatmap, write_svg_pie_with_legend
 
 REPORT_NAME = "ARENA_REPORT.md"
@@ -35,6 +36,30 @@ class BestByDataset:
     last_ts: float
     report_path: str
     extra: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ModelRanking:
+    """One row of the overall ranking (:func:`overall_ranking`): a tracked model's averages."""
+
+    model_abs: str
+    model_rel: str
+    model_name: str
+    type: str  # "Bundle" | "Single"
+    avg_acc: float | None
+    avg_f1: float | None
+    datasets: int
+    best_ds: str
+    worst_ds: str
+    last_ts: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """The former ranking dict (same keys, same order)."""
+        return asdict(self)
+
+
+#: Keys of a ranking in :func:`write_arena_report`'s ``top`` summary.
+TOP_KEYS = ("model_name", "model_rel", "type", "avg_acc", "avg_f1", "datasets")
 
 
 def detect_sim_root(start: Path) -> Path | None:
@@ -81,7 +106,7 @@ def load_arena(sim_root: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
     return tracked, missing
 
 
-def _critical_fn_summary(report: dict[str, Any]) -> str:
+def _critical_fn_summary(report: Mapping[str, Any]) -> str:
     d = (report.get("metrics") or {}).get("critical_fn_rates") or {}
     if not isinstance(d, dict) or not d:
         return "-"
@@ -165,10 +190,13 @@ def _match_tracked(tracked: dict[str, dict[str, Any]], model_abs: Path) -> str |
 
 
 def best_rows_by_model(
-    sim_root: Path, tracked: dict[str, dict[str, Any]], reports: list[dict[str, Any]]
+    sim_root: Path, tracked: dict[str, dict[str, Any]], reports: list[Report] | list[Mapping[str, Any]]
 ) -> dict[str, list[BestByDataset]]:
-    """Best report per (tracked model, dataset name), grouped by tracked model key."""
-    per_model_dataset: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    """Best report per (tracked model, dataset name), grouped by tracked model key.
+
+    *reports* are :class:`~simple_sim.reports.Report` objects (or legacy dicts with ``"_path"``).
+    """
+    per_model_dataset: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     for r in reports:
         abs_mp = _resolve(sim_root, str(r.get("model_path") or "").strip())
         if abs_mp is None:
@@ -213,7 +241,7 @@ def best_rows_by_model(
                 seen=as_int(best.get("seen_samples") or best.get("test_size"), None),
                 dataset_size_bytes=ds_size_b,
                 last_ts=max(stamps),
-                report_path=str(best.get("_path") or ""),
+                report_path=report_path(best) or "",
                 extra={
                     "critical_fn": _critical_fn_summary(best),
                     "epoch": best.get("checkpoint_epoch") or best.get("epoch"),
@@ -225,9 +253,9 @@ def best_rows_by_model(
     return model_to_rows
 
 
-def overall_ranking(sim_root: Path, model_to_rows: dict[str, list[BestByDataset]]) -> list[dict[str, Any]]:
+def overall_ranking(sim_root: Path, model_to_rows: dict[str, list[BestByDataset]]) -> list[ModelRanking]:
     """Per-model averages, sorted by avg accuracy, avg F1, recency, then name."""
-    overall: list[dict[str, Any]] = []
+    overall: list[ModelRanking] = []
     for model_abs, rows in model_to_rows.items():
         with_acc = [r for r in rows if r.accuracy is not None]
         f1s = [r.f1 for r in rows if r.f1 is not None]
@@ -239,25 +267,25 @@ def overall_ranking(sim_root: Path, model_to_rows: dict[str, list[BestByDataset]
             worst_ds = f"{worst_r.dataset_name} ({worst_r.accuracy:.4f})"
         p = Path(model_abs)
         overall.append(
-            {
-                "model_abs": model_abs,
-                "model_rel": rel_to(sim_root, p),
-                "model_name": p.name,
-                "type": "Bundle" if p.is_dir() else "Single",
-                "avg_acc": sum(r.accuracy for r in with_acc) / len(with_acc) if with_acc else None,
-                "avg_f1": sum(f1s) / len(f1s) if f1s else None,
-                "datasets": len({r.dataset_name for r in rows}),
-                "best_ds": best_ds,
-                "worst_ds": worst_ds,
-                "last_ts": max((r.last_ts for r in rows), default=0.0),
-            }
+            ModelRanking(
+                model_abs=model_abs,
+                model_rel=rel_to(sim_root, p),
+                model_name=p.name,
+                type="Bundle" if p.is_dir() else "Single",
+                avg_acc=sum(r.accuracy for r in with_acc) / len(with_acc) if with_acc else None,
+                avg_f1=sum(f1s) / len(f1s) if f1s else None,
+                datasets=len({r.dataset_name for r in rows}),
+                best_ds=best_ds,
+                worst_ds=worst_ds,
+                last_ts=max((r.last_ts for r in rows), default=0.0),
+            )
         )
     overall.sort(
         key=lambda it: (
-            -(float(it["avg_acc"]) if it["avg_acc"] is not None else -1.0),
-            -(float(it["avg_f1"]) if it["avg_f1"] is not None else -1.0),
-            -float(it["last_ts"] or 0.0),
-            str(it["model_name"]),
+            -(float(it.avg_acc) if it.avg_acc is not None else -1.0),
+            -(float(it.avg_f1) if it.avg_f1 is not None else -1.0),
+            -float(it.last_ts or 0.0),
+            str(it.model_name),
         )
     )
     return overall
@@ -273,7 +301,7 @@ def _top_with_other(items: list[tuple[str, int]]) -> list[tuple[str, int]]:
 
 def write_charts(
     assets_dir: Path,
-    overall: list[dict[str, Any]],
+    overall: list[ModelRanking],
     *,
     dataset_sizes: list[tuple[str, int]],
     heatmap_models: list[str],
@@ -292,7 +320,7 @@ def write_charts(
         ("avg_acc", "Top Avg Accuracy", "top_avg_accuracy.svg", False),
         ("avg_f1", "Top Avg F1", "top_avg_f1.svg", True),
     ):
-        items = [(it["model_name"], it[metric_key]) for it in overall if it.get(metric_key) is not None]
+        items = [(it.model_name, getattr(it, metric_key)) for it in overall if getattr(it, metric_key) is not None]
         if sort_desc:
             items.sort(key=lambda t: -float(t[1]))
         items = items[:15]
@@ -307,8 +335,8 @@ def write_charts(
 
     model_sizes = []
     for it in overall:
-        p = Path(str(it["model_abs"]))
-        model_sizes.append((str(it.get("model_name") or p.name), path_size_bytes(p)))
+        p = Path(str(it.model_abs))
+        model_sizes.append((str(it.model_name or p.name), path_size_bytes(p)))
     size_items = _top_with_other(model_sizes)
     if size_items:
         write_svg_pie_with_legend(assets_dir / "model_size_pie.svg", title="Model Storage Breakdown", items=size_items)
@@ -341,11 +369,11 @@ def _dataset_stats(rows: list[tuple[str, BestByDataset]]) -> tuple[int, int]:
 def render_markdown(
     sim_root: Path,
     tracked: dict[str, dict[str, Any]],
-    reports: list[dict[str, Any]],
+    reports: list[Report] | list[Mapping[str, Any]],
     *,
     missing: list[str],
     assets_dir: Path | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[ModelRanking]]:
     """Render the report markdown (writing charts to *assets_dir*); return ``(markdown, overall_ranking)``."""
     assets_dir = assets_dir or (sim_root / "ARENA_REPORT_assets")
     model_to_rows = best_rows_by_model(sim_root, tracked, reports)
@@ -371,7 +399,7 @@ def render_markdown(
         dataset_chart_items.append((f"{ds_name} ({samples} samples)" if samples > 0 else ds_name, int(size_b)))
 
     # Heatmap: top models by overall ranking x top datasets by sample count.
-    top_model_abs = [str(it["model_abs"]) for it in overall[:12]]
+    top_model_abs = [str(it.model_abs) for it in overall[:12]]
     top_datasets = [ds for ds, _cnt in sorted(dataset_samples_map.items(), key=lambda t: -int(t[1]))]
     if not top_datasets:
         top_datasets = sorted(dataset_to_models.keys())
@@ -388,7 +416,7 @@ def render_markdown(
     )
 
     dataset_order = sorted(dataset_to_models.keys())
-    model_order = [str(it["model_abs"]) for it in overall]
+    model_order = [str(it.model_abs) for it in overall]
 
     used_anchor_ids: set[str] = set()
 
@@ -472,19 +500,19 @@ def render_markdown(
     lines.append("| Rank | Model | Type | Avg Accuracy | Avg F1 | Datasets Tested | Best Dataset | Worst Dataset | Last Run |")
     lines.append("|---:|---|---|---:|---:|---:|---|---|---|")
     for i, it in enumerate(overall, start=1):
-        rank_s, model_s = _rank_cells(i, str(it["model_name"]))
+        rank_s, model_s = _rank_cells(i, str(it.model_name))
         lines.append(
             _table_row(
                 [
                     rank_s,
                     model_s,
-                    str(it["type"]),
-                    _fmt4(it["avg_acc"]),
-                    _fmt4(it["avg_f1"]),
-                    str(int(it["datasets"])),
-                    _md_escape(str(it["best_ds"])),
-                    _md_escape(str(it["worst_ds"])),
-                    _md_escape(_fmt_ts(float(it["last_ts"] or 0.0))),
+                    str(it.type),
+                    _fmt4(it.avg_acc),
+                    _fmt4(it.avg_f1),
+                    str(int(it.datasets)),
+                    _md_escape(str(it.best_ds)),
+                    _md_escape(str(it.worst_ds)),
+                    _md_escape(_fmt_ts(float(it.last_ts or 0.0))),
                 ]
             )
         )
@@ -528,9 +556,9 @@ def render_markdown(
     lines.append(f'<a id="{aid_bundle}"></a>')
     lines.append("## Bundle Details")
     lines.append("")
-    bundles = [it for it in overall if it["type"] == "Bundle"]
+    bundles = [it for it in overall if it.type == "Bundle"]
     for it in bundles:
-        bdir = Path(it["model_abs"])
+        bdir = Path(it.model_abs)
         det = _bundle_details(bdir)
         lines.append(f"### {_md_escape(bdir.name)}")
         lines.append(f"- **Profiles:** {', '.join(_md_escape(p) for p in det.get('profiles') or []) or '-'}")
@@ -545,10 +573,10 @@ def render_markdown(
     lines.append("## Per-Model Detail Cards")
     lines.append("")
     for it in overall:
-        model_abs = it["model_abs"]
+        model_abs = it.model_abs
         rows_m = sorted(model_to_rows.get(model_abs, []), key=lambda r: r.dataset_name)
         lines.append(f'<a id="{model_anchor[model_abs]}"></a>')
-        lines.append(f"### {_md_escape(Path(model_abs).name)} ({it['type']})")
+        lines.append(f"### {_md_escape(Path(model_abs).name)} ({it.type})")
         lines.append("")
         lines.append("| Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |")
         lines.append("|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
@@ -611,7 +639,7 @@ def write_arena_report(sim_root: Path, out_path: Path | None = None, *, top_n: i
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     tracked, missing = load_arena(sim_root)
-    overall: list[dict[str, Any]] = []
+    overall: list[ModelRanking] = []
     if not tracked:
         out_path.write_text(
             "# Model Arena Report\n"
@@ -632,7 +660,7 @@ def write_arena_report(sim_root: Path, out_path: Path | None = None, *, top_n: i
         "n_models": len(overall),
         "n_missing": len(missing),
         "top": [
-            {k: it[k] for k in ("model_name", "model_rel", "type", "avg_acc", "avg_f1", "datasets")}
+            {k: getattr(it, k) for k in TOP_KEYS}
             for it in overall[:top_n]
         ],
     }

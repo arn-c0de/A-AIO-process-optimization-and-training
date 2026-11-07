@@ -1,20 +1,27 @@
 """Single agent-friendly entrypoint: ``python -m simple_sim <command> [args...]``.
 
-Commands dispatch to the existing scripts/tools as a subprocess with the same Python
-interpreter; all remaining arguments are passed through unchanged. Two built-ins:
+Commands are registered in :data:`COMMANDS`. Library commands (:mod:`simple_sim.commands`) run
+in-process via their ``main(argv)``; the helper tools under ``tools/`` still run as a subprocess
+with the same Python interpreter. All remaining arguments are passed through unchanged. Two
+built-ins:
 
 * ``commands [--json]`` - list commands, their one-line description and ``--json`` support
 * ``status [--json] [--root DIR]`` - profiles, run configs, datasets, models and latest reports
 
-This module is torch-free and tk-free so it can be used for discovery anywhere.
+:func:`argv_for` builds the command line other programs (the GUI, shell launchers) should spawn.
+This module is torch-free and tk-free so it can be used for discovery anywhere: listing reads the
+command sources, it does not import them.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import importlib
+import importlib.util
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,35 +36,65 @@ from simple_sim.reports import best_report, load_reports, metric_value, report_s
 
 SIM_ROOT = Path(__file__).resolve().parents[1]
 
-# command name -> script path relative to SIM_ROOT (descriptions come from the script docstring)
-COMMANDS: dict[str, str] = {
-    "generate": "scripts/generate.py",
-    "generate-profile-dataset": "scripts/generate_profile_dataset.py",
-    "validate": "tools/validate_dataset.py",
-    "train": "scripts/train.py",
-    "train-profile": "scripts/train_profile.py",
-    "eval": "scripts/eval.py",
-    "eval-profile": "scripts/eval_profile.py",
-    "predict": "scripts/predict.py",
-    "predict-two-stage": "scripts/predict_two_stage.py",
-    "sample-check": "scripts/sample_check.py",
-    "batch-predict": "scripts/batch_predict.py",
-    "arena-report": "scripts/arena_report.py",
-    "render-debug-previews": "scripts/render_debug_previews.py",
-    "create-multi-dataset": "tools/create_multi_dataset.py",
-    "backfill-manifest": "tools/backfill_manifest.py",
-    "backfill-labels": "tools/backfill_labels_v2.py",
-    "update-sample-gallery": "tools/update_sample_gallery.py",
-    "gui-screenshots": "tools/gui_screenshots.py",
+PROG = "python -m simple_sim"
+
+
+@dataclass(frozen=True, slots=True)
+class CommandSpec:
+    """One ``python -m simple_sim`` command.
+
+    ``module`` (``simple_sim.commands.<name>``) runs in-process: its ``main(argv, prog=...)`` is
+    called, its docstring is the description and its ``SUPPORTS_JSON`` constant the ``--json``
+    flag. ``script`` (relative to :data:`SIM_ROOT`) is the file users can also run directly: the
+    ``scripts/*.py`` shim of a module command, or a ``tools/*.py`` script that is dispatched as a
+    subprocess (description from its docstring, ``--json`` support detected from its source).
+    """
+
+    name: str
+    script: str
+    module: str | None = None
+
+
+def _library(name: str) -> CommandSpec:
+    stem = name.replace("-", "_")
+    return CommandSpec(name, f"scripts/{stem}.py", f"simple_sim.commands.{stem}")
+
+
+def _tool(name: str, script: str) -> CommandSpec:
+    return CommandSpec(name, script)
+
+
+_SPECS = [
+    _library("generate"),
+    _library("generate-profile-dataset"),
+    _tool("validate", "tools/validate_dataset.py"),
+    _library("train"),
+    _library("train-profile"),
+    _library("eval"),
+    _library("eval-profile"),
+    _library("predict"),
+    _library("predict-two-stage"),
+    _library("sample-check"),
+    _library("batch-predict"),
+    _library("arena-report"),
+    _library("render-debug-previews"),
+    _tool("create-multi-dataset", "tools/create_multi_dataset.py"),
+    _tool("backfill-manifest", "tools/backfill_manifest.py"),
+    _tool("backfill-labels", "tools/backfill_labels_v2.py"),
+    _tool("update-sample-gallery", "tools/update_sample_gallery.py"),
+    _tool("gui-screenshots", "tools/gui_screenshots.py"),
     # sim-to-real helpers (real camera crops vs. the synthetic look)
-    "sim-to-real": "tools/sim_to_real.py",
-    "calibrate-camera": "tools/calibrate_camera.py",
-    "look-stats": "tools/look_stats.py",
-    "look-montage": "tools/look_montage.py",
-    "real-crops": "tools/real_crops.py",
-    "eval-real": "tools/eval_real.py",
-    "mix-real": "tools/mix_real.py",
-}
+    _tool("sim-to-real", "tools/sim_to_real.py"),
+    _tool("calibrate-camera", "tools/calibrate_camera.py"),
+    _tool("look-stats", "tools/look_stats.py"),
+    _tool("look-montage", "tools/look_montage.py"),
+    _tool("real-crops", "tools/real_crops.py"),
+    _tool("eval-real", "tools/eval_real.py"),
+    _tool("mix-real", "tools/mix_real.py"),
+]
+
+#: command name -> :class:`CommandSpec`
+COMMANDS: dict[str, CommandSpec] = {c.name: c for c in _SPECS}
 
 BUILTINS: dict[str, str] = {
     "commands": "List available commands (name, script, description, --json support).",
@@ -69,27 +106,55 @@ BUILTINS: dict[str, str] = {
 # commands
 # ---------------------------------------------------------------------------
 
-def command_info(name: str, script: str, root: Path = SIM_ROOT) -> dict[str, Any]:
-    """Describe one dispatched command by reading (not importing) its script source."""
-    path = root / script
+def _module_source(module: str) -> Path | None:
+    """File of *module* without importing it (only its parent packages are imported)."""
     try:
-        src = path.read_text(encoding="utf-8")
-        doc = ast.get_docstring(ast.parse(src)) or ""
+        spec = importlib.util.find_spec(module)
+    except (ImportError, ValueError):
+        return None
+    return Path(spec.origin) if spec is not None and spec.origin else None
+
+
+def _constant(tree: ast.Module, name: str) -> Any:
+    """Value of a top-level ``NAME = <literal>`` assignment (None when absent)."""
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            try:
+                return ast.literal_eval(node.value)
+            except ValueError:
+                return None
+    return None
+
+
+def command_info(name: str, spec: CommandSpec | str, root: Path = SIM_ROOT) -> dict[str, Any]:
+    """Describe one command by reading (not importing) its source."""
+    if isinstance(spec, str):  # former signature: (name, script path)
+        spec = CommandSpec(name, spec)
+    source = _module_source(spec.module) if spec.module else root / spec.script
+    try:
+        src = source.read_text(encoding="utf-8") if source is not None else ""
+        tree = ast.parse(src)
+        doc = ast.get_docstring(tree) or ""
     except (OSError, SyntaxError, ValueError):
-        src, doc = "", ""
+        src, tree, doc = "", None, ""
+    if spec.module:
+        supports_json = bool(tree is not None and _constant(tree, "SUPPORTS_JSON"))
+    else:
+        supports_json = "add_json_flag" in src
     return {
         "name": name,
-        "script": script,
+        "script": spec.script,
+        "module": spec.module,
         "description": doc.strip().splitlines()[0] if doc.strip() else "",
-        "supports_json": "add_json_flag" in src,
-        "exists": path.is_file(),
+        "supports_json": supports_json,
+        "exists": source is not None and source.is_file() and (root / spec.script).is_file(),
     }
 
 
 def list_commands(root: Path = SIM_ROOT) -> list[dict[str, Any]]:
     """All commands: built-ins first, then dispatched scripts."""
     out: list[dict[str, Any]] = [
-        {"name": n, "script": None, "description": d, "supports_json": True, "exists": True}
+        {"name": n, "script": None, "module": None, "description": d, "supports_json": True, "exists": True}
         for n, d in BUILTINS.items()
     ]
     out.extend(command_info(n, s, root) for n, s in COMMANDS.items())
@@ -97,7 +162,7 @@ def list_commands(root: Path = SIM_ROOT) -> list[dict[str, Any]]:
 
 
 def _cmd_commands(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m simple_sim commands", description=BUILTINS["commands"])
+    parser = argparse.ArgumentParser(prog=f"{PROG} commands", description=BUILTINS["commands"])
     add_json_flag(parser)
     args = parser.parse_args(argv)
     cmds = list_commands()
@@ -215,7 +280,7 @@ def collect_status(root: Path = SIM_ROOT) -> dict[str, Any]:
 
 
 def _cmd_status(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="python -m simple_sim status", description=BUILTINS["status"])
+    parser = argparse.ArgumentParser(prog=f"{PROG} status", description=BUILTINS["status"])
     parser.add_argument("--root", default=str(SIM_ROOT), help="Simple-Sim root to inspect (default: this checkout)")
     add_json_flag(parser)
     args = parser.parse_args(argv)
@@ -247,13 +312,48 @@ def _cmd_status(argv: list[str]) -> int:
 # ---------------------------------------------------------------------------
 
 def _usage() -> str:
-    lines = ["usage: python -m simple_sim <command> [args...]", "", "commands:"]
+    lines = [f"usage: {PROG} <command> [args...]", "", "commands:"]
     width = max(len(n) for n in [*BUILTINS, *COMMANDS])
     for c in list_commands():
         lines.append(f"  {c['name']:<{width}}  {c['description']}")
     lines += ["", "Run 'python -m simple_sim <command> --help' for command options.",
               "Most commands accept --json (see 'commands --json')."]
     return "\n".join(lines)
+
+
+def argv_for(command: str, *args: Any, python: str | None = None, **options: Any) -> list[str]:
+    """Command line that runs ``python -m simple_sim <command>`` with the current interpreter.
+
+    *args* are appended as they are; each keyword becomes ``--<name-with-dashes>``: ``True`` adds
+    the bare flag, ``False``/``None`` omit it, anything else adds ``--name value``. Callers that
+    spawn commands (GUI, launchers) use this instead of hard-coding ``.venv/bin/python
+    scripts/<name>.py``, so the venv and the installed package are always the ones in use.
+    """
+    if command not in COMMANDS and command not in BUILTINS:
+        raise KeyError(f"Unknown command: {command}")
+    out = [python or sys.executable, "-m", "simple_sim", command, *(str(a) for a in args)]
+    for key, value in options.items():
+        if value is None or value is False:
+            continue
+        flag = "--" + key.replace("_", "-")
+        out.append(flag) if value is True else out.extend([flag, str(value)])
+    return out
+
+
+def run_command(name: str, argv: list[str]) -> int:
+    """Run registered command *name* with *argv*; return its exit status."""
+    spec = COMMANDS[name]
+    if spec.module is None:
+        return subprocess.call([sys.executable, str(SIM_ROOT / spec.script), *argv])
+    mod = importlib.import_module(spec.module)
+    try:
+        return int(mod.main(argv, prog=f"{PROG} {name}") or 0)
+    except SystemExit as exc:  # argparse --help / usage errors, UsageError, run_cli failures
+        code = exc.code
+        if code is None or isinstance(code, int):
+            return int(code or 0)
+        print(code, file=sys.stderr)
+        return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -266,11 +366,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_commands(rest)
     if name == "status":
         return _cmd_status(rest)
-    script = COMMANDS.get(name)
-    if script is None:
+    if name not in COMMANDS:
         print(f"Unknown command: {name}\n\n{_usage()}", file=sys.stderr)
         return 2
-    return subprocess.call([sys.executable, str(SIM_ROOT / script), *rest])
+    return run_command(name, rest)
 
 
 if __name__ == "__main__":

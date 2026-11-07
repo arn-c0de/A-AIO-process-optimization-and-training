@@ -167,3 +167,19 @@ def parse_result(stdout: str) -> dict[str, Any] | None:
         if line.startswith(RESULT_JSON_PREFIX):
             return json.loads(line[len(RESULT_JSON_PREFIX):])
     return None
+
+
+def parse_result_line(line: str) -> dict[str, Any] | None:
+    """The result object if *line* (one streamed stdout line) is a result line, else ``None``.
+
+    For callers that stream a command's output line by line (GUI) instead of collecting stdout.
+    Malformed JSON is treated as "not a result line".
+    """
+    line = line.strip()
+    if not line.startswith(RESULT_JSON_PREFIX.strip()):
+        return None
+    try:
+        obj = json.loads(line[len(RESULT_JSON_PREFIX.strip()):])
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None

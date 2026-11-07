@@ -9,7 +9,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.generate import generate_dataset
+from simple_sim.generation.dataset import generate_dataset
 from simple_sim.manifest import read_dataset_manifest
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, write_jsonl
 from tools.backfill_labels_v2 import backfill_labels

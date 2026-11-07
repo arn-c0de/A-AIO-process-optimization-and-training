@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from simple_sim.cli_utils import add_json_flag, run_cli  # noqa: E402
-from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile  # noqa: E402
+from simple_sim.manifest import load_dataset_manifest, resolve_dataset_profile  # noqa: E402
 from simple_sim.schema import LabelRow, read_jsonl, write_jsonl  # noqa: E402
 
 
@@ -53,8 +53,8 @@ def backfill_labels(data_dir: Path) -> int:
         print("Labels are already v2. Nothing to do.")
         return 0
 
-    manifest = read_dataset_manifest(manifest_path)
-    mver = int(manifest.get("manifest_version", 1) or 1)
+    manifest = load_dataset_manifest(manifest_path)
+    mver = manifest.version
     if mver != 1:
         raise ValueError(
             f"{manifest_path} is a multi-profile manifest (manifest_version={mver}); "

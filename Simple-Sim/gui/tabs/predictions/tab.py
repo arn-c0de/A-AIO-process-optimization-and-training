@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
-import queue
 from tkinter import ttk
 from pathlib import Path
 from typing import Any
 
 from gui import dialogs
+from gui.core.tasks import DispatchQueue
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_dataset_labels
 from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
+from simple_sim.cli_utils import parse_result_line
 
 from .ui import PredictionsUI
 from .logic import PredictionsLogic
@@ -21,7 +22,8 @@ from .logic import PredictionsLogic
 class PredictionsTab(BaseTab):
     def __init__(self, parent: ttk.Frame, sim_root: Path, state: UiState) -> None:
         super().__init__(parent, sim_root, state)
-        self.log_q: queue.Queue[str] = queue.Queue()
+        # PredictionsLogic only put()s; DispatchQueue drains on the Tk thread (no after() poll).
+        self.log_q: DispatchQueue = DispatchQueue()
         self.ui = PredictionsUI(self, self.frame)
         self.logic = PredictionsLogic(sim_root, self.log_q)
 
@@ -36,7 +38,6 @@ class PredictionsTab(BaseTab):
         self._dataset_dirs: list[Path] = []
         self._dataset_by_label: dict[str, Path] = {}
 
-        self._ui_tick_id: str | None = None
 
     def build_ui(self) -> None:
         self.ui.build_ui()
@@ -53,7 +54,7 @@ class PredictionsTab(BaseTab):
         self._wire_settings_autosave()
         self._update_multi_sel_label()
         self._apply_multi_mode_ui()
-        self._tick_ui()
+        self.bind_queue(self.log_q, self._on_log_lines)
 
     def on_dataset_changed(self) -> None:
         if not self.state.dataset_dir:
@@ -190,20 +191,22 @@ class PredictionsTab(BaseTab):
     def _active_data_dir(self) -> Path | None:
         return self._active_dataset_dir or self.state.dataset_dir
 
-    def _tick_ui(self) -> None:
-        while True:
-            try:
-                line = self.log_q.get_nowait()
-                self.ui.append_log(line)
-                if "Report saved to:" in line:
-                    p = line.split("Report saved to:", 1)[-1].strip()
-                    self.ui.var_report_path.set(f"report: {p}")
-                if "Predictions saved to:" in line:
-                    p = line.split("Predictions saved to:", 1)[-1].strip()
-                    self.ui.var_preds_path.set(f"preds: {p}")
-            except queue.Empty:
-                break
-        self._ui_tick_id = self.frame.after(150, self._tick_ui)
+    def _on_log_lines(self, lines: list[str]) -> None:
+        for line in lines:
+            self.ui.append_log(line)
+            result = parse_result_line(line)  # batch-predict --json: the machine-readable result (D22)
+            if result is not None:
+                if result.get("report_path"):
+                    self.ui.var_report_path.set(f"report: {result['report_path']}")
+                if result.get("preds_path"):
+                    self.ui.var_preds_path.set(f"preds: {result['preds_path']}")
+                continue
+            if "Report saved to:" in line:  # older output without a result line
+                p = line.split("Report saved to:", 1)[-1].strip()
+                self.ui.var_report_path.set(f"report: {p}")
+            if "Predictions saved to:" in line:
+                p = line.split("Predictions saved to:", 1)[-1].strip()
+                self.ui.var_preds_path.set(f"preds: {p}")
 
     def _stop_predictions(self) -> None:
         self.logic.stop_predictions()
@@ -267,7 +270,7 @@ class PredictionsTab(BaseTab):
             bool(self.ui.chk_auto_train_bundle.get()),
             pm_path,
             # Called from the worker thread: hop onto the Tk main loop before touching widgets.
-            lambda *res: self.frame.after(0, self._on_prediction_complete, *res),
+            lambda *res: self.post(lambda: self._on_prediction_complete(*res)),
         )
 
     def _on_prediction_complete(self, last_report_path, last_preds_path, last_dataset_dir, multi_results, multi_result_by_key, was_stopped):

@@ -37,6 +37,48 @@ MARK_ARRAY_CODE = "array_code"           # printed 1-3 character code between th
 MARK_LASER = "laser"                     # laser marking (part number / date / lot, or a short SOT code)
 PRINTED_MARKINGS = (MARK_RESISTOR_CODE, MARK_ARRAY_CODE)
 
+# Marking vocabularies (the 2D renderer via ``photoreal.palette`` and the Blender script via the scene).
+RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
+ARRAY_CODES = ("0", "000", "101", "103", "220", "221", "330", "472", "473", "102", "4R7")
+MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
+
+# Part builders of the Blender script (``blender/render_batch.py``, D35).
+BLENDER_CHIP = "chip"   # body with two end caps
+BLENDER_IC = "ic"       # moulded body with pin-1 dimple and laser marking (every other family)
+
+
+@dataclass(frozen=True, slots=True)
+class BlenderPart:
+    """How ``blender/render_batch.py`` builds a family's part (baked into the scene as ``part``, D35).
+
+    The Blender model is coarser than the 2D one and differs from it on purpose where the 2D
+    numbers model something else; the defaults are the generic moulded IC. Known differences to
+    the 2D renderer, kept so the Blender output stays as it was:
+
+    * ``height_ratio`` 0.56 for chips vs ``photoreal.parts.THICKNESS_RATIO`` 0.55 (2D tombstone
+      end face: thickness / width).
+    * Only resistors and capacitors get end caps; inductors and LEDs (2D: chips with ``cap_len``
+      0.25 / 0.16), arrays and power inductors are built as moulded ICs.
+    * Gull-wing leads only for ``sot`` / ``soic`` (2D also ``sot6``); lead width
+      ``min(a * min(pad w, h), b * max(L, W))`` vs 2D ``0.6 * min(pad extent, 0.3 * L)``.
+    * Markings ignore ``render.marking_probability``; arrays, inductors and LEDs carry laser marking
+      (2D: array codes or unmarked).
+    """
+
+    body: str = BLENDER_IC                  # BLENDER_CHIP | BLENDER_IC
+    height_ratio: float = 0.5               # body height / min(length, width), capped by component_height_mm
+    standoff: float = 0.01                  # body lift above the board / body height
+    body_material: str = "mold"             # "ceramic" (fixed tan) | "mold" (render_3d.materials.body)
+    cap_len: float | None = None            # end cap length / body length (BLENDER_CHIP)
+    leads: bool = False                     # gull-wing leads from the body edge to the pads
+    lead_width: tuple[float, float] = (0.55, 0.15)  # (a, b): lead width = min(a * min(pad w, h), b * max(L, W))
+    marking: str | None = MARK_LASER        # MARK_RESISTOR_CODE (one RESISTOR_CODES pick) | MARK_LASER | None
+    marking_lines: int = 3                  # laser marking lines of 3-6 MARK_CHARS
+    marking_size: tuple[float, float | None] = (0.13, 0.085)  # (a, b): text size = min(a * W, b * L); b None: a * W
+
+
+BLENDER_GENERIC = BlenderPart()
+
 
 @dataclass(frozen=True, slots=True)
 class PartFamily:
@@ -57,7 +99,7 @@ class PartFamily:
     cap_len: float | None = None    # 2D chip terminal (end cap) length / body length
     edge_inset: float = 0.07        # visible body edge slope from above / min(length, width)
     grain_sd: float = 0.06          # top-face surface grain (normal noise sd)
-    height_ratio: float | None = None  # Blender body height / width (``render_batch._HEIGHT_RATIO``; None: 0.5)
+    blender: BlenderPart = BLENDER_GENERIC  # how the Blender script builds the part (scene ``part``)
 
     @property
     def unmarked(self) -> bool:
@@ -73,11 +115,15 @@ class PartFamily:
 # yields the names, so ``for fam in FAMILIES`` / ``fam in FAMILIES`` work as before).
 FAMILIES: Mapping[str, PartFamily] = MappingProxyType({f.name: f for f in (
     PartFamily("resistor", KIND_CHIP, "R", MARK_RESISTOR_CODE, chip=True, cap_len=0.22, grain_sd=0.025,
-               height_ratio=0.56),
-    PartFamily("capacitor", KIND_CHIP, "C", None, chip=True, cap_len=0.26, grain_sd=0.025, height_ratio=0.56),
-    PartFamily("sot", KIND_IC, "Q", MARK_LASER, leaded=True, edge_inset=0.05, height_ratio=0.75),
-    PartFamily("soic", KIND_IC, "U", MARK_LASER, leaded=True, fine_pitch=True, edge_inset=0.035, height_ratio=0.38),
-    PartFamily("qfn", KIND_IC, "U", MARK_LASER, fine_pitch=True, edge_inset=0.012, height_ratio=0.18),
+               blender=BlenderPart(BLENDER_CHIP, 0.56, cap_len=0.22, marking=MARK_RESISTOR_CODE, marking_lines=1,
+                                   marking_size=(0.42, None))),
+    PartFamily("capacitor", KIND_CHIP, "C", None, chip=True, cap_len=0.26, grain_sd=0.025,
+               blender=BlenderPart(BLENDER_CHIP, 0.56, body_material="ceramic", cap_len=0.26, marking=None)),
+    PartFamily("sot", KIND_IC, "Q", MARK_LASER, leaded=True, edge_inset=0.05,
+               blender=BlenderPart(height_ratio=0.75, standoff=0.08, leads=True, marking_lines=1, marking_size=(0.32, None))),
+    PartFamily("soic", KIND_IC, "U", MARK_LASER, leaded=True, fine_pitch=True, edge_inset=0.035,
+               blender=BlenderPart(height_ratio=0.38, standoff=0.08, leads=True)),
+    PartFamily("qfn", KIND_IC, "U", MARK_LASER, fine_pitch=True, edge_inset=0.012, blender=BlenderPart(height_ratio=0.18)),
     PartFamily("sot6", KIND_IC, "U", MARK_LASER, leaded=True, fine_pitch=True, edge_inset=0.05),
     PartFamily("array_r", KIND_ARRAY, "RN", MARK_ARRAY_CODE, fine_pitch=True, edge_inset=0.05),
     PartFamily("array_c", KIND_ARRAY, "CN", None, fine_pitch=True, edge_inset=0.05),
@@ -94,6 +140,19 @@ GENERIC_FAMILY = PartFamily("generic", KIND_IC, "U", MARK_LASER)
 def part_family(name: str) -> PartFamily:
     """:class:`PartFamily` of *name* (:data:`GENERIC_FAMILY` for an unknown name)."""
     return FAMILIES.get(name, GENERIC_FAMILY)
+
+
+def scene_part(name: str) -> dict[str, Any]:
+    """The ``part`` entry of the Blender scene (``job_schema.ScenePart``): :attr:`PartFamily.blender` of *name*,
+    JSON-ready, with the marking vocabulary, so ``render_batch.py`` builds geometry from the scene alone."""
+    b = part_family(name).blender
+    marking = None
+    if b.marking is not None:
+        codes = list(RESISTOR_CODES) if b.marking == MARK_RESISTOR_CODE else []
+        marking = {"codes": codes, "chars": MARK_CHARS, "lines": 1 if codes else b.marking_lines, "length": [3, 6],
+                   "size": list(b.marking_size)}
+    return {"body": b.body, "height_ratio": b.height_ratio, "standoff": b.standoff, "body_material": b.body_material,
+            "cap_len": b.cap_len, "leads": b.leads, "lead_width": list(b.lead_width), "marking": marking}
 
 
 def _names(pred) -> tuple[str, ...]:

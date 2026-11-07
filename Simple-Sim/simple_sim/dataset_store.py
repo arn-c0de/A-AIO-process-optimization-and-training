@@ -13,7 +13,7 @@ import numpy as np
 import yaml
 
 from simple_sim.dataset_files import CONFIG_YAML, LABELS_JSONL, META_JSONL
-from simple_sim.schema import LabelRow, MetaRow, validate_jsonl_pair, write_jsonl
+from simple_sim.rows import LabelRow, MetaRow, validate_jsonl_pair, write_jsonl
 
 
 def validate_dataset_files(data_dir: Path) -> None:

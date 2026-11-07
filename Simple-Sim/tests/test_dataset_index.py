@@ -149,7 +149,7 @@ def test_roi_dataset_items_unchanged(tmp_path):
 
 
 def test_batch_predict_dataset_info_and_profile_map(tmp_path):
-    from scripts.batch_predict import _gt_profile_map, build_dataset, dataset_info
+    from simple_sim.batch_predict import _gt_profile_map, build_dataset, dataset_info
 
     ds = make_dataset(tmp_path / "ds", n=9)
     info = dataset_info(ds)
@@ -181,7 +181,7 @@ def _old_choose(data_dir, class_names, split, per_class, seed):
 
 def test_sample_check_uses_split_files(tmp_path):
     """C1: in a re-split dataset the ``/<split>/`` part of an id is not its split."""
-    from scripts.sample_check import choose_samples
+    from simple_sim.inference import choose_samples
 
     ds = make_dataset(tmp_path / "ds", n=12, resplit=True)
     want = set((ds / "splits" / "test.txt").read_text().split())

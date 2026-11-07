@@ -1,14 +1,14 @@
 """Parsed ``meta.jsonl`` / ``labels.jsonl`` / ``splits/*.txt`` of a dataset, read once per run.
 
 :class:`DatasetIndex` is the shared read side of a dataset directory (plan item L11). The files
-are parsed with the same validation as :func:`simple_sim.schema.read_jsonl` and
-:func:`simple_sim.splits.read_split`, and the result is kept in a small per-process cache keyed by
+are parsed with the same validation as :func:`simple_sim.rows.read_jsonl`,
+:func:`simple_sim.splits.read_split` and :func:`simple_sim.manifest.load_dataset_manifest`, and the result is kept in a small per-process cache keyed by
 the file's path and ``stat`` signature (inode, size, mtime, ctime). A rewritten, appended or
 replaced file is therefore parsed again on the next access, while e.g. ``batch_predict --split all``
 (three datasets, ``dataset_info``, the profile ground truth) parses each JSONL once.
 
 Rows are shared between all users of the cache: treat them, the returned tuples and the
-``id_to_*`` mappings as read-only. Pure stdlib + schema; no torch/cv2.
+``id_to_*`` mappings as read-only. Pure stdlib + rows/manifest; no torch/cv2.
 """
 
 from __future__ import annotations
@@ -20,8 +20,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable
 
-from simple_sim.dataset_files import LABELS_JSONL, META_JSONL, SPLITS_DIR
-from simple_sim.schema import LabelRow, MetaRow, read_jsonl
+from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL, SPLITS_DIR
+from simple_sim.manifest import DatasetManifest, load_dataset_manifest
+from simple_sim.rows import LabelRow, MetaRow, read_jsonl
 from simple_sim.splits import read_split
 
 SPLIT_NAMES = ("train", "val", "test")
@@ -106,6 +107,20 @@ class DatasetIndex:
 
     def split_path(self, split: str) -> Path:
         return self.data_dir / SPLITS_DIR / f"{split}.txt"
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.data_dir / DATASET_MANIFEST
+
+    def manifest(self) -> DatasetManifest:
+        """Validated ``dataset_manifest.json`` (``FileNotFoundError`` / ``ValueError`` as
+        :func:`~simple_sim.manifest.read_dataset_manifest`); one shared, read-only instance per
+        file version."""
+        return _cached(self.manifest_path, "manifest", load_dataset_manifest)
+
+    def profile_ids(self) -> tuple[str, ...]:
+        """Profile ids declared by the manifest (see :attr:`DatasetManifest.profile_ids`)."""
+        return self.manifest().profile_ids
 
     def meta_rows(self) -> tuple[MetaRow, ...]:
         return _cached(self.meta_path, "meta", _load_meta)[0]

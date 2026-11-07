@@ -28,7 +28,7 @@ class BoardDetectionLogic:
         """Run two-stage prediction on a worker thread.
 
         ``on_complete``/``on_error`` are invoked from that worker thread; callers
-        must marshal any Tk work onto the main loop (e.g. ``widget.after(0, ...)``).
+        must marshal any Tk work onto the main loop (e.g. ``BaseTab.post`` / ``UiDispatcher.post``).
         """
         def _run():
             try:

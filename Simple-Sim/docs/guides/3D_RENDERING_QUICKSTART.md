@@ -12,6 +12,7 @@ profile + run config
        1. bake per job (blender3d/bake.py):
           photoreal 2D board -> PNG texture (mask, traces, vias, silkscreen, pad finish)
           + layout: pad rectangles, body pose, part family, thermal pad
+          + part: how to build the part (board.footprints.FAMILIES[family].blender)
        2. Blender: simple_sim/blender/render_batch.py builds the 3D scene and renders
        3. camera model (same as 2D: lens blur, uneven light, highlight roll-off, sensor noise)
   -> caller applies the usual image filters (augment)
@@ -29,7 +30,7 @@ only models what needs real 3D: solder fillets, part bodies, leads, lighting.
 |---|---|
 | Board | Plane (2x the ROI, so rotations never show its edge) with the baked texture; low specular because the baked colours already include the mask sheen |
 | Solder | One height-field mesh per pad, metallic. Concave fillet rising to the terminal (chips, QFN) or the lead foot (SOT/SOIC); reflowed paste dome when nothing touches the pad; window-pane islands on a free thermal pad |
-| Part | Body box (height from `component.nominal_dims_mm.height`, capped at the real package's height/width ratio). Resistor: metal end caps + printed value code. Capacitor (`component.type` contains `cap`): tan ceramic + end caps. SOT/SOIC/QFN: mold body with fine speckle, pin-1 dot, laser marking; SOT/SOIC get gull-wing leads to every pad |
+| Part | Body box (height from `component.nominal_dims_mm.height`, capped at the real package's height/width ratio). Resistor: metal end caps + printed value code. Capacitor (`component.type` contains `cap`): tan ceramic + end caps. SOT/SOIC/QFN and every other family: mold body with fine speckle, pin-1 dot, laser marking; SOT/SOIC get gull-wing leads to every pad. Height ratio, standoff, end caps, lead width and marking vocabulary come from the scene's `part` (`board.footprints.PartFamily.blender`, see `job_schema.ScenePart`); `render_batch.py` has no family table of its own |
 | Defects | Same semantics as 2D: shift/rotation, `MISSING`, `TOMBSTONE` (body pivots about the bottom edge of its anchored end; from above you see the steep top face and the upright end cap, `tolerances.tombstone_tilt_deg`), `SOLDER_BRIDGE` (baked into the board), `SOLDER_BALL` (solder spheres), `EXCESS_SOLDER` (convex, higher fillet meshes); ball positions and affected pads come from the same layout function as in 2D. `CORNER_LIFT` renders like a flat part |
 | Light | AOI rig around the camera axis, invisible to the camera: low-angle ring light (emissive torus; highlights on slopes and edges) plus a diffuse top light (emissive disc; makes flat metal such as solder tops and upright end caps bright), dim ambient |
 | Camera | Orthographic, framed exactly to the ROI, top-down by default; with `render.camera` tilt/zoom (e.g. `preset: phone`) the bake samples the view, Blender tilts the camera and widens it, and the baked board grows to cover it |
@@ -98,4 +99,5 @@ Common issues:
 | Board look (both backends) | `simple_sim/generators/opencv2d/photoreal.py` |
 | Bake / camera model hook | `simple_sim/generators/blender3d/bake.py` |
 | Fillets, bodies, leads, markings, light, camera | `simple_sim/blender/render_batch.py` |
+| Per-family part build (height, end caps, leads, marking) | `simple_sim/board/footprints.py` (`BlenderPart`, `scene_part`) |
 | Job contract (JSONL keys, scene dict, defaults) | `simple_sim/blender/job_schema.py` (stdlib only, imported by both sides) |

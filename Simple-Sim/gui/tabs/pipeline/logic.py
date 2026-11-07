@@ -19,11 +19,13 @@ import yaml
 from gui.utils.checkpoint_meta import CheckpointMetaCache
 from gui.utils.paths import list_model_paths, model_root
 from gui.utils.process import terminate_process
+from simple_sim.cli import argv_for
 from simple_sim.dataset_files import CONFIG_YAML, DATASET_MANIFEST, LABELS_JSONL, META_JSONL, SPLITS_DIR
 from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, now_tag, path_size_bytes, read_json, rel_to
 from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
 from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
+from simple_sim.model_store import snapshot_checkpoint
 
 
 class PipelineLogic:
@@ -194,24 +196,26 @@ class PipelineLogic:
         env["IMAGE_FILTERS"] = json.dumps(image_filters, ensure_ascii=True)
         env["PYTHONUNBUFFERED"] = "1"
 
+        # Generate-only modes run ``python -m simple_sim <command>`` with the GUI's interpreter (plan P4/N9);
+        # run_pipeline.sh bootstraps and uses the project venv itself.
         if task == "full": cmd = ["bash", "-lc", "./run_pipeline.sh"]
         elif task == "generate_only":
             cmd_str = (
-                "./.venv/bin/python scripts/generate.py "
+                f"{shlex.join(argv_for('generate'))} "
                 "--config \"$CONFIG\" "
                 "--out \"$DATA_DIR\" "
                 "$([[ \"${DATASET_MODE}\" == \"extend\" ]] && echo --extend) "
                 "&& "
-                "./.venv/bin/python tools/validate_dataset.py --data \"$DATA_DIR\""
+                f"{shlex.join(argv_for('validate'))} --data \"$DATA_DIR\""
             )
             cmd = ["bash", "-lc", cmd_str]
         elif task == "generate_mixed":
             cmd_str = (
-                "./.venv/bin/python scripts/generate_profile_dataset.py "
+                f"{shlex.join(argv_for('generate-profile-dataset'))} "
                 "--config \"$CONFIG\" "
                 "--out \"$DATA_DIR\" "
                 "&& "
-                "./.venv/bin/python tools/validate_dataset.py --data \"$DATA_DIR\""
+                f"{shlex.join(argv_for('validate'))} --data \"$DATA_DIR\""
             )
             cmd = ["bash", "-lc", cmd_str]
         else: raise ValueError(f"Unknown task: {task}")
@@ -381,20 +385,9 @@ class PipelineLogic:
             if self._last_snap_sig == sig: return None
             self._last_snap_sig = sig
             
-            dst_root = self._model_root() / "versions" / model_path.stem
-            dst_root.mkdir(parents=True, exist_ok=True)
-            tag = now_tag(micro=False)
-            base = dst_root / f"{model_path.stem}_{tag}_run{int(run_i):03d}.pt"
-            dst = base
-            if dst.exists():
-                for i in range(1, 1000):
-                    cand = dst_root / f"{model_path.stem}_{tag}_run{int(run_i):03d}_{i:03d}.pt"
-                    if not cand.exists():
-                        dst = cand
-                        break
-            shutil.copy2(model_path, dst)
+            dst = snapshot_checkpoint(self._model_root(), model_path, run=int(run_i))
             self._write_snapshot_meta(dst, src=model_path, run_i=run_i)
-            self._prune_model_snapshots(dst_root, snap_keep)
+            self._prune_model_snapshots(dst.parent, snap_keep)
             return dst
         except Exception: return None
 
@@ -475,8 +468,8 @@ class PipelineLogic:
         rel_cfg, rel_out_ds, rel_out_model = (rel_to(self.sim_root, p) for p in (cfg, out_ds, out_model))
 
         # "&&" must stay a shell operator, so quote each command separately.
-        gen = ["./.venv/bin/python", "scripts/generate_profile_dataset.py", "--config", rel_cfg, "--out", rel_out_ds]
-        train = ["./.venv/bin/python", "scripts/train_profile.py", "--data", rel_out_ds, "--out", rel_out_model]
+        gen = argv_for("generate-profile-dataset", config=rel_cfg, out=rel_out_ds)
+        train = argv_for("train-profile", data=rel_out_ds, out=rel_out_model)
         cmd_q = shlex.join(gen) + " && " + shlex.join(train)
         log_callback(f"\n[build profile model] preset={preset}\nconfig: {cfg}\ndata:   {out_ds}\nout:    {out_model}\n[cmd] {cmd_q}\n\n")
         run_simple_cmd_callback([cmd_q])

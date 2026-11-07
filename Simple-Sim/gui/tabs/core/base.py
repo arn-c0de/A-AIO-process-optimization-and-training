@@ -3,7 +3,9 @@
 from __future__ import annotations
 from tkinter import ttk
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
+
+from gui.core.tasks import DispatchQueue, TaskRunner, UiDispatcher, dispatcher_for
 
 if TYPE_CHECKING:
     from gui.state import UiState
@@ -27,6 +29,32 @@ class BaseTab:
 
         # Create main frame for this tab
         self.frame = ttk.Frame(parent, padding=0)  # the page container already pads
+
+    @property
+    def dispatcher(self) -> UiDispatcher:
+        """The app's ``UiDispatcher`` (or a private one attached to ``self.frame``)."""
+        return dispatcher_for(self.state, self.frame)
+
+    def post(self, fn: Callable[[], None]) -> None:
+        """Run ``fn`` on the Tk thread; safe to call from any thread (never ``frame.after`` from a worker)."""
+        self.dispatcher.post(fn)
+
+    @property
+    def quiet_tasks(self) -> TaskRunner:
+        """Runner for short read-only background work (thumbnails, index loads): callbacks on the
+        Tk thread like ``ctx.tasks``, but without status-bar entries (no event bus)."""
+        runner = getattr(self, "_quiet_tasks", None)
+        if runner is None:
+            runner = self._quiet_tasks = TaskRunner(self.dispatcher.post)
+        return runner
+
+    def bind_queue(self, q: DispatchQueue, handler: Callable[[list[Any]], None], *, max_items: int = 200) -> DispatchQueue:
+        """Drain ``q`` on the Tk thread whenever producers ``put`` (replaces an ``after()`` poll loop).
+
+        At most ``max_items`` per drain; the rest follows on the next dispatcher tick.
+        """
+        d = self.dispatcher
+        return q.bind(d.post, handler, max_items=max_items, post_next=d.post_next_tick)
 
     def build_ui(self) -> None:
         """Build the tab UI. Subclasses must implement this."""

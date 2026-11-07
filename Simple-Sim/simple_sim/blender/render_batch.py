@@ -7,7 +7,8 @@ Each JSONL job is a ``PreparedJob`` of ``simple_sim.blender.job_schema`` (the st
 script shares with the library): the sample fields (``image_path``, ``seed``, ``mm_per_px``,
 ``roi_width_px``, ``roi_height_px``, ``component_height_mm``, ``augment``, ``render_3d``) plus the
 ``board`` scene added by the bake (``blender3d/bake.py``): texture, scale, camera pose, family,
-pads, thermal pad, excess pads, solder balls and the body.
+pads, thermal pad, excess pads, solder balls, the body and ``part`` (how to build the part: the
+family's row of ``board.footprints.FAMILIES``).
 
 Layout values are camera pixels relative to the ROI centre, image convention (x right, y down),
 identical to the 2D renderer. The scene (1 Blender unit = 1 mm): board plane with the baked
@@ -38,10 +39,10 @@ from simple_sim.blender.job_schema import (BOARD_SCALE, DEFAULT_CAMERA_POSE, DEF
 
 PadMm = tuple[float, float, float, float]  # (cx, cy, w, h) in mm, Blender axes
 
-# Height / body-width ratios of real packages (0603: 0.45/0.8, SOT-23: 1.0/1.3, SOIC: 1.5/3.9, QFN: 0.9/5).
-_HEIGHT_RATIO = {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18}
-_RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
-_MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
+# Per-family decisions (height ratio, standoff, end caps, leads, marking) come from the scene's ``part``
+# (``board.footprints.PartFamily.blender``, baked by ``photoreal.scene.render_board``; D35).
+# Reflowed paste dome |u|^3 + |v|^3; the 2D meniscus uses 2.5 (``photoreal/meniscus.py``): known difference (X12).
+_PASTE_DOME_EXPONENT = 3
 RING_STRENGTH, TOP_STRENGTH = 6.0, 0.9  # emission strengths, calibrated to the baked board colours
 
 
@@ -198,7 +199,8 @@ def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big
             else:
                 u = ((i / n * nx) % 1.0) * 2 - 1
                 v = ((j / n * ny) % 1.0) * 2 - 1
-                z = dome_h * max(0.0, 1.0 - (abs(u) ** 3 + abs(v) ** 3) * (0.85 if nx * ny == 1 else 1.2))
+                z = dome_h * max(0.0, 1.0 - (abs(u) ** _PASTE_DOME_EXPONENT + abs(v) ** _PASTE_DOME_EXPONENT)
+                                   * (0.85 if nx * ny == 1 else 1.2))
             verts.append((x, y, 0.001 + z * rim))
     faces = [(j * (n + 1) + i, j * (n + 1) + i + 1, (j + 1) * (n + 1) + i + 1, (j + 1) * (n + 1) + i)
              for j in range(n) for i in range(n)]
@@ -223,24 +225,72 @@ def _look_at(obj: bpy.types.Object, target: Vector) -> None:
 
 # --------------------------------------------------------------------------- part
 
+def part_params(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: float,
+                rng: random.Random) -> dict[str, Any] | None:
+    """Every per-part number the geometry is built from (pure: no ``bpy``; ``None`` for MISSING).
+
+    The decisions come from ``board["part"]`` (:class:`~simple_sim.blender.job_schema.ScenePart`);
+    the family name is only a label. Consumes *rng* exactly as the geometry always did (the marking
+    text), so it runs before the meshes are built. Lengths in mm: ``length``, ``width``, ``height``,
+    ``standoff``, ``cap`` (end cap length or ``None``), ``marking`` (texts, one per line) and
+    ``marking_size``, ``leads`` (``[{"width", "thickness"}]`` per pad, gull-wing parts only),
+    ``contacts`` (``"body"``: the solder wets the body / terminal, ``"leads"``: the lead feet,
+    ``"none"``: paste only) and ``solder_height``.
+    """
+    body, part = board["body"], board["part"]
+    if body is None:
+        return None
+    L, W = _mm(body["length"], mmpp), _mm(body["width"], mmpp)
+    H = min(comp_h_mm, part["height_ratio"] * min(L, W))
+    chip = part["body"] == "chip"
+    p: dict[str, Any] = {"length": L, "width": W, "height": H, "standoff": part["standoff"] * H,
+                         "body_material": part["body_material"], "end_caps": chip, "cap": None, "marking": [],
+                         "marking_size": 0.0, "leads": [], "contacts": "body", "solder_height": 0.0}
+    mark = part["marking"]
+    if mark is not None:
+        size_w, size_l = mark["size"]
+        p["marking_size"] = size_w * W if size_l is None else min(size_w * W, size_l * L)
+        if mark["codes"]:
+            p["marking"] = [rng.choice(mark["codes"])]
+        else:
+            lo, hi = mark["length"]
+            p["marking"] = ["".join(rng.choice(mark["chars"]) for _ in range(rng.randint(lo, hi)))
+                            for _ in range(mark["lines"])]
+    if chip:
+        p["cap"] = part["cap_len"] * L
+        p["solder_height"] = 0.6 * H
+    elif part["leads"] and not body.get("is_tombstone"):
+        a, b = part["lead_width"]
+        t = 0.0
+        for _, _, pw, ph in pads:
+            lw = min(a * min(pw, ph), b * max(L, W))
+            t = 0.25 * lw
+            p["leads"].append({"width": lw, "thickness": t})
+        p["contacts"], p["solder_height"] = "leads", 0.9 * t
+    elif part["leads"]:
+        p["contacts"] = "none"  # tombstoned leaded part: leads lifted, paste only
+    else:
+        p["solder_height"] = 0.3 * H
+    return p
+
+
 def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: float,
                 render_3d: dict[str, Any], rng: random.Random) -> tuple[list[bpy.types.Object], list, float]:
-    """Body, end caps / leads, pin-1 mark and marking.
+    """Body, end caps / leads, pin-1 mark and marking (numbers from :func:`part_params`).
 
     Returns (objects, per-pad contact rect or None, solder height). The contact is what the solder
     wets: the terminal / body edge for chips and QFN, the lead foot for SOT/SOIC.
     """
-    family, body = board["family"], board["body"]
-    if body is None:
+    body = board["body"]
+    p = part_params(pads, board, mmpp, comp_h_mm, rng)
+    if p is None:
         return [], [None] * len(pads), 0.0  # no contacts: every pad gets a paste dome
 
     mats = render_3d.get("materials") or {}
-    L, W = _mm(body["length"], mmpp), _mm(body["width"], mmpp)
-    H = min(comp_h_mm, _HEIGHT_RATIO.get(family, 0.5) * min(L, W))  # new 2D-only families: generic height
+    L, W, H, standoff = p["length"], p["width"], p["height"], p["standoff"]
     angle = -math.radians(float(body["rotation_deg"]))  # image y-down -> Blender y-up
     cx, cy = _mm_xy(body["center"][0], body["center"][1], mmpp)
     axis = Vector((math.cos(angle), math.sin(angle), 0.0))
-    standoff = 0.08 * H if family in ("sot", "soic") else 0.01 * H
 
     root = bpy.data.objects.new("part_root", None)
     bpy.context.collection.objects.link(root)
@@ -261,27 +311,27 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
         root.location = (cx, cy, standoff)
         root.rotation_euler = (0.0, 0.0, angle)
 
-    if family == "capacitor":
+    if p["body_material"] == "ceramic":
         m_body = _material("mat_ceramic", (0.42, 0.26, 0.14), roughness=0.55, bump=0.02)
     else:
         m_body = _cfg_material("mat_body", mats.get("body") or {}, (0.02, 0.02, 0.02), 0.5, 0.0, bump=0.03)
     objs: list[bpy.types.Object] = [root]
     objs.append(_box("body", (L, W, H), (offset, 0.0, H / 2), m_body, parent=root, bevel=0.06 * min(W, H)))
 
-    if family in ("resistor", "capacitor"):
+    if p["end_caps"]:
         # Tin plating is satin, not a mirror: it must catch the ring light when it faces the camera.
         m_cap = _material("mat_endcap", (0.75, 0.75, 0.74), roughness=0.45, metallic=1.0, bump=0.05)
-        cap = (0.26 if family == "capacitor" else 0.22) * L
+        cap = p["cap"]
         for s in (-1, 1):
             # Caps wrap slightly beyond the body, so their end faces never coincide with the body's
             # (an upright tombstone shows the cap's end face to the camera).
             objs.append(_box(f"endcap_{s}", (cap + 0.02 * H, W * 1.02, H * 1.02),
                              (offset + s * ((L - cap) / 2 + 0.01 * H), 0.0, H / 2), m_cap,
                              parent=root, bevel=0.1 * min(W, H)))
-        if family == "resistor":
+        if p["marking"]:
             m_ink = _material("mat_ink", (0.85, 0.85, 0.82), roughness=0.8)
-            _text("marking", rng.choice(_RESISTOR_CODES), 0.42 * W, (offset, 0.0, H + 0.0005), m_ink, root)
-        return objs, [contact] * len(pads), 0.6 * H
+            _text("marking", p["marking"][0], p["marking_size"], (offset, 0.0, H + 0.0005), m_ink, root)
+        return objs, [contact] * len(pads), p["solder_height"]
 
     # ICs: pin-1 dimple and laser marking.
     m_dot = _material("mat_pin1", (0.01, 0.01, 0.01), roughness=0.25)
@@ -291,28 +341,25 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
     dot.data.materials.append(m_dot)
     dot.parent = root
     m_laser = _material("mat_laser", (0.22, 0.22, 0.21), roughness=0.9)
-    lines = 1 if family == "sot" else 3
-    size = 0.32 * W if family == "sot" else min(0.13 * W, 0.085 * L)
-    for i in range(lines):
-        text = "".join(rng.choice(_MARK_CHARS) for _ in range(rng.randint(3, 6)))
+    lines, size = len(p["marking"]), p["marking_size"]
+    for i, text in enumerate(p["marking"]):
         _text(f"marking_{i}", text, size, (offset, ((lines - 1) / 2 - i) * size * 1.6, H + 0.0005), m_laser, root)
 
-    if family in ("sot", "soic") and not body.get("is_tombstone"):
+    if p["contacts"] == "leads":
         m_lead = _cfg_material("mat_lead", mats.get("solder") or {}, (0.7, 0.7, 0.72), 0.25, 1.0)
-        contacts, t = [], 0.0
+        contacts = []
         # Leads are rigid with the body: their layout comes from the *nominal* placement (part centred,
         # body axis at lead_frame_deg), so a shifted/rotated part's feet miss their pads instead of
         # stretching towards them.
         a0 = -math.radians(float(body.get("lead_frame_deg", 0.0)))
         axis0 = Vector((math.cos(a0), math.sin(a0), 0.0))
         to_world = lambda v: Vector((cx, cy, 0.0)) + axis * v.x + Vector((-axis.y, axis.x, 0.0)) * v.y  # noqa: E731
-        for k, (px, py, pw, ph) in enumerate(pads):
+        for k, ((px, py, pw, ph), lead) in enumerate(zip(pads, p["leads"])):
             rel = Vector((px, py, 0.0))  # scene coordinates are relative to the nominal part centre
             loc = Vector((rel.dot(axis0), rel.x * -axis0.y + rel.y * axis0.x, 0.0))  # pad in body frame
             edge = Vector((max(-L / 2, min(L / 2, loc.x)), max(-W / 2, min(W / 2, loc.y)), 0.0))
             start, foot = to_world(edge * 0.98), to_world(loc)
-            lw = min(0.55 * min(pw, ph), 0.15 * max(L, W))
-            t = 0.25 * lw
+            lw, t = lead["width"], lead["thickness"]
             shoulder = start + Vector((0, 0, standoff + 0.45 * H))
             knee = start + (foot - start) * 0.3 + Vector((0, 0, standoff + 0.45 * H))
             ankle = start + (foot - start) * 0.55 + Vector((0, 0, t / 2))
@@ -321,10 +368,10 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
             d = foot - ankle
             mid = (foot + ankle) / 2
             contacts.append({"cx": mid.x, "cy": mid.y, "hl": d.length / 2, "hw": lw / 2, "angle": math.atan2(d.y, d.x)})
-        return objs, contacts, 0.9 * t
-    if family in ("sot", "soic"):
+        return objs, contacts, p["solder_height"]
+    if p["contacts"] == "none":
         return objs, [None] * len(pads), 0.0  # tombstoned leaded part: leads lifted, paste only
-    return objs, [contact] * len(pads), 0.3 * H
+    return objs, [contact] * len(pads), p["solder_height"]
 
 
 # --------------------------------------------------------------------------- scene

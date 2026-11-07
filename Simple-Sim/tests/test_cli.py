@@ -37,11 +37,43 @@ def test_commands_json_lists_all_scripts():
     assert by_name["validate"]["supports_json"] is True
 
 
-def test_supports_json_detection_reads_source():
+def test_supports_json_comes_from_the_command_source():
+    """Library commands declare ``SUPPORTS_JSON``; tool scripts are detected by ``add_json_flag``."""
+    import importlib
+
     for c in list_commands():
-        if c["script"]:
+        if c["module"]:
+            assert c["supports_json"] == importlib.import_module(c["module"]).SUPPORTS_JSON, c["name"]
+        elif c["script"]:
             src = (SIM_ROOT / c["script"]).read_text(encoding="utf-8")
             assert c["supports_json"] == ("add_json_flag" in src)
+
+
+def test_library_commands_run_in_process(monkeypatch, capsys):
+    """``main`` calls the command module (no subprocess) and passes a ``python -m simple_sim`` prog."""
+    import subprocess as sp
+
+    monkeypatch.setattr(sp, "call", lambda *a, **k: pytest.fail("library command spawned a subprocess"))
+    assert main(["train", "--help"]) == 0
+    assert capsys.readouterr().out.startswith("usage: python -m simple_sim train ")
+    assert main(["train", "--no-such-flag"]) == 2
+
+
+def test_every_script_is_a_shim_of_its_command():
+    for c in list_commands():
+        if c["module"]:
+            src = (SIM_ROOT / c["script"]).read_text(encoding="utf-8")
+            assert f"from {c['module']} import main" in src, c["name"]
+
+
+def test_argv_for_builds_a_module_command_line():
+    from simple_sim.cli import argv_for
+
+    assert argv_for("train", data="/d", out="m.pt", amp=False, resume=None, json=True) == [
+        sys.executable, "-m", "simple_sim", "train", "--data", "/d", "--out", "m.pt", "--json"]
+    assert argv_for("eval", "--tta", python="py", model="m")[:5] == ["py", "-m", "simple_sim", "eval", "--tta"]
+    with pytest.raises(KeyError):
+        argv_for("no-such-command")
 
 
 def test_status_json_on_empty_root(tmp_path):
