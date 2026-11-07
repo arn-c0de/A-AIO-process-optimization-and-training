@@ -7,8 +7,8 @@ from typing import Protocol
 
 import numpy as np
 
-from simple_sim.board.geometry import box
-from simple_sim.board.model import Board, Port, Track, Vec, Via
+from simple_sim.board.geometry import BBox, Vec, add, box, clip, perp, polyline45, unit  # noqa: F401 (re-exported)
+from simple_sim.board.model import Board, Port, Track, Via
 from simple_sim.board.netlist import net_class
 from simple_sim.board.occupancy import CopperMap
 
@@ -47,29 +47,7 @@ def seed_occupancy(board: Board) -> CopperMap:
     return occ
 
 
-def unit(v: Vec) -> Vec:
-    n = float(np.hypot(v[0], v[1]))
-    return (v[0] / n, v[1] / n) if n > 0 else (0.0, 0.0)
-
-
-def perp(v: Vec) -> Vec:
-    return (-v[1], v[0])
-
-
-def add(p: Vec, d: Vec, k: float = 1.0) -> Vec:
-    return (p[0] + d[0] * k, p[1] + d[1] * k)
-
-
-def polyline45(p0: Vec, p1: Vec) -> list[Vec]:
-    """*p0* to *p1* with one 45-degree jog first, then straight (like autorouted traces)."""
-    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
-    jog = min(abs(dx), abs(dy))
-    mid = (p0[0] + float(np.sign(dx)) * jog, p0[1] + float(np.sign(dy)) * jog)
-    pts = [p0, mid, p1]
-    return [p for i, p in enumerate(pts) if i == 0 or p != pts[i - 1]]
-
-
-def axial_room(bbox: tuple[float, float, float, float], direction: Vec, start: Vec) -> float:
+def axial_room(bbox: BBox, direction: Vec, start: Vec) -> float:
     """Distance from *start* to the window border along the dominant axis of *direction*."""
     x0, y0, x1, y1 = bbox
     if abs(direction[0]) >= abs(direction[1]):
@@ -77,7 +55,7 @@ def axial_room(bbox: tuple[float, float, float, float], direction: Vec, start: V
     return (start[1] - y0) if direction[1] < 0 else y1 - start[1]
 
 
-def runs_along_border(bbox: tuple[float, float, float, float], points: list[Vec], margin: float) -> bool:
+def runs_along_border(bbox: BBox, points: list[Vec], margin: float) -> bool:
     """True if a segment of *points* runs (within *margin*) along a window edge instead of into it."""
     x0, y0, x1, y1 = bbox
     for a, b in zip(points, points[1:]):
@@ -87,18 +65,18 @@ def runs_along_border(bbox: tuple[float, float, float, float], points: list[Vec]
     return False
 
 
-def border_point(bbox: tuple[float, float, float, float], direction: Vec, through: Vec, lateral: float) -> Vec:
+def border_point(bbox: BBox, direction: Vec, through: Vec, lateral: float) -> Vec:
     """Point on the window border reached from *through* along the dominant axis of *direction*,
     shifted by *lateral* along the border."""
     x0, y0, x1, y1 = bbox
     if abs(direction[0]) >= abs(direction[1]):
         x = x0 if direction[0] < 0 else x1
-        return (x, float(np.clip(through[1] + lateral, y0, y1)))
+        return (x, clip(through[1] + lateral, y0, y1))
     y = y0 if direction[1] < 0 else y1
-    return (float(np.clip(through[0] + lateral, x0, x1)), y)
+    return (clip(through[0] + lateral, x0, x1), y)
 
 
-def random_border_point(bbox: tuple[float, float, float, float], edge: int, rng: np.random.Generator) -> Vec:
+def random_border_point(bbox: BBox, edge: int, rng: np.random.Generator) -> Vec:
     """Random point on edge 0..3 (left, right, top, bottom)."""
     x0, y0, x1, y1 = bbox
     if edge == 0:

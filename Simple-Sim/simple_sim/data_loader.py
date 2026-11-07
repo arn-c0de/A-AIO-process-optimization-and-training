@@ -1,8 +1,10 @@
 """PyTorch Dataset for ROI images."""
 
+import contextlib
 import logging
 import os
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +68,33 @@ def build_train_transform(augment: dict[str, Any] | None) -> transforms.Compose:
     return transforms.Compose(steps)
 
 
+@contextlib.contextmanager
+def single_threaded_torch() -> Iterator[None]:
+    """Run the enclosed per-image tensor ops with one intra-op thread (results unchanged).
+
+    The transforms work on one 256 px image at a time, and such small element-wise ops are
+    dominated by the fork/join of torch's thread pool: with the default pool of 16 threads
+    ``ToTensor`` + ``Normalize`` take 27 ms instead of 0.3 ms per image and ``ColorJitter``
+    600 ms instead of 10 ms (i9-12900K). DataLoader workers already run with one thread; this
+    gives the main process (``num_workers: 0``, the config default) the same behaviour.
+    """
+    threads = torch.get_num_threads()
+    if threads <= 1:
+        yield
+        return
+    torch.set_num_threads(1)
+    try:
+        yield
+    finally:
+        torch.set_num_threads(threads)
+
+
+def apply_transform(transform: Any, img_rgb: np.ndarray) -> torch.Tensor:
+    """``transform(img_rgb)`` (RGB uint8 HWC -> CHW tensor) inside :func:`single_threaded_torch`."""
+    with single_threaded_torch():
+        return transform(img_rgb)
+
+
 def load_image_bgr(image_path: Path) -> np.ndarray:
     """Read an image with OpenCV (BGR); raise OSError if it cannot be loaded."""
     img_bgr = cv2.imread(str(image_path))
@@ -76,8 +105,7 @@ def load_image_bgr(image_path: Path) -> np.ndarray:
 
 def preprocess_bgr(img_bgr: np.ndarray) -> torch.Tensor:
     """Convert a BGR image (cv2.imread) to a normalised model input tensor."""
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    return IMAGENET_TRANSFORM(img_rgb)
+    return apply_transform(IMAGENET_TRANSFORM, cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
 
 
 def make_loader_kwargs(num_workers: int, device: torch.device) -> dict[str, Any]:
@@ -114,11 +142,13 @@ class _BaseROIDataset(Dataset):
     """Base class with shared image loading and metadata handling."""
 
     def __init__(self, data_dir: Path, split: str, return_id: bool = False,
-                 transform: Any | None = None) -> None:
+                 transform: Any | None = None, cache_images: bool = False) -> None:
         self.data_dir = Path(data_dir)
         self.split = split
         self.return_id = return_id
         self.transform = IMAGENET_TRANSFORM if transform is None else transform
+        self.cache_images = bool(cache_images)
+        self._rgb_cache: dict[str, np.ndarray] = {}
 
         split_file = self.data_dir / 'splits' / f'{split}.txt'
         self.sample_ids = read_split(split_file)
@@ -158,9 +188,18 @@ class _BaseROIDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
+    def _load_rgb(self, sample_id: str) -> np.ndarray:
+        """Decoded RGB uint8 image of *sample_id*; kept in RAM after the first read with ``cache_images``."""
+        rgb = self._rgb_cache.get(sample_id)
+        if rgb is None:
+            img_bgr = load_image_bgr(self.data_dir / self.id_to_meta[sample_id].image_path)
+            rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            if self.cache_images:
+                self._rgb_cache[sample_id] = rgb
+        return rgb
+
     def _load_tensor(self, sample_id: str) -> torch.Tensor:
-        img_bgr = load_image_bgr(self.data_dir / self.id_to_meta[sample_id].image_path)
-        return self.transform(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        return apply_transform(self.transform, self._load_rgb(sample_id))
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int] | tuple[torch.Tensor, int, str, str]:
         sample_id = self.samples[idx]
@@ -179,7 +218,7 @@ class ROIDataset(_BaseROIDataset):
     """PyTorch Dataset for PCB ROI images, labelled by defect class."""
 
     def __init__(self, data_dir: Path, split: str, class_names: list[str], return_id: bool = False,
-                 transform: Any | None = None):
+                 transform: Any | None = None, cache_images: bool = False):
         """Initialize dataset.
 
         Args:
@@ -189,9 +228,11 @@ class ROIDataset(_BaseROIDataset):
             return_id: If True, __getitem__ returns (image, label, sample_id, image_rel_path)
             transform: Image transform (RGB uint8 HWC -> tensor); default :data:`IMAGENET_TRANSFORM`,
                 training passes :func:`build_train_transform`
+            cache_images: Keep the decoded images in RAM after the first epoch (``train.cache_images``;
+                about 200 KB per 256 px image, each DataLoader worker holds its own copy)
         """
         self.class_names = class_names
-        super().__init__(data_dir, split, return_id, transform)
+        super().__init__(data_dir, split, return_id, transform, cache_images)
 
     def _init_label_mapping(self, label_rows: list[LabelRow]) -> None:
         self.id_to_label: dict[str, str] = {row.id: row.class_name for row in label_rows}

@@ -109,6 +109,58 @@ def compute_metrics(
     }
 
 
+#: Bins of the expected calibration error (equal width over the confidence range (0, 1]).
+ECE_BINS = 15
+
+
+def calibration_metrics(
+    probs: np.ndarray | Sequence[Sequence[float]],
+    y_true: np.ndarray | Sequence[int],
+    n_bins: int = ECE_BINS,
+) -> dict[str, Any]:
+    """Calibration of predicted class probabilities: ``ece``, ``nll``, ``brier`` (and ``n_bins``).
+
+    *probs* is ``[N, C]`` (rows sum to 1), *y_true* the true class indices. ECE is the
+    confidence-weighted gap between accuracy and mean confidence (top-1 probability) over *n_bins*
+    equal-width bins; NLL the mean negative log probability of the true class (clipped at 1e-12);
+    Brier the mean squared error between the probability vector and the one-hot label, summed over
+    classes (so 0 for a perfect, 2 for a confidently wrong prediction). Empty inputs give zeros.
+    """
+    p = np.asarray(probs, dtype=np.float64)
+    y = np.asarray(y_true).astype(np.int64, copy=False).ravel()
+    if p.ndim != 2 or p.shape[0] != y.size:
+        raise ValueError(f"probs must be [N, C] with N == len(y_true): {p.shape} vs {y.size}")
+    if n_bins < 1:
+        raise ValueError("n_bins must be positive")
+    n, c = p.shape
+    if n == 0:
+        return {'ece': 0.0, 'nll': 0.0, 'brier': 0.0, 'n_bins': int(n_bins)}
+    if (y < 0).any() or (y >= c).any():
+        raise ValueError("y_true contains labels outside range(C)")
+
+    conf = p.max(axis=1)
+    correct = (p.argmax(axis=1) == y).astype(np.float64)
+    # Bin b covers (b/n_bins, (b+1)/n_bins]; a confidence of exactly 0 lands in bin 0.
+    bins = np.clip(np.ceil(conf * n_bins).astype(np.int64) - 1, 0, n_bins - 1)
+    ece = 0.0
+    for b in range(n_bins):
+        m = bins == b
+        if m.any():
+            ece += m.mean() * abs(correct[m].mean() - conf[m].mean())
+
+    nll = float(-np.mean(np.log(np.clip(p[np.arange(n), y], 1e-12, None))))
+    onehot = np.zeros_like(p)
+    onehot[np.arange(n), y] = 1.0
+    brier = float(np.mean(np.sum((p - onehot) ** 2, axis=1)))
+    return {'ece': float(ece), 'nll': nll, 'brier': brier, 'n_bins': int(n_bins)}
+
+
+def format_calibration(cal: dict[str, Any]) -> str:
+    """One line: ``Calibration: ECE 0.0123 (15 bins)  NLL 0.4567  Brier 0.2345``."""
+    return (f"Calibration: ECE {cal['ece']:.4f} ({cal.get('n_bins', ECE_BINS)} bins)  "
+            f"NLL {cal['nll']:.4f}  Brier {cal['brier']:.4f}")
+
+
 @dataclass(frozen=True, slots=True)
 class SuccessCheck:
     """Result of :func:`evaluate_success_criteria`: ``(label, passed)`` per criterion."""

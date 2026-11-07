@@ -331,10 +331,56 @@ in the GUI filter popup, profile-preview tab and sample gallery. New: `--extend`
 resolved look options (`generation/render_options.py`), closing the open item of the board,
 solder, training-options and look work.
 
-Still open: D27 (legacy copper vs board-model jog/pour helpers), D29-D35 (mm/px helper, render
-defaults in one place, colour-jitter helper, Blender constants re-typed in `render_batch.py` / X12),
-the Blender job `TypedDict`s, `profile_dataset.py` continuing the sampling rng (documented, kept for
-pixel identity), the `typing` leftovers outside the renderer.
+Third round (2026-11-07, D27-D35 and the job contract; both golden tests unchanged, no rng draw moved):
+- D27: `board.geometry.polyline45(p0, p1, dedupe=True)` and `board.geometry.octagon` are the one
+  45-degree jog and pour outline; the legacy copper generator (`photoreal/copper.py`, `_polyline` and
+  the pours) calls them (`dedupe=False`: `cv2.polylines` blends a zero-length anti-aliased segment, so
+  the coinciding jog point stays; the jog of integer pixels is an integral float cast back to int32).
+- D33: `POUR_CELLS_PER_CLEARANCE` is defined in `board/zones.py` (`stitch_vias` divides by it);
+  `board/drc.py` imports it.
+- D34: `Vec` and `BBox` exist once (`board/geometry.py`; `model.py` imports them); `unit`, `perp`,
+  `add`, `clip`, `polyline45` moved from `routing/base.py` to `geometry.py` (re-exported by `base`;
+  `zones.py` no longer imports from the routing layer); the spelled-out 4-tuple is `BBox` in
+  `model.py`, `routing/base.py`, `routing/escape.py`, `board/__init__.py`.
+- R7 contract: `simple_sim/blender/job_schema.py` (stdlib only, `simple_sim/blender/__init__.py`
+  added): `JobFields`, `BakeOptions`, `BlenderJob`, `PreparedJob`, `BoardScene`, `SceneBody`,
+  `CameraPose`; imported by `blender3d/bake.py`, `runner.py`, `generation/blender.py` and by
+  `render_batch.py` inside Blender (puts the package root on `sys.path`, imports nothing else).
+  `tests/test_blender_bake.py` checks the keys of every writer and reader against it.
+- D30: defaults in one place: `job_schema` carries `DEFAULT_BLENDER_EXECUTABLE`,
+  `DEFAULT_CYCLES_SAMPLES`, `DEFAULT_DEVICE`, `DEFAULT_ENGINE` (`generation.blender.blender_settings`,
+  the runner and the script's argparse), `DEFAULT_COMPONENT_HEIGHT_MM`, `BOARD_SCALE`,
+  `DEFAULT_CAMERA_POSE`; `board.footprints.DEFAULT_FOOTPRINT` + `profile_footprint(profile)`
+  (`RenderSpec`, `draw.py`, `bake.py`, `preview/render.py`, `tools/update_sample_gallery.py`);
+  `bake.profile_component_height_mm(profile)` (`generation/dataset.py`, `preview/render.py`, the
+  gallery); `bake.BAKE_CONFIG_DEFAULTS` is the one table behind `bake_fields` and `prepare_job`.
+  Left for the owners: `opencv2d/render.py:64` (`footprint="chip_2pad"`), `look.mask_gloss` /
+  `rework_probability(config, default)` always called with the same constant (`scene.py:67,72`,
+  `generation/render_options.py:42-43`, `bake.py`: make `default` optional in `look.py`),
+  `gui/components/filter_popup/preview_render.py:105` and `gui/tabs/profile_preview/logic.py:248`
+  (`0.45`, use `profile_component_height_mm`).
+- D31: `palette.jittered(colour, rng, lo, hi)` (= `colour * float(rng.uniform(lo, hi))`), used at
+  `substrate.py` (mask base) and `rework.py` (flux). Left (owned files): `joints.py:37`,
+  `parts.py:119,194,229,273,275,277,307,441`, `scene.py:68`, `meniscus.py:87`. Grain: the home is
+  `imageops.WindowedNoise.normal`; the free-standing `rng.normal(0, sd, shape).astype(float32)` at
+  `substrate.py:58`, `camera.py:224,226`, `filters.py:23` stay until `imageops` gets a module function.
+- D32: `augment.sample_rotation_deg(rng, range, enable_cardinal_rotation_90=)` (the two draws of
+  `sample_augment_params`) and `augment.clean_augment(rotation_deg)` (`CLEAN_AUGMENT_KEYS` from
+  `NEUTRAL_AUGMENT`); `preview.render.sample_preview_augment` is now one line of both. Left:
+  `gui/components/filter_popup/preview_render.py:21-27` (X2, gui).
+- D29 partly: `render_batch.py` converts with `_mm` / `_mm_xy` (one place for the y flip); the
+  photoreal sites collapsed into `copper.mm_per_px(config)` during R5 and one `job.mm_per_px / ctx.ss`
+  (`copper.py:216`). Not unified: `footprints.pads_px` multiplies by the reciprocal and rounds,
+  `occupancy.Grid` divides with ceil/round, `part_from_pads` multiplies: different numerics, a shared
+  helper would change pixels.
+- D35: skipped. The per-part decisions re-typed in the Blender script (`_HEIGHT_RATIO`, cap fraction,
+  standoff, lead width, marking vocabularies; X12's 0.56 vs `parts.THICKNESS_RATIO` 0.55, dome
+  exponent 3 vs 2.5) would have to be written by `scene.render_board` into the scene dict (owned by
+  the look session) and the bake golden hashes that dict; the constants belong in `job_schema` once
+  `parts.py` / `meniscus.py` can import them from there.
+
+Still open: the D29/D30/D31/D32 sites listed above, D35, `profile_dataset.py` continuing the
+sampling rng (documented, kept for pixel identity), the `typing` leftovers outside the renderer.
 
 ## 5. Guard rails
 
@@ -353,3 +399,186 @@ pixel identity), the `typing` leftovers outside the renderer.
 - Docs to update alongside: AGENTS.md (test note, command registry), README/QUICKSTART
   (`simple-sim` script), `docs/architekture/*-Overview.md`, `architektur.md` via
   `tools/update_architektur_md.sh`, `gui/README.md` (stale sections).
+
+## 6. Re-audit 2026-11-07 (working tree after phase 6, uncommitted look/perf round)
+
+Read-only pass over the whole tree (`simple_sim/` 15.1k lines, `gui/` 18.9k, `tools/` 4.8k,
+`scripts/` 2.4k, `tests/` 6.1k; 610 tests, 607 pass / 3 skip in 178 s; both golden tests pass on
+the uncommitted tree, 48 s). Lens: modularity (extension points, layer boundaries) and
+scalability (per-call work that is constant per run, whole-dataset memory, UI-thread I/O).
+
+### 6.1 Status of the plan
+
+| Phase | Status | Evidence |
+|---|---|---|
+| 0, 1 | done | `tests/test_headless_imports.py` guards I1/I8; `print(` only in `cli*.py` + Blender script |
+| 2 shared helpers | open except D14/D17/D18/D19/D23-D25 | D1 device pick at 7 script sites; D5 three history blocks `manifest.py:146,186,399`; D7 108 literal file-name sites; D11 `hash_profile` re-reads YAML; D16 `sha256:` built twice; I5 `import simple_sim.eval_utils` 2.8 s; I7 `validate_config` still loads cv2 + `simple_sim.board` (measured via `sys.modules`); I4 `import simple_sim.board.model` loads cv2 via `board/__init__.py:22 -> drc -> occupancy` |
+| 3 typed records | open | `_path` key in 6 places, `load_checkpoint_model` 3-tuple, `parse_config_typed` result discarded (`config.py:79`), 11-positional `write_dataset_manifest` |
+| 4 logic into library | open | none of `training/evaluation/batch_predict/validation/dataset_merge/dataset_edit/inference/...` exist; `train_model` 256 lines / 44 prints; `gui/utils/validation_suite.py:13` is the only `gui -> tools` import; `simple_sim/preview/viewer_tk.py:219` the only `simple_sim -> gui` import |
+| 5 command registry | open | `cli.py:264 subprocess.call`, `:75 "add_json_flag" in src`; 7 tools not in `COMMANDS` (sim-to-real, calibrate-camera, look-stats, eval-real, mix-real, real-crops, look-montage); 40 `sys.path.insert` |
+| 6 renderer | mostly done | R2, R5, R6, R9, X5, D23-D25 done. Partly: R1 (5 callers still hand-merge via `merge_profile_render`: `profile_dataset.py:101`, `preview/render.py:377`, `filter_popup/preview_render.py:58`, `profile_preview/logic.py:190`, `update_sample_gallery.py:148`), R3 (`backends.py` holds capabilities only; dispatch `if backend == Backend.OPENCV_2D` at `dataset.py:456-475`), R4 (`generate_dataset` 208 lines, `generate_profile_dataset` 134 lines not decomposed), R7 (job contract still dicts), R8 (env read inside `realism.py:135`), D26, D28 (`REFDES_PREFIX` twice), D29, X8 (two live `fine_pitch` definitions: `escape.py:30` vs `copper.py:164`). Open: D27, D30, D31, D33, D34, D35/X12, R10 |
+| 7 GUI | open | `pipeline/tab.py` 2033 lines / 105 methods; threads in 6 tabs; GUI plan phase 4 untouched |
+| X1-X12 | only X5 closed | X1 `model_inference.py:22`, X2 `preview_render.py:24`, X3 `validation_suite.py:18`, X4 `train_profile.py:98`, X6, X7 `predictions/logic.py:91`, X9, X10 `preview_3d.py:475`, X11 `weights/logic.py:97` |
+
+### 6.2 Regression in the working tree (fix before commit)
+
+- **G1** `scripts/train_profile.py:85` unpacks 4 values, but the uncommitted freeze change made
+  `scripts/train.py:169 build_training` return 5 (`..., frozen`). `train_profile` raises
+  `ValueError: too many values to unpack` at start; no test imports it. Fix: unpack `frozen`,
+  pass it to `fit_epoch`, add a 1-epoch smoke test. This is the cost of L1 (training loop in a
+  script that another script imports).
+
+### 6.3 Findings of the uncommitted renderer round (all pixel-safe)
+
+- **U1** `light_roll_deg` threaded through 4 layers under 4 names (`render.py:76` -> `scene.py:248`
+  `roll`/`after` with `None` sentinel -> `context.py:41 roll_deg` -> `camera.py:142 axis_roll_deg`).
+  One `RenderContext.post_roll_deg`. S.
+- **U2** `context.py:52 if look.name == "quins"` selects the joint sampler by string. Make it a
+  `Look.joint_sampler: Callable` field so a third look needs no core edit. S.
+- **U3** `Grid.inflated_rect_rows` returns a `None` sentinel; the fallback is duplicated in
+  `zones.py:98-103` and `occupancy.py:124-131`. Always return rows. S.
+- **U4** `drc._end_connected(items=None)` (`drc.py:129-140`) rebuilds `_copper(board)` per call
+  when omitted. Make `items` required. S.
+- **U5** `imageops.gradient`, `heightmap_normals`, `contact_shadow`/`_rolled_spans`
+  (`imageops.py:59-85,231-269`) re-implement `np.gradient`/`np.linalg.norm`/`np.roll` and claim
+  bit identity; only the golden tests pin it. Add equality property tests incl. border cases. S.
+- **U6** `DENSE_PACKING` (`placement.py:46`, a look constant) lives in the board layer; `crowd`
+  overlaps `Packing` (`scene.py:97,160` vs `placement.py:77`). Move to `look.py`, fold `crowd` in. S.
+- **U7** `Look` is becoming the render-defaults object (`shadow`, `silkscreen_skip`, `packing`).
+  Finish D30 there: numeric `mask_gloss`/`rework` on `LEGACY_LOOK`, drop the `default` args of
+  `mask_gloss()/rework_probability()` and the constant re-imports in `bake.py:45-46,69-70`,
+  `render_options.py:18`. S.
+- **U8** `camera_model` is 83 lines (`camera.py:139`); `camera_settings` returns an untyped dict and
+  `CAMERA_DEFAULTS["channel_axis"]` is a string among range lists, so typos surface at render
+  time. Frozen `CameraSettings` validated in `config._validate_camera`. M.
+
+### 6.4 New findings: modularity and extension points
+
+- **N1 Part families are a 7-file string chain.** `parts.draw_body` (115 lines, `:272-346`),
+  `parts.py:139-153`, `solder_defects.py:88-96`, `silkscreen.py:23-30`, `footprints.family_of:52-71`
+  (substring sniffing), `palette.py:58-84` (CHIPS/LEADED/ARRAY/UNMARKED/CAP_LEN/REFDES),
+  `render_batch.py:36,227,248-279`, `copper.py:164`. Fix: cv2-free `PartFamily` frozen dataclass
+  (kind, cap_len, unmarked, refdes, edge inset, height_ratio, marking rule) in a `FAMILIES`
+  table in `board/footprints.py`; `parts.py` dispatches via a drawer registry keyed by `kind`;
+  Blender reads the same table from the baked scene (closes half of D35). Pixel-safe. M.
+- **N2 Render config dict re-resolved per image.** `config` is passed through
+  `draw_board/_render_board/_render_photoreal_base` (`scene.py:35,82,135`) and read for
+  `texture_dir`, `component_type`, `component_color`, `marking_probability`, `mm_per_px`,
+  `camera`, `mask_gloss`, `rework`; `board_options` validates per image (`:51`); `get_look`
+  runs 3x per image. Resolve once in `RenderContext.for_render` (typed fields) or a
+  `ResolvedRender` cached on `RenderSpec`. Pixel-safe. M.
+- **N3 Scene prologue duplicated.** `_render_board:94-117` and `_render_photoreal_base:154-185`
+  both do scaled_geometry, family_of, draw_board, body_geometry, boxPoints,
+  solder_defect_layout; the latter has 10 args. Extract `_scene_setup() -> SceneGeometry`
+  (frozen) and `_draw_part()`. Pixel-safe by whole-block moves. M.
+- **N4 Backend dispatch.** Add a lazily imported `render_records` to `BackendInfo` (or a
+  `RenderBackend` Protocol); removes `dataset.py:456-475` and `preview/render.py:34-35`. S.
+- **N5 `generate_profile_dataset` is a second `generate_dataset`** (`profile_dataset.py:35-168`):
+  own profile loop, own sampling loop, hard-coded `profiles_dir`, `load_image_filters_env()`
+  inside, ignores the R4 split. Reuse `resolve_run` + `plan_records` with an
+  "rng continues into render" flag (keeps `:119-121`). M.
+- **N6 Defect types as raw strings** at 14 renderer sites (`scene.py:99,120,171-212`,
+  `solder_defects.py:30,33`) and in `defects.py:85,94,118-127`, `batch_predict.py:518`,
+  although `DefectClass(StrEnum)` exists. S.
+- **N7 Registries duplicated:** `LOOKS` tuple vs `_LOOKS` dict (`look.py:41,110`, validated via
+  lazy import in `config.py:386`); `BOARD_ROUTERS` vs `ROUTERS` (`board/__init__.py:40`). Derive
+  tuples from dicts. `Look`/`Packing` frozen dataclasses hold mutable arrays/dicts
+  (`look.py:57-65`): `setflags(write=False)` + `MappingProxyType`. S.
+- **N8 Profile editor duplicates geometry:** `preview_3d.py:374-523 _build_scene` (149 lines) and
+  `blender_live_preview.py:150-169` each define `mid()` over `geometry_ranges`; pads hand-placed
+  (X10) instead of `footprint_pads`/`geometry.pad_positions`; `_render:72-147` builds the Blender
+  job by hand while `generation.blender.blender_job` exists. M.
+- **N9 Three subprocess launch conventions in the GUI:** `run_pipeline.sh` env
+  (`pipeline/logic.py:185-213`), `bash predict.sh` (`weights/logic.py:306`),
+  `.venv/bin/python scripts/train.py` (`predictions/logic.py:101`), `python3 scripts/arena_report.py`
+  (`weights/logic.py:97`). One `cli.argv_for(cmd, **opts) -> [sys.executable, "-m", "simple_sim", ...]`
+  (goes with P2/P4). S-M.
+- **N10 `pipeline/tab.py` god class** (1955-line class, 105 methods; `_build_run_specs` 171,
+  `_confirm_pipeline_start` 142, `_start_pipeline` 108 lines). Tk-free `RunSpecBuilder` and
+  `FilterProfileController`; `DatasetPicker`/`ModelPicker` widgets replace the five combo
+  populators; dataset CRUD (`:1640-1880`) moves to the Datasets tab. L.
+- **N11 Polling instead of the dispatcher:** `after(120/150/100)` tick loops in
+  `pipeline/tab.py:1082`, `weights/tab.py:146`, `predictions/tab.py:206`, `profile_preview/tab.py:432`,
+  `monitor.py:399`, `profile_editor/app.py:465,511`; logic classes take `queue.Queue` and
+  `dict[str, StringVar]` although `UiDispatcher.post` (`gui/core/tasks.py:36`) exists. M.
+- **N12 Helper tools outside the registry** (D21 grew to 5 copies of the image-folder loader:
+  `sim_to_real`, `calibrate_camera`, `look_stats`, `eval_real`, `look_montage`, all importing
+  `IMAGE_EXTENSIONS` from `photoreal/substrate.py`); tests load them via
+  `spec_from_file_location` or `pythonpath=["."]`; `tools/mix_real.py:114-131` edits the manifest
+  by hand. `simple_sim/images.py` (`IMAGE_EXTENSIONS`, `list_images`), `simple_sim/realism/`
+  package, register the commands. S.
+- **N13 Packaging gap:** `pyproject.toml` packages only `simple_sim*`; `gui/monitor.py:15`,
+  `profile_editor/app.py:15`, `filter_popup/preview_panel.py:258` mutate `sys.path`;
+  `simple-sim gui` only works from a checkout. Package `gui` under the `[gui]` extra. M.
+
+### 6.5 New findings: scalability
+
+- **S1 Dataset JSONL parsed up to 5x per run.** `_BaseROIDataset.__init__` (`data_loader.py:156`)
+  reads full meta+labels per split instance; `batch_predict --split all` = 3 datasets +
+  `dataset_info` + `_gt_profile_map` -> labels 5x, meta 4x (measured 50k rows: ~5.4 s redundant).
+  `read_jsonl` recomputes `dataclasses.fields()` per line (`schema.py:150-153`);
+  `_get_label_index` does `class_names.index()` per `__getitem__` (`data_loader.py:244`).
+  Fix: hoist the field set (S), one `DatasetIndex` (L11) shared by datasets, predictors and GUI (M).
+- **S2 Per-call env/subprocess/file work in hot paths.** `telemetry.emit` reads the env var,
+  `makedirs` and opens the file per batch (`telemetry.py:20-27`, called from
+  `eval_utils.py:127`, `train.py:103`); `manifest._get_git_commit` spawns `git rev-parse` on
+  every manifest write (`manifest.py:48-61`); `parallel.py:48,61,76`, `realism.py:135`,
+  `filter_settings.py:234` read env inside library functions. Fix: `telemetry.set_sink()`,
+  cached git commit as optional parameter, env resolution at the CLI boundary only. S.
+- **S3 Texture substrate decodes the photo per image** (`substrate.py:29 cv2.imread`); only the
+  directory listing is cached. Per-process `lru_cache` of read-only decoded arrays keyed by
+  path+mtime. Pixel-safe. S.
+- **S4 `--extend` holds the whole old dataset in lists** (`dataset.py:186-187,488-489`;
+  `records/tmp_meta/tmp_labels/meta_rows` coexist in `common.py:191-207`). Stream rows, keep only
+  ids/splits of the old set. M.
+- **S5 Report/arena scans re-read and re-walk.** `reports.load_reports` parses every report per
+  call (`reports.py:44-63`, called by `cli.status`, `arena`, `batch_predict.history_rows`);
+  `arena.best_rows_by_model` re-parses timestamps inside sort keys (`:176-187`);
+  `path_size_bytes` walks a dataset dir per dataset per model per report (`arena.py:189-194,261-263`).
+  mtime-keyed caches. S-M.
+- **S6 Blocking I/O on the Tk thread.** `pipeline/tab.py:1603-1609` reads whole
+  `meta.jsonl`/`labels.jsonl` per dataset selection; `pipeline/ui.py:519-539` decodes 12 images
+  + overlays per refresh on the UI thread; `_refresh_models:1290-1298` stats every checkpoint
+  synchronously; `weights/logic.py:467-515` reopens manifests per dataset; profile editor
+  parses every YAML every 1.4 s (`profile_registry.py:54-70` from `app.py:511`). `DatasetIndex`
+  via TaskRunner, thumbnails in a worker, stat-first mtime cache (L10 `catalog.py`). M.
+- **S7 Per-image render hot spots (profile, 256² ss 2: legacy 55.7 ms, quins 49.8 ms):** `blend`
+  ~10 ms/img (`cv2.boundingRect((alpha>0))` on full-frame alphas, `imageops.py:48`),
+  `procedural_substrate` ~9 ms (rng-bound, not skippable), `camera_model` 7 ms,
+  `meniscus.shade` 6 ms. Pixel-safe: `blend(..., window=)` so callers that know the box skip
+  the boundingRect. S. `RenderSpec` pickles to 370 B, so pool overhead is not an issue.
+- **S8 `model_bundle` does a full `torch.load` per `.pt` to list a bundle** (`model_bundle.py:103-113`;
+  plan L8). Sidecar JSON or `torch.load(..., mmap=True)` of the metadata only. S.
+
+### 6.6 New findings: correctness found on the way
+
+- **C1** `sample_check.choose_samples` selects the split by substring `f"/{split}/" in sample_id`
+  (`sample_check.py:42`) instead of `splits.read_split`, so it diverges from `ROIDataset` for
+  merged or re-split datasets. S.
+- **C2** `augment.apply_image_filter_overrides` is a 144-line ladder (`augment.py:13`); table-drive
+  it in the existing key order (rng draw order preserved). M.
+- **C3** The divergent modules of section 2 have no tests at all (`gui/utils/model_inference.py`,
+  `validation_suite.py`, `filter_popup/preview_render.py`, `dataset_store.py`, `two_stage.py`,
+  `telemetry.py`, `preview/viewer_tk.py`), so X1-X3 cannot be fixed with a regression net.
+  Write the tests against the library targets while doing L4/L7. S each.
+
+### 6.7 Test-suite health
+
+178 s total; `test_render_golden_variants` is one 48 s test (589 cases, no ids);
+`test_eval_utils::test_ensemble_and_bundle_eval_predict` and `test_script_cores_end_to_end`
+each 20 s (generate + train resnet18); `test_headless_imports` 5 s per torch-loading param.
+No `tests/conftest.py`: dataset fixtures hand-rolled in 4 files, a `"roi":` config dict repeated
+in 6, `generate_dataset` called for fixtures in 10. Fix: session-scoped `tiny_dataset`/`trained_model`
+fixtures, a `slow` marker documented in AGENTS.md, parametrised variants. M.
+
+### 6.8 Recommended order
+
+1. G1 (regression) and U1-U7 before the current round is committed; they are small and the
+   golden tests guard them.
+2. Phase 2 in the order S1 + L11 `DatasetIndex` (unblocks S6, X7, D6), S2, D1/D2/D7/D9/D10/D16,
+   I4 (`board/__init__.py` lazy, PEP 562), I5, I7, N12, S3, S8.
+3. N1 + N2 + N3 (renderer extension points), then the open phase-6 leftovers (D27, D30/U7,
+   D33, D34, D35 via the baked `FAMILIES` table, R3 via N4, R4 via N5).
+4. Phase 4/5 together: L1/L2/L3 into `simple_sim/training.py`, `evaluation.py`, `inference.py`
+   (closes X1, X4, G1 for good), then P2 registry + N9 `cli.argv_for` (closes P4, D22, X9, X11).
+5. GUI: N11 dispatcher first (mechanical, per tab), then N10 split, then S6.

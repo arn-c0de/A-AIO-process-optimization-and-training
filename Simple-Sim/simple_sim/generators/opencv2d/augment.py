@@ -156,6 +156,26 @@ def apply_image_filter_overrides(
     return aug
 
 
+CARDINAL_ROTATIONS_DEG = (0.0, 90.0, 180.0, 270.0)
+
+#: The augment keys of a clean image (previews, galleries): neutral values of ``NEUTRAL_AUGMENT``.
+CLEAN_AUGMENT_KEYS = ("blur_sigma", "noise_stddev", "brightness_factor", "contrast_factor")
+
+
+def sample_rotation_deg(rng: np.random.Generator, rotation_range: tuple[float, float], *,
+                        enable_cardinal_rotation_90: bool = True) -> float:
+    """Global in-plane orientation: a cardinal base (one ``rng.choice`` of 0/90/180/270, skipped
+    without *enable_cardinal_rotation_90*) plus one uniform jitter draw in *rotation_range*."""
+    base_orientation_deg = float(rng.choice(list(CARDINAL_ROTATIONS_DEG))) if enable_cardinal_rotation_90 else 0.0
+    rotation_jitter_deg = float(rng.uniform(rotation_range[0], rotation_range[1]))
+    return float(base_orientation_deg + rotation_jitter_deg)
+
+
+def clean_augment(rotation_deg: float = 0.0) -> dict[str, float]:
+    """Augment of a clean image (no blur, grain, brightness or contrast change) at *rotation_deg*."""
+    return {**{key: NEUTRAL_AUGMENT[key] for key in CLEAN_AUGMENT_KEYS}, "rotation_deg": float(rotation_deg)}
+
+
 def sample_augment_params(
     augment_config: dict[str, Any],
     domain_config: dict[str, Any],
@@ -170,15 +190,14 @@ def sample_augment_params(
     contrast_min, contrast_max = augment_config["contrast_factor_range"]
     rot_min, rot_max = augment_config["rotation_deg_range"]
 
-    base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0])) if enable_cardinal_rotation_90 else 0.0
-    rotation_jitter_deg = float(rng.uniform(rot_min, rot_max))
+    rotation_deg = sample_rotation_deg(rng, (rot_min, rot_max), enable_cardinal_rotation_90=enable_cardinal_rotation_90)
 
     return {
         "blur_sigma": float(rng.uniform(blur_min, blur_max)),
         "noise_stddev": float(rng.uniform(noise_min, noise_max)),
         "brightness_factor": float(rng.uniform(bright_min, bright_max)),
         "contrast_factor": float(rng.uniform(contrast_min, contrast_max)),
-        "rotation_deg": float(base_orientation_deg + rotation_jitter_deg),
+        "rotation_deg": rotation_deg,
         "perspective_angle_x": float(rng.uniform(-10.0, 10.0)),
         "perspective_angle_y": float(rng.uniform(-10.0, 10.0)),
         "motion_blur_angle": float(rng.uniform(0.0, 360.0)),

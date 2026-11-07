@@ -455,3 +455,25 @@ def test_pour_has_no_floating_islands():
             anchored = set(np.unique(labels[grid.inflate(own, grid.res) > 0]))
             for k in range(1, n):
                 assert k in border or k in anchored, (seed, k)
+
+
+def test_shared_geometry_helpers_keep_both_behaviours():
+    """``polyline45`` / ``octagon`` serve the board model and the legacy copper generator (D27):
+    integer pixel inputs give integral floats, the legacy path keeps a coinciding jog point."""
+    from simple_sim.board.geometry import octagon, polyline45
+    from simple_sim.board.routing.base import polyline45 as from_routing
+
+    assert from_routing is polyline45
+    assert polyline45((0.0, 0.0), (10.0, 4.0)) == [(0.0, 0.0), (4.0, 4.0), (10.0, 4.0)]
+    assert polyline45((0.0, 0.0), (10.0, 0.0)) == [(0.0, 0.0), (10.0, 0.0)]             # jog of 0 dropped
+    assert polyline45((0.0, 0.0), (10.0, 0.0), dedupe=False) == [(0.0, 0.0), (0.0, 0.0), (10.0, 0.0)]
+    pts = np.array(polyline45((3, 7), (-5, 20), dedupe=False), dtype=np.int32)
+    assert pts.tolist() == [[3, 7], [-5, 15], [-5, 20]]
+    assert octagon(1.0, 2.0, 10.0, 6.0, 1.5) == [(2.5, 2.0), (9.5, 2.0), (11.0, 3.5), (11.0, 6.5), (9.5, 8.0), (2.5, 8.0),
+                                                 (1.0, 6.5), (1.0, 3.5)]
+
+
+def test_pour_raster_resolution_is_one_constant():
+    from simple_sim.board import drc, zones
+
+    assert drc.POUR_CELLS_PER_CLEARANCE is zones.POUR_CELLS_PER_CLEARANCE == 4

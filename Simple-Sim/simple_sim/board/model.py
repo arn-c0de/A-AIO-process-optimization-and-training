@@ -11,9 +11,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from simple_sim.board.geometry import BBox, Vec
 from simple_sim.board.rules import DesignRules
-
-Vec = tuple[float, float]
 PadRole = Literal["signal", "power", "gnd", "thermal", "nc"]
 PadShape = Literal["rect", "roundrect", "circle"]
 NetClass = Literal["signal", "power"]
@@ -40,7 +39,7 @@ class Pad:
         return self.size[0] / 2.0, self.size[1] / 2.0
 
     @property
-    def bbox(self) -> tuple[float, float, float, float]:
+    def bbox(self) -> BBox:
         """Axis-aligned (x0, y0, x1, y1) in mm (rotation is 0 or 90 degrees for every footprint here)."""
         hx, hy = self.half
         return self.center[0] - hx, self.center[1] - hy, self.center[0] + hx, self.center[1] + hy
@@ -61,7 +60,7 @@ class Part:
         return self.pose[0], self.pose[1]
 
     @property
-    def keepout(self) -> tuple[float, float, float, float]:
+    def keepout(self) -> BBox:
         """Bounding box of body and pads in mm: nothing of another net may be routed through it."""
         bl, bw = self.body
         if round(self.pose[2]) % 180 == 90:
@@ -131,7 +130,7 @@ class Board:
     ports: list[Port] = field(default_factory=list)
 
     @property
-    def bbox(self) -> tuple[float, float, float, float]:
+    def bbox(self) -> BBox:
         xs = [p[0] for p in self.outline]
         ys = [p[1] for p in self.outline]
         return min(xs), min(ys), max(xs), max(ys)

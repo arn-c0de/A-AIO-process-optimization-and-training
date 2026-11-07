@@ -110,3 +110,26 @@ def test_success_criteria_text_block_unchanged():
         "", "✗ SOME CHECKS FAILED", bar,
     ])
     assert format_success_criteria(check, ascii_only=True).splitlines()[4] == "PASS: Val accuracy > 70%"
+
+
+# --------------------------------------------------------------------------- calibration
+
+def test_calibration_metrics_hand_computed():
+    from simple_sim.metrics import ECE_BINS, calibration_metrics, format_calibration
+
+    p = np.array([[0.9, 0.1], [0.9, 0.1], [0.3, 0.7], [0.5, 0.5]])
+    y = np.array([0, 1, 1, 0])
+    cal = calibration_metrics(p, y)
+    assert cal["n_bins"] == ECE_BINS == 15
+    # bins: 0.9 -> bin 13 (acc 0.5, conf 0.9), 0.7 -> bin 10 (acc 1, conf 0.7), 0.5 -> bin 7 (acc 1, conf 0.5)
+    assert cal["ece"] == pytest.approx(0.5 * 0.4 + 0.25 * 0.3 + 0.25 * 0.5)
+    assert cal["nll"] == pytest.approx(-np.mean(np.log([0.9, 0.1, 0.7, 0.5])))
+    assert cal["brier"] == pytest.approx(np.mean([0.02, 1.62, 0.18, 0.5]))
+    assert format_calibration(cal).startswith("Calibration: ECE 0.4000 (15 bins)  NLL ")
+    perfect = calibration_metrics(np.eye(3)[[0, 1, 2]], [0, 1, 2])
+    assert perfect == {"ece": 0.0, "nll": pytest.approx(0.0), "brier": 0.0, "n_bins": 15}
+    assert calibration_metrics(np.zeros((0, 3)), [])["ece"] == 0.0
+    with pytest.raises(ValueError):
+        calibration_metrics(p, [0, 1, 1])
+    with pytest.raises(ValueError):
+        calibration_metrics(p, [0, 2, 0, 0])

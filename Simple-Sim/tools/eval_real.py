@@ -10,6 +10,9 @@ Reported per folder: number of images, accuracy (predicted class == folder class
 predicted ``OK`` and the predicted-class histogram; overall: the binary inspection view
 (``OK`` vs. any defect): false-call rate on good parts and escape rate on defective ones.
 
+``--tta`` averages the softmax over flips and quarter turns; ``--calibration`` adds ECE (15 bins),
+NLL and Brier score over the images of known classes (``calibration`` in the result).
+
 Usage:
     python tools/eval_real.py --checkpoint models/run_0402_c.pt --real data/real_eval [--json out.json]
 """
@@ -30,7 +33,9 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import preprocess_bgr  # noqa: E402
+from simple_sim.eval_utils import model_outputs  # noqa: E402
 from simple_sim.generators.opencv2d.photoreal import IMAGE_EXTENSIONS  # noqa: E402
+from simple_sim.metrics import calibration_metrics, format_calibration  # noqa: E402
 from simple_sim.models import load_checkpoint_model  # noqa: E402
 
 
@@ -53,8 +58,10 @@ def class_folders(root: Path) -> list[tuple[str, str, list[Path]]]:
 
 
 @torch.no_grad()
-def predict(model: torch.nn.Module, files: list[Path], size: tuple[int, int], batch: int = 64) -> list[int]:
-    preds: list[int] = []
+def predict_probs(model: torch.nn.Module, files: list[Path], size: tuple[int, int], batch: int = 64,
+                  *, tta: bool = False) -> np.ndarray:
+    """Softmax probabilities ``[N, C]`` of *files* (with *tta*: averaged over flips and quarter turns)."""
+    probs: list[np.ndarray] = []
     for i in range(0, len(files), batch):
         imgs = []
         for p in files[i:i + batch]:
@@ -63,20 +70,31 @@ def predict(model: torch.nn.Module, files: list[Path], size: tuple[int, int], ba
                 raise SystemExit(f"Failed to read {p}")
             interp = cv2.INTER_CUBIC if img.shape[1] < size[0] else cv2.INTER_AREA
             imgs.append(preprocess_bgr(cv2.resize(img, size, interpolation=interp)))
-        preds.extend(model(torch.stack(imgs)).argmax(1).tolist())
-    return preds
+        probs.append(torch.softmax(model_outputs(model, torch.stack(imgs), tta=tta).float(), dim=1).numpy())
+    return np.concatenate(probs) if probs else np.zeros((0, 0), dtype=np.float32)
+
+
+def predict(model: torch.nn.Module, files: list[Path], size: tuple[int, int], batch: int = 64,
+            *, tta: bool = False) -> list[int]:
+    return predict_probs(model, files, size, batch, tta=tta).argmax(1).tolist()
 
 
 def evaluate(model: torch.nn.Module, class_names: list[str], root: Path, size: tuple[int, int],
-             limit: int, seed: int = 0) -> dict[str, Any]:
+             limit: int, seed: int = 0, *, tta: bool = False, calibration: bool = False) -> dict[str, Any]:
     rng = np.random.default_rng(seed)
     groups: dict[str, Any] = {}
     good = good_flagged = bad = bad_passed = 0
+    cal_probs: list[np.ndarray] = []
+    cal_true: list[int] = []
     for group, cls, files in class_folders(root):
         if len(files) > limit:
             files = [files[i] for i in sorted(rng.choice(len(files), limit, replace=False))]
-        names = [class_names[i] for i in predict(model, files, size)]
+        probs = predict_probs(model, files, size, tta=tta)
+        names = [class_names[i] for i in probs.argmax(1)]
         hist = Counter(names)
+        if cls in class_names:
+            cal_probs.append(probs)
+            cal_true.extend([class_names.index(cls)] * len(names))
         n = len(names)
         groups[group] = {"class": cls, "images": n, "known_class": cls in class_names,
                          "accuracy": hist[cls] / n, "predicted_ok": hist["OK"] / n,
@@ -85,9 +103,16 @@ def evaluate(model: torch.nn.Module, class_names: list[str], root: Path, size: t
             good, good_flagged = good + n, good_flagged + n - hist["OK"]
         else:
             bad, bad_passed = bad + n, bad_passed + hist["OK"]
-    return {"groups": groups,
-            "false_call_rate": good_flagged / good if good else None,
-            "escape_rate": bad_passed / bad if bad else None}
+    result = {"groups": groups,
+              "false_call_rate": good_flagged / good if good else None,
+              "escape_rate": bad_passed / bad if bad else None}
+    if tta:
+        result["tta"] = True
+    if calibration:
+        probs_all = np.concatenate(cal_probs) if cal_probs else np.zeros((0, len(class_names)))
+        result["calibration"] = {**calibration_metrics(probs_all, np.asarray(cal_true, dtype=np.int64)),
+                                 "images": int(len(cal_true))}
+    return result
 
 
 def format_report(result: dict[str, Any]) -> str:
@@ -97,6 +122,8 @@ def format_report(result: dict[str, Any]) -> str:
     fc, esc = result["false_call_rate"], result["escape_rate"]
     lines.append(f"false-call rate (good flagged): {'-' if fc is None else f'{fc:.3f}'}   "
                  f"escape rate (defect passed as OK): {'-' if esc is None else f'{esc:.3f}'}")
+    if "calibration" in result:
+        lines.append(f"{format_calibration(result['calibration'])}  (known classes, {result['calibration']['images']} images)")
     return "\n".join(lines)
 
 
@@ -106,10 +133,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--real", type=Path, required=True, help="folder with one sub-folder per class")
     ap.add_argument("--limit", type=int, default=1000, help="max images per sub-folder (random subset)")
     ap.add_argument("--size", type=int, default=256, help="ROI size if the checkpoint has no config")
+    ap.add_argument("--tta", action="store_true",
+                    help="test-time augmentation: average over horizontal/vertical flips and quarter turns")
+    ap.add_argument("--calibration", action="store_true", help="report ECE (15 bins), NLL and Brier score")
     ap.add_argument("--json", type=Path)
     args = ap.parse_args(argv)
     model, class_names, checkpoint = load_checkpoint_model(args.checkpoint, "cpu")
-    result = evaluate(model, class_names, args.real, roi_size(checkpoint, args.size), args.limit)
+    result = evaluate(model, class_names, args.real, roi_size(checkpoint, args.size), args.limit,
+                      tta=args.tta, calibration=args.calibration)
     result["checkpoint"] = str(args.checkpoint)
     print(format_report(result))
     if args.json:

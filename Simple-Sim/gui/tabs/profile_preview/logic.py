@@ -18,6 +18,7 @@ from typing import Any
 
 import numpy as np
 
+from gui.utils.pipeline_helpers import apply_render_overrides, render_overrides, render_overrides_text
 from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generators.opencv2d.geometry import sample_nominal_geometry
@@ -65,6 +66,12 @@ class PreviewRequest:
     blender_samples: int = 64
     blender_engine: str = ""  # "" = from config
     blender_device: str = ""  # "" = from config
+    # render.look / render.board overrides on top of the run config ("" = from config), both backends
+    # (the 3D board bake renders the same board model and look): see gui.utils.pipeline_helpers.render_overrides.
+    look: str = ""
+    board_routing: str = ""
+    board_drc: str = ""
+    board_rules: str = ""
 
 
 @dataclass
@@ -165,6 +172,10 @@ class ProfilePreviewLogic:
             return self._render_2d(req, profile, cfg, states, out_dir, on_image, on_log, should_stop)
         return self._render_3d(req, profile, cfg, states, out_dir, on_image, on_log, should_stop)
 
+    def _overrides(self, req: PreviewRequest) -> dict[str, Any]:
+        """``render`` keys the request overrides (``look``, ``board``); raises ``ValueError`` on unknown values."""
+        return render_overrides(look=req.look, routing=req.board_routing, drc=req.board_drc, design_rules=req.board_rules)
+
     def _camera_cfg(self, render_cfg: dict[str, Any], req: PreviewRequest) -> dict[str, Any] | None:
         if req.camera == CAMERA_FROM_CONFIG:
             return render_cfg.get("camera")
@@ -195,10 +206,13 @@ class ProfilePreviewLogic:
             render_cfg.pop("camera", None)
         else:
             render_cfg["camera"] = camera
+        overrides = self._overrides(req)
+        apply_render_overrides(render_cfg, overrides)
         footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
         tolerances = profile.get("tolerances")
         spec = RenderSpec(roi_size=(w, h), render=render_cfg, footprint=footprint, tolerances=tolerances)
-        on_log(f"ROI {w}x{h} | style {req.style} | supersampling {req.supersampling}x | camera {req.camera}")
+        on_log(f"ROI {w}x{h} | style {req.style} | supersampling {req.supersampling}x | camera {req.camera}"
+               + (f" | {render_overrides_text(overrides)}" if overrides else ""))
 
         def render_one(item: tuple[str, int]) -> PreviewImage:
             state, v = item
@@ -234,7 +248,8 @@ class ProfilePreviewLogic:
 
         roi = cfg["roi"]
         w, h, mpp = int(roi["width_px"]), int(roi["height_px"]), float(roi["mm_per_px"])
-        render_cfg = cfg.get("render") or {}
+        overrides = self._overrides(req)
+        render_cfg = apply_render_overrides(copy.deepcopy(cfg.get("render") or {}), overrides)
         settings = blender_settings(cfg)
         settings["samples"] = int(req.blender_samples)
         if req.blender_engine:
@@ -266,7 +281,8 @@ class ProfilePreviewLogic:
                                         bake=bake))
                 meta.append((state, v, out_dir / rel, defect, nominal))
         on_log(f"Blender: {len(jobs)} images | {settings['engine']} | {settings['samples']} samples | "
-               f"{settings['device']} | board supersampling {req.supersampling}x")
+               f"{settings['device']} | board supersampling {req.supersampling}x"
+               + (f" | {render_overrides_text(overrides)}" if overrides else ""))
         # One Blender run per image: each image shows up as soon as it is done and Stop takes effect
         # between images. The boards are baked in background threads while Blender renders the
         # previous image, so the bake (2D photoreal render of the board) is off the critical path.

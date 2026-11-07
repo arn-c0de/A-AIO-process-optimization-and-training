@@ -8,10 +8,14 @@ around :func:`footprint_pads`), so defect geometry, labels and the Blender scene
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from simple_sim.board.model import Pad, PadRole, Part, Vec
+
+# Footprint of the renderers, jobs and specs when a caller or profile names none: a two-terminal chip.
+DEFAULT_FOOTPRINT = "chip_2pad"
 
 LEFT: Vec = (-1.0, 0.0)
 RIGHT: Vec = (1.0, 0.0)
@@ -47,6 +51,11 @@ class PadSpec:
     def as_dict(self) -> dict[str, int]:
         """The legacy ``{"x", "y", "w", "h"}`` form the drawing code consumes."""
         return {"x": self.x, "y": self.y, "w": self.w, "h": self.h}
+
+
+def profile_footprint(profile: Mapping[str, Any]) -> str:
+    """``component.footprint`` of a component profile (:data:`DEFAULT_FOOTPRINT` when unset)."""
+    return str((profile.get("component") or {}).get("footprint", DEFAULT_FOOTPRINT))
 
 
 def family_of(footprint: str, component_type: str = "") -> str:

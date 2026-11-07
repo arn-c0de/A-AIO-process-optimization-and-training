@@ -3,15 +3,11 @@
 Run via (normally through ``simple_sim.generators.blender3d.render_blender_batch``):
   blender --background --factory-startup --python render_batch.py -- --jobs jobs.jsonl --out_root <dir> --samples 64
 
-Each JSONL job carries the usual sample fields (``image_path``, ``seed``, ``mm_per_px``,
-``roi_width_px``, ``roi_height_px``, ``component_height_mm``, ``augment``, ``render_3d``) plus a
-``board`` entry added by the runner (see ``blender3d/bake.py``)::
-
-  "board": {"texture": "<png>", "scale": 2, "family": "resistor|capacitor|sot|soic|qfn",
-            "pads": [[cx, cy, w, h], ...], "thermal_pad": index | null,
-            "excess": [pad index, ...], "balls": [[x, y, r], ...], "pose": {"tilt", "azimuth", "zoom"},
-            "body": null | {"center": [x, y], "length", "width", "rotation_deg", "tilt_deg",
-                            "is_tombstone", "raised_sign"}}
+Each JSONL job is a ``PreparedJob`` of ``simple_sim.blender.job_schema`` (the stdlib-only contract this
+script shares with the library): the sample fields (``image_path``, ``seed``, ``mm_per_px``,
+``roi_width_px``, ``roi_height_px``, ``component_height_mm``, ``augment``, ``render_3d``) plus the
+``board`` scene added by the bake (``blender3d/bake.py``): texture, scale, camera pose, family,
+pads, thermal pad, excess pads, solder balls and the body.
 
 Layout values are camera pixels relative to the ROI centre, image convention (x right, y down),
 identical to the 2D renderer. The scene (1 Blender unit = 1 mm): board plane with the baked
@@ -32,6 +28,16 @@ from typing import Any
 import bpy
 from mathutils import Vector
 
+# The job contract lives next to this script in the simple_sim package, which Blender's Python does
+# not have on its path (stdlib-only: nothing else of the package is imported).
+_PACKAGE_ROOT = str(Path(__file__).resolve().parents[2])
+if _PACKAGE_ROOT not in sys.path:
+    sys.path.insert(0, _PACKAGE_ROOT)
+from simple_sim.blender.job_schema import (BOARD_SCALE, DEFAULT_CAMERA_POSE, DEFAULT_COMPONENT_HEIGHT_MM,  # noqa: E402
+                                           DEFAULT_DEVICE, DEFAULT_ENGINE, BoardScene, PreparedJob)
+
+PadMm = tuple[float, float, float, float]  # (cx, cy, w, h) in mm, Blender axes
+
 # Height / body-width ratios of real packages (0603: 0.45/0.8, SOT-23: 1.0/1.3, SOIC: 1.5/3.9, QFN: 0.9/5).
 _HEIGHT_RATIO = {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18}
 _RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
@@ -44,8 +50,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--jobs", required=True)
     parser.add_argument("--out_root", required=True)
     parser.add_argument("--samples", type=int, required=True)
-    parser.add_argument("--device", default="CPU")
-    parser.add_argument("--engine", default="BLENDER_EEVEE", help="Render engine (BLENDER_EEVEE or CYCLES)")
+    parser.add_argument("--device", default=DEFAULT_DEVICE)
+    parser.add_argument("--engine", default=DEFAULT_ENGINE, help="Render engine (BLENDER_EEVEE or CYCLES)")
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
     return parser.parse_args(argv)
 
@@ -105,6 +111,16 @@ def _cfg_material(name: str, cfg: dict[str, Any], default_color, default_roughne
 
 
 # --------------------------------------------------------------------------- geometry helpers
+
+def _mm(px: float, mmpp: float) -> float:
+    """Scene length in camera pixels -> mm (1 Blender unit)."""
+    return float(px) * mmpp
+
+
+def _mm_xy(x: float, y: float, mmpp: float) -> tuple[float, float]:
+    """Scene point (camera px relative to the ROI centre, image y down) -> Blender (x, y up) in mm."""
+    return float(x) * mmpp, -float(y) * mmpp
+
 
 def _mesh_object(name: str, verts, faces, mat: bpy.types.Material, *, smooth: bool = True) -> bpy.types.Object:
     mesh = bpy.data.meshes.new(name)
@@ -207,7 +223,7 @@ def _look_at(obj: bpy.types.Object, target: Vector) -> None:
 
 # --------------------------------------------------------------------------- part
 
-def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, Any], mmpp: float, comp_h_mm: float,
+def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: float,
                 render_3d: dict[str, Any], rng: random.Random) -> tuple[list[bpy.types.Object], list, float]:
     """Body, end caps / leads, pin-1 mark and marking.
 
@@ -219,10 +235,10 @@ def _build_part(pads: list[tuple[float, float, float, float]], board: dict[str, 
         return [], [None] * len(pads), 0.0  # no contacts: every pad gets a paste dome
 
     mats = render_3d.get("materials") or {}
-    L, W = float(body["length"]) * mmpp, float(body["width"]) * mmpp
+    L, W = _mm(body["length"], mmpp), _mm(body["width"], mmpp)
     H = min(comp_h_mm, _HEIGHT_RATIO.get(family, 0.5) * min(L, W))  # new 2D-only families: generic height
     angle = -math.radians(float(body["rotation_deg"]))  # image y-down -> Blender y-up
-    cx, cy = float(body["center"][0]) * mmpp, -float(body["center"][1]) * mmpp
+    cx, cy = _mm_xy(body["center"][0], body["center"][1], mmpp)
     axis = Vector((math.cos(angle), math.sin(angle), 0.0))
     standoff = 0.08 * H if family in ("sot", "soic") else 0.01 * H
 
@@ -413,7 +429,7 @@ def _aoi_lights(render_3d: dict[str, Any], roi_mm: float) -> None:
     top.visible_camera = False
 
 
-def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engine: str) -> None:
+def _build_scene_for_job(job: PreparedJob, *, samples: int, device: str, engine: str) -> None:
     seed = int(job.get("seed", 0))
     rng = random.Random(seed)
     mmpp = float(job["mm_per_px"])
@@ -423,7 +439,7 @@ def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engi
     render_3d = job.get("render_3d") or {}
     _configure_render(width_px=w_px, height_px=h_px, samples=samples, seed=seed, device=device, engine=engine)
 
-    scale = float(board.get("scale", 2))
+    scale = float(board.get("scale", BOARD_SCALE))
     bpy.ops.mesh.primitive_plane_add(size=1.0, location=(0.0, 0.0, 0.0))
     plane = bpy.context.active_object
     plane.name = "board"
@@ -431,9 +447,9 @@ def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engi
     plane.data.materials.append(_board_material(board["texture"]))
     scene_objs = [plane]
 
-    pads = [(p[0] * mmpp, -p[1] * mmpp, p[2] * mmpp, p[3] * mmpp) for p in board["pads"]]
-    part, contacts, h_solder = _build_part(pads, board, mmpp, float(job.get("component_height_mm") or 0.45),
-                                           render_3d, rng)
+    pads: list[PadMm] = [(*_mm_xy(p[0], p[1], mmpp), _mm(p[2], mmpp), _mm(p[3], mmpp)) for p in board["pads"]]
+    part, contacts, h_solder = _build_part(pads, board, mmpp,
+                                           float(job.get("component_height_mm") or DEFAULT_COMPONENT_HEIGHT_MM), render_3d, rng)
     scene_objs += [o for o in part if o.parent is None]
     m_solder = _cfg_material("mat_solder", (render_3d.get("materials") or {}).get("solder") or {},
                              (0.7, 0.7, 0.72), 0.18, 1.0, bump=0.02)
@@ -441,8 +457,8 @@ def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engi
         big = i == board.get("thermal_pad")  # window-pane stencil, as in 2D
         scene_objs.append(_fillet(f"solder_{i}", pad, contact, h_solder, big, m_solder, excess=i in board.get("excess", [])))
     for k, (bx, by, br) in enumerate(board.get("balls", [])):  # solder balls on the mask
-        r = br * mmpp
-        bpy.ops.mesh.primitive_uv_sphere_add(radius=r, location=(bx * mmpp, -by * mmpp, 0.7 * r), segments=16, ring_count=8)
+        r = _mm(br, mmpp)
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=r, location=(*_mm_xy(bx, by, mmpp), 0.7 * r), segments=16, ring_count=8)
         ball = bpy.context.active_object
         ball.name = f"solder_ball_{k}"
         ball.data.materials.append(m_solder)
@@ -468,7 +484,7 @@ def _build_scene_for_job(job: dict[str, Any], *, samples: int, device: str, engi
     bpy.ops.object.camera_add(location=loc)
     cam = bpy.context.active_object
     cam.data.type = "ORTHO"
-    pose = board.get("pose") or {"tilt": 0.0, "azimuth": 0.0, "zoom": 1.0}
+    pose = board.get("pose") or DEFAULT_CAMERA_POSE
     cam.data.ortho_scale = roi_mm * float(pose["zoom"])  # zoomed out: farther away (render.camera.zoom)
     cam.data.clip_end = 1000.0
     look = cam_cfg.get("look_at_mm")

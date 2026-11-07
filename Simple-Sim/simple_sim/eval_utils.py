@@ -63,12 +63,44 @@ def to_device(t: torch.Tensor, device: torch.device) -> torch.Tensor:
 
 @dataclass
 class InferenceResult:
-    """Collected labels/predictions of one pass over a loader."""
+    """Collected labels/predictions of one pass over a loader (``probs`` only with ``collect_probs``)."""
 
     y_true: np.ndarray
     y_pred: np.ndarray
     avg_loss: float | None
     num_samples: int
+    probs: np.ndarray | None = None
+
+
+#: Test-time augmentation views: the 8 symmetries of the square (quarter turns, each plain and
+#: mirrored), i.e. horizontal/vertical flips and 90-degree rotations. Valid for datasets whose
+#: labels are invariant under them (cardinal-rotation-augmented ROIs).
+TTA_VIEWS = 8
+
+
+def tta_views(images: torch.Tensor) -> list[torch.Tensor]:
+    """The :data:`TTA_VIEWS` dihedral views of an ``[N, C, H, W]`` batch (the first is the input)."""
+    views = []
+    for k in range(4):
+        turned = torch.rot90(images, k, dims=(2, 3))
+        views.append(turned)
+        views.append(torch.flip(turned, dims=(3,)))
+    return views
+
+
+def model_outputs(model: nn.Module, images: torch.Tensor, *, tta: bool = False) -> torch.Tensor:
+    """Logits of *model* for *images*; with *tta* the log of the softmax averaged over :func:`tta_views`.
+
+    The log-mean-probabilities behave like logits downstream (softmax gives back the averaged
+    probabilities, ``CrossEntropyLoss`` is the NLL of the averaged prediction).
+    """
+    if not tta:
+        return model(images)
+    mean = None
+    for view in tta_views(images):
+        p = torch.softmax(model(view).float(), dim=1)
+        mean = p if mean is None else mean + p
+    return torch.log((mean / TTA_VIEWS).clamp_min(1e-12))
 
 
 def run_inference(
@@ -81,15 +113,20 @@ def run_inference(
     desc: str = "Evaluating",
     leave: bool = True,
     event: str = "eval_batch",
+    tta: bool = False,
+    collect_probs: bool = False,
 ) -> InferenceResult:
     """Run *model* over *loader* without gradients and collect argmax predictions.
 
     Shows a tqdm progress bar and emits one telemetry *event* per batch. With *criterion*,
-    the average loss is computed as well.
+    the average loss is computed as well. *tta* averages the softmax over :func:`tta_views`
+    (predictions, loss and probabilities then come from the averaged distribution);
+    *collect_probs* keeps the softmax probabilities (``[N, C]``) in ``probs``.
     """
     model.eval()
     preds: list[np.ndarray] = []
     labels_all: list[np.ndarray] = []
+    probs_all: list[np.ndarray] = []
     meter = ThroughputMeter()
     total_loss = 0.0
     num_batches = 0
@@ -107,7 +144,7 @@ def run_inference(
             images = to_device(images, device)
             labels = to_device(labels, device)
             with amp_autocast(use_amp):
-                outputs = model(images)
+                outputs = model_outputs(model, images, tta=tta)
                 loss = criterion(outputs, labels) if criterion is not None else None
 
             bs = int(images.shape[0])
@@ -134,6 +171,8 @@ def run_inference(
 
             preds.append(torch.argmax(outputs, dim=1).cpu().numpy())
             labels_all.append(labels.cpu().numpy())
+            if collect_probs:
+                probs_all.append(torch.softmax(outputs.float(), dim=1).cpu().numpy())
 
     cat = (lambda xs: np.concatenate(xs) if xs else np.array([], dtype=np.int64))
     return InferenceResult(
@@ -141,6 +180,7 @@ def run_inference(
         y_pred=cat(preds),
         avg_loss=(total_loss / max(1, num_batches)) if criterion is not None else None,
         num_samples=num_samples,
+        probs=(np.concatenate(probs_all) if probs_all else np.zeros((0, 0), dtype=np.float32)) if collect_probs else None,
     )
 
 
@@ -199,13 +239,16 @@ def format_distribution(title: str, dist: dict[str, int]) -> str:
 
 
 def metrics_summary(metrics: dict[str, Any]) -> dict[str, Any]:
-    """Compact metric subset for ``--json`` payloads."""
-    return {
+    """Compact metric subset for ``--json`` payloads (``calibration`` only when it was computed)."""
+    out = {
         "accuracy": metrics["accuracy"],
         "macro_f1": metrics["macro_f1"],
         "per_class": metrics["per_class"],
         "critical_fn_rates": metrics.get("critical_fn_rates", {}),
     }
+    if "calibration" in metrics:
+        out["calibration"] = metrics["calibration"]
+    return out
 
 
 # ---------------------------------------------------------------------------

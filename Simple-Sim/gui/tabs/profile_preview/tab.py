@@ -25,6 +25,7 @@ from PIL import Image, ImageTk
 
 from gui.components.overlay_renderer import draw_defect_overlay
 from gui.tabs.core.base import BaseTab
+from gui.utils.pipeline_helpers import BOARD_DRC_CHOICES, BOARD_ROUTING_CHOICES, BOARD_RULES_CHOICES, LOOK_CHOICES
 from gui.utils.settings_store import bind_persisted_vars
 from simple_sim.generators.opencv2d.photoreal import SUPERSAMPLING_CHOICES
 from simple_sim.preview.render import BACKEND_2D, BACKEND_3D, resolve_defect_types
@@ -88,6 +89,11 @@ class ProfilePreviewTab(BaseTab):
         self.var_samples = tk.IntVar(value=QUALITY_PRESETS["Standard"]["samples"])
         self.var_engine = tk.StringVar(value=FROM_CONFIG)
         self.var_device = tk.StringVar(value=FROM_CONFIG)
+        # render.look / render.board on top of the run config (both backends); LOOK_CHOICES[0] is "from config".
+        self.var_look = tk.StringVar(value=LOOK_CHOICES[0])
+        self.var_board_routing = tk.StringVar(value=BOARD_ROUTING_CHOICES[0])
+        self.var_board_drc = tk.StringVar(value=BOARD_DRC_CHOICES[0])
+        self.var_board_rules = tk.StringVar(value=BOARD_RULES_CHOICES[0])
         self.var_variants = tk.IntVar(value=2)
         self.var_seed = tk.StringVar(value="2026")
         self.var_cardinal = tk.BooleanVar(value=True)
@@ -119,6 +125,10 @@ class ProfilePreviewTab(BaseTab):
                 ("profile_preview.samples", self.var_samples),
                 ("profile_preview.engine", self.var_engine),
                 ("profile_preview.device", self.var_device),
+                ("profile_preview.look", self.var_look),
+                ("profile_preview.board_routing", self.var_board_routing),
+                ("profile_preview.board_drc", self.var_board_drc),
+                ("profile_preview.board_rules", self.var_board_rules),
                 ("profile_preview.variants", self.var_variants),
                 ("profile_preview.seed", self.var_seed),
                 ("profile_preview.cardinal", self.var_cardinal),
@@ -182,6 +192,22 @@ class ProfilePreviewTab(BaseTab):
         ttk.Label(box, text="Device (3D)").grid(row=6, column=0, sticky="w")
         self.cb_device = ttk.Combobox(box, textvariable=self.var_device, values=DEVICE_CHOICES, state="readonly", width=14)
         self.cb_device.grid(row=6, column=1, sticky="w", pady=2)
+        # render.look and render.board overrides (both backends: the 3D bake draws the same board).
+        ttk.Label(box, text="Look").grid(row=7, column=0, sticky="w")
+        self.cb_look = ttk.Combobox(box, textvariable=self.var_look, values=list(LOOK_CHOICES), state="readonly", width=14)
+        self.cb_look.grid(row=7, column=1, sticky="w", pady=2)
+        ttk.Label(box, text="Copper (board)").grid(row=8, column=0, sticky="w")
+        self.cb_board_routing = ttk.Combobox(box, textvariable=self.var_board_routing, values=list(BOARD_ROUTING_CHOICES),
+                                             state="readonly", width=14)
+        self.cb_board_routing.grid(row=8, column=1, sticky="w", pady=2)
+        ttk.Label(box, text="DRC (board)").grid(row=9, column=0, sticky="w")
+        self.cb_board_drc = ttk.Combobox(box, textvariable=self.var_board_drc, values=list(BOARD_DRC_CHOICES),
+                                         state="readonly", width=14)
+        self.cb_board_drc.grid(row=9, column=1, sticky="w", pady=2)
+        ttk.Label(box, text="Design rules").grid(row=10, column=0, sticky="w")
+        self.cb_board_rules = ttk.Combobox(box, textvariable=self.var_board_rules, values=list(BOARD_RULES_CHOICES),
+                                           state="readonly", width=14)
+        self.cb_board_rules.grid(row=10, column=1, sticky="w", pady=2)
 
         box = ttk.LabelFrame(parent, text="Samples", padding=8)
         box.pack(fill="both", expand=True, pady=(8, 0))
@@ -351,6 +377,10 @@ class ProfilePreviewTab(BaseTab):
             blender_samples=samples,
             blender_engine="" if self.var_engine.get() == FROM_CONFIG else self.var_engine.get(),
             blender_device="" if self.var_device.get() == FROM_CONFIG else self.var_device.get(),
+            look="" if self.var_look.get() == LOOK_CHOICES[0] else self.var_look.get(),
+            board_routing="" if self.var_board_routing.get() == BOARD_ROUTING_CHOICES[0] else self.var_board_routing.get(),
+            board_drc="" if self.var_board_drc.get() == BOARD_DRC_CHOICES[0] else self.var_board_drc.get(),
+            board_rules="" if self.var_board_rules.get() == BOARD_RULES_CHOICES[0] else self.var_board_rules.get(),
         )
 
     # ------------------------------------------------------------------ rendering

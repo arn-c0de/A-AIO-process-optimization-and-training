@@ -352,3 +352,45 @@ def test_settings_store_save_is_atomic_json(tmp_path: Path) -> None:
     store.save()
     assert json.loads((tmp_path / "sub" / "settings.json").read_text()) == {"k": "v"}
     assert not (tmp_path / "sub" / "settings.json.tmp").exists()
+
+
+# --------------------------------------------------------------------------- render overrides (look / board)
+
+def test_render_overrides_and_application() -> None:
+    from gui.utils.pipeline_helpers import (
+        BOARD_DRC_CHOICES,
+        BOARD_ROUTING_CHOICES,
+        BOARD_RULES_CHOICES,
+        FROM_CONFIG,
+        LOOK_CHOICES,
+        PERSISTED_FIELD_MAP,
+        apply_render_overrides,
+        render_overrides,
+        render_overrides_text,
+    )
+    from simple_sim.board import BOARD_ROUTERS, DRC_MODES, validate_board_options
+    from simple_sim.board.rules import PRESETS
+    from simple_sim.generators.opencv2d.photoreal.look import LOOKS, look_name
+
+    assert LOOK_CHOICES == (FROM_CONFIG, *LOOKS) and BOARD_ROUTING_CHOICES == (FROM_CONFIG, *BOARD_ROUTERS)
+    assert BOARD_DRC_CHOICES == (FROM_CONFIG, *DRC_MODES) and BOARD_RULES_CHOICES == (FROM_CONFIG, *PRESETS)
+    assert render_overrides() == {} and render_overrides(look=FROM_CONFIG, routing="", drc=FROM_CONFIG) == {}
+    ov = render_overrides(look="quins", routing="escape", drc="warn", design_rules="hdi")
+    assert ov == {"look": "quins", "board": {"routing": "escape", "drc": "warn", "design_rules": "hdi"}}
+    assert render_overrides_text(ov) == "look=quins, board.routing=escape, board.drc=warn, board.design_rules=hdi"
+    with pytest.raises(ValueError):
+        render_overrides(look="matte")
+    with pytest.raises(ValueError):
+        render_overrides(routing="grid")
+
+    render = {"style": "photoreal", "board": {"pour_probability": 0.3, "routing": "legacy"}}
+    out = apply_render_overrides(render, ov)
+    assert out is render and out["look"] == "quins"
+    assert out["board"] == {"pour_probability": 0.3, "routing": "escape", "drc": "warn", "design_rules": "hdi"}
+    validate_board_options(out["board"]) and look_name(out)
+    assert apply_render_overrides({"board": None}, {"board": {"drc": "strict"}}) == {"board": {"drc": "strict"}}
+    assert apply_render_overrides({"look": "quins"}, {}) == {"look": "quins"}
+    # Persisted like the other Pipeline-tab settings.
+    keys = dict(PERSISTED_FIELD_MAP)
+    assert {keys["pipeline.look"], keys["pipeline.board_routing"], keys["pipeline.board_drc"], keys["pipeline.board_rules"]} == {
+        "var_look", "var_board_routing", "var_board_drc", "var_board_rules"}

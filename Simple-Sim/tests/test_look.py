@@ -8,6 +8,7 @@ from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal import (LOOKS, RenderContext, camera_config, camera_model, camera_settings,
                                                       get_look, mask_gloss, rework_probability)
 from simple_sim.generators.opencv2d.photoreal.look import LEGACY_LOOK, QUINS_LOOK
+from simple_sim.generators.opencv2d.photoreal.meniscus import SOLDER_TINT as LEGACY_TINT
 
 from tests.test_photoreal import CFG as BASE_CFG
 from tests.test_photoreal import CLASSES, FOOTPRINTS, TOL
@@ -59,8 +60,75 @@ def test_quins_context_uses_scanner_joints_unless_solder_is_set():
     state = rng.bit_generator.state
     ctx = RenderContext.for_render({"look": "quins"}, rng)
     assert rng.bit_generator.state == state  # side stream only: the image's random stream is untouched
-    assert ctx.look is QUINS_LOOK and ctx.solder_look is not None and ctx.solder_look.azimuths == ()
+    assert ctx.look is QUINS_LOOK and ctx.solder_look is not None
+    # Two line lights along the image x axis; the board is shaded before the camera roll, so the
+    # azimuths follow the roll and the bright bands stay vertical in the finished crop.
+    assert ctx.solder_look.azimuths == (0.0, pytest.approx(np.pi)) and ctx.solder_look.tint != LEGACY_TINT
+    rolled = RenderContext.for_render({"look": "quins"}, rng, roll_deg=90.0)
+    assert rolled.solder_look.azimuths == (pytest.approx(np.pi / 2), pytest.approx(1.5 * np.pi))
     assert RenderContext.for_render({"look": "quins", "solder": "legacy"}, rng).solder_look is None
+    assert RenderContext.for_render({"solder": "meniscus"}, rng).solder_look.tint == LEGACY_TINT
+
+
+def test_quins_scanner_light_lights_the_pad_rims_facing_x_whatever_the_rotation():
+    """Side lights: on an empty pad the left and right rims of the solder dome are brighter than the
+    top and bottom rims, in every cardinal rotation and in both post-filter modes (the lights are
+    rotated with the camera roll / the final image rotation)."""
+    def side_ratio(img: np.ndarray, nominal: dict, rot: float, size: int = 128) -> float:
+        s = size / (3.0 * nominal["component_length"])  # crop_part_lengths = 3 of the quins preset
+        grey = img.astype(np.float32).mean(axis=2)
+        a = np.radians(rot)
+        along = np.array([np.cos(a), -np.sin(a)])  # pad axis after the image-CCW rotation (y down)
+        lr, tb = [], []
+        for sign in (-1, 1):
+            cx, cy = size / 2.0 + sign * along * nominal["pad_spacing"] / 2.0 * s
+            pw, ph = (nominal["pad_width"], nominal["pad_height"]) if rot % 180 == 0 else (nominal["pad_height"], nominal["pad_width"])
+            hw, hh = pw * s / 2.0, ph * s / 2.0
+            x0, x1, y0, y1 = int(cx - hw), int(cx + hw), int(cy - hh), int(cy + hh)
+            rows, cols = slice(int(cy - hh / 2), int(cy + hh / 2)), slice(int(cx - hw / 2), int(cx + hw / 2))
+            lr += [grey[rows, x0 - 1:x0 + 3].mean(), grey[rows, x1 - 3:x1 + 1].mean()]
+            tb += [grey[y0 - 1:y0 + 3, cols].mean(), grey[y1 - 3:y1 + 1, cols].mean()]
+        return float(np.mean(lr) / np.mean(tb))
+
+    rng = np.random.default_rng(7)
+    nominal = sample_nominal_geometry({}, rng, FOOTPRINTS["chip_2pad"])
+    defect = sample_defect_params("MISSING", rng, TOL)
+    ratios = {}
+    for rot in (0.0, 90.0, 180.0, 270.0):
+        for post in ("camera", "legacy"):
+            for seed in (3, 4):
+                img = render_roi(nominal, defect, {"rotation_deg": rot}, (128, 128),
+                                 {**CFG, "look": "quins", "post_filters": post}, TOL, np.random.default_rng(seed), footprint="chip_2pad")
+                ratios[(rot, post, seed)] = side_ratio(img, nominal, rot)
+    assert min(ratios.values()) > 1.15, ratios
+
+
+def test_quins_look_softens_shadows_and_prints_little_silkscreen():
+    assert LEGACY_LOOK.shadow == 1.0 and LEGACY_LOOK.silkscreen_skip == 0.45
+    assert 0.0 <= QUINS_LOOK.shadow < 0.5 and QUINS_LOOK.silkscreen_skip > 0.7
+
+
+def test_channel_axis_fixes_the_scanner_direction():
+    from simple_sim.config import _validate_camera
+
+    img = np.zeros((64, 64, 3), np.uint8)
+    img[:, 32:] = 200   # vertical edge: a split along x separates B and R, a split along y does not
+    quiet = {"read_noise": [0, 0], "shot_noise": 0, "blur_sigma": [0.3, 0.3], "channel_shift": [2.0, 2.0]}
+    along_x = camera_model(img, np.random.default_rng(1), {**quiet, "channel_axis": "x"}).astype(int)
+    along_y = camera_model(img, np.random.default_rng(1), {**quiet, "channel_axis": "y"}).astype(int)
+    assert np.abs(along_x[..., 0] - along_x[..., 2]).max() > 40
+    assert np.abs(along_y[..., 0] - along_y[..., 2]).max() <= 2
+    # post_filters: legacy turns the finished image: a fixed axis is pre-rotated the other way (like
+    # the scanner lights), so after a 90 degree turn the split still runs along x in the final image.
+    turned = camera_model(img, np.random.default_rng(1), {**quiet, "channel_axis": "x"}, axis_roll_deg=90.0).astype(int)
+    assert np.abs(turned[..., 0] - turned[..., 2]).max() <= 2
+    turned = camera_model(img, np.random.default_rng(1), {**quiet, "channel_axis": "y"}, axis_roll_deg=90.0).astype(int)
+    assert np.abs(turned[..., 0] - turned[..., 2]).max() > 40
+    assert np.array_equal(camera_model(img, np.random.default_rng(1), {**quiet, "channel_axis": "x"}, axis_roll_deg=0.0), along_x)
+    assert camera_settings({"preset": "quins"})["channel_axis"] == "x" and camera_settings(None)["channel_axis"] == "random"
+    _validate_camera({"channel_axis": "y"})
+    with pytest.raises(ValueError, match="channel_axis"):
+        _validate_camera({"channel_axis": "diagonal"})
 
 
 def test_look_defaults_yield_to_explicit_settings():
@@ -144,5 +212,20 @@ def test_crop_part_lengths_sets_the_field_of_view():
     assert apply_view(canvas, fitted, (256, 256)).shape == (256, 256, 3)  # magnified crop, ROI size
 
 
-def test_quins_neighbour_density_and_legacy_default():
-    assert LEGACY_LOOK.crowd == 1.0 and QUINS_LOOK.crowd > 1.0
+def test_neighbour_count_factor_defaults():
+    """Density comes from ``Look.packing`` (see the packing test); the count factor stays neutral."""
+    assert LEGACY_LOOK.crowd == 1.0 and QUINS_LOOK.crowd == 1.0
+
+
+def test_quins_uses_dense_packing_and_legacy_layout_is_unchanged():
+    from simple_sim.board import DENSE_PACKING, LEGACY_PACKING, neighbour_layout
+
+    assert LEGACY_LOOK.packing is LEGACY_PACKING and QUINS_LOOK.packing is DENSE_PACKING
+    pads = [{"x": 100, "y": 110, "w": 30, "h": 36}, {"x": 160, "y": 110, "w": 30, "h": 36}]
+    keepout = (100, 110, 190, 146)
+    a = neighbour_layout(pads, keepout, (256, 290), np.random.default_rng(3))
+    b = neighbour_layout(pads, keepout, (256, 290), np.random.default_rng(3), 1.0, LEGACY_PACKING)
+    assert a == b
+    counts = [len(neighbour_layout(pads, keepout, (256, 290), np.random.default_rng(s), 1.0, p))
+              for p in (LEGACY_PACKING, DENSE_PACKING) for s in range(20)]
+    assert sum(counts[20:]) > sum(counts[:20])

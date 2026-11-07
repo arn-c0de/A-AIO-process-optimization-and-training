@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import shlex
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,10 @@ import yaml
 
 from gui.utils.filter_profile_store import FILTER_SETTING_SPECS
 from gui.utils.paths import model_root
+from simple_sim.board import BOARD_ROUTERS, DRC_MODES
+from simple_sim.board.rules import PRESETS as DESIGN_RULE_PRESETS
 from simple_sim.classes import STANDARD_CLASSES
+from simple_sim.generators.opencv2d.photoreal.look import LOOKS
 from simple_sim.io_utils import load_yaml
 
 PYTHON = "./.venv/bin/python"
@@ -42,7 +46,19 @@ PERSISTED_FIELD_MAP: tuple[tuple[str, str], ...] = (
     ("pipeline.profile_model_locked", "var_profile_model_lock"),
     ("pipeline.profile_build_preset", "var_profile_build_preset"),
     ("pipeline.render_backend", "var_render_backend"),
+    ("pipeline.look", "var_look"),
+    ("pipeline.board_routing", "var_board_routing"),
+    ("pipeline.board_drc", "var_board_drc"),
+    ("pipeline.board_rules", "var_board_rules"),
 ) + tuple((f"pipeline.filter.{key}", f"var_filter_{key}") for key, _kind, _default in FILTER_SETTING_SPECS)
+
+# Render options the GUI can override on top of a run config (``render.look``, ``render.board.*``).
+# Every selector starts at FROM_CONFIG: the config's value (or the renderer default) is kept.
+FROM_CONFIG = "from config"
+LOOK_CHOICES: tuple[str, ...] = (FROM_CONFIG, *LOOKS)
+BOARD_ROUTING_CHOICES: tuple[str, ...] = (FROM_CONFIG, *BOARD_ROUTERS)
+BOARD_DRC_CHOICES: tuple[str, ...] = (FROM_CONFIG, *DRC_MODES)
+BOARD_RULES_CHOICES: tuple[str, ...] = (FROM_CONFIG, *DESIGN_RULE_PRESETS)
 
 # Persisted keys that selecting a dataset overwrites (``_apply_dataset_settings``); restored again afterwards.
 DATASET_DERIVED_KEYS: frozenset[str] = frozenset(
@@ -148,6 +164,47 @@ def precise_counts_for_profile(counts: dict[str, Any], profile_id: str) -> dict[
     if per_profile is None:
         return counts
     return per_profile.get(profile_id) or next(iter(per_profile.values()), {})
+
+
+def render_overrides(*, look: str = "", routing: str = "", drc: str = "", design_rules: str = "") -> dict[str, Any]:
+    """The ``render`` keys the GUI selectors override: ``{"look": ..., "board": {"routing": ..., "drc": ...,
+    "design_rules": ...}}`` with only the chosen entries (``""`` / :data:`FROM_CONFIG` = keep the config's);
+    empty when nothing is chosen. Unknown values raise ``ValueError`` (the config validation would too)."""
+    def chosen(value: str, choices: tuple[str, ...], key: str) -> str:
+        value = str(value or "").strip()
+        if value in ("", FROM_CONFIG):
+            return ""
+        if value not in choices:
+            raise ValueError(f"{key} must be one of {list(choices[1:])}, got {value!r}")
+        return value
+
+    out: dict[str, Any] = {}
+    if v := chosen(look, LOOK_CHOICES, "render.look"):
+        out["look"] = v
+    board = {k: v for k, v in (("routing", chosen(routing, BOARD_ROUTING_CHOICES, "render.board.routing")),
+                               ("drc", chosen(drc, BOARD_DRC_CHOICES, "render.board.drc")),
+                               ("design_rules", chosen(design_rules, BOARD_RULES_CHOICES, "render.board.design_rules")))
+             if v}
+    if board:
+        out["board"] = board
+    return out
+
+
+def apply_render_overrides(render: dict[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """*render* (a run config's ``render`` section, modified in place) with :func:`render_overrides`
+    applied: ``look`` replaced, ``board`` keys merged into the existing ``board`` mapping."""
+    if overrides.get("look"):
+        render["look"] = str(overrides["look"])
+    if overrides.get("board"):
+        render["board"] = {**(render.get("board") or {}), **dict(overrides["board"])}
+    return render
+
+
+def render_overrides_text(overrides: Mapping[str, Any]) -> str:
+    """``"look=quins, board.routing=escape"`` for logs and captions (``""`` when empty)."""
+    parts = [f"look={overrides['look']}"] if overrides.get("look") else []
+    parts += [f"board.{k}={v}" for k, v in (overrides.get("board") or {}).items()]
+    return ", ".join(parts)
 
 
 def apply_precise_counts(cfg_data: dict[str, Any], counts: dict[str, Any]) -> dict[str, Any]:

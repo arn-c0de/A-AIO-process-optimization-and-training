@@ -8,6 +8,7 @@ import numpy as np
 
 from .context import RenderContext
 from .imageops import blend, smooth_noise
+from .palette import jittered
 
 
 REWORK_PROBABILITY = 0.15  # default share of images with rework residue (``render.rework_artifacts``)
@@ -64,7 +65,7 @@ def draw_rework(ctx: RenderContext, img: np.ndarray, keepout: tuple[int, int, in
             blob = (layer > 0) & (smooth_noise((h, w), 0.6 * r, rng) > -0.7)  # irregular outline
             a = cv2.GaussianBlur(blob.astype(np.float32), (0, 0), 2 * ctx.ss)
             rim = np.clip(cv2.GaussianBlur(blob.astype(np.float32), (0, 0), 1.0 * ctx.ss) - a, 0, 1)  # dried edge
-            blend(img, FLUX * float(rng.uniform(0.85, 1.1)), a * float(rng.uniform(0.25, 0.45)))
+            blend(img, jittered(FLUX, rng, 0.85, 1.1), a * float(rng.uniform(0.25, 0.45)))
             img *= (1.0 - 0.5 * rim)[..., None]
         elif kind == "dirt":
             width = int(round(float(rng.uniform(0.35, 0.8)) * ref))

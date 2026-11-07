@@ -13,6 +13,13 @@ import cv2
 from gui import dialogs
 from gui.theme.style import font
 from gui.theme.tokens import SPACE
+from gui.utils.pipeline_helpers import (
+    BOARD_DRC_CHOICES,
+    BOARD_ROUTING_CHOICES,
+    BOARD_RULES_CHOICES,
+    FROM_CONFIG,
+    LOOK_CHOICES,
+)
 from gui.utils.tooltip import ToolTip
 from gui.widgets import (
     CollapsibleSection,
@@ -99,6 +106,15 @@ class PipelineUI:
         self.profile_combo: ttk.Combobox
         self.var_render_backend: tk.StringVar = tk.StringVar(value="opencv_2d")
         self.render_combo: ttk.Combobox
+        # render.look / render.board overrides on top of the run config (FROM_CONFIG = keep the config's).
+        self.var_look: tk.StringVar = tk.StringVar(value=FROM_CONFIG)
+        self.var_board_routing: tk.StringVar = tk.StringVar(value=FROM_CONFIG)
+        self.var_board_drc: tk.StringVar = tk.StringVar(value=FROM_CONFIG)
+        self.var_board_rules: tk.StringVar = tk.StringVar(value=FROM_CONFIG)
+        self.look_combo: ttk.Combobox
+        self.board_routing_combo: ttk.Combobox
+        self.board_drc_combo: ttk.Combobox
+        self.board_rules_combo: ttk.Combobox
         self.var_profiles_multi: tk.BooleanVar = tk.BooleanVar(value=False)
         self.var_profiles_multi_mode: tk.StringVar = tk.StringVar(value="separate")
         self.var_profiles_multi_json: tk.StringVar = tk.StringVar(value="[]")
@@ -276,6 +292,27 @@ class PipelineUI:
                                          values=["opencv_2d", "blender_3d"], state="readonly", width=14)
         self.render_combo.bind("<<ComboboxSelected>>", self.tab._on_render_backend_changed)
         form.row("Render", self.render_combo, help_key="pipeline.render", sticky="w")
+
+        self.look_combo = ttk.Combobox(form, textvariable=self.var_look, values=list(LOOK_CHOICES),
+                                       state="readonly", width=14)
+        form.row("Look", self.look_combo, help_key="pipeline.look", sticky="w")
+
+        board = form.inline()
+        self.board_routing_combo = ttk.Combobox(board, textvariable=self.var_board_routing,
+                                                values=list(BOARD_ROUTING_CHOICES), state="readonly", width=12)
+        self.board_routing_combo.pack(side="left")
+        ToolTip(self.board_routing_combo, help_key="pipeline.board_routing")
+        ttk.Label(board, text="DRC", style="CardMuted.TLabel").pack(side="left", padx=(SPACE.M, SPACE.XS))
+        self.board_drc_combo = ttk.Combobox(board, textvariable=self.var_board_drc, values=list(BOARD_DRC_CHOICES),
+                                            state="readonly", width=11)
+        self.board_drc_combo.pack(side="left")
+        ToolTip(self.board_drc_combo, help_key="pipeline.board_drc")
+        ttk.Label(board, text="Rules", style="CardMuted.TLabel").pack(side="left", padx=(SPACE.M, SPACE.XS))
+        self.board_rules_combo = ttk.Combobox(board, textvariable=self.var_board_rules, values=list(BOARD_RULES_CHOICES),
+                                              state="readonly", width=14)
+        self.board_rules_combo.pack(side="left")
+        ToolTip(self.board_rules_combo, help_key="pipeline.board_rules")
+        form.row("Copper", board, help_key="pipeline.board_routing", sticky="w")
 
         form.row("Config", PathPicker(form, self.var_config, title="Select run config",
                                       filetypes=[("YAML", "*.yaml *.yml"), ("All files", "*")],

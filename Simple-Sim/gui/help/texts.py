@@ -49,6 +49,23 @@ HELP: dict[str, str] = {
     "pipeline.profile": "Component profile to render (e.g. resistor_0603). Picks a matching config automatically.",
     "pipeline.profile_info": "Show the selected profile's geometry and settings.",
     "pipeline.render": "opencv_2d: fast 2D rendering. blender_3d: photoreal 3D rendering (needs Blender, slower).",
+    "pipeline.look": (
+        "render.look override: legacy = default materials, quins = materials and scanner joints tuned to the "
+        "QUINS scans. 'from config' keeps the run config's value. Applied through a temporary config under "
+        "outputs/live; extending a dataset with another look is refused like any config change."
+    ),
+    "pipeline.board_routing": (
+        "render.board.routing override: legacy = random copper (no board model), none = no copper, "
+        "escape = board model with nets, routed tracks, pours and vias. 'from config' keeps the run config's value."
+    ),
+    "pipeline.board_drc": (
+        "render.board.drc override (board model only): off, warn = log violations and store the result per sample "
+        "in meta.jsonl (render_meta.board_drc), strict = redraw the routing until it is clean."
+    ),
+    "pipeline.board_rules": (
+        "render.board.design_rules override (board model only): consumer_dense, industrial or hdi "
+        "(track widths, clearances, via sizes)."
+    ),
     "pipeline.multi_profile": "Generate several component profiles in one go.",
     "pipeline.multi_mode": (
         "separate: one dataset per profile. "

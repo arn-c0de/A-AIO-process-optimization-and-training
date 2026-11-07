@@ -2,7 +2,8 @@
 
 The Blender script (``simple_sim/blender/render_batch.py``) is found relative to this package, so
 rendering needs no checkout root; job, jobs-file and output paths are passed to Blender as absolute
-paths, so the working directory does not matter either.
+paths, so the working directory does not matter either. The job lines are
+:class:`simple_sim.blender.job_schema.PreparedJob` (the contract both sides import).
 """
 
 from __future__ import annotations
@@ -12,7 +13,8 @@ import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+
+from simple_sim.blender.job_schema import DEFAULT_DEVICE, DEFAULT_ENGINE, BlenderJob, PreparedJob
 
 from .bake import apply_camera, prepare_jobs
 from .io import write_jobs_jsonl
@@ -32,8 +34,8 @@ def render_blender_batch(
     output_root: Path,
     blender_executable: str,
     cycles_samples: int,
-    device: str = "CPU",
-    engine: str = "BLENDER_EEVEE",
+    device: str = DEFAULT_DEVICE,
+    engine: str = DEFAULT_ENGINE,
     extra_env: dict[str, str] | None = None,
     should_stop: StopCheck | None = None,
 ) -> None:
@@ -51,7 +53,7 @@ def render_blender_batch(
 
     # Bake the shared board textures next to the output; removed again once Blender is done.
     work_dir = output_root / "_board_textures"
-    jobs = [json.loads(line) for line in jobs_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    jobs: list[BlenderJob] = [json.loads(line) for line in jobs_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     try:
         _check_stop(should_stop)
         prepared = prepare_jobs(jobs, work_dir)
@@ -66,13 +68,13 @@ def render_blender_batch(
 
 def render_prepared_batch(
     *,
-    prepared: list[dict[str, Any]],
+    prepared: list[PreparedJob],
     prepared_path: Path,
     output_root: Path,
     blender_executable: str,
     cycles_samples: int,
-    device: str = "CPU",
-    engine: str = "BLENDER_EEVEE",
+    device: str = DEFAULT_DEVICE,
+    engine: str = DEFAULT_ENGINE,
     extra_env: dict[str, str] | None = None,
     should_stop: StopCheck | None = None,
 ) -> None:
@@ -100,7 +102,7 @@ def script_path() -> Path:
 
 def _run_blender(
     *,
-    prepared: list[dict[str, Any]],
+    prepared: list[PreparedJob],
     prepared_path: Path,
     output_root: Path,
     blender_executable: str,

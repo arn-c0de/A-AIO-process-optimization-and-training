@@ -34,6 +34,8 @@ from typing import Any
 
 import numpy as np
 
+from simple_sim.board.placement import DENSE_PACKING, LEGACY_PACKING, Packing
+
 from .palette import CAP_BODY, COPPER_UNDER_MASK, END_CAP, LEAD, MASK_PALETTE
 
 LOOKS = ("legacy", "quins")
@@ -59,11 +61,14 @@ class Look:
     flat_caps: bool               # flat tin terminal tops with bright edges (else: legacy ridge rule)
     bodies: dict[str, np.ndarray] = field(default_factory=dict)  # family -> colour for the dark default body
     crowd: float = 1.0                # neighbour-part density factor (board population)
+    packing: Packing = LEGACY_PACKING  # neighbour layout (row pitch, clearances, families)
     cap_len: dict[str, float] = field(default_factory=dict)  # family -> terminal length / body length
     mask_gloss: float | None = None   # default of render.mask_gloss (None: the renderer default)
     rework: float | None = None       # default of render.rework_artifacts (None: the renderer default)
     camera_preset: str | None = None  # default of render.camera.preset (None: aoi)
     solder: str | None = None         # joint model this look implies (None: render.solder decides)
+    shadow: float = 1.0               # contact-shadow strength factor (diffuse scanner light: < 1)
+    silkscreen_skip: float = 0.45     # probability that no silkscreen is printed next to the part
 
     def body_colour(self, family: str, base_color: np.ndarray) -> np.ndarray:
         """Body colour of a part whose profile colour is the dark default (legacy: ``max(base, 34)``)."""
@@ -84,17 +89,22 @@ QUINS_LOOK = Look(
     mask_mottle=0.02, mask_weave=0.012,           # the scans show an almost uniform mask
     copper_under_mask=_bgr(1.12, 1.18, 1.2),     # traces are only faintly visible through the mask
     cap_body=_bgr(86, 108, 121),
-    end_cap=_bgr(170, 175, 177),
-    lead=_bgr(165, 169, 171),
+    # Metal in the scans is nearly white with a green cast (median BGR of pixels > 200: (209, 228, 214),
+    # p90 (253, 253, 253)): the terminal tops saturate, the fillets around them are bright too.
+    end_cap=_bgr(200, 216, 206),
+    lead=_bgr(192, 208, 198),
     flat_caps=True,
     bodies={"resistor": _RESISTOR, "array_r": _RESISTOR, "inductor": _bgr(58, 61, 59),
             "power_inductor": _bgr(99, 105, 104), "led": _bgr(200, 207, 209), "*": _MOULD},
     cap_len={"capacitor": 0.16, "resistor": 0.16},  # scans: narrow bright terminals, the joint shows around them
-    crowd=6.0,                                    # xpa boards: rows of passives, 4-8 neighbours per 3x crop
+    crowd=1.0,
+    packing=DENSE_PACKING,                        # xpa boards: rows of almost touching passives, mostly MLCCs, 4-10 per 3x crop
     mask_gloss=0.0,                               # diffuse scanner light: no glare on the mask
     rework=0.03,                                  # good production boards: patch wires and flux are rare
     camera_preset="quins",
     solder="meniscus",
+    shadow=0.3,                                   # diffuse ring light: hardly any contact shadow
+    silkscreen_skip=0.85,                         # the crops show almost no print next to the passives
 )
 
 _LOOKS = {"legacy": LEGACY_LOOK, "quins": QUINS_LOOK}

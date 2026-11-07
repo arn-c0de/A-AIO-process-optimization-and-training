@@ -12,7 +12,7 @@ from .palette import CHIPS, REFDES_PREFIX, SILKSCREEN
 
 
 def draw_silkscreen(ctx: RenderContext, img: np.ndarray, keepout: tuple[int, int, int, int], family: str, rng: np.random.Generator) -> None:
-    if rng.random() < 0.45:  # dense production boards often have no print next to small parts
+    if rng.random() < ctx.look.silkscreen_skip:  # dense production boards often have no print next to small parts
         return
     h, w = img.shape[:2]
     x0, y0, x1, y1 = keepout

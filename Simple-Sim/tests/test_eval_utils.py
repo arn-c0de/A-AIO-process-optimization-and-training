@@ -14,10 +14,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.cli_utils import UsageError, parse_result, run_cli
 from simple_sim.eval_utils import (
+    TTA_VIEWS,
     ThroughputMeter,
+    metrics_summary,
+    model_outputs,
     resolve_bundle_checkpoint,
     run_inference,
     top_prediction,
+    tta_views,
     unpack_batch,
 )
 
@@ -49,6 +53,35 @@ def test_run_inference_collects_preds_and_loss():
     assert np.array_equal(res.y_pred, y.numpy())
     assert res.avg_loss is not None and res.avg_loss > 0
     assert run_inference(model, loader, torch.device("cpu")).avg_loss is None
+
+
+def test_run_inference_tta_and_probs():
+    x = torch.zeros(4, 3, 6, 6)
+    x[:, 0, 0, 0] = 1.0  # a corner pixel: only the identity view puts it top-left
+    y = torch.tensor([0, 0, 0, 0])
+    loader = DataLoader(TensorDataset(x, y), batch_size=2)
+
+    class TopLeft(nn.Module):  # class 0 iff the mark is in the top-left corner
+        def forward(self, inp):
+            hit = inp[:, 0, 0, 0]
+            return torch.stack([hit * 10, (1 - hit) * 10], dim=1)
+
+    views = tta_views(x)
+    assert len(views) == TTA_VIEWS == 8 and all(v.shape == x.shape for v in views)
+    assert torch.equal(views[0], x) and len({tuple(v.nonzero()[0].tolist()) for v in views}) == 4
+    plain = run_inference(TopLeft(), loader, torch.device("cpu"), collect_probs=True)
+    assert plain.probs.shape == (4, 2) and np.allclose(plain.probs[:, 0], 1.0, atol=1e-3)
+    assert np.array_equal(plain.y_pred, [0, 0, 0, 0])
+    assert run_inference(TopLeft(), loader, torch.device("cpu")).probs is None
+    tta = run_inference(TopLeft(), loader, torch.device("cpu"), tta=True, collect_probs=True,
+                        criterion=nn.CrossEntropyLoss())
+    # 2 of 8 views keep the mark top-left (identity and the transpose): mean prob 0.25 -> class 1
+    assert np.allclose(tta.probs[:, 0], 0.25, atol=1e-3) and np.array_equal(tta.y_pred, [1, 1, 1, 1])
+    assert tta.avg_loss == pytest.approx(-np.log(0.25), abs=1e-3)
+    out = model_outputs(TopLeft(), x, tta=True)
+    assert torch.allclose(torch.softmax(out, 1)[:, 0], torch.full((4,), 0.25), atol=1e-3)
+    assert "calibration" not in metrics_summary({"accuracy": 1, "macro_f1": 1, "per_class": {}})
+    assert metrics_summary({"accuracy": 1, "macro_f1": 1, "per_class": {}, "calibration": {"ece": 0}})["calibration"] == {"ece": 0}
 
 
 def test_top_prediction():
@@ -130,6 +163,15 @@ def test_script_cores_end_to_end(tmp_path):
     ev = run_eval(data, model, "cpu")
     assert Path(ev["report_path"]).exists()
     assert 0.0 <= ev["accuracy"] <= 1.0 and set(ev["per_class"]) == set(TINY_CONFIG["classes"])
+    import json
+    report = json.loads(Path(ev["report_path"]).read_text(encoding="utf-8"))
+    assert "tta" not in report and "tta" not in ev and "calibration" not in report["metrics"]
+    ev2 = run_eval(data, model, "cpu", tta=True, calibration=True)
+    report2 = json.loads(Path(ev2["report_path"]).read_text(encoding="utf-8"))
+    assert ev2["tta"] is True and report2["tta"] is True
+    cal = report2["metrics"]["calibration"]
+    assert ev2["calibration"] == cal and set(cal) == {"ece", "nll", "brier", "n_bins"} and cal["n_bins"] == 15
+    assert 0.0 <= cal["ece"] <= 1.0 and cal["nll"] >= 0.0 and 0.0 <= cal["brier"] <= 2.0
 
     sid = (data / "splits" / "test.txt").read_text().split()[0]
     pr = predict_image(model, data_dir=data, sample_id=sid, device="cpu", topk=2)

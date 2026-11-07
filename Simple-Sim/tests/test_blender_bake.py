@@ -153,3 +153,51 @@ def test_blender_script_is_found_without_a_checkout_root():
 
     path = runner.script_path()
     assert path.name == "render_batch.py" and path.parent.name == "blender" and path.is_file()
+
+
+def test_job_schema_is_the_contract_of_both_sides(tmp_path):
+    """``simple_sim.blender.job_schema`` (stdlib only) names every key the bake writes and the script reads."""
+    import ast
+    import importlib
+
+    from simple_sim.blender import job_schema
+    from simple_sim.generation.blender import blender_job, blender_settings
+    from simple_sim.generators.blender3d import bake, runner
+
+    tree = ast.parse(Path(job_schema.__file__).read_text(encoding="utf-8"))
+    imported = {n.names[0].name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import)}
+    imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+    assert imported <= {"typing", "__future__"}
+    job_keys = set(job_schema.JobFields.__annotations__) | set(job_schema.BakeOptions.__annotations__) | {"board"}
+    assert set(job_schema.BlenderJob.__annotations__) == job_keys == set(job_schema.PreparedJob.__annotations__)
+    bake_keys = (set(job_schema.BakeOptions.__annotations__) | {"board"}) - {"component_type", "tolerances"}
+    assert set(bake.BAKE_CONFIG_DEFAULTS) | {"camera"} == bake_keys
+    assert set(bake.bake_fields({})) == set(bake.BAKE_CONFIG_DEFAULTS) | {"camera"}
+    assert set(bake.profile_job_fields({})) == {"component_type", "tolerances"}
+    record = {"image_path": "a.png", "seed": 1, "nominal": {}, "defect": {}, "augment": {}}
+    job = blender_job(record, mm_per_px=0.01, roi_width=64, roi_height=64, footprint="chip_2pad",
+                      component_height_mm=0.45, render_3d={}, bake=bake.bake_fields({}))
+    assert set(job) == job_keys - {"component_type", "tolerances"}
+    prepared = bake.prepare_jobs([_job("OK")], tmp_path)[0]
+    assert set(prepared["board"]) == set(job_schema.BoardScene.__annotations__)
+    assert set(prepared["board"]["body"]) <= set(job_schema.SceneBody.__annotations__)
+    assert set(prepared["board"]["pose"]) == set(job_schema.CameraPose.__annotations__)
+    # Defaults exist once: the runner, ``render.blender`` settings and the script agree.
+    assert blender_settings({}) == {"executable": job_schema.DEFAULT_BLENDER_EXECUTABLE, "samples": job_schema.DEFAULT_CYCLES_SAMPLES,
+                                    "device": job_schema.DEFAULT_DEVICE, "engine": job_schema.DEFAULT_ENGINE}
+    assert bake.BOARD_SCALE is job_schema.BOARD_SCALE
+    script = runner.script_path().read_text(encoding="utf-8")
+    assert "from simple_sim.blender.job_schema import" in script and "DEFAULT_COMPONENT_HEIGHT_MM" in script
+    assert bake.profile_component_height_mm({"component": {"nominal_dims_mm": {"height": 1.2}}}) == 1.2
+    assert bake.profile_component_height_mm({"component": {}}) == job_schema.DEFAULT_COMPONENT_HEIGHT_MM
+    importlib.reload(job_schema)
+
+
+def test_prepare_job_defaults_match_the_renderer():
+    """A job without bake fields bakes with the renderer's defaults (``BAKE_CONFIG_DEFAULTS``)."""
+    from simple_sim.generators.blender3d import bake
+    from simple_sim.generators.opencv2d.photoreal import DEFAULT_SUPERSAMPLING, MASK_GLOSS_PROBABILITY, REWORK_PROBABILITY
+
+    assert bake.BAKE_CONFIG_DEFAULTS["rework_artifacts"] == REWORK_PROBABILITY
+    assert bake.BAKE_CONFIG_DEFAULTS["mask_gloss"] == MASK_GLOSS_PROBABILITY
+    assert bake.BAKE_CONFIG_DEFAULTS["supersampling"] is None and DEFAULT_SUPERSAMPLING == 2

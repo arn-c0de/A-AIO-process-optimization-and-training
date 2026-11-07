@@ -31,6 +31,34 @@ def build_resnet18(num_classes: int, pretrained: bool = False) -> nn.Module:
     return model
 
 
+RESNET_STAGES = ("stem", "layer1", "layer2", "layer3", "layer4")
+
+
+def freeze_stages(model: nn.Module, stages: list[str] | tuple[str, ...] | None) -> list[nn.Module]:
+    """Freeze the given ResNet *stages* (``train.freeze``) and return the frozen modules.
+
+    ``stem`` is ``conv1`` + ``bn1``, ``layer1`` .. ``layer4`` the residual stages. Their parameters
+    get ``requires_grad = False`` (no gradients, so backward stops early and the optimizer skips
+    them); the trainer also keeps the frozen modules in eval mode so their BatchNorm statistics
+    stay at the pretrained values. An unknown stage name raises ``ValueError``.
+    """
+    frozen: list[nn.Module] = []
+    for name in stages or ():
+        if name not in RESNET_STAGES:
+            raise ValueError(f"train.freeze: unknown stage {name!r}, expected one of {list(RESNET_STAGES)}")
+        modules = [model.conv1, model.bn1] if name == "stem" else [getattr(model, name)]
+        for m in modules:
+            for p in m.parameters():
+                p.requires_grad_(False)
+        frozen.extend(modules)
+    return frozen
+
+
+def trainable_parameters(model: nn.Module) -> list[nn.Parameter]:
+    """Parameters with ``requires_grad`` (all of them unless :func:`freeze_stages` was applied)."""
+    return [p for p in model.parameters() if p.requires_grad]
+
+
 def model_from_checkpoint(checkpoint: dict[str, Any], device: str | torch.device) -> nn.Module:
     """Build a ResNet18 from a single-model checkpoint dict and put it in eval mode on ``device``."""
     model = build_resnet18(len(checkpoint["class_names"]))

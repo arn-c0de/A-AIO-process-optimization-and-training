@@ -12,18 +12,21 @@ whether the DRC runs per sample. See ``docs/refactoring/PCB_TRACE_ROUTING_PLAN.m
 
 from __future__ import annotations
 
+import contextvars
 import logging
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
-from collections.abc import Mapping
 from typing import Any, NamedTuple
 
 import numpy as np
 
 from simple_sim.board.drc import BoardDrcError, DrcReport, check
-from simple_sim.board.footprints import PadSpec, family_of, footprint_pads
-from simple_sim.board.model import Board, Vec, window_board
+from simple_sim.board.footprints import DEFAULT_FOOTPRINT, PadSpec, family_of, footprint_pads, profile_footprint
+from simple_sim.board.geometry import BBox, Vec
+from simple_sim.board.model import Board, window_board
 from simple_sim.board.netlist import assign_nets
-from simple_sim.board.placement import neighbour_layout, place_window
+from simple_sim.board.placement import DENSE_PACKING, LEGACY_PACKING, Packing, neighbour_layout, place_window
 from simple_sim.board.routing import ROUTERS, seed_occupancy
 from simple_sim.board.routing.escape import FINE_PITCH_FAMILIES
 from simple_sim.board.rules import DEFAULT_PRESET, PRESETS, DesignRules, fit_to_pitch, sample_rules
@@ -85,6 +88,43 @@ def board_options(render_config: Mapping[str, Any] | None) -> BoardOptions:
                         pour_probability=float(raw.get("pour_probability", POUR_PROBABILITY)), drc=str(raw.get("drc", "off")))
 
 
+#: DRC summaries of the boards built in the current context (see :func:`collect_drc`); ``None`` = nobody listens.
+_DRC_SINK: contextvars.ContextVar[list[dict[str, Any]] | None] = contextvars.ContextVar("board_drc_sink", default=None)
+
+
+def drc_summary(report: DrcReport, options: BoardOptions) -> dict[str, Any]:
+    """Compact, JSON-ready DRC result of one board (``render_meta.board_drc`` in ``meta.jsonl``):
+    ``ok``, the number of violations, the counts per violation kind and the ``render.board`` options
+    (router, design-rule preset, DRC mode) the board was built with. No messages."""
+    return {"ok": report.ok, "violations": len(report.violations), "kinds": report.counts(),
+            "routing": options.routing, "design_rules": options.design_rules, "drc": options.drc}
+
+
+@contextmanager
+def collect_drc() -> Iterator[list[dict[str, Any]]]:
+    """Collect the :func:`drc_summary` of every board :func:`build_window_board` checks while the
+    block runs (``drc: warn | strict``; nothing is collected with ``off``, and a strict board that
+    fails every attempt raises instead). The sink is per thread / context, so parallel renders never
+    mix, and listening changes neither the boards nor any random stream::
+
+        with collect_drc() as reports:
+            img = render_record(spec, record)
+        meta["board_drc"] = reports[0]   # one board per 2D render window
+    """
+    sink: list[dict[str, Any]] = []
+    token = _DRC_SINK.set(sink)
+    try:
+        yield sink
+    finally:
+        _DRC_SINK.reset(token)
+
+
+def _record_drc(report: DrcReport, options: BoardOptions) -> None:
+    sink = _DRC_SINK.get()
+    if sink is not None:
+        sink.append(drc_summary(report, options))
+
+
 def _stream(seed: int, key: int, attempt: int = 0) -> np.random.Generator:
     return np.random.default_rng([int(seed), key, attempt] if attempt else [int(seed), key])
 
@@ -103,7 +143,7 @@ def min_row_pitch(pads: list[PadSpec]) -> float:
 
 
 def fanout_band_px(target_pads: list[PadSpec], rules: DesignRules, px_to_mm: float,
-                   to_border: bool = False) -> list[tuple[float, float, float, float]]:
+                   to_border: bool = False) -> list[BBox]:
     """Pixel rects in front of every target pad where its fan-out runs (stub, jog, staggered via);
     with *to_border* the whole corridor up to the window border (fine-pitch rows run straight out)."""
     reach = max(rules.fanout_stub * 1.2, 1.5 * rules.clearance + rules.width("power") * 1.15)
@@ -124,7 +164,7 @@ def fanout_band_px(target_pads: list[PadSpec], rules: DesignRules, px_to_mm: flo
     return rects
 
 
-def _clear_of(n: dict[str, Any], rects: list[tuple[float, float, float, float]]) -> bool:
+def _clear_of(n: dict[str, Any], rects: list[BBox]) -> bool:
     xs = [p["x"] for p in n["pads"]] + [p["x"] + p["w"] for p in n["pads"]]
     ys = [p["y"] for p in n["pads"]] + [p["y"] + p["h"] for p in n["pads"]]
     nx0, ny0, nx1, ny1 = min(xs), min(ys), max(xs), max(ys)
@@ -154,7 +194,8 @@ def build_window_board(*, footprint: str, family: str, target_pads: list[PadSpec
 
     With ``options.drc == "strict"`` the routing stages are re-drawn (new sub-streams) until the
     DRC passes; after :data:`DRC_STRICT_ATTEMPTS` failed attempts :class:`BoardDrcError` is
-    raised. ``warn`` logs the violations and returns the board with its report.
+    raised. ``warn`` logs the violations and returns the board with its report. Either report is
+    handed to an enclosing :func:`collect_drc`.
     """
     if options.routing not in ROUTERS:
         raise ValueError(f"no router {options.routing!r} (choose from {list(ROUTERS)})")
@@ -181,16 +222,18 @@ def build_window_board(*, footprint: str, family: str, target_pads: list[PadSpec
             return WindowBoard(board, None, kept)
         report = check(board)
         if report.ok:
+            _record_drc(report, options)
             return WindowBoard(board, report, kept)
     assert board is not None and report is not None
     if options.drc == "strict":
         raise BoardDrcError(report, seed)
+    _record_drc(report, options)
     log.warning("board DRC: %s (seed %s, %s)", report.to_dict(), seed, options.routing)
     return WindowBoard(board, report, kept)
 
 
 __all__ = [
-    "BOARD_ROUTERS", "DEFAULT_MM_PER_PX", "DRC_MODES", "LEGACY", "NONE", "Board", "BoardDrcError", "BoardOptions", "DrcReport",
-    "PadSpec", "WindowBoard",
-    "board_options", "build_window_board", "family_of", "footprint_pads", "neighbour_layout", "validate_board_options",
+    "BOARD_ROUTERS", "DEFAULT_FOOTPRINT", "DEFAULT_MM_PER_PX", "DRC_MODES", "LEGACY", "NONE", "BBox", "Board", "BoardDrcError",
+    "BoardOptions", "DrcReport", "PadSpec", "Vec", "WindowBoard",
+    "board_options", "build_window_board", "collect_drc", "drc_summary", "family_of", "footprint_pads", "neighbour_layout", "profile_footprint", "Packing", "LEGACY_PACKING", "DENSE_PACKING", "validate_board_options",
 ]

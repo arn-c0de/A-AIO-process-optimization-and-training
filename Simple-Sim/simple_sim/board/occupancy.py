@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import cv2
 import numpy as np
@@ -22,6 +23,24 @@ from simple_sim.board.model import Vec
 # Fixed-point bits for sub-cell accurate cv2 drawing.
 _SHIFT = 4
 _ONE = 1 << _SHIFT
+
+
+def _ellipse(n: int) -> np.ndarray:
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * n + 1, 2 * n + 1))
+
+
+@lru_cache(maxsize=64)
+def _ellipse_spans(n: int) -> tuple[np.ndarray, np.ndarray] | None:
+    """Per kernel row of :func:`_ellipse`: how far its set cells reach left and right of the centre
+    (``(left, right)`` arrays of length ``2n + 1``), or ``None`` if a row is not one contiguous span."""
+    k = _ellipse(n) != 0
+    left, right = np.zeros(2 * n + 1, dtype=np.int64), np.zeros(2 * n + 1, dtype=np.int64)
+    for r in range(2 * n + 1):
+        cols = np.flatnonzero(k[r])
+        if cols.size == 0 or cols.size != cols[-1] - cols[0] + 1 or not cols[0] <= n <= cols[-1]:
+            return None
+        left[r], right[r] = n - cols[0], cols[-1] - n
+    return left, right
 
 
 @dataclass(slots=True)
@@ -70,6 +89,48 @@ class Grid:
             cv2.rectangle(mask, (i0, j0), (i1, j1), 255, -1)
         return mask
 
+    def _rect_cells(self, bbox: BBox) -> tuple[int, int, int, int] | None:
+        """Inclusive cell box ``(i0, j0, i1, j1)`` that :meth:`rect` sets (clipped to the grid), or ``None``."""
+        u0, v0 = (bbox[0] - self.origin[0]) / self.res, (bbox[1] - self.origin[1]) / self.res
+        u1, v1 = (bbox[2] - self.origin[0]) / self.res, (bbox[3] - self.origin[1]) / self.res
+        i0, j0 = max(0, int(np.ceil(u0 - 1e-9))), max(0, int(np.ceil(v0 - 1e-9)))
+        i1, j1 = min(self.shape[1] - 1, int(np.ceil(u1 - 1e-9)) - 1), min(self.shape[0] - 1, int(np.ceil(v1 - 1e-9)) - 1)
+        return (i0, j0, i1, j1) if i1 >= i0 and j1 >= j0 else None
+
+    def inflated_rect_rows(self, bbox: BBox, mm: float) -> list[tuple[int, int, int]] | None:
+        """Row spans ``(row, x0, x1)`` (``x1`` exclusive) of ``inflate(rect(bbox), mm)``, computed from
+        the structuring element instead of dilating the whole grid; ``None`` when that is not possible
+        (then call the two methods). A rectangle dilated by a kernel whose rows are contiguous spans
+        through the centre is, per row, the rectangle widened by the widest kernel row that reaches it."""
+        n = self.cells(mm)
+        cells = self._rect_cells(bbox)
+        if cells is None:
+            return []
+        i0, j0, i1, j1 = cells
+        if n <= 0:
+            return [(y, i0, i1 + 1) for y in range(j0, j1 + 1)]
+        spans = _ellipse_spans(n)
+        if spans is None:
+            return None
+        left, right = spans
+        rows_h, cols_w = self.shape
+        out = []
+        for y in range(max(0, j0 - n), min(rows_h - 1, j1 + n) + 1):
+            # Kernel rows dy with y + dy inside the rectangle (the kernel row index is dy + n).
+            r0, r1 = max(0, j0 - y + n), min(2 * n, j1 - y + n)
+            out.append((y, max(0, i0 - int(left[r0:r1 + 1].max())), min(cols_w, i1 + int(right[r0:r1 + 1].max()) + 1)))
+        return out
+
+    def inflated_rect(self, bbox: BBox, mm: float) -> np.ndarray:
+        """``inflate(rect(bbox), mm)`` without dilating the whole grid (same cells)."""
+        rows = self.inflated_rect_rows(bbox, mm)
+        if rows is None:
+            return self.inflate(self.rect(bbox), mm)
+        mask = self.scratch()
+        for y, x0, x1 in rows:
+            mask[y, x0:x1] = 255
+        return mask
+
     def polyline(self, points: list[Vec], width: float, mask: np.ndarray | None = None) -> np.ndarray:
         mask = self.scratch() if mask is None else mask
         pts = np.array([self._fixed(p) for p in points], dtype=np.int32)
@@ -93,15 +154,24 @@ class Grid:
         n = self.cells(mm)
         if n <= 0:
             return mask
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * n + 1, 2 * n + 1))
-        return cv2.dilate(mask, k)
+        k = _ellipse(n)
+        # Dilate only the box of the set cells grown by *n* (a single pad is a tiny patch of the
+        # window): outside it the result is zero, inside it is the same as on the whole mask.
+        rows = np.flatnonzero(mask.any(axis=1))
+        out = np.zeros_like(mask)
+        if rows.size == 0:
+            return out
+        cols = np.flatnonzero(mask.any(axis=0))
+        y0, y1 = max(0, int(rows[0]) - n), min(mask.shape[0], int(rows[-1]) + n + 1)
+        x0, x1 = max(0, int(cols[0]) - n), min(mask.shape[1], int(cols[-1]) + n + 1)
+        out[y0:y1, x0:x1] = cv2.dilate(np.ascontiguousarray(mask[y0:y1, x0:x1]), k)
+        return out
 
     def erode(self, mask: np.ndarray, mm: float) -> np.ndarray:
         n = self.cells(mm)
         if n <= 0:
             return mask
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * n + 1, 2 * n + 1))
-        return cv2.erode(mask, k)
+        return cv2.erode(mask, _ellipse(n))
 
 
 @dataclass(slots=True)
@@ -118,15 +188,19 @@ class CopperMap:
     bbox: BBox
     items: list[Item | None] = field(default_factory=list)
     groups: dict[str, int] = field(default_factory=dict)
-    _boxes: list[BBox] = field(default_factory=list)
+    # Bounding box per item (row = token), grown by doubling: the query filter reads it as one array.
+    _boxes: np.ndarray = field(default_factory=lambda: np.empty((64, 4), dtype=np.float64))
 
     def group(self, ref: str) -> int:
         return self.groups.setdefault(ref, len(self.groups) + 1)
 
     def add(self, shape: Shape, net: str | None, *, group: int | None = None, blocked: bool = False) -> int:
         self.items.append(Item(shape, net, group, blocked))
-        self._boxes.append(shape.bbox)
-        return len(self.items) - 1
+        n = len(self.items)
+        if n > len(self._boxes):
+            self._boxes = np.concatenate([self._boxes, np.empty_like(self._boxes)])
+        self._boxes[n - 1] = shape.bbox
+        return n - 1
 
     def remove(self, token: int) -> None:
         self.items[token] = None
@@ -138,8 +212,8 @@ class CopperMap:
         *group_clearance*, and the own part's keep-out does not count."""
         reach = max(clearance, group_clearance)
         sb = shape.bbox
-        if self._boxes:
-            b = np.asarray(self._boxes)
+        if self.items:
+            b = self._boxes[:len(self.items)]
             near = np.flatnonzero((b[:, 0] <= sb[2] + reach) & (sb[0] <= b[:, 2] + reach)
                                   & (b[:, 1] <= sb[3] + reach) & (sb[1] <= b[:, 3] + reach))
         else:

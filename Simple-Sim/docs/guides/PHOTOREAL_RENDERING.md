@@ -60,6 +60,7 @@ render:
     design_rules: consumer_dense   # consumer_dense | industrial | hdi (track widths, clearances, via sizes)
     pour_probability: 0.6    # share of boards with a ground pour
     drc: off                 # off | warn (log violations) | strict (re-draw the routing until clean, else raise)
+                             # warn / strict also store the result per sample (render_meta.board_drc in meta.jsonl)
 ```
 
 With `routing: escape` the pipeline is footprints -> placement -> netlist -> pours -> routing ->
@@ -86,7 +87,15 @@ stitching vias -> DRC -> raster:
   about as wide as their pads), clipped to [0.3, 6].
 - **DRC** (`simple_sim/board/drc.py`): clearance, dangling track ends, copper on thermal/NC pads,
   foreign copper in the inspected part's keep-out, track widths. Used by the tests
-  (`tests/test_board.py`) and optionally per sample.
+  (`tests/test_board.py`) and optionally per sample: with `drc: warn | strict` every row of
+  `meta.jsonl` gets `render_meta.board_drc`, e.g.
+  `{"ok": false, "violations": 2, "kinds": {"clearance": 2}, "routing": "escape", "design_rules": "consumer_dense", "drc": "warn"}`
+  (counts per violation kind, no messages; `strict` rows are always `ok`). The renderer returns
+  only the image; the result is collected on the side (`simple_sim.board.collect_drc`,
+  `opencv2d.render_record_with_meta`) without touching any random stream. Not recorded for
+  `legacy` / `none` copper, `drc: off` or the Blender backend. The GUI (Profile Preview "Quality"
+  box, Pipeline "Source" section) can override `routing`, `drc` and `design_rules` of the run
+  config, and `render.look`, without editing the YAML.
 
 The board's random streams are keyed (`default_rng([board_seed, stage])`), so a change in the
 router never moves the neighbours or the netlist. Switching from `legacy` to `escape` changes
@@ -143,10 +152,11 @@ and comparing whole-image statistics with `tools/look_stats.py`:
 | Copper under the mask | faint | x1.29-1.40 | x1.12-1.20 |
 | MLCC ceramic | (86, 108, 121) | (120, 152, 170) | measured |
 | Moulded IC/SOT, resistor, ferrite, power inductor, LED housing | (64, 68, 65), ~(44, 47, 44), dark, (99, 105, 104), white | all (34, 34, 34) | measured (only when the profile keeps the dark default colour) |
-| Chip terminals | flat bright tin, brightest where the plating rolls over the cap edges | tube-like ridge | flat, bright edges, darker middle |
-| Joints | ring-light reflections, no room lamps | legacy fillets | `meniscus` with a fixed ring light (`meniscus.sample_scanner_look`) |
+| Chip terminals | matte tin, nearly white (pixels > 200: median BGR (209, 228, 214), p90 253), brightest where the plating rolls over the cap edges | tube-like ridge, (170, 175, 177) | flat (198, 214, 204), bright edges |
+| Joints | two line lights along the scan direction: the fillet slopes facing +-x blaze (vertical bright bands on every terminal, whatever the part's orientation), flat solder mirrors the dark camera (grey dome tops on empty pads inside a bright rolled rim), green-cast metal | legacy fillets | `meniscus` with two side lights along image x, rotated with the camera roll (`meniscus.sample_scanner_look(rng, roll_deg)`), metal tint (0.94, 1, 0.95), high domes on empty pads |
+| Contact shadows, silkscreen | hardly any shadow (diffuse light), almost no print next to passives | shadow 0.35-0.4, 55 % printed | `Look.shadow` 0.3x, `Look.silkscreen_skip` 85 % |
 | Mask glare, rework artifacts | none / rare | 50 % / 25 % | 0 % / 3 % |
-| Camera | 23.7 px/mm, upscaled, ~0.9 levels noise, RGB fringes at edges | AOI preset | preset `quins` |
+| Camera | 23.7 px/mm, upscaled, ~0.9 levels noise, blue/orange fringes along the scan axis | AOI preset | preset `quins` (`channel_shift` 1.6-3.2 px along x) |
 
 Whole images (p10/p50/p90 over 600 real crops vs. 42 renders of 7 run configs, `tools/look_stats.py`):
 
@@ -157,6 +167,40 @@ Whole images (p10/p50/p90 over 600 real crops vs. 42 renders of 7 run configs, `
 | p99 grey | 170/199/229 | 142/166/186 | 141/193/219 |
 | white share | 0.3/1.2/3.8 % | 0.02/0.5/1.3 % | 0.1/1.8/3.1 % |
 
+**Second round (2026-11-07), tuned on side-by-side montages of real and synthetic 0402 crops (3x body
+length, upscaled to 256 px; `tools/look_montage.py --real real_eval/ --data DATASET --out m.png --stats`,
+one row of real crops per class folder above the synthetic row of the same class) and on the statistics
+that separated them (the `--stats` table).** The first `quins` joints were
+far too dark: the scans show blazing fillets and bright empty pads, the renders matte grey ones
+(an earlier tuning had dimmed them on purpose because a classifier confused bright joints with
+excess solder). Per-image means over 300 crops each (`tools/look_stats.py` plus LAB spread):
+
+| Metric (256 px crops) | real good 0402 MLCC | `quins` before | `quins` now | real empty 0402 pad | `quins` MISSING now |
+|---|---|---|---|---|---|
+| L std (LAB) | 30.4 | 21.9 | 29.3 | 36.8 | 30.3 |
+| b std (yellow-blue, fringes + tan body) | 8.4 | 4.6 | 6.8 | 8.7 | 7.9 |
+| share of pixels > 200 | 1.0 % | 0.0 % | 1.5 % | 3.7 % | 1.8 % |
+| share of pixels > 150 | 6.7 % | 2.7 % | 6.9 % | 10.1 % | 7.4 % |
+| p90 / p99 grey | 139 / 201 | 123 / 164 | 135 / 213 | 150 / 229 | 137 / 216 |
+| median BGR of pixels > 200 | (209, 228, 214) | (206, 212, 201) | (199, 233, 216) | (211, 222, 213) | (193, 234, 212) |
+
+What changed in `quins` (legacy untouched, 31 golden variant cases updated, `RENDERER_VERSION` unchanged):
+the scanner joint light (`meniscus.sample_scanner_look`) is two line lights along image x instead of
+a ring (the real crops show vertical bright bands on every terminal and the left/right rims of every
+empty pad, in all part orientations), wide in azimuth (half width 50-65 deg) but a narrow elevation
+band (22-34 +- 11-17 deg: bright lines on the slopes, not blocks) and strong (gain 440-540), the
+flat-solder brightness is low (120-155: a mirror of the dark camera), the metal has the measured green
+cast (`SolderLook.tint`), empty pads get high domes (`paste_scale` 1.0-1.3), the terminal tops are
+grey mirrors with blazing rolled edges on both sides (the "bracket" look of every real terminal;
+`parts.draw_body`, `flat_caps`: 0.7 + 0.7 x edges of (200, 216, 206)), contact shadows are faint
+(`Look.shadow`), silkscreen is rare (`Look.silkscreen_skip`), and the RGB misregistration is stronger and
+fixed to the scan axis (`camera.channel_axis: x`). The light direction is fixed in the finished image:
+`RenderContext.for_render(config, rng, roll_deg)` rotates the azimuths by the camera roll
+(`post_filters: camera`) or the final image rotation (`post_filters: legacy`,
+`render_photoreal_base(..., light_roll_deg=)`), tested in `tests/test_look.py`. Still open: real empty
+pads are brighter than the rendered ones (table), the glossy MLCC body shows a light stripe along its
+middle in the scans, and the scans have a little more yellow-blue spread.
+
 The camera preset `quins` adds three keys to `render.camera` (all off by default, without a random
 draw, so other presets render as before):
 
@@ -164,13 +208,17 @@ draw, so other presets render as before):
   `sensor_px_per_mm x roi.mm_per_px x zoom` (at most 1), so the scan resolution holds for every profile
   scale and field of view.
 - `channel_shift: [min, max]`: line-scanner RGB misregistration in sensor pixels. Blue and red are
-  shifted apart along one of the four axis directions, which gives the colour fringes at bright edges.
+  shifted apart along one axis, which gives the colour fringes at bright edges.
+- `channel_axis: random | x | y`: that axis. `random` (default) draws one of the four axis directions
+  per image; a line scanner has a fixed scan direction, so the `quins` preset uses `x`. Like the scanner
+  lights, a fixed axis is kept in the finished image: with `post_filters: legacy` it is pre-rotated
+  against the augmentation rotation (`camera_model(..., axis_roll_deg=)`).
 - `crop_part_lengths: [min, max]` (2D): field of view in body lengths, replacing `zoom`. DeepVision cuts
   every QUINS crop at 3x the body length (measured 3.02-3.04 on all chip forms), so the preset uses
   `[3, 3]`; for the 0402 profiles that magnifies the view (zoom 0.73), for 0603 at 100 px/mm it zooms out.
 
 `render.look: quins` sets the defaults `camera.preset: quins`, `mask_gloss: 0`, `rework_artifacts: 0.03`
-and `solder: meniscus`, and raises the neighbour-part density (`Look.crowd` 6; the xpa boards are densely
+and `solder: meniscus`, and packs the neighbour parts densely (`Look.packing`: `board.placement.DENSE_PACKING`; the xpa boards are densely
 populated); anything set explicitly in `render` wins. Look-specific randomness is drawn from the
 meniscus side stream only, so `quins` shares part placement and labels of a seed with `legacy`. Code:
 `simple_sim/generators/opencv2d/photoreal/look.py`.
@@ -195,6 +243,7 @@ embedding (`tools/sim_to_real.py`; NN distance ratio, 1.0 = as close as real to 
 | `run_0402_c.yaml` (legacy) | 3.42 | 101 |
 | `look: quins`, run_0402_c domain | 2.70 | 68 |
 | `run_0402_c_quins.yaml` (crop 3x, crowd 2, calm domain, camera post filters; before the classifier tuning below) | 2.57 | 4.5 |
+| same config, second tuning round (side lights, bright joints, grey terminal tops; 300 vs. 300) | 2.52 | 5.2 |
 
 1-NN accuracy stays ~1.0 (still separable): what is left is content (silkscreen and via placement,
 part arrangement) rather than colour. Variants of the joint lighting (low ring light, dark fillet
@@ -205,24 +254,85 @@ slopes, more frost) and a darker mask did not move the ratio or made it worse.
 `tools/eval_real.py --checkpoint model.pt --real DIR` scores a checkpoint on real crops sorted into one
 sub-folder per class (`OK`, `MISSING`, `MISSING@empty_pad`, ...; the part after `@` is a sub-group).
 Test set used: 400 good 0402 MLCCs (form-02, QUINS test split), 35 crops labelled "fehlt", 400 empty
-0402 pads ("leer") and 5 "versetzt". ResNet18, 2400 synthetic images, 6 epochs on CPU:
+0402 pads ("leer", val/test splits) and 5 "versetzt". ResNet18, 2400 synthetic images (400 per class),
+6 epochs on CPU, one run each (single runs vary strongly):
 
-| Training data | good -> OK | "fehlt" -> MISSING | empty pad -> MISSING |
-|---|---|---|---|
-| `run_0402_c` (legacy) | 3 % | 0 % | 0 % |
-| `run_0402_c_quins` (state of the A/B table above) | 0 % | 0 % | 1 % |
-| + train augment, high pillow-shaped paste on empty pads (`SolderLook.paste_scale`) | 0 % | 57 % | 79 % |
-| + narrow terminals (`Look.cap_len`), dim overhead / bright ring joint light | 0 % | 0 % | 0 % |
+| Training data | good -> OK | "fehlt" detected | empty pad detected | false calls | escapes |
+|---|---|---|---|---|---|
+| `run_0402_c` (legacy) | 3 % | 0 % | 0 % | 97 % | 0 % |
+| `run_0402_c_quins` (state of the A/B table above) | 0 % | 0 % | 1 % | 100 % | 0 % |
+| + train augment, high pillow-shaped paste on empty pads (`SolderLook.paste_scale`) | 0 % | 57 % | 79 % | 100 % | 0 % |
+| + narrow terminals (`Look.cap_len`), dim overhead / bright ring joint light | 0 % | 0 % | 0 % | 100 % | 0 % |
+| + dense neighbour rows (`Look.packing`, `board.placement.DENSE_PACKING`) | 0 % | 0 % | 0 % | 100 % | 0 % |
+| + 200 real good crops (QUINS train split) | 99.5 % | 9 % | 4 % | 0.5 % | 96 % |
+| + 200 real good + 200 real empty pads (train split) | 96.5 % | 94 % | 100 % | 3.5 % | 0.7 % |
+| only those 400 real crops, no synthetic images | 96 % | 97 % | 100 % | 4 % | 0.2 % |
+| dense-packing quins + 200 + 200 other real crops, mixed with `tools/mix_real.py` | 99.8 % | 97 % | 100 % | 0.3 % | 0.5 % |
 
-So far no model trained on synthetic images alone accepts the real good parts: they are predicted as
-TOMBSTONE (or EXCESS_SOLDER). Diagnostics on the real OK crops: the prediction stays TOMBSTONE with
-the part masked out, so a global image property decides; transferring the real LAB colour statistics
-to synthetic OK images flips ~45 % of them to TOMBSTONE. The real scans have far more luminance spread
-(L std 32 vs. 20: densely packed bright terminals on dark mask) and twice the yellow-blue spread
-(tan MLCC neighbours, colour fringes). `Look.crowd` cannot reach that density: `neighbour_layout`
-places neighbours on a coarse grid with a large clearance. Next steps: denser packing in
-`simple_sim/board/placement.py` for this look, then repeat the test with several seeds (single runs
-vary strongly).
+("detected" = predicted as any defect; "fehlt" and the tested empty pads were never trained on.)
+
+Second tuning round of the look (side lights, blazing joints, grey terminal tops; see "Target look"),
+2400 synthetic images, 8 epochs, train augment + cosine, benchmark from `tools/real_crops.py`
+(form-02: 500 good test crops, 10 "fehlalarm", 26 "fehlt", 5 "versetzt", 1 "verdreht", 9 "loetfehler",
+4 other defects, 300 empty form-01 pads; form-01: 300 good, 48 "fehlalarm", 9 "fehlt", 11 foreign objects):
+
+| Training data | good -> OK (form-02 / form-01) | "fehlt" detected | empty pad detected | "versetzt"/"loetfehler" detected | false calls | escapes |
+|---|---|---|---|---|---|---|
+| synthetic only, second-round look | 0 % / 0 % | 100 % | 100 % | 100 % | 100 % | 0 % |
+| + 300 real good (form-02 train) + 300 real empty pads (form-01 train), `tools/mix_real.py` | 100 % / 87 % | 85 % | 100 % | 5/5, 7/9 | 0.2 % | 2.9 % |
+| those 600 real crops with only 8 synthetic images (real-only control) | 100 % / 82 % | 92 % | 100 % | 3/5, 4/9 | 0 % | 3.8 % |
+
+(form-01 good parts are black 0402 chips the models never saw as good; "versetzt"/"loetfehler" are
+detected as MISSING, not as their own class; foreign objects and wrong parts pass as OK in both.)
+
+The synthetic-only model still rejects every real crop (mostly as TOMBSTONE, the rest SOLDER_BALL),
+although the image statistics now match (table above, NN distance ratio 2.52). Probing the model with
+edited real crops: matching the real crops' LAB statistics or histogram to the renders, blurring,
+sharpening or re-sampling them changes nothing; a real part pasted into a synthetic surround is
+TOMBSTONE/MISALIGNED, a synthetic part pasted into a real surround is SOLDER_BALL, and a synthetic
+OK image with its part painted over stays "OK" in 67 % of the cases. So the classifier keys on
+texture details of both the part and its surroundings that the statistics do not capture, not on
+colour or sharpness, and it never learned to look at the joint. Closing that with renderer tuning
+alone is open-ended; the practical route stays real good parts + real empty pads in the training set.
+With them, the synthetic defects do earn their place on the rare classes: the mixed model flags all
+5 shifted and 7 of 9 solder-defect crops where the real-only model flags 3 and 4, and it accepts more
+of the unseen black form-01 chips (87 % vs. 82 %); on the plentiful classes (good, empty pad, missing)
+both are at 92-100 % and the differences are within single-run noise. The 10 "fehlalarm" crops (AOI
+false alarms reviewed as good) pass with both.
+
+Findings:
+
+- **Synthetic images alone do not transfer.** Real good parts are rejected (TOMBSTONE, MISALIGNED,
+  SOLDER_BALL) by every synthetic-only model. The decision is not about the joint: with the part
+  masked out the prediction stays TOMBSTONE, and giving synthetic OK images the LAB colour statistics
+  of the scans flips ~45 % of them to TOMBSTONE. The scans have more luminance spread (L std 32 vs. 20
+  with dense packing 22) and twice the yellow-blue spread.
+- **Real crops in only one class teach the domain, not the class**: with real good crops added, every
+  real image is "OK", defects included.
+- **Real good crops plus real empty pads work** (both are plentiful in production: 46 000 good and
+  2 800 empty 0402 pads in the train split), but in this test the synthetic images add nothing
+  measurable for OK / MISSING: the real-only model is as good.
+- Where synthetic data still has to carry the load are the classes without real examples
+  (MISALIGNED: 5 real crops, TOMBSTONE, solder defects). The real-only model flags all 5 "versetzt"
+  crops as MISSING (detected, wrong class); the mixed model flags 4 of 5. Too few to compare.
+
+Recommendation: train on synthetic defects plus real good parts and real empty pads, and collect real
+crops of the rarer defects for evaluation before relying on the synthetic ones.
+
+`tools/mix_real.py` does the mixing reproducibly: it takes a folder with one sub-folder per class
+(the same layout as `tools/eval_real.py`), resizes the crops to the ROI size and appends them to a
+split of a generated dataset (`images/real/`, `meta.jsonl` with `render_backend: real` and
+`render_meta.real: true`, `labels.jsonl`, split file, `dataset_manifest.json` `real_crops` history):
+
+```bash
+python -m simple_sim generate --config configs/run_0402_c_quins.yaml --out data/run_0402_c_quins
+python tools/mix_real.py --data data/run_0402_c_quins --real real_train/ --limit 200   # OK/, MISSING@empty_pad/
+python scripts/train.py --data data/run_0402_c_quins --out models/run_0402_c_quins.pt
+python tools/eval_real.py --checkpoint models/run_0402_c_quins.pt --real real_eval/   # crops never mixed in
+```
+
+Real rows carry the dataset's median nominal geometry and zero defect offsets (the true values are
+unknown), so they must not be used for geometry regression or seed replay.
 
 `generate --extend` compares the resolved look (`render.look` and the camera preset, mask gloss and
 rework defaults it implies) with the dataset, so looks are not mixed by accident.
@@ -277,6 +387,9 @@ render:
     jpeg_quality: [100, 100]   # < 95 compresses
     capture_scale: [1, 1]      # sensor px per ROI px; < 1: captured at low resolution and upscaled to the ROI
     chroma_shift: [0, 0]       # lateral chromatic aberration (R/B shift at the border, sensor px)
+    max_oversampling: 0        # > 0 (2D): cap on supersampling x zoom; zoomed-out views render at a lower
+                               # supersampling (never below 1, never raised), e.g. 2 halves the time of a
+                               # QFN32 under `crop_part_lengths` (zoom 2: 254 -> 125 ms). 0: off (default)
 ```
 
 `preset: phone` sets `tilt_deg: [5, 40]`, `zoom: [1, 1.5]`, `blur_sigma: [0.5, 1.2]`,
@@ -377,3 +490,28 @@ a few hundred real ROIs per package are enough.
 3. **Done – real-photo texture bank**: `render.texture_dir` (see above).
 4. **Done – sim-to-real check**: `tools/sim_to_real.py` (see below). Still open: a small labelled
    set of real ROIs per package to measure classifier accuracy on real data.
+
+## A/B of the opt-in render options against the real 0402 crops (2026-11-07)
+
+`tools/sim_to_real.py` (ImageNet ResNet18 embeddings, 300 synthetic OK images of
+`configs/run_0402_c_quins.yaml` per variant vs. 300 of the 500 real good form-02 test crops, 128 px): the
+NN distance ratio says how far the real crops are from their nearest render relative to their nearest
+other real crop (1 = covered); the 1-NN accuracy stays at 1.0 for every variant, i.e. real and synthetic
+are still perfectly separable by a generic embedding, so only the ratio is informative.
+
+| Variant (relative to `run_0402_c_quins`) | NN distance ratio |
+|---|---|
+| `look: legacy`, `post_filters: legacy` (the pre-quins render) | 3.61 |
+| `look: quins` (the config: `post_filters: camera`, implied meniscus joints) | **2.49** |
+| `post_filters: legacy` instead of `camera` | 2.55 |
+| `solder: legacy` (quins materials, legacy fillets) | 2.92 |
+| `board.routing: escape` | 2.58 |
+| `board.routing: escape`, `pour_probability: 1.0` | 2.58 |
+| `defects.placement_sampling: continuous` | 2.49 |
+| `supersampling: 3` | 2.49 |
+
+Reading: the look (materials, scanner camera) and the meniscus joints carry the whole gain; the camera
+post-filter mode helps a little; the board-model copper and the continuous placement sampler do not
+change the distance on this metric (the routed traces are hardly visible under the quins mask), and a
+third supersampling level is wasted. The remaining gap is not resolved by a generic embedding; the
+classifier test above is the better guide. Defaults are unchanged by this measurement.

@@ -11,6 +11,7 @@ import numpy as np
 
 from .context import RenderContext
 from .imageops import blend, grid, smooth_noise
+from .palette import jittered
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
@@ -43,8 +44,7 @@ def texture_substrate(ctx: RenderContext, h: int, w: int, texture_dir: str, rng:
 
 def procedural_substrate(ctx: RenderContext, h: int, w: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     palette = ctx.look.mask_palette
-    base = np.array(palette[int(rng.integers(len(palette)))], dtype=np.float32)
-    base *= float(rng.uniform(0.92, 1.08))
+    base = jittered(np.array(palette[int(rng.integers(len(palette)))], dtype=np.float32), rng, 0.92, 1.08)
     img = np.empty((h, w, 3), dtype=np.float32)
     img[:] = base
 

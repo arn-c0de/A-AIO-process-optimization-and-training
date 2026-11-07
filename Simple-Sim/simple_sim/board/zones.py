@@ -12,19 +12,13 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from simple_sim.board.geometry import disc
-from simple_sim.board.model import GND, TOP, Board, ThermalRelief, Vec, Via, Zone, point_in_polygon
+from simple_sim.board.geometry import add, disc, octagon, perp, unit
+from simple_sim.board.model import GND, TOP, Board, ThermalRelief, Via, Zone, point_in_polygon
 from simple_sim.board.occupancy import CopperMap, Grid
-from simple_sim.board.routing.base import add, perp, unit
 
 POUR_PROBABILITY = 0.6  # default share of boards with a copper pour (``render.board.pour_probability``)
-
-
-def octagon(x: float, y: float, w: float, h: float, chamfer: float) -> list[Vec]:
-    """Rectangle with 45-degree chamfered corners (the pour shape of autorouted boards)."""
-    c = chamfer
-    return [(x + c, y), (x + w - c, y), (x + w, y + c), (x + w, y + h - c), (x + w - c, y + h), (x + c, y + h),
-            (x, y + h - c), (x, y + c)]
+# Pour raster resolution (stitching vias, DRC): cells per clearance.
+POUR_CELLS_PER_CLEARANCE = 4
 
 
 def sample_zones(board: Board, rng: np.random.Generator, probability: float = POUR_PROBABILITY) -> list[Zone]:
@@ -69,7 +63,8 @@ def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
     spoke from the router as a track), and islands that touch neither copper of the pour's net nor
     the window border (where the pour continues) are removed.
     """
-    fill = grid.polygon(zone.outline)
+    outline = grid.polygon(zone.outline)
+    fill = outline.copy()
     foreign = grid.scratch()
     target = board.target
     if target is not None:  # the inspected part's area is kept free (as the real boards: pours end at the part)
@@ -94,7 +89,12 @@ def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
             for pad in part.pads:
                 if pad.net != zone.net or not point_in_polygon(pad.center, zone.outline):
                     continue
-                fill[grid.inflate(grid.rect(pad.bbox), relief.gap) > 0] = 0
+                rows = grid.inflated_rect_rows(pad.bbox, relief.gap)
+                if rows is None:
+                    fill[grid.inflate(grid.rect(pad.bbox), relief.gap) > 0] = 0
+                else:
+                    for y, x0, x1 in rows:
+                        fill[y, x0:x1] = 0
                 if part.is_target:
                     continue
                 d = unit(pad.escape_dir) if pad.escape_dir != (0.0, 0.0) else (1.0, 0.0)
@@ -102,7 +102,7 @@ def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
                 for direction in (d, perp(d), (-d[0], -d[1]), (-perp(d)[0], -perp(d)[1]))[: relief.spokes]:
                     grid.polyline([pad.center, add(pad.center, direction, reach)], relief.spoke_width, mask=spokes)
         spokes[keep_clear > 0] = 0
-        spokes[grid.polygon(zone.outline) == 0] = 0
+        spokes[outline == 0] = 0
         fill = np.maximum(fill, spokes)
     return _drop_islands(fill, grid.inflate(own_copper(board, zone.net, grid, zone.layer), grid.res))
 
@@ -113,13 +113,15 @@ def _drop_islands(fill: np.ndarray, anchors: np.ndarray) -> np.ndarray:
     if n <= 2 and not np.any(fill == 0):
         return fill
     keep = np.zeros(n, dtype=bool)
-    keep[np.unique(labels[anchors > 0])] = True
-    border = np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]])
-    keep[np.unique(border)] = True
+    keep[labels[anchors > 0]] = True
+    keep[labels[0, :]] = True
+    keep[labels[-1, :]] = True
+    keep[labels[:, 0]] = True
+    keep[labels[:, -1]] = True
     keep[0] = False
-    out = fill.copy()
-    out[~keep[labels]] = 0
-    return out
+    if keep[1:].all():
+        return fill
+    return fill * keep[labels]
 
 
 def stitch_vias(board: Board, zone: Zone, occ: CopperMap, rng: np.random.Generator, max_count: int = 24) -> list[Via]:
@@ -127,7 +129,7 @@ def stitch_vias(board: Board, zone: Zone, occ: CopperMap, rng: np.random.Generat
     rules = board.rules
     if rules.stitch_pitch is None:
         return []
-    grid = Grid.for_window(board.bbox, rules.clearance / 4.0)
+    grid = Grid.for_window(board.bbox, rules.clearance / POUR_CELLS_PER_CLEARANCE)
     fill = grid.erode(zone_fill(board, zone, grid), rules.via_diameter / 2.0 + rules.clearance)
     x0, y0, x1, y1 = board.bbox
     pitch = rules.stitch_pitch

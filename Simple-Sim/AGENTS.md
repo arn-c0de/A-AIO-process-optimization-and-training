@@ -84,9 +84,13 @@ class), `train.epochs: 1`, `train.pretrained: false` (avoids downloading weights
 scratch outputs outside the repo (e.g. `/tmp/...`); `outputs/` is git-ignored.
 
 Optional quality settings (all default to the old behaviour; `configs/run_0001_xdomain.yaml` has
-them all): `defects.placement_sampling: continuous`, several `domains` with a held-out one in
+them all): `defects.placement_sampling: continuous`, `defects.units: mm` (tombstone / bridge /
+corner-lift shift ranges in mm via `roi.mm_per_px`), several `domains` with a held-out one in
 `splits.val_domains`/`test_domains` (per-domain `camera` override), `render.post_filters: camera`,
-`train.augment` / `train.scheduler: cosine` / `train.label_smoothing`.
+`train.augment` / `train.scheduler: cosine` / `train.label_smoothing`. CPU training speed:
+`train.cache_images: true` (decoded images stay in RAM), `train.freeze: [stem, layer1]` (frozen
+ResNet stages, changes the model), `train --threads N` (torch threads; on hybrid CPUs try the number
+of performance cores).
 
 Other commands: `generate-profile-dataset` / `train-profile` / `eval-profile` (component
 type classifier), `predict` (single image), `predict-two-stage`, `sample-check`,

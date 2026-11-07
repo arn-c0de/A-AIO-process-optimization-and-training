@@ -8,7 +8,7 @@ import numpy as np
 
 from . import meniscus as solder_model
 from .context import RenderContext
-from .imageops import blend, grid, shade_solder, smooth_noise, solder_env
+from .imageops import blend, grid, shade_solder, skip_smooth_noise, smooth_noise, solder_env
 from .palette import SOLDER
 
 
@@ -37,10 +37,14 @@ def pads_and_solder(ctx: RenderContext, img: np.ndarray, base: np.ndarray, pads:
     solder = SOLDER * float(rng.uniform(0.9, 1.05))
     mask_edge = base * 0.65
     env = solder_env(base)  # what slopes of the solder mirror: the surrounding board
-    # Surface irregularity: real fillets are lumpy, not mathematically smooth.
-    lumps = smooth_noise((h, w), 8 * ctx.ss, rng) * 0.06
     thermal = thermal_pad_index(pads)
     look = ctx.solder_look if with_solder else None
+    # Surface irregularity: real fillets are lumpy, not mathematically smooth. (The meniscus model has
+    # its own relief; it only keeps the random stream in step.)
+    if look is None:
+        lumps = smooth_noise((h, w), 8 * ctx.ss, rng) * 0.06
+    else:
+        skip_smooth_noise((h, w), 8 * ctx.ss, rng)
     # render.solder: meniscus draws from a side stream: *rng* advances exactly as for legacy joints.
     joint_rng = solder_model.side_stream(rng, 1) if look is not None else None
 
@@ -58,16 +62,15 @@ def pads_and_solder(ctx: RenderContext, img: np.ndarray, base: np.ndarray, pads:
 
         ph, pw = region.shape[:2]
         covered = body_mask[y0:y1, x0:x1] > 0
-        yy, xx = grid(ph, pw)
-        edge = np.minimum(np.minimum(xx, pw - 1 - xx), np.minimum(yy, ph - 1 - yy))
-        rim = np.clip(edge / (1.5 * ctx.ss), 0.0, 1.0)  # copper visible at the pad rim
         amp = min(0.55 * min(pw, ph), 9.0 * ctx.ss)  # solder height; big (thermal) pads stay flat
         # Thermal pads are printed through a window-pane stencil (separate solder islands).
         cells = (max(2, round(3 * pw / min(pw, ph))), max(2, round(3 * ph / min(pw, ph)))) if i == thermal else (1, 1)
         if look is not None:
             solder_model.render_joint(region, base, covered, amp, look, joint_rng, ctx.ss, excess=i in excess, cells=cells)
-            img[y0:y1, x0:x1] = region
-            continue
+            continue  # region is a view: already written
+        yy, xx = grid(ph, pw)
+        edge = np.minimum(np.minimum(xx, pw - 1 - xx), np.minimum(yy, ph - 1 - yy))
+        rim = np.clip(edge / (1.5 * ctx.ss), 0.0, 1.0)  # copper visible at the pad rim
         if covered.any():
             dist =cv2.distanceTransform((~covered).astype(np.uint8), cv2.DIST_L2, 3)
             t = 1.0 - dist / max(1.0, float(dist.max()))

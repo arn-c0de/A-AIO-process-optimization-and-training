@@ -44,6 +44,21 @@ _BOUNDARY_GAP = 0.98
 # continuous: share of the MISALIGNED range covered by half the samples (u**2 density, see _beyond()).
 _MISALIGNED_TAIL_SCALE = 5.0
 
+# ``defects.units``: units of the fixed lateral-shift ranges of the TOMBSTONE / SOLDER_BRIDGE /
+# CORNER_LIFT samplers (rotation and tilt are degrees either way; nothing else changes).
+#   px  the legacy pixel half-ranges below, whatever the ROI scale (5 px are 0.05 mm at 100 px/mm but
+#       0.19 mm at 26 px/mm, so the same defect looks different per run config).
+#   mm  physical half-ranges converted with ``mm_per_px`` (``roi.mm_per_px``): the slide of a
+#       tombstoned part is a fixed length, the wobble of a bridged / corner-lifted part is a fixed
+#       length but never more than 0.7 x the profile's placement tolerance (``ok_shift_px`` in mm),
+#       so it stays a correctly placed part. IPC-A-610 class 2: tombstoning and bridging are defects
+#       at any offset; the tolerance encodes the 50 % termination-width side-overhang limit.
+#       The number of RNG draws is the same in both modes (only the bounds differ).
+DEFECT_UNITS = ("px", "mm")
+DEFAULT_DEFECT_UNITS = "px"
+_LEGACY_SHIFT_PX = {'TOMBSTONE': 5.0, 'SOLDER_BRIDGE': 1.0, 'CORNER_LIFT': 2.0}
+_SHIFT_MM = {'TOMBSTONE': 0.10, 'SOLDER_BRIDGE': 0.025, 'CORNER_LIFT': 0.05}
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -103,6 +118,8 @@ def sample_defect_params(
     tolerances: dict[str, Any] | None = None,
     *,
     placement: str = DEFAULT_PLACEMENT_SAMPLING,
+    units: str = DEFAULT_DEFECT_UNITS,
+    mm_per_px: float | None = None,
 ) -> dict[str, Any]:
     """Sample defect parameters based on type.
 
@@ -113,6 +130,9 @@ def sample_defect_params(
         tolerances: Optional tolerance thresholds from config for footprint-specific sampling
         placement: ``defects.placement_sampling`` (see :data:`PLACEMENT_SAMPLING`); affects the
             placement of OK, MISALIGNED, SOLDER_BALL and EXCESS_SOLDER only
+        units: ``defects.units`` (see :data:`DEFECT_UNITS`); affects the lateral shift of
+            TOMBSTONE, SOLDER_BRIDGE and CORNER_LIFT only
+        mm_per_px: ROI scale (``roi.mm_per_px``), required for ``units="mm"``
 
     Returns:
         Dictionary with defect parameters
@@ -120,6 +140,7 @@ def sample_defect_params(
     if placement not in PLACEMENT_SAMPLING:
         raise ValueError(f"defects.placement_sampling must be one of {PLACEMENT_SAMPLING}, got {placement!r}")
     ok_shift_px, ok_rotation_deg, tombstone_tilt_deg = _tolerance_bounds(tolerances)
+    shift_px = fixed_shift_px(units, mm_per_px, ok_shift_px)
     continuous = placement == "continuous"
     ok_sampler = _sample_ok_continuous if continuous else _sample_ok
 
@@ -139,7 +160,7 @@ def sample_defect_params(
         raise ValueError(f"Unknown defect type: {defect_type}")
 
     shift_x, shift_y, rotation_deg, tilt_deg = samplers[defect_type](
-        rng, ok_shift_px, ok_rotation_deg, tombstone_tilt_deg
+        rng, ok_shift_px, ok_rotation_deg, tombstone_tilt_deg, shift_px.get(defect_type)
     )
 
     return {
@@ -151,12 +172,34 @@ def sample_defect_params(
     }
 
 
+def fixed_shift_px(units: str, mm_per_px: float | None, ok_shift_px: float) -> dict[str, float]:
+    """Lateral-shift half-range in px per fixed-range defect type for ``defects.units`` *units*.
+
+    ``px``: the legacy constants. ``mm``: :data:`_SHIFT_MM` divided by *mm_per_px*; the bridge and
+    corner-lift wobble is capped at ``_OK_SAFETY_MARGIN * ok_shift_px`` (the last OK placement).
+    """
+    if units not in DEFECT_UNITS:
+        raise ValueError(f"defects.units must be one of {DEFECT_UNITS}, got {units!r}")
+    if units == "px":
+        return dict(_LEGACY_SHIFT_PX)
+    if mm_per_px is None or float(mm_per_px) <= 0.0:
+        raise ValueError("defects.units: mm needs a positive roi.mm_per_px")
+    scale = 1.0 / float(mm_per_px)
+    wobble_cap = _OK_SAFETY_MARGIN * float(ok_shift_px)
+    return {
+        'TOMBSTONE': _SHIFT_MM['TOMBSTONE'] * scale,
+        'SOLDER_BRIDGE': min(_SHIFT_MM['SOLDER_BRIDGE'] * scale, wobble_cap),
+        'CORNER_LIFT': min(_SHIFT_MM['CORNER_LIFT'] * scale, wobble_cap),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Private per-type samplers
-# signature: (rng, ok_shift_px, ok_rotation_deg, tombstone_tilt_deg) -> (sx, sy, rot, tilt)
+# signature: (rng, ok_shift_px, ok_rotation_deg, tombstone_tilt_deg, shift_px) -> (sx, sy, rot, tilt)
+# shift_px: lateral half-range of the fixed-range samplers (see fixed_shift_px()), None otherwise
 # ---------------------------------------------------------------------------
 
-def _sample_ok(rng, ok_shift_px, ok_rotation_deg, _tombstone):
+def _sample_ok(rng, ok_shift_px, ok_rotation_deg, _tombstone, _shift=None):
     # _tolerance_bounds() always fills in defaults, so the bounds are never None here.
     shift_bound = max(0.0, _OK_SAFETY_MARGIN * ok_shift_px)
     rot_bound = max(0.0, _OK_SAFETY_MARGIN * ok_rotation_deg)
@@ -166,11 +209,11 @@ def _sample_ok(rng, ok_shift_px, ok_rotation_deg, _tombstone):
     return sx, sy, rot, 0.0
 
 
-def _sample_missing(rng, _ok_shift, _ok_rot, _tombstone):
+def _sample_missing(rng, _ok_shift, _ok_rot, _tombstone, _shift=None):
     return 0.0, 0.0, 0.0, 0.0
 
 
-def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone):
+def _sample_misaligned(rng, ok_shift_px, ok_rotation_deg, _tombstone, _shift=None):
     min_shift = ok_shift_px + 1.0
     max_shift = max(min_shift, _MISALIGNED_SHIFT_SCALE * min_shift)
     min_rot = ok_rotation_deg + 1.0
@@ -213,14 +256,14 @@ def _beyond(rng, lo: float, hi: float) -> float:
     return lo + (hi - lo) * float(rng.random()) ** 2
 
 
-def _sample_ok_continuous(rng, ok_shift_px, ok_rotation_deg, _tombstone):
+def _sample_ok_continuous(rng, ok_shift_px, ok_rotation_deg, _tombstone, _shift=None):
     """OK placement that fills the whole tolerance (uniform over the disc / rotation interval)."""
     sx, sy = _uniform_disc(rng, _BOUNDARY_GAP * ok_shift_px)
     rot = rng.uniform(-_BOUNDARY_GAP * ok_rotation_deg, _BOUNDARY_GAP * ok_rotation_deg)
     return sx, sy, rot, 0.0
 
 
-def _sample_misaligned_continuous(rng, ok_shift_px, ok_rotation_deg, _tombstone):
+def _sample_misaligned_continuous(rng, ok_shift_px, ok_rotation_deg, _tombstone, _shift=None):
     """MISALIGNED placement starting right at the tolerance boundary (see :data:`PLACEMENT_SAMPLING`).
 
     Half the samples are pure shifts, half pure rotations, as in the legacy sampler; the other
@@ -239,27 +282,27 @@ def _sample_misaligned_continuous(rng, ok_shift_px, ok_rotation_deg, _tombstone)
     return sx, sy, rot, 0.0
 
 
-def _sample_tombstone(rng, _ok_shift, _ok_rot, tombstone_tilt_deg):
+def _sample_tombstone(rng, _ok_shift, _ok_rot, tombstone_tilt_deg, shift):
     # Anywhere from the class threshold up to fully upright (real tombstones end up at all angles).
     tilt_min = tombstone_tilt_deg if tombstone_tilt_deg is not None else _DEFAULT_TOMBSTONE_TILT
     tilt = rng.uniform(tilt_min, 90.0)
-    sx = rng.uniform(-5.0, 5.0)
-    sy = rng.uniform(-5.0, 5.0)
+    sx = rng.uniform(-shift, shift)
+    sy = rng.uniform(-shift, shift)
     rot = rng.uniform(-10.0, 10.0)
     return sx, sy, rot, tilt
 
 
-def _sample_solder_bridge(rng, _ok_shift, _ok_rot, _tombstone):
-    sx = rng.uniform(-1.0, 1.0)
-    sy = rng.uniform(-1.0, 1.0)
+def _sample_solder_bridge(rng, _ok_shift, _ok_rot, _tombstone, shift):
+    sx = rng.uniform(-shift, shift)
+    sy = rng.uniform(-shift, shift)
     rot = rng.uniform(-5.0, 5.0)
     tilt = rng.uniform(0.0, 2.0)
     return sx, sy, rot, tilt
 
 
-def _sample_corner_lift(rng, _ok_shift, _ok_rot, _tombstone):
-    sx = rng.uniform(-2.0, 2.0)
-    sy = rng.uniform(-2.0, 2.0)
+def _sample_corner_lift(rng, _ok_shift, _ok_rot, _tombstone, shift):
+    sx = rng.uniform(-shift, shift)
+    sy = rng.uniform(-shift, shift)
     rot = rng.uniform(-3.0, 3.0)
     tilt = rng.uniform(40.0, 65.0)
     return sx, sy, rot, tilt

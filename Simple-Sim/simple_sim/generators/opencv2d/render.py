@@ -72,7 +72,8 @@ def render_roi(
         augment = {**augment, "blur_sigma": 0.0, "noise_stddev": 0.0, "rotation_deg": 0.0}
         img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size, post)
     elif photoreal:
-        img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size)
+        img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size,
+                                    light_roll_deg=float(augment.get("rotation_deg", 0.0)))
     else:
         img = np.zeros((height, width, 3), dtype=np.uint8)
         draw_substrate(img, config)

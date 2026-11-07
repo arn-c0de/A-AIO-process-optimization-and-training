@@ -507,10 +507,16 @@ Modell-Tests laufen ohne Pixel-Rendern auf `Board` + `Occupancy` (mm-Raster) und
   der Pinreihe gilt als Abstand, was der Pitch hergibt (Stummel bleibt in der Padspalte).
 - **DRC:** Pads werden nicht gegeneinander geprüft (Footprint-Geometrie ist gegeben, der Pitch
   darf unter der Clearance liegen) und der Fan-out eines Netzes ist im Clearance-Umfeld seiner
-  eigenen Pads ausgenommen. Ergebnis pro Sample wird noch nicht in `meta.jsonl` abgelegt
-  (`render_meta.board_drc` bleibt offen: der 2D-Renderer gibt nur das Bild zurück).
+  eigenen Pads ausgenommen. Ergebnis pro Sample liegt unter `render_meta.board_drc` in
+  `meta.jsonl` (`{ok, violations, kinds, routing, design_rules, drc}`, nur bei `drc: warn | strict`):
+  der 2D-Renderer gibt weiterhin nur das Bild zurück, `build_window_board` meldet den Report an
+  einen Kontext-Sammler (`board.collect_drc`, pro Thread/Prozess), `opencv2d.render_record_with_meta`
+  liefert `(Bild, Details)`, `generation.common.render_2d_records` gibt die Details zurück und
+  `add_render_meta` trägt sie vor dem Schreiben in die Zeilen ein. Blender-Backend: noch offen.
 - **`routing: none`** zusätzlich: kein Kupfer, Rest wie `legacy` (für Ablationen).
 - **`--extend`-Abgleich** von `render.board` (3.11) ist noch nicht umgesetzt.
-- **GUI-Auswahl** (Pipeline-/Profile-Preview-Tab) noch nicht; die Tabs nehmen `render.board`
-  aus der Run-Config.
+- **GUI-Auswahl** (Pipeline-/Profile-Preview-Tab): Router, DRC-Modus und Regel-Preset (und
+  `render.look`) sind als Überschreibung der Run-Config wählbar (Standard „from config“); der
+  Pipeline-Tab schreibt dafür eine temporäre Config unter `outputs/live`
+  (`gui.utils.pipeline_helpers.apply_render_overrides`).
 - Nicht umgesetzt (Phase 2/3): `GridRouter`, Innenlagen, Gesamtplatine, Profile in mm.

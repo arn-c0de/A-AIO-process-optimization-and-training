@@ -23,9 +23,11 @@ from simple_sim.classes import Backend
 from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
-from simple_sim.generators.blender3d.bake import bake_fields, profile_job_fields
+from simple_sim.generators.blender3d.bake import bake_fields, profile_component_height_mm, profile_job_fields
 from simple_sim.classes import STANDARD_CLASSES
 from simple_sim.filter_settings import normalize_image_filters
+from simple_sim.board.footprints import profile_footprint
+from simple_sim.generators.opencv2d.augment import clean_augment, sample_rotation_deg
 from simple_sim.generators.opencv2d.geometry import sample_nominal_geometry
 from simple_sim.profile_hash import load_profile
 
@@ -300,16 +302,9 @@ def rotation_jitter_range(cfg: dict[str, Any] | None) -> tuple[float, float]:
 def sample_preview_augment(
     rng: np.random.Generator, *, rotation_range: tuple[float, float], enable_cardinal_rotation_90: bool = True
 ) -> dict[str, float]:
-    """Preview augment: clean image, but randomized global orientation like dataset generation."""
-    base_orientation_deg = float(rng.choice([0.0, 90.0, 180.0, 270.0])) if enable_cardinal_rotation_90 else 0.0
-    rotation_jitter_deg = float(rng.uniform(*rotation_range))
-    return {
-        "blur_sigma": 0.0,
-        "noise_stddev": 0.0,
-        "brightness_factor": 1.0,
-        "contrast_factor": 1.0,
-        "rotation_deg": float(base_orientation_deg + rotation_jitter_deg),
-    }
+    """Preview augment: clean image, but randomized global orientation like dataset generation
+    (the same two draws as ``sample_augment_params``)."""
+    return clean_augment(sample_rotation_deg(rng, rotation_range, enable_cardinal_rotation_90=enable_cardinal_rotation_90))
 
 
 def apply_filter_overrides_to_augment(augment: dict[str, float], image_filters: dict[str, Any] | None,
@@ -375,7 +370,7 @@ def render_2d_previews(
     w, h, mpp = resolve_2d_roi(cfg, roi_override)
     roi_cfg = {"width_px": w, "height_px": h, "mm_per_px": mpp}
     render_cfg = merge_profile_render(cfg["render"], profile, roi_cfg)
-    footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
+    footprint = profile_footprint(profile)
     geometry_ranges = profile.get("geometry_ranges") or {}
     tolerances = profile.get("tolerances")
     spec = RenderSpec(roi_size=(w, h), render=render_cfg, footprint=footprint, tolerances=tolerances)
@@ -412,11 +407,10 @@ def build_preview_jobs(
 
     With *run_id*, seeds vary between runs (like the real 3D pipeline).
     """
-    component = profile.get("component") or {}
-    footprint = str(component.get("footprint", "chip_2pad"))
+    footprint = profile_footprint(profile)
     geometry_ranges = profile.get("geometry_ranges") or {}
     tolerances = profile.get("tolerances") or {}
-    component_height_mm = float((component.get("nominal_dims_mm") or {}).get("height", 0.45) or 0.45)
+    component_height_mm = profile_component_height_mm(profile)
     render_3d = profile.get("render_3d") or {}
     roi_cfg = {"width_px": int(settings.roi_width_px), "height_px": int(settings.roi_height_px), "mm_per_px": float(settings.mm_per_px)}
 

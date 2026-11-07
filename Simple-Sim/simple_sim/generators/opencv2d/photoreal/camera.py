@@ -27,7 +27,9 @@ CAMERA_DEFAULTS: dict[str, Any] = {
     "chroma_shift": [0.0, 0.0],    # lateral chromatic aberration: R/B shift at the ROI border (sensor pixels)
     "sensor_px_per_mm": [0.0, 0.0],  # > 0: sensor resolution; replaces capture_scale by sensor px/mm x roi.mm_per_px
     "channel_shift": [0.0, 0.0],   # line-scanner RGB misregistration: B and R shifted apart along one axis (sensor px)
+    "channel_axis": "random",      # that axis: "random" (per image), "x" or "y" (a scanner's fixed scan direction)
     "crop_part_lengths": [0.0, 0.0],  # > 0 (2D): field of view = this many body lengths; replaces zoom (< 1 magnifies)
+    "max_oversampling": 0.0,       # > 0 (2D): cap on supersampling x zoom (rendered px per output px and axis)
 }
 
 
@@ -42,7 +44,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
     # QUINS AOI flatbed scans (DeepVision xpa, 23.7 px/mm, see .look): low resolution, very little
     # noise (flat-area high-pass std ~0.9 levels on the crops), slight RGB misregistration at edges.
     "quins": {"sensor_px_per_mm": [22.0, 25.5], "blur_sigma": [0.6, 0.95], "read_noise": [0.3, 1.5],
-              "shot_noise": 0.015, "channel_shift": [1.0, 2.0],
+              "shot_noise": 0.015, "channel_shift": [1.6, 3.2], "channel_axis": "x",
               # DeepVision cuts every QUINS crop at 3x the body length (measured: 3.02-3.04 for all chip forms).
               "crop_part_lengths": [3.0, 3.0]},
 }
@@ -71,6 +73,21 @@ def fit_crop(pose: dict[str, float], cam: dict[str, Any], rng: np.random.Generat
     if k <= 0.0:
         return pose
     return {**pose, "zoom": max(0.05, k * float(part_length) / float(min(size)))}
+
+
+def effective_supersampling(ss: int, pose: dict[str, float], cam: dict[str, Any]) -> int:
+    """``render.camera.max_oversampling``: the supersampling to render a zoomed-out view with.
+
+    A view zoomed out by ``pose['zoom']`` renders ``ss x zoom`` board pixels per output pixel and axis;
+    with ``crop_part_lengths`` a large package (QFN, TSSOP) needs zoom 2-6, i.e. a 1-3 Mpx canvas at
+    4-12x oversampling that is averaged away again. With a cap > 0 the supersampling is lowered so
+    ``ss x zoom <= cap`` where possible (never below 1, never raised); 0 (default) keeps *ss*.
+    """
+    cap = float(cam.get("max_oversampling", 0.0))
+    zoom = float(pose.get("zoom", 1.0))
+    if cap <= 0.0 or zoom <= 0.0 or ss * zoom <= cap:
+        return ss
+    return max(1, min(ss, int(np.floor(cap / zoom + 1e-9))))
 
 
 def roll_parts(pose: dict[str, float]) -> tuple[int, float]:
@@ -137,7 +154,8 @@ def draw_range(rng: np.random.Generator, bounds: Any) -> float:
 
 def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] | None = None,
                  pose: dict[str, float] | None = None, *, extra_blur: float = 0.0,
-                 extra_noise_var: float = 0.0, mm_per_px: float | None = None) -> np.ndarray:
+                 extra_noise_var: float = 0.0, mm_per_px: float | None = None,
+                 axis_roll_deg: float = 0.0) -> np.ndarray:
     """Turn an ideal render (2D supersampled or 3D) into a camera image. BGR in, uint8 out.
 
     Lens blur (plus depth-of-field falloff along the tilt of an oblique *pose*), uneven
@@ -150,6 +168,9 @@ def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] 
     noise: ``render.post_filters: camera`` passes the domain's ``blur_sigma`` / ``noise_stddev`` here
     instead of applying them a second time on the finished camera image. *mm_per_px* (ROI scale) is
     needed for ``sensor_px_per_mm``: the capture scale is then sensor px/mm x mm/px (at most 1).
+    *axis_roll_deg*: rotation the caller applies to the finished image (counter-clockwise, like
+    ``cv2.getRotationMatrix2D``); a fixed ``channel_axis`` is turned against it so the scan direction
+    stays put in the final image, as the camera roll of a *pose* already happened before this model.
     """
     c = camera_settings(cfg)
     out_h, out_w = img.shape[:2]
@@ -183,8 +204,13 @@ def camera_model(img: np.ndarray, rng: np.random.Generator, cfg: dict[str, Any] 
             img[..., ch] = cv2.warpAffine(img[..., ch], m, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
     split = draw_range(rng, c["channel_shift"])
     if split > 0.0:  # line scanner: the colour lines see the board at slightly different times
-        axis = int(rng.integers(4))
-        dx, dy = ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0))[axis]
+        if c["channel_axis"] == "random":
+            dx, dy = ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0))[int(rng.integers(4))]
+        else:
+            dx, dy = (1.0, 0.0) if c["channel_axis"] == "x" else (0.0, 1.0)
+            if axis_roll_deg != 0.0:  # the image is turned afterwards: pre-rotate the axis the other way
+                r = np.radians(axis_roll_deg)
+                dx, dy = float(dx * np.cos(r) - dy * np.sin(r)), float(dx * np.sin(r) + dy * np.cos(r))
         for ch, k in ((0, 0.5), (2, -0.5)):
             m = np.float32([[1, 0, k * split * dx], [0, 1, k * split * dy]])
             img[..., ch] = cv2.warpAffine(img[..., ch], m, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)

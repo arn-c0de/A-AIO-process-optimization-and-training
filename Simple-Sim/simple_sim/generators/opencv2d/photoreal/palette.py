@@ -14,6 +14,12 @@ import numpy as np
 from simple_sim.board.footprints import CHIP_FAMILIES
 
 
+def jittered(colour: np.ndarray, rng: np.random.Generator, lo: float, hi: float) -> np.ndarray:
+    """*colour* scaled by one uniform draw in [*lo*, *hi*): the per-image colour variation of bodies,
+    terminals, solder, mask and flux (``colour * float(rng.uniform(lo, hi))``)."""
+    return colour * float(rng.uniform(lo, hi))
+
+
 # Unit light direction (image x, image y, up). Light from the top-left, fairly high.
 LIGHT = np.array([-0.40, -0.40, 0.82], dtype=np.float32)
 LIGHT /= np.linalg.norm(LIGHT)

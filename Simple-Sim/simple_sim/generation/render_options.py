@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from simple_sim.board import board_options
-from simple_sim.config import domain_camera, placement_sampling
+from simple_sim.config import defect_units, domain_camera, placement_sampling
 from simple_sim.generators.backends import backend_of
 from simple_sim.generators.opencv2d.photoreal import (MASK_GLOSS_PROBABILITY, REWORK_PROBABILITY, camera_settings,
                                                       supersampling)
@@ -44,6 +44,7 @@ def look_options(config: Mapping[str, Any]) -> dict[str, Any]:
         "render.component_color": list(render.get("component_color") or []) or None,
         "render.camera": _camera(render),
         "defects.placement_sampling": placement_sampling(dict(config)),
+        "defects.units": defect_units(dict(config)),
     }
     if info.post_filters_camera:
         out["render.post_filters"] = post_filter_mode(render)

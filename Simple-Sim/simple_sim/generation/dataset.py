@@ -16,8 +16,10 @@ from tqdm import tqdm
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE, load_config, merge_profile_render, validate_config
 from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files
 from simple_sim.generation.blender import blender_settings, render_blender_records
+from simple_sim.generators.blender3d.bake import profile_component_height_mm
 from simple_sim.generation.common import (
     SPLIT_NAMES,
+    add_render_meta,
     build_rows,
     finalize_splits,
     project_root as default_project_root,
@@ -275,7 +277,7 @@ def resolve_run(config: Mapping[str, Any], *, profiles_dir: Path, root: Path) ->
         config=config, profile_id=profile_id, profile=profile, profile_hash=hash_profile(profile_path),
         profile_rel_path=rel_profile_path(profile_path, root), footprint=profile["component"]["footprint"],
         geometry_ranges=geometry_ranges, tolerances=tolerances,
-        component_height_mm=float(profile.get("component", {}).get("nominal_dims_mm", {}).get("height", 0.45) or 0.45),
+        component_height_mm=profile_component_height_mm(profile),
         profile_render_3d=profile.get("render_3d") or {},
     )
 
@@ -457,8 +459,10 @@ def generate_dataset(
             # Per-domain camera (domains.<name>.camera) on top of render.camera.
             spec = RenderSpec.from_run_config(config, run.profile, tolerances=run.tolerances)
             bar = tqdm(total=len(records), desc="render")
-            render_2d_records([(spec, r, None) for r in records], out_root, progress=lambda done, _total: bar.update(1))
+            details = render_2d_records([(spec, r, None) for r in records], out_root,
+                                        progress=lambda done, _total: bar.update(1))
             bar.close()
+            add_render_meta(meta_rows, details)  # e.g. board_drc, before the rows are written
             return
         render_blender_records(
             records,

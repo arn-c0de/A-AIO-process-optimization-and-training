@@ -11,6 +11,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import numpy as np
+
 Vec = tuple[float, float]
 BBox = tuple[float, float, float, float]
 
@@ -142,3 +144,50 @@ def gap(s: Shape, t: Shape) -> float:
 
 def bbox_near(p: BBox, q: BBox, margin: float) -> bool:
     return not (p[2] + margin < q[0] or q[2] + margin < p[0] or p[3] + margin < q[1] or q[3] + margin < p[1])
+
+
+# ---- vectors and shapes shared by the router, the pours and the legacy copper generator ------------
+
+def unit(v: Vec) -> Vec:
+    n = float(np.hypot(v[0], v[1]))
+    return (v[0] / n, v[1] / n) if n > 0 else (0.0, 0.0)
+
+
+def perp(v: Vec) -> Vec:
+    return (-v[1], v[0])
+
+
+def add(p: Vec, d: Vec, k: float = 1.0) -> Vec:
+    return (p[0] + d[0] * k, p[1] + d[1] * k)
+
+
+def clip(x: float, lo: float, hi: float) -> float:
+    """``float(np.clip(x, lo, hi))`` for finite scalars without the ufunc overhead: numpy clips as
+    ``min(max(x, lo), hi)`` keeping *x* on ties (the sign of a zero), and *hi* wins when ``lo > hi``."""
+    x = x if x >= lo else lo
+    return float(x if x <= hi else hi)
+
+
+def polyline45(p0: Vec, p1: Vec, *, dedupe: bool = True) -> list[Vec]:
+    """*p0* to *p1* with one 45-degree jog first, then straight (like autorouted traces).
+
+    The jog point is ``p0 + sign(d) * min(|dx|, |dy|)`` with a float sign, so integer pixel inputs
+    give integral floats. *dedupe* drops a jog point that coincides with its neighbour (the board
+    model's tracks); the legacy copper generator keeps all three points (``cv2.polylines`` blends a
+    zero-length anti-aliased segment, so the pixels depend on it).
+    """
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    jog = min(abs(dx), abs(dy))
+    mid = (p0[0] + float(np.sign(dx)) * jog, p0[1] + float(np.sign(dy)) * jog)
+    pts = [p0, mid, p1]
+    if not dedupe:
+        return pts
+    return [p for i, p in enumerate(pts) if i == 0 or p != pts[i - 1]]
+
+
+def octagon(x: float, y: float, w: float, h: float, chamfer: float) -> list[Vec]:
+    """Rectangle with 45-degree chamfered corners (the pour shape of autorouted boards), clockwise
+    from the top edge."""
+    c = chamfer
+    return [(x + c, y), (x + w - c, y), (x + w, y + c), (x + w, y + h - c), (x + w - c, y + h), (x + c, y + h),
+            (x, y + h - c), (x, y + c)]

@@ -290,16 +290,19 @@ def domain_camera(render: dict[str, Any], domain_cfg: dict[str, Any] | None) -> 
 
 
 def _validate_defects(defects: Any) -> None:
-    """``defects`` (optional): how defect parameters are drawn (``placement_sampling``)."""
+    """``defects`` (optional): how defect parameters are drawn (``placement_sampling``, ``units``)."""
     if defects is None:
         return
-    from simple_sim.defects import PLACEMENT_SAMPLING
+    from simple_sim.defects import DEFECT_UNITS, PLACEMENT_SAMPLING
 
-    if not isinstance(defects, dict) or set(defects) - {'placement_sampling'}:
-        raise ValueError("defects must be a mapping with keys from ['placement_sampling']")
+    if not isinstance(defects, dict) or set(defects) - {'placement_sampling', 'units'}:
+        raise ValueError("defects must be a mapping with keys from ['placement_sampling', 'units']")
     placement = defects.get('placement_sampling')
     if placement is not None and placement not in PLACEMENT_SAMPLING:
         raise ValueError(f"defects.placement_sampling must be one of {list(PLACEMENT_SAMPLING)}")
+    units = defects.get('units')
+    if units is not None and units not in DEFECT_UNITS:
+        raise ValueError(f"defects.units must be one of {list(DEFECT_UNITS)}")
 
 
 def placement_sampling(cfg: dict[str, Any]) -> str:
@@ -307,6 +310,13 @@ def placement_sampling(cfg: dict[str, Any]) -> str:
     from simple_sim.defects import DEFAULT_PLACEMENT_SAMPLING
 
     return str((cfg.get('defects') or {}).get('placement_sampling') or DEFAULT_PLACEMENT_SAMPLING)
+
+
+def defect_units(cfg: dict[str, Any]) -> str:
+    """``defects.units`` of a run config (default ``px``)."""
+    from simple_sim.defects import DEFAULT_DEFECT_UNITS
+
+    return str((cfg.get('defects') or {}).get('units') or DEFAULT_DEFECT_UNITS)
 
 
 def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> None:
@@ -426,6 +436,11 @@ def _validate_camera(camera: Any) -> None:
         raise ValueError("render.camera.zoom must be >= 1 (1 = profile scale, larger = farther away)")
     if 'shot_noise' in camera and not (isinstance(camera['shot_noise'], (int, float)) and camera['shot_noise'] >= 0):
         raise ValueError("render.camera.shot_noise must be a number >= 0")
+    if 'channel_axis' in camera and camera['channel_axis'] not in ('random', 'x', 'y'):
+        raise ValueError("render.camera.channel_axis must be one of ['random', 'x', 'y']")
+    if 'max_oversampling' in camera and not (isinstance(camera['max_oversampling'], (int, float))
+                                             and camera['max_oversampling'] >= 0):
+        raise ValueError("render.camera.max_oversampling must be a number >= 0 (0 = off)")
 
 
 def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
@@ -523,14 +538,22 @@ def _validate_train(train: dict[str, Any]) -> None:
 
 
 _TRAIN_SCHEDULERS = ('none', 'cosine')
+_TRAIN_FREEZE_STAGES = ('stem', 'layer1', 'layer2', 'layer3', 'layer4')
 _TRAIN_AUGMENT_FLAGS = ('hflip', 'vflip', 'rot90')
 _TRAIN_AUGMENT_JITTER = ('brightness', 'contrast', 'saturation', 'hue')
 
 
 def _validate_train_extras(train: dict[str, Any]) -> None:
-    """Optional training knobs: ``scheduler``, ``warmup_epochs``, ``label_smoothing``, ``augment``."""
+    """Optional training knobs: ``scheduler``, ``warmup_epochs``, ``label_smoothing``, ``augment``,
+    ``freeze`` (ResNet stages without gradients), ``cache_images`` (decoded images kept in RAM)."""
     if 'scheduler' in train and train['scheduler'] not in _TRAIN_SCHEDULERS:
         raise ValueError(f"train.scheduler must be one of {list(_TRAIN_SCHEDULERS)}")
+    if 'cache_images' in train and not isinstance(train['cache_images'], bool):
+        raise ValueError("train.cache_images must be a boolean")
+    if 'freeze' in train and train['freeze'] is not None:
+        freeze = train['freeze']
+        if not isinstance(freeze, list) or any(f not in _TRAIN_FREEZE_STAGES for f in freeze):
+            raise ValueError(f"train.freeze must be a list of stages from {list(_TRAIN_FREEZE_STAGES)}")
     if 'warmup_epochs' in train:
         if isinstance(train['warmup_epochs'], bool) or not isinstance(train['warmup_epochs'], int) or train['warmup_epochs'] < 0:
             raise ValueError("train.warmup_epochs must be an integer >= 0")

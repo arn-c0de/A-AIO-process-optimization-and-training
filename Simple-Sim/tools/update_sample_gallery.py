@@ -34,7 +34,8 @@ from gui.components.overlay_renderer import draw_defect_overlay  # noqa: E402
 from simple_sim.cli_utils import add_json_flag, configure_cli_logging, emit_result  # noqa: E402
 from simple_sim.config import load_config, merge_profile_render, validate_config  # noqa: E402
 from simple_sim.defects import sample_defect_params  # noqa: E402
-from simple_sim.generators.blender3d.bake import bake_fields  # noqa: E402
+from simple_sim.board.footprints import profile_footprint  # noqa: E402
+from simple_sim.generators.blender3d.bake import bake_fields, profile_component_height_mm  # noqa: E402
 from simple_sim.generators.blender3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # noqa: E402
 from simple_sim.generators.opencv2d import RenderSpec, render_sample, sample_nominal_geometry  # noqa: E402
 from simple_sim.classes import STANDARD_CLASSES  # noqa: E402
@@ -182,10 +183,10 @@ def _build_3d_job(
 
     rng = np.random.default_rng(_stable_int_seed(str(seed_base), profile_id, defect_type, "blender_3d"))
 
-    footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
+    footprint = profile_footprint(profile)
     geometry_ranges = profile.get("geometry_ranges") or {}
     tolerances = profile.get("tolerances") or {}
-    component_height_mm = float(((profile.get("component") or {}).get("nominal_dims_mm") or {}).get("height", 0.45) or 0.45)
+    component_height_mm = profile_component_height_mm(profile)
     render_3d = profile.get("render_3d") or {}
 
     nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)

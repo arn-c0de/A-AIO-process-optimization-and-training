@@ -38,14 +38,19 @@ class RenderContext:
     look: Look = LEGACY_LOOK
 
     @classmethod
-    def for_render(cls, config: dict[str, Any] | None, rng: np.random.Generator) -> RenderContext:
+    def for_render(cls, config: dict[str, Any] | None, rng: np.random.Generator, roll_deg: float = 0.0) -> RenderContext:
         """Context of one render of *config*. The meniscus look is drawn from a side stream of *rng*
         (not advancing it), so everything but the joints matches the legacy render of the seed.
-        ``render.solder`` unset: the look's joint model (``quins``: meniscus under a scanner ring light)."""
+        ``render.solder`` unset: the look's joint model (``quins``: meniscus under the scanner's line
+        lights, whose direction is fixed in the final image: *roll_deg* is the camera roll / rotation
+        applied after shading)."""
         look = get_look(config)
         style = solder_model.solder_style(config) if (config or {}).get("solder") or look.solder is None else look.solder
         joints = None
         if style == "meniscus":
-            sample = solder_model.sample_scanner_look if look.name == "quins" else solder_model.sample_look
-            joints = sample(solder_model.side_stream(rng, 0))
+            stream = solder_model.side_stream(rng, 0)
+            if look.name == "quins":
+                joints = solder_model.sample_scanner_look(stream, roll_deg)
+            else:
+                joints = solder_model.sample_look(stream)
         return cls(ss=supersampling(config), solder_look=joints, look=look)

@@ -1,5 +1,5 @@
-"""Training-quality options: continuous placement sampling, multi-domain datasets with a held-out
-domain, ``render.post_filters: camera``, train-time augmentation, cosine LR schedule."""
+"""Training-quality options: continuous placement sampling, defect ranges in mm, multi-domain datasets
+with a held-out domain, ``render.post_filters: camera``, train-time augmentation, cosine LR schedule."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ import pytest
 import torch
 import yaml
 
-from simple_sim.config import domain_camera, placement_sampling, validate_config
-from simple_sim.data_loader import IMAGENET_TRANSFORM, build_train_transform
-from simple_sim.defects import classify_defect, sample_defect_params
+from simple_sim.config import defect_units, domain_camera, placement_sampling, validate_config
+from simple_sim.data_loader import IMAGENET_TRANSFORM, ROIDataset, build_train_transform
+from simple_sim.defects import classify_defect, fixed_shift_px, sample_defect_params
 from simple_sim.generation.common import sample_domain, sample_record
 from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal import apply_view, camera_model, view_canvas
@@ -99,6 +99,68 @@ def test_sample_record_uses_the_config_placement():
     assert legacy != cont
     assert all(np.hypot(d["shift_x"], d["shift_y"]) >= TOL["ok_shift_px"] + 1 or abs(d["rotation_deg"]) >= TOL["ok_rotation_deg"] + 1
                for d in legacy)
+
+
+# --------------------------------------------------------------------------- defects.units
+
+FIXED = ("TOMBSTONE", "SOLDER_BRIDGE", "CORNER_LIFT")
+
+
+def test_units_px_is_default_and_unchanged():
+    r1, r2 = np.random.default_rng(7), np.random.default_rng(7)
+    a = [sample_defect_params(c, r1, TOL) for c in FIXED]
+    b = [sample_defect_params(c, r2, TOL, units="px", mm_per_px=0.01) for c in FIXED]
+    assert a == b and r1.bit_generator.state == r2.bit_generator.state
+    assert fixed_shift_px("px", None, 3.0) == {"TOMBSTONE": 5.0, "SOLDER_BRIDGE": 1.0, "CORNER_LIFT": 2.0}
+    assert defect_units({}) == "px"
+    with pytest.raises(ValueError, match="defects.units"):
+        sample_defect_params("TOMBSTONE", r1, TOL, units="inch")
+    with pytest.raises(ValueError, match="mm_per_px"):
+        sample_defect_params("TOMBSTONE", r1, TOL, units="mm")
+
+
+def test_units_mm_mapping():
+    # 0.10 / 0.025 / 0.05 mm at 100 px/mm: 10 / 2.5 / 5 px; bridge and lift capped at 0.7 x ok_shift_px.
+    assert fixed_shift_px("mm", 0.01, 10.0) == pytest.approx({"TOMBSTONE": 10.0, "SOLDER_BRIDGE": 2.5, "CORNER_LIFT": 5.0})
+    assert fixed_shift_px("mm", 0.01, TOL["ok_shift_px"]) == pytest.approx(
+        {"TOMBSTONE": 10.0, "SOLDER_BRIDGE": 2.1, "CORNER_LIFT": 2.1})
+    # 45 px/mm (the array profiles): 4.5 / 1.125 / 2.25 px.
+    assert fixed_shift_px("mm", 1 / 45, 10.0) == pytest.approx({"TOMBSTONE": 4.5, "SOLDER_BRIDGE": 1.125, "CORNER_LIFT": 2.25})
+    rng = np.random.default_rng(3)
+    for cls, half in fixed_shift_px("mm", 0.01, 10.0).items():
+        for _ in range(200):
+            d = sample_defect_params(cls, rng, {**TOL, "ok_shift_px": 10.0}, units="mm", mm_per_px=0.01)
+            assert abs(d["shift_x"]) <= half and abs(d["shift_y"]) <= half
+            assert classify_defect({}, d, {**TOL, "ok_shift_px": 10.0}) == cls
+    # Same number of draws in both modes: the stream continues identically afterwards.
+    r1, r2 = np.random.default_rng(9), np.random.default_rng(9)
+    for c in FIXED:
+        sample_defect_params(c, r1, TOL)
+        sample_defect_params(c, r2, TOL, units="mm", mm_per_px=0.01)
+    assert r1.bit_generator.state == r2.bit_generator.state
+
+
+def test_units_are_validated_and_reach_sample_record():
+    cfg = _base_config()
+    cfg["defects"] = {"placement_sampling": "legacy", "units": "mm"}
+    validate_config(cfg)
+    assert defect_units(cfg) == "mm"
+    cfg["defects"] = {"units": "inch"}
+    with pytest.raises(ValueError, match="defects.units"):
+        validate_config(cfg)
+    cfg = _base_config()  # roi.mm_per_px 0.01
+    kw = dict(config=cfg, run_seed=1, geometry_ranges=None, tolerances=TOL, image_filters={},
+              enable_cardinal_rotation_90=True, footprint="chip_2pad")
+    px = [sample_record(i, "TOMBSTONE", **kw)[0] for i in range(20)]
+    cfg["defects"] = {"units": "mm"}
+    mm = [sample_record(i, "TOMBSTONE", **kw)[0] for i in range(20)]
+    assert all(a["defect"]["shift_x"] * 2 == pytest.approx(b["defect"]["shift_x"]) for a, b in zip(px, mm))
+    for a, b in zip(px, mm):  # only the shift differs: same geometry, augmentation, tilt and seed
+        assert {k: v for k, v in a.items() if k != "defect"} == {k: v for k, v in b.items() if k != "defect"}
+        assert a["defect"]["tilt_deg"] == b["defect"]["tilt_deg"] and a["defect"]["rotation_deg"] == b["defect"]["rotation_deg"]
+    ok = [sample_record(i, "OK", **kw)[0] for i in range(5)]
+    cfg["defects"] = {}
+    assert [sample_record(i, "OK", **kw)[0] for i in range(5)] == ok
 
 
 # --------------------------------------------------------------------------- domains
@@ -260,8 +322,11 @@ def test_train_options_are_validated():
     cfg["train"].update({"scheduler": "cosine", "warmup_epochs": 1, "label_smoothing": 0.1,
                          "augment": {"hflip": True, "rot90": True, "brightness": 0.2}})
     validate_config(cfg)
+    cfg["train"].update({"freeze": ["stem", "layer1"], "cache_images": True})
+    validate_config(cfg)
     for bad in ({"scheduler": "step"}, {"warmup_epochs": 10}, {"warmup_epochs": -1}, {"label_smoothing": 1.0},
-                {"augment": {"flip": True}}, {"augment": {"hue": 0.9}}, {"augment": {"hflip": "yes"}}):
+                {"augment": {"flip": True}}, {"augment": {"hue": 0.9}}, {"augment": {"hflip": "yes"}},
+                {"freeze": "stem"}, {"freeze": ["fc"]}, {"cache_images": "yes"}):
         cfg = _base_config()
         cfg["train"].update(bad)
         with pytest.raises(ValueError, match="train."):
@@ -281,6 +346,7 @@ def test_cosine_lr_factor():
     assert build_scheduler(opt, {"scheduler": "none"}, 5) is None
     sched = build_scheduler(opt, {"scheduler": "cosine", "warmup_epochs": 1}, 5)
     assert opt.param_groups[0]["lr"] == pytest.approx(0.1)  # warm-up over one epoch: full lr from the start
+    opt.step()  # as in training: the optimizer steps before the scheduler (torch warns otherwise)
     for _ in range(4):
         sched.step()
     assert opt.param_groups[0]["lr"] == pytest.approx(0.1 * LR_FLOOR)
@@ -295,7 +361,8 @@ def test_pipeline_with_all_options(tmp_path):
     cfg = yaml.safe_load((ROOT / "configs" / "run_0001_xdomain.yaml").read_text(encoding="utf-8"))
     cfg["roi"] = {"width_px": 64, "height_px": 64, "mm_per_px": 0.04}
     cfg["classes"] = {"OK": 6, "MISSING": 6, "MISALIGNED": 6}
-    cfg["train"].update({"epochs": 2, "batch_size": 4, "pretrained": False, "warmup_epochs": 1})
+    cfg["train"].update({"epochs": 2, "batch_size": 4, "pretrained": False, "warmup_epochs": 1,
+                         "freeze": ["stem", "layer1"], "cache_images": True})
     cfg_path = tmp_path / "cfg.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     data = tmp_path / "ds"
@@ -306,7 +373,47 @@ def test_pipeline_with_all_options(tmp_path):
     held = (data / "splits" / "val.txt").read_text().split() + (data / "splits" / "test.txt").read_text().split()
     assert held and all("/domain_B/" in s for s in held)
     model = tmp_path / "m.pt"
-    tr = train_model(data, model, device="cpu")
+    threads_before = torch.get_num_threads()
+    tr = train_model(data, model, device="cpu", threads=2)
+    assert torch.get_num_threads() == 2
+    torch.set_num_threads(threads_before)
     assert tr["epochs_run"] == 2 and model.exists()
     ev = run_eval(data, model, device="cpu")
     assert 0.0 <= float(ev["accuracy"]) <= 1.0
+    # train.cache_images: the second read of a sample comes from RAM and is the same tensor.
+    ds = ROIDataset(data, "train", sorted(cfg["classes"]), cache_images=True)
+    first = ds[0][0]
+    assert len(ds._rgb_cache) == 1
+    assert torch.equal(first, ds[0][0]) and len(ds._rgb_cache) == 1
+    plain = ROIDataset(data, "train", sorted(cfg["classes"]))
+    assert torch.equal(first, plain[0][0]) and not plain._rgb_cache
+
+
+def test_freeze_stages_stops_gradients_and_keeps_bn_stats():
+    from simple_sim.models import RESNET_STAGES, build_resnet18, freeze_stages, trainable_parameters
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from train import train_epoch
+
+    model = build_resnet18(3)
+    n_all = len(list(model.parameters()))
+    frozen = freeze_stages(model, ["stem", "layer1"])
+    assert [type(m).__name__ for m in frozen] == ["Conv2d", "BatchNorm2d", "Sequential"]
+    assert all(not p.requires_grad for m in frozen for p in m.parameters())
+    assert all(p.requires_grad for p in model.layer2.parameters())
+    assert 0 < len(trainable_parameters(model)) < n_all
+    assert freeze_stages(model, None) == [] and RESNET_STAGES[0] == "stem"
+    with pytest.raises(ValueError, match="train.freeze"):
+        freeze_stages(model, ["fc"])
+
+    before = {k: v.clone() for k, v in model.state_dict().items()}
+    opt = torch.optim.Adam(trainable_parameters(model), lr=0.01)
+    x = torch.randn(4, 3, 32, 32)
+    loader = [(x, torch.tensor([0, 1, 2, 0]))]
+    train_epoch(model, loader, torch.nn.CrossEntropyLoss(), opt, torch.device("cpu"), frozen=frozen)  # type: ignore[arg-type]
+    after = model.state_dict()
+    assert torch.equal(before["conv1.weight"], after["conv1.weight"])
+    assert torch.equal(before["bn1.running_mean"], after["bn1.running_mean"])  # eval mode: stats untouched
+    assert torch.equal(before["layer1.0.bn1.running_mean"], after["layer1.0.bn1.running_mean"])
+    assert not torch.equal(before["layer2.0.conv1.weight"], after["layer2.0.conv1.weight"])
+    assert not torch.equal(before["layer2.0.bn1.running_mean"], after["layer2.0.bn1.running_mean"])
+    assert model.training  # the model as a whole is still in train mode

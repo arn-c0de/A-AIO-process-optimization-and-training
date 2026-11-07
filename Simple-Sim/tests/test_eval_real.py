@@ -2,6 +2,7 @@
 
 import cv2
 import numpy as np
+import pytest
 import torch
 
 from tools.eval_real import class_folders, evaluate, format_report, roi_size
@@ -35,6 +36,15 @@ def test_evaluate_scores_groups_and_binary_rates(tmp_path):
     assert groups["MISSING@empty_pad"]["predicted_ok"] == 1.0
     assert result["false_call_rate"] == 0.0 and result["escape_rate"] == 2 / 5
     assert "escape rate" in format_report(result)
+    assert "tta" not in result and "calibration" not in result
+    cal = evaluate(_BrightIsOk(), CLASSES, tmp_path, (64, 64), limit=10, tta=True, calibration=True)
+    assert cal["tta"] is True and cal["groups"] == groups
+    # Logits 1/0: p(top) = e/(e+2); 7 of 9 images are right (the 2 bright MISSING escape).
+    p_top = np.e / (np.e + 2)
+    assert cal["calibration"]["images"] == 9 and cal["calibration"]["n_bins"] == 15
+    assert cal["calibration"]["ece"] == pytest.approx(abs(7 / 9 - p_top))
+    assert cal["calibration"]["nll"] == pytest.approx(-(7 * np.log(p_top) + 2 * np.log(1 / (np.e + 2))) / 9)
+    assert "Calibration: ECE" in format_report(cal)
 
 
 def test_roi_size_from_checkpoint_config():

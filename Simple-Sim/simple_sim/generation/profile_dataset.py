@@ -13,6 +13,7 @@ from tqdm import tqdm
 from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files
 from simple_sim.generation.common import (
+    add_render_meta,
     build_rows,
     finalize_splits,
     RenderTask,
@@ -136,8 +137,9 @@ def generate_profile_dataset(
     log.info(f"\nWriting dataset to {output_dir}")
     with atomic_dataset_dir(output_dir) as temp_dir:
         bar = tqdm(total=len(jobs), desc="render")
-        render_2d_records(jobs, temp_dir, progress=lambda done, _total: bar.update(1))
+        details = render_2d_records(jobs, temp_dir, progress=lambda done, _total: bar.update(1))
         bar.close()
+        add_render_meta(meta_rows, details)  # e.g. board_drc
         write_dataset_files(temp_dir, meta_rows, label_rows, config)
     finalize_splits(output_dir, splits, label_rows)
 

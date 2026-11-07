@@ -38,6 +38,7 @@ from gui.utils.pipeline_helpers import (
     DATASET_DERIVED_KEYS,
     PERSISTED_FIELD_MAP,
     apply_precise_counts,
+    apply_render_overrides,
     chain_commands,
     config_class_names,
     continue_train_argv,
@@ -55,6 +56,8 @@ from gui.utils.pipeline_helpers import (
     profile_compat_status,
     profile_model_paths,
     profile_run_targets,
+    render_overrides,
+    render_overrides_text,
     resolve_under,
     sample_color_from_total,
     samples_text,
@@ -811,6 +814,27 @@ class PipelineControlTab(BaseTab):
                 return None
         return patched_specs
     
+    def _render_overrides(self) -> dict[str, Any]:
+        """``render.look`` / ``render.board`` chosen in the Source section (empty: the configs' own values)."""
+        return render_overrides(look=self.ui.var_look.get(), routing=self.ui.var_board_routing.get(),
+                                drc=self.ui.var_board_drc.get(), design_rules=self.ui.var_board_rules.get())
+
+    def _apply_render_overrides_to_run_specs(self, run_specs: list[dict[str, str]],
+                                             overrides: dict[str, Any]) -> list[dict[str, str]] | None:
+        """Each spec's config rewritten as a temp config under outputs/live with *overrides* applied."""
+        patched_specs: list[dict[str, str]] = []
+        for spec in run_specs:
+            cfg_path = resolve_under(self.sim_root, spec["config"])
+            try:
+                data = load_yaml(cfg_path) or {}
+                data["render"] = apply_render_overrides(dict(data.get("render") or {}), overrides)
+                patched_path = self._write_temp_cfg(data, prefix="render_")
+                patched_specs.append({**spec, "config": self._rel_to_sim_root(patched_path)})
+            except Exception as e:
+                self.ui.show_messagebox("error", "Error", f"Failed to write render config:\n\n{e}")
+                return None
+        return patched_specs
+
     def _start_pipeline(self, *, task: str) -> None:
         if self.logic.is_busy(): return
         
@@ -877,6 +901,20 @@ class PipelineControlTab(BaseTab):
         # Precise mode: patch each spec's config with user-specified sample counts
         if run_mode == "precise":
             patched_specs = self._apply_precise_counts_to_run_specs(run_specs)
+            if patched_specs is None:
+                return
+            run_specs = patched_specs
+
+        # Look / board selectors: patch each spec's config like precise mode does (generate --extend then
+        # compares the look options with the dataset's config.yaml as for any config edit).
+        try:
+            overrides = self._render_overrides()
+        except ValueError as e:
+            self.ui.show_messagebox("error", "Error", str(e))
+            return
+        if overrides:
+            self._append_log(f"Render overrides: {render_overrides_text(overrides)}\n")
+            patched_specs = self._apply_render_overrides_to_run_specs(run_specs, overrides)
             if patched_specs is None:
                 return
             run_specs = patched_specs

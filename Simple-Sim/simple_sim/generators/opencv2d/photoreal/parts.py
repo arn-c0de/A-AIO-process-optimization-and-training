@@ -260,9 +260,10 @@ def draw_body(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[fl
     inset = max(1.0, {"qfn": 0.012, "soic": 0.035, "sot": 0.05, "sot6": 0.05, "array_r": 0.05,
                       "array_c": 0.05}.get(family, 0.07) * min(length, width))
 
-    inside = (np.abs(u) <= hl) & (np.abs(v) <= hw)
-    top = (np.abs(u) <= hl - inset) & (np.abs(v) <= hw - inset)
-    d_top = np.maximum(np.abs(u) - (hl - inset), np.abs(v) - (hw - inset))
+    au, av = np.abs(u), np.abs(v)
+    inside = (au <= hl) & (av <= hw)
+    top = (au <= hl - inset) & (av <= hw - inset)
+    d_top = np.maximum(au - (hl - inset), av - (hw - inset))
     aa_top = np.clip(0.5 - d_top, 0.0, 1.0)
 
     # Ceramic parts take a light profile colour (component_color_bgr, e.g. brown 1210 MLCCs); the
@@ -279,7 +280,7 @@ def draw_body(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[fl
     a = np.radians(angle_deg)
     light_u = LIGHT[0] * np.cos(a) + LIGHT[1] * np.sin(a)
     light_v = -LIGHT[0] * np.sin(a) + LIGHT[1] * np.cos(a)
-    facing = np.where(np.abs(u) / hl > np.abs(v) / hw, np.sign(u) * light_u, np.sign(v) * light_v)
+    facing = np.where(au / hl > av / hw, np.sign(u) * light_u, np.sign(v) * light_v)
     side_shade = 0.45 + 0.35 * np.clip(-facing, 0, 1)
     blend(img, body_col, aa_body)  # body footprint
     img *= np.where(inside & ~top, side_shade, 1.0)[..., None]
@@ -302,17 +303,21 @@ def draw_body(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[fl
         cap_len = ctx.look.cap_len.get(family, CAP_LEN[family]) * length
         if family == "led":
             draw_led_top(ctx, img, u, v, aa_top, hl - cap_len, hw, rng)
-        cap = inside & (np.abs(u) > hl - cap_len)
+        cap = inside & (au > hl - cap_len)
         cap_col = ctx.look.end_cap * float(rng.uniform(0.9, 1.05))
-        # Metallic end caps: bright ridge across the middle of each cap, darker towards the body.
-        ridge = np.exp(-(((np.abs(u) - (hl - cap_len * 0.45)) / (cap_len * 0.35)) ** 2))
-        shade = 0.72 + 0.45 * ridge - 0.25 * np.clip(v / hw, 0, 1) * 0.5
-        if ctx.look.flat_caps:  # scanner look: flat tin top, bright where the plating rolls over both cap edges
-            d_out, d_in = hl - np.abs(u), np.abs(u) - (hl - cap_len)
-            edges = np.maximum(np.exp(-((d_out / (0.16 * cap_len)) ** 2)), 0.75 * np.exp(-((d_in / (0.14 * cap_len)) ** 2)))
-            shade = 0.85 + 0.3 * edges - 0.05 * np.clip(v / hw, 0, 1)
-        elif ctx.solder_look is not None:  # meniscus look: flat, matte tin top (no tube-like ridge), as in real crops
-            shade = 0.88 + 0.12 * ridge - 0.06 * np.clip(v / hw, 0, 1)
+        v_across = np.clip(v / hw, 0, 1)
+        if ctx.look.flat_caps:  # scanner look: the flat tin top mirrors the dark camera (grey); the plating
+            # rolling over both cap edges faces the side lights and blazes (bright vertical bands on every terminal)
+            d_out, d_in = hl - au, au - (hl - cap_len)
+            edges = np.maximum(np.exp(-((d_out / (0.18 * cap_len)) ** 2)), 0.9 * np.exp(-((d_in / (0.16 * cap_len)) ** 2)))
+            shade = 0.7 + 0.7 * edges - 0.05 * v_across
+        else:
+            # Metallic end caps: bright ridge across the middle of each cap, darker towards the body.
+            ridge = np.exp(-(((au - (hl - cap_len * 0.45)) / (cap_len * 0.35)) ** 2))
+            if ctx.solder_look is not None:  # meniscus look: flat, matte tin top (no tube-like ridge), as in real crops
+                shade = 0.88 + 0.12 * ridge - 0.06 * v_across
+            else:
+                shade = 0.72 + 0.45 * ridge - 0.25 * v_across * 0.5
         cap_img = cap_col * shade[..., None] * (1.0 + noise.normal(rng, 0.02, channels=1))
         blend(img, cap_img, cap.astype(np.float32) * aa_body)
         if not marks:
@@ -406,7 +411,7 @@ def draw_tombstone(ctx: RenderContext, img: np.ndarray, family: str, pose: dict[
     cv2.fillConvexPoly(sh, cv2.convexHull(pts), 255)
     y0, y1, x0, x1 = blur_window(sh, 2.0 * ctx.ss)  # the blurred shadow is exactly 0 outside
     sh = cv2.GaussianBlur(sh[y0:y1, x0:x1], (0, 0), 2.0 * ctx.ss).astype(np.float32) / 255.0
-    img[y0:y1, x0:x1] *= (1.0 - 0.4 * sh)[..., None]
+    img[y0:y1, x0:x1] *= (1.0 - 0.4 * ctx.look.shadow * sh)[..., None]
     contact_shadow(ctx, img, pose["mask"], 0.4, 3 * ctx.ss)
 
     # Steep top face: the foreshortened body, shaded by how much it still faces the light.

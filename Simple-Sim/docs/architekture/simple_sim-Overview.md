@@ -386,6 +386,7 @@ Drawing steps compute on the window around their shape; random fields are drawn 
 ## `simple_sim/blender/render_batch.py`
 
 Purpose: standalone Blender-side batch renderer script.
+The job lines are `PreparedJob` of `simple_sim/blender/job_schema.py` (stdlib-only `TypedDict`s and defaults the library and the script share).
 
 Responsibilities:
 - Parses Blender custom CLI args.

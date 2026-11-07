@@ -52,7 +52,8 @@ python3 scripts/train.py \
 ```bash
 python3 scripts/eval.py \
   --data outputs/sim_data/runs/run_0001 \
-  --model outputs/models/run_0001.pt
+  --model outputs/models/run_0001.pt \
+  [--tta] [--calibration]   # flips + quarter turns averaged; ECE / NLL / Brier in the report
 ```
 
 ## Testing
@@ -196,9 +197,21 @@ python3 scripts/train.py ... --device cuda
 # Generate smaller dataset for testing
 # Edit config: classes.OK: 10 (for each class)
 
-# Use fewer workers
-# Edit scripts/train.py: num_workers=2
+# CPU training: thread count (hybrid CPUs: try the number of performance cores)
+python3 scripts/train.py ... --device cpu --threads 8
+
+# Keep decoded images in RAM after the first epoch (~200 KB per 256 px image)
+# Edit config: train.cache_images: true
+
+# Freeze the pretrained stem + first stage (less backward work; changes what is trained)
+# Edit config: train.freeze: [stem, layer1]
+
+# Background workers for decoding (need shared memory / Unix sockets)
+# Edit config: train.num_workers: 2
 ```
+
+Per-image transforms already run single-threaded in the main process (`num_workers: 0`); with
+torch's full thread pool they used to cost 30-600 ms per image instead of 0.3-10 ms.
 
 ## File Locations
 

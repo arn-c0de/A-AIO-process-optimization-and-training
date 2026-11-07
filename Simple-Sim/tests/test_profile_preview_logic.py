@@ -48,3 +48,25 @@ def test_sidecar_keeps_defect_for_overlay(logic):
     assert side["defect"]["type"] == "TOMBSTONE" and side["nominal"]
     out = draw_defect_overlay(cv2.imread(str(im.path)), side["defect"], side["nominal"])
     assert out.shape == (256, 256, 3)
+
+
+def test_look_and_board_overrides_change_the_render(logic):
+    import cv2
+    import numpy as np
+
+    base = PreviewRequest("chip_0603_resistor@2", "opencv_2d", states=["OK"], variants=1)
+    (plain,) = logic.render(base, on_image=lambda _i: None, on_log=lambda _s: None, should_stop=lambda: False)
+    plain_img = cv2.imread(str(plain.path))
+    logs = []
+    req = PreviewRequest("chip_0603_resistor@2", "opencv_2d", states=["OK"], variants=1,
+                         look="quins", board_routing="escape", board_drc="warn", board_rules="industrial")
+    (im,) = logic.render(req, on_image=lambda _i: None, on_log=logs.append, should_stop=lambda: False)
+    assert any("look=quins, board.routing=escape, board.drc=warn, board.design_rules=industrial" in s for s in logs)
+    assert not np.array_equal(cv2.imread(str(im.path)), plain_img)
+    # "from config" spelled out equals no override.
+    same = PreviewRequest("chip_0603_resistor@2", "opencv_2d", states=["OK"], variants=1, look="from config")
+    (again,) = logic.render(same, on_image=lambda _i: None, on_log=lambda _s: None, should_stop=lambda: False)
+    assert np.array_equal(cv2.imread(str(again.path)), plain_img)
+    with pytest.raises(ValueError):
+        logic.render(PreviewRequest("chip_0603_resistor@2", "opencv_2d", states=["OK"], variants=1, look="matte"),
+                     on_image=lambda _i: None, on_log=lambda _s: None, should_stop=lambda: False)

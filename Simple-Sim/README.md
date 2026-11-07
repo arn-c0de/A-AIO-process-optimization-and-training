@@ -93,6 +93,7 @@ Defect classes are **component-dependent**; common classes include:
 - **Photoreal 2D rendering (v1.0.3)**: Default `render.style: photoreal` calibrated on real boards (textured mask, silkscreen, solder fillets, camera model); `flat` keeps the old look. See [`docs/guides/PHOTOREAL_RENDERING.md`](docs/guides/PHOTOREAL_RENDERING.md).
 - **Blender backend rebuilt (v1.0.3)**: Shares the 2D board bake and pad layout, real Cycles GPU rendering (`render.blender.device: GPU`), 3D profiles are now `*_3d@2`.
 - **Camera presets (v1.0.3)**: `render.camera` (AOI default, `preset: phone` for oblique phone photos) plus `tools/calibrate_camera.py` and `tools/sim_to_real.py`.
+- **Target look `render.look: quins`**: materials, scanner joint light and camera of the DeepVision QUINS AOI scans; sim-to-real tools `tools/real_crops.py` (export real crops by form/split/class), `tools/look_montage.py` (real vs. synthetic montage + gap statistics), `tools/look_stats.py` (statistics), `tools/eval_real.py` (score a checkpoint on real crops), `tools/mix_real.py` (add real crops to a dataset). See the guide, section "Target look".
 - **Profile Preview tab (v1.0.3)**: Render a few images per defect state of one profile without generating a dataset.
 - **Extended filter research**: Advanced image filter pipeline with persisted profiles and randomized ranges.
 
@@ -169,6 +170,8 @@ cd Simple-Sim
 - Console: Formatted metrics table
 - File: `outputs/models/report_run_0001.json`
 - Success criteria check results
+
+Optional: `--tta` averages the softmax over horizontal/vertical flips and 90-degree rotations (8 views; for datasets with cardinal-rotation augmentation), `--calibration` adds the expected calibration error (15 bins), negative log-likelihood and Brier score under `metrics.calibration` in the report. `tools/eval_real.py` takes the same two flags.
 
 ## Component Profiles
 
@@ -262,12 +265,12 @@ Configuration files (`configs/*.yaml`) define all dataset and training parameter
 - **roi**: Image dimensions, mm/pixel scaling
 - **classes**: Sample counts per class
 - **tolerances**: Classification thresholds (shift, rotation, tilt) (profile-provided in schema v2)
-- **defects** (optional): `placement_sampling: legacy | continuous`. `continuous` renders OK parts up to the tolerance and MISALIGNED parts from right behind it (the legacy sampler leaves the band between 0.7 x tolerance and tolerance + 1 px empty), with most misalignments close to the boundary.
+- **defects** (optional): `placement_sampling: legacy | continuous`. `continuous` renders OK parts up to the tolerance and MISALIGNED parts from right behind it (the legacy sampler leaves the band between 0.7 x tolerance and tolerance + 1 px empty), with most misalignments close to the boundary. `units: px | mm` (default `px`): units of the fixed lateral-shift ranges of the TOMBSTONE / SOLDER_BRIDGE / CORNER_LIFT samplers. `px` keeps the legacy half-ranges 5 / 1 / 2 px whatever `roi.mm_per_px` is (0.05 / 0.01 / 0.02 mm at 100 px/mm, but 0.19 / 0.04 / 0.08 mm at 26 px/mm). `mm` uses physical half-ranges divided by `roi.mm_per_px`: tombstone slide 0.10 mm; bridge wobble 0.025 mm and corner-lift wobble 0.05 mm, each capped at 0.7 x the profile's `ok_shift_px` (in mm) so the part stays a correctly placed one (IPC-A-610 class 2: tombstoning and bridging are defects at any offset; the placement tolerance encodes the 50 % termination-width side-overhang limit). Rotation and tilt ranges are degrees in both modes, labels and the number of RNG draws do not change.
 - **domains**: Lighting, blur, noise ranges per domain; samples alternate over all domains. A domain may override the camera (`camera: {preset: phone}`, 2D backend).
 - **splits**: Train/val/test fractions and domain assignments. A domain listed only under `val_domains`/`test_domains` is held out: val/test then measure generalisation to that camera.
 - **render**: Colors, rendering backend; `post_filters: camera` applies the domain blur/noise and the rotation inside the camera model instead of on the finished image (see `docs/guides/PHOTOREAL_RENDERING.md`).
 - **augment**: Rotation, brightness, contrast ranges (baked into the rendered images)
-- **train**: Model, epochs, batch size, optimizer params. Optional: `augment` (training-time flips `hflip`/`vflip`, quarter turns `rot90`, ColorJitter `brightness`/`contrast`/`saturation`/`hue`), `scheduler: cosine` + `warmup_epochs`, `label_smoothing`.
+- **train**: Model, epochs, batch size, optimizer params. Optional: `augment` (training-time flips `hflip`/`vflip`, quarter turns `rot90`, ColorJitter `brightness`/`contrast`/`saturation`/`hue`), `scheduler: cosine` + `warmup_epochs`, `label_smoothing`, `freeze` (ResNet stages `stem`, `layer1` .. `layer4` kept at their pretrained weights), `cache_images` (decoded images stay in RAM after the first epoch). `train --threads N` sets the CPU thread count.
 - **eval**: Batch size, metrics to compute
 
 `configs/run_0001_xdomain.yaml` is `run_0001` with all of the optional training-quality settings turned on. Every option defaults to the previous behaviour.

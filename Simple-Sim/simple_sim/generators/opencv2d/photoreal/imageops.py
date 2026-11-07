@@ -56,11 +56,32 @@ def blend(img: np.ndarray, color: np.ndarray, alpha: np.ndarray) -> None:
     sub += color * a
 
 
+def gradient(f: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``np.gradient(f)`` of a 2D float map (``(gy, gx)``, unit spacing, first-order edges): the same
+    float operations in the same order, without its per-call overhead (called twice per joint)."""
+    h, w = f.shape
+    if h < 2 or w < 2 or not np.issubdtype(f.dtype, np.inexact):
+        return np.gradient(f)  # type: ignore[return-value]
+    gx, gy = np.empty_like(f), np.empty_like(f)
+    gx[:, 1:-1] = (f[:, 2:] - f[:, :-2]) / 2.0
+    gx[:, 0] = f[:, 1] - f[:, 0]
+    gx[:, -1] = f[:, -1] - f[:, -2]
+    gy[1:-1, :] = (f[2:, :] - f[:-2, :]) / 2.0
+    gy[0, :] = f[1, :] - f[0, :]
+    gy[-1, :] = f[-1, :] - f[-2, :]
+    return gy, gx
+
+
 def heightmap_normals(hmap: np.ndarray) -> np.ndarray:
     """Unit surface normals (H, W, 3: x, y, up) of a height map in pixels (central differences)."""
-    gy, gx = np.gradient(hmap)
-    n = np.dstack([-gx, -gy, np.ones_like(hmap)])
-    n /= np.linalg.norm(n, axis=2, keepdims=True)
+    h, w = hmap.shape
+    gy, gx = gradient(hmap)
+    n = np.empty((h, w, 3), dtype=gx.dtype)
+    np.negative(gx, out=n[..., 0])
+    np.negative(gy, out=n[..., 1])
+    n[..., 2] = 1.0
+    # == np.linalg.norm(n, axis=2, keepdims=True): sqrt of the squares summed left to right.
+    n /= np.sqrt((gx * gx + gy * gy) + 1.0)[..., None]
     return n
 
 
@@ -93,6 +114,13 @@ def smooth_noise(shape: tuple[int, int], cell: float, rng: np.random.Generator) 
     h, w = shape
     small = rng.normal(0.0, 1.0, (int(h / cell) + 2, int(w / cell) + 2)).astype(np.float32)
     return cv2.resize(small, (w, h), interpolation=cv2.INTER_CUBIC)
+
+
+def skip_smooth_noise(shape: tuple[int, int], cell: float, rng: np.random.Generator) -> None:
+    """Advance *rng* exactly as :func:`smooth_noise` would, without building the field (for a layer
+    that does not use it but must leave the random stream as before)."""
+    h, w = shape
+    rng.normal(0.0, 1.0, (int(h / cell) + 2, int(w / cell) + 2))
 
 
 def text_layer(shape: tuple[int, int], text: str, center: tuple[float, float], height_px: float,
@@ -208,16 +236,34 @@ def contact_shadow(ctx: RenderContext, img: np.ndarray, mask: np.ndarray, streng
     Masks close to the frame edge (where the shift would wrap around) use the full frame.
     """
     h, w = mask.shape[:2]
+    strength = strength * ctx.look.shadow  # diffuse scanner light (render.look: quins): fainter shadows
     shift = int(1.5 * ctx.ss)
     sigma = spread * 0.8
     margin = int(spread) + int(round(sigma * 3 * 2 + 1)) // 2 + shift + 2
     x, y, bw, bh = cv2.boundingRect(mask)
     if bw == 0 or bh == 0:
         return
-    x0, y0, x1, y1 = x - margin, y - margin, x + bw + margin, y + bh + margin
-    if x0 < 0 or y0 < 0 or x1 > w or y1 > h:  # near the frame edge: the roll wraps, keep the full frame
-        x0, y0, x1, y1 = 0, 0, w, h
+    # Clipped to the frame: inside the window the dilation and blur equal the full-frame ones (the
+    # mask is 0 within the margin of the window's inner sides, and a side on the frame edge sees the
+    # same border as the full frame).
+    x0, y0, x1, y1 = max(0, x - margin), max(0, y - margin), min(w, x + bw + margin), min(h, y + bh + margin)
     sh = cv2.dilate(mask[y0:y1, x0:x1], np.ones((int(spread), int(spread)), np.uint8))
-    sh = cv2.GaussianBlur(sh, (0, 0), sigma).astype(np.float32) / 255.0
-    sh = np.roll(sh, (shift, shift), axis=(0, 1))  # away from the light
-    img[y0:y1, x0:x1] *= (1.0 - strength * sh)[..., None]
+    sh = cv2.GaussianBlur(sh, (0, 0), sigma).astype(np.float32)
+    sh /= 255.0
+    sh *= -strength  # in place: 1 + (-strength * sh) == 1 - strength * sh bit for bit
+    sh += 1.0
+    # Shifted away from the light like np.roll(shadow, (shift, shift)) of the full frame: the window
+    # lands at rows y0+shift.. and columns x0+shift.. modulo the frame (up to 4 pieces when it wraps);
+    # everywhere else the factor is exactly 1.
+    for ry0, ry1, sy in _rolled_spans(y0, y1, shift, h):
+        for rx0, rx1, sx in _rolled_spans(x0, x1, shift, w):
+            img[ry0:ry1, rx0:rx1] *= sh[sy:sy + ry1 - ry0, sx:sx + rx1 - rx0, None]
+
+
+def _rolled_spans(a0: int, a1: int, shift: int, n: int) -> list[tuple[int, int, int]]:
+    """Where the span ``[a0, a1)`` of an axis of length *n* lands after ``np.roll(.., shift)``:
+    ``(start, stop, offset)`` pieces, *offset* being the first span index that lands in the piece."""
+    start, length = (a0 + shift) % n, a1 - a0
+    if start + length <= n:
+        return [(start, start + length, 0)]
+    return [(start, n, 0), (0, start + length - n, n - start)]

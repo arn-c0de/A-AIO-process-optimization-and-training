@@ -98,3 +98,4 @@ Common issues:
 | Board look (both backends) | `simple_sim/generators/opencv2d/photoreal.py` |
 | Bake / camera model hook | `simple_sim/generators/blender3d/bake.py` |
 | Fillets, bodies, leads, markings, light, camera | `simple_sim/blender/render_batch.py` |
+| Job contract (JSONL keys, scene dict, defaults) | `simple_sim/blender/job_schema.py` (stdlib only, imported by both sides) |

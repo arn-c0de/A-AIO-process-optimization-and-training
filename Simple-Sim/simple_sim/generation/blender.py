@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from simple_sim.blender.job_schema import (DEFAULT_BLENDER_EXECUTABLE, DEFAULT_CYCLES_SAMPLES, DEFAULT_DEVICE, DEFAULT_ENGINE,
+                                           BakeOptions, BlenderJob, PreparedJob)
 from simple_sim.generators.blender3d.runner import render_prepared_batch
 from simple_sim.generators.blender3d import render_blender_batch, write_jobs_jsonl
 from simple_sim.filter_settings import NEUTRAL_AUGMENT
@@ -30,13 +32,13 @@ _POST_FILTER_SECONDARY_KEYS = frozenset({
 
 
 def blender_settings(config: dict[str, Any]) -> dict[str, Any]:
-    """``render.blender`` settings with defaults: executable, samples, device, engine."""
+    """``render.blender`` settings with defaults (``simple_sim.blender.job_schema``): executable, samples, device, engine."""
     cfg = (config.get("render") or {}).get("blender") or {}
     return {
-        "executable": str(cfg.get("executable", "blender")),
-        "samples": int(cfg.get("samples", 64)),
-        "device": str(cfg.get("device", "CPU")),
-        "engine": str(cfg.get("engine", "BLENDER_EEVEE")),
+        "executable": str(cfg.get("executable", DEFAULT_BLENDER_EXECUTABLE)),
+        "samples": int(cfg.get("samples", DEFAULT_CYCLES_SAMPLES)),
+        "device": str(cfg.get("device", DEFAULT_DEVICE)),
+        "engine": str(cfg.get("engine", DEFAULT_ENGINE)),
     }
 
 
@@ -49,9 +51,10 @@ def blender_job(
     footprint: str,
     component_height_mm: float,
     render_3d: dict[str, Any],
-    bake: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """One ``render_batch.py`` job from a record with image_path/seed/nominal/defect/augment.
+    bake: BakeOptions | None = None,
+) -> BlenderJob:
+    """One ``render_batch.py`` job (:class:`~simple_sim.blender.job_schema.BlenderJob`) from a record with
+    image_path/seed/nominal/defect/augment.
 
     *bake*: fields for the shared board bake and camera model (``component_type``, ``tolerances``,
     ``texture_dir``, ``camera``), see ``simple_sim.generators.blender3d.bake``.
@@ -105,7 +108,7 @@ def postprocess_blender_images(records: Iterable[dict[str, Any]], output_root: P
 
 
 def run_blender_jobs(
-    jobs: list[dict[str, Any]],
+    jobs: list[BlenderJob],
     *,
     output_root: Path,
     jobs_path: Path,
@@ -131,7 +134,7 @@ def run_blender_jobs(
 
 
 def run_prepared_blender_jobs(
-    prepared: list[dict[str, Any]],
+    prepared: list[PreparedJob],
     *,
     output_root: Path,
     jobs_path: Path,

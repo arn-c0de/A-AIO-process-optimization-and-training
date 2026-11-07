@@ -17,6 +17,8 @@ from typing import Any
 
 import numpy as np
 
+from simple_sim.board import collect_drc
+from simple_sim.board.footprints import DEFAULT_FOOTPRINT
 from simple_sim.config import domain_camera, merge_profile_render
 
 from .render import render_roi
@@ -33,7 +35,7 @@ class RenderSpec:
 
     roi_size: tuple[int, int]
     render: Mapping[str, Any]
-    footprint: str = "chip_2pad"
+    footprint: str = DEFAULT_FOOTPRINT
     tolerances: Mapping[str, Any] | None = None
     domain_render: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
@@ -75,3 +77,20 @@ def render_record(spec: RenderSpec, record: Mapping[str, Any], rng: np.random.Ge
     if rng is None:
         rng = np.random.default_rng(int(record["seed"]))
     return render_sample(spec, record["nominal"], record["defect"], record["augment"], rng, domain=record.get("domain"))
+
+
+def render_record_with_meta(spec: RenderSpec, record: Mapping[str, Any],
+                            rng: np.random.Generator | None = None) -> tuple[np.ndarray, dict[str, Any]]:
+    """:func:`render_record` plus the per-sample render details for ``render_meta`` of ``meta.jsonl``.
+
+    Same image and random draws as :func:`render_record`. The details hold ``board_drc``
+    (:func:`simple_sim.board.drc_summary`: ``ok``, violation counts per kind, router, design-rule
+    preset, DRC mode) when the board model checked the window (``render.board.routing: escape``
+    with ``drc: warn | strict``), and nothing otherwise (``legacy`` / ``none`` copper, ``drc: off``).
+    """
+    with collect_drc() as reports:
+        img = render_record(spec, record, rng)
+    meta: dict[str, Any] = {}
+    if reports:
+        meta["board_drc"] = reports[0]  # one board per render window
+    return img, meta

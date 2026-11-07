@@ -33,7 +33,7 @@ from simple_sim.eval_utils import (
 from simple_sim.manifest import ProfileMismatchError, check_checkpoint_profile, hash_file, read_dataset_manifest, resolve_dataset_profile
 from simple_sim.metrics import compute_metrics
 from simple_sim.model_bundle import bundle_checkpoint_path, upsert_bundle_meta
-from simple_sim.models import build_resnet18, load_checkpoint
+from simple_sim.models import build_resnet18, freeze_stages, load_checkpoint, trainable_parameters
 from simple_sim.rng import resolve_train_seed, seed_everything
 from simple_sim.telemetry import emit
 from simple_sim.io_utils import load_yaml
@@ -49,9 +49,15 @@ def train_epoch(
     *,
     use_amp: bool = False,
     scaler: torch.amp.GradScaler | None = None,
+    frozen: list[nn.Module] | None = None,
 ) -> tuple[float, int]:
-    """Train for one epoch; return ``(average loss, num_samples)``."""
+    """Train for one epoch; return ``(average loss, num_samples)``.
+
+    *frozen* modules (``train.freeze``) stay in eval mode so their BatchNorm statistics do not move.
+    """
     model.train()
+    for m in frozen or ():
+        m.eval()
     total_loss = 0.0
     num_batches = 0
     num_samples = 0
@@ -139,21 +145,28 @@ def load_dataset_config(data_dir: Path) -> dict[str, Any]:
 
 def build_training(
     num_classes: int, train_config: dict[str, Any], device: torch.device, use_amp: bool
-) -> tuple[nn.Module, nn.Module, optim.Optimizer, torch.amp.GradScaler]:
-    """Create ``(model, criterion, optimizer, scaler)`` from the dataset's ``train`` config section.
+) -> tuple[nn.Module, nn.Module, optim.Optimizer, torch.amp.GradScaler, list[nn.Module]]:
+    """Create ``(model, criterion, optimizer, scaler, frozen_modules)`` from the dataset's ``train`` section.
 
     ``train.label_smoothing`` (default 0) smooths the training loss only; validation uses plain
-    cross-entropy so val losses stay comparable between runs.
+    cross-entropy so val losses stay comparable between runs. ``train.freeze`` (default none) lists
+    ResNet stages (``stem``, ``layer1`` .. ``layer4``) that keep their (pretrained) weights: the
+    optimizer only sees the remaining parameters and backward stops at the first trainable layer.
     """
     print("\nInitializing ResNet18...")
     model = build_resnet18(num_classes, pretrained=train_config.get('pretrained', True))
+    frozen = freeze_stages(model, train_config.get('freeze'))
+    if frozen:
+        n_train = sum(p.numel() for p in trainable_parameters(model))
+        n_all = sum(p.numel() for p in model.parameters())
+        print(f"  Frozen stages: {list(train_config['freeze'])} ({n_train / 1e6:.2f} of {n_all / 1e6:.2f} M parameters trainable)")
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
     model = model.to(device)
     criterion = nn.CrossEntropyLoss(label_smoothing=float(train_config.get('label_smoothing', 0.0) or 0.0))
-    optimizer = optim.Adam(model.parameters(), lr=train_config['lr'], weight_decay=train_config['weight_decay'])
+    optimizer = optim.Adam(trainable_parameters(model), lr=train_config['lr'], weight_decay=train_config['weight_decay'])
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
-    return model, criterion, optimizer, scaler
+    return model, criterion, optimizer, scaler, frozen
 
 
 LR_FLOOR = 0.02  # cosine schedule ends at this fraction of train.lr
@@ -201,6 +214,7 @@ def fit_epoch(
     use_amp: bool = False,
     scaler: torch.amp.GradScaler | None = None,
     emit_events: bool = True,
+    frozen: list[nn.Module] | None = None,
 ) -> dict[str, Any]:
     """Train + validate one epoch (0-based *epoch*), print the summary and return its stats."""
     print(f"\nEpoch {epoch + 1}/{total_epochs}")
@@ -209,7 +223,7 @@ def fit_epoch(
 
     t_epoch = time.perf_counter()
     train_loss, train_seen = train_epoch(
-        model, train_loader, criterion, optimizer, device, use_amp=use_amp, scaler=scaler
+        model, train_loader, criterion, optimizer, device, use_amp=use_amp, scaler=scaler, frozen=frozen
     )
     val_loss, val_metrics, val_seen = validate(
         model, val_loader, criterion, device, class_names, critical_classes=critical_classes, use_amp=use_amp
@@ -246,10 +260,12 @@ def train_model(
     out_mode: str = "best",
     device: str | torch.device = "cpu",
     amp: bool = True,
+    threads: int | None = None,
 ) -> dict[str, Any]:
     """Train a defect classifier on *data_dir* and write checkpoints to *out*.
 
     *out* may be a ``.pt`` path or a multi-model bundle directory (existing dir or ``*.bundle``).
+    *threads* sets torch's intra-op thread count (CPU training; default: torch's choice).
     Returns a summary dict (checkpoint paths, best epoch / val metrics, epochs run).
     """
     data_dir = Path(data_dir)
@@ -257,6 +273,10 @@ def train_model(
     resume_path_arg = Path(resume) if resume else None
     device = torch.device(device)
     use_amp = bool(amp and device.type == "cuda")
+    if threads is not None:
+        if int(threads) <= 0:
+            raise ValueError("--threads must be a positive integer")
+        torch.set_num_threads(int(threads))
 
     config = load_dataset_config(data_dir)
 
@@ -312,6 +332,8 @@ def train_model(
     print(f"  Seed: {train_seed}")
     print(f"  Device: {device}")
     print(f"  AMP: {use_amp}")
+    if device.type == "cpu":
+        print(f"  Torch threads: {torch.get_num_threads()}")
     if resume_path:
         print(f"  Resume: {resume_path}")
         print(f"  Out mode: {out_mode}")
@@ -321,9 +343,12 @@ def train_model(
     train_augment = train_config.get('augment') or {}
     if train_augment:
         print(f"  Train augmentation: {train_augment}")
+    cache_images = bool(train_config.get('cache_images', False))
+    if cache_images:
+        print("  Image cache: decoded images are kept in RAM after the first epoch")
     train_dataset = ROIDataset(data_dir, 'train', class_names, return_id=True,
-                               transform=build_train_transform(train_augment))
-    val_dataset = ROIDataset(data_dir, 'val', class_names, return_id=True)
+                               transform=build_train_transform(train_augment), cache_images=cache_images)
+    val_dataset = ROIDataset(data_dir, 'val', class_names, return_id=True, cache_images=cache_images)
     print(f"Train samples: {len(train_dataset)}")
     print(f"Val samples: {len(val_dataset)}")
     print(format_distribution("Train class distribution", train_dataset.get_class_distribution()))
@@ -331,7 +356,7 @@ def train_model(
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
-    model, criterion, optimizer, scaler = build_training(len(class_names), train_config, device, use_amp)
+    model, criterion, optimizer, scaler, frozen = build_training(len(class_names), train_config, device, use_amp)
 
     start_epoch = 0
     best_val_f1 = 0.0
@@ -419,7 +444,7 @@ def train_model(
         stats = fit_epoch(
             model, train_loader, val_loader, criterion, optimizer, device, class_names,
             epoch=epoch, total_epochs=total_epochs, critical_classes=critical_classes,
-            use_amp=use_amp, scaler=scaler,
+            use_amp=use_amp, scaler=scaler, frozen=frozen,
         )
         val_acc = stats['val_accuracy']
         val_f1 = stats['val_macro_f1']
@@ -506,6 +531,9 @@ def main() -> None:
     amp_group.add_argument('--amp', dest='amp', action='store_true', help='Enable mixed precision on CUDA (default).')
     amp_group.add_argument('--no-amp', dest='amp', action='store_false', help='Disable mixed precision.')
     parser.set_defaults(amp=True)
+    parser.add_argument('--threads', type=int, default=None,
+                        help='Torch intra-op threads for CPU training (default: torch picks; on hybrid CPUs the '
+                             'number of performance cores is often faster than the default)')
     add_json_flag(parser)
     args = parser.parse_args()
 
@@ -517,6 +545,7 @@ def main() -> None:
         out_mode=args.out_mode,
         device=args.device,
         amp=args.amp,
+        threads=args.threads,
     ), ProfileMismatchError, PROFILE_MISMATCH_HINT), args.json)
 
 

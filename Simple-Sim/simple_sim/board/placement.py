@@ -7,6 +7,7 @@ used by ``routing: legacy`` too); :func:`place_window` turns the target and thos
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -27,34 +28,57 @@ def pad_ref(pads: list[dict[str, int]]) -> float:
     return float(min(min(p["w"], p["h"]) for p in pads))
 
 
+@dataclass(frozen=True, slots=True)
+class Packing:
+    """How densely :func:`neighbour_layout` populates the board. The defaults are the legacy layout
+    (same values and random draws as before the class existed)."""
+
+    array_probability: float = 0.7          # share of windows with an orderly row/column of identical parts
+    pitch: tuple[float, float] = (1.4, 2.0)  # array cell size relative to a part's pad extent
+    clearance: float = 0.35                  # gap around the inspected part (x 2.2 x smallest pad side)
+    spacing: float = 0.15                    # gap between neighbours (same unit)
+    parts: float = 6.0                       # max neighbours per ROI area (x crowd)
+    capacitor_share: float = 0.55            # neighbour family: capacitor, else resistor
+    tries: int = 12                          # placement attempts per array part (scatter: 8)
+
+
+LEGACY_PACKING = Packing()
+# Densely populated production boards (DeepVision xpa QUINS scans): rows of passives almost touching,
+# mostly MLCCs, 4-10 neighbours in a crop of 3x the part length.
+DENSE_PACKING = Packing(array_probability=0.9, pitch=(1.12, 1.3), clearance=0.18, spacing=0.05, parts=10.0,
+                        capacitor_share=0.75, tries=24)
+
+
 def neighbour_layout(pads: list[dict[str, int]], keepout: tuple[int, int, int, int], shape: tuple[int, int],
-                     rng: np.random.Generator, crowd: float = 1.0) -> list[dict[str, Any]]:
+                     rng: np.random.Generator, crowd: float = 1.0,
+                     packing: Packing = LEGACY_PACKING) -> list[dict[str, Any]]:
     """Small chip parts around the inspected one: real ROIs are densely populated.
 
     Sized from the target's pads (a neighbour is about a chip with pads of that size, so it fits
     every package), at 0 or 90 degrees, possibly cut by the window border, never in the keep-out.
     *crowd*: rendered area relative to the ROI (zoomed-out views show proportionally more parts).
+    *packing*: density of the layout (:class:`Packing`; default: the legacy layout).
     Returns pixel dicts: ``center, length, width, pads, angle, family``.
     """
     h, w = shape
     ref = 2.2 * pad_ref(pads)
     x0, y0, x1, y1 = keepout
-    gap = 0.35 * ref
+    gap = packing.clearance * ref
     taken = [(x0 - gap, y0 - gap, x1 + gap, y1 + gap)]
     parts: list[dict[str, Any]] = []
     # Real layouts are orderly: passives sit in rows/columns of identical parts (decoupling caps,
     # resistor arrays) on a placement grid aligned with the inspected part. Mostly render such an
     # array; otherwise the older loose scatter of mixed parts.
-    array = bool(rng.random() < 0.7)
+    array = bool(rng.random() < packing.array_probability)
     if array:
         a_length = float(rng.uniform(0.75, 1.1)) * ref
         a_width = a_length * float(rng.uniform(0.45, 0.6))
         a_vertical = bool(rng.random() < 0.35)
-        a_family = "capacitor" if rng.random() < 0.55 else "resistor"
-        a_pitch = float(rng.uniform(1.4, 2.0))  # cell size relative to the part's pad extent
-        n_parts = int(rng.integers(2, int(round(6 * crowd)) + 2))
+        a_family = "capacitor" if rng.random() < packing.capacitor_share else "resistor"
+        a_pitch = float(rng.uniform(*packing.pitch))  # cell size relative to the part's pad extent
+        n_parts = int(rng.integers(2, int(round(packing.parts * crowd)) + 2))
     else:
-        n_parts = int(rng.integers(0, int(round(6 * crowd)) + 1))
+        n_parts = int(rng.integers(0, int(round(packing.parts * crowd)) + 1))
     for _ in range(n_parts):
         length = a_length if array else float(rng.uniform(0.6, 1.1)) * ref
         width = a_width if array else length * float(rng.uniform(0.45, 0.6))
@@ -63,15 +87,15 @@ def neighbour_layout(pads: list[dict[str, int]], keepout: tuple[int, int, int, i
         ex, ey = off + pad_l / 2.0, pad_w / 2.0
         if vertical:
             ex, ey = ey, ex
-        for _try in range(12 if array else 8):
+        for _try in range(packing.tries if array else 8):
             cx, cy = float(rng.uniform(-0.3 * ex, w + 0.3 * ex)), float(rng.uniform(-0.3 * ey, h + 0.3 * ey))
             if array:  # snap to the placement grid through the window centre
                 px_, py_ = 2.0 * ex * a_pitch, 2.0 * ey * a_pitch
                 cx = w / 2.0 + round((cx - w / 2.0) / px_) * px_
                 cy = h / 2.0 + round((cy - h / 2.0) / py_) * py_
             box = (cx - ex, cy - ey, cx + ex, cy + ey)
-            if all(box[2] + 0.15 * ref < t[0] or box[0] - 0.15 * ref > t[2] or box[3] + 0.15 * ref < t[1]
-                   or box[1] - 0.15 * ref > t[3] for t in taken):
+            sp = packing.spacing * ref
+            if all(box[2] + sp < t[0] or box[0] - sp > t[2] or box[3] + sp < t[1] or box[1] - sp > t[3] for t in taken):
                 break
         else:
             continue
@@ -79,7 +103,7 @@ def neighbour_layout(pads: list[dict[str, int]], keepout: tuple[int, int, int, i
         parts.append({"center": (cx, cy), "length": length, "width": width,
                       "pads": [p.as_dict() for p in chip_pads((cx, cy), length, width, vertical)],
                       "angle": (90.0 if vertical else 0.0) + float(rng.uniform(-1.5, 1.5)),
-                      "family": a_family if array else ("capacitor" if rng.random() < 0.55 else "resistor")})
+                      "family": a_family if array else ("capacitor" if rng.random() < packing.capacitor_share else "resistor")})
     return parts
 
 

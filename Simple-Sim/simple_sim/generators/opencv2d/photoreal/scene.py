@@ -8,6 +8,7 @@ so a sample is fully determined by its seed.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import cv2
@@ -17,7 +18,8 @@ from simple_sim.board import board_options, family_of, footprint_pads, neighbour
 from simple_sim.board.placement import pad_ref
 
 from ..geometry import body_geometry, draw_solder_bridge, lifted_corner_geometry, param_selector
-from .camera import apply_view, camera_model, camera_settings, fit_crop, sample_camera_pose, view_canvas
+from .camera import (apply_view, camera_model, camera_settings, effective_supersampling, fit_crop, sample_camera_pose,
+                     view_canvas)
 from .context import RenderContext
 from .copper import CopperJob, draw_board_copper, mm_per_px
 from .imageops import blend, clip8, contact_shadow
@@ -65,7 +67,7 @@ def draw_board(ctx: RenderContext, nom: dict[str, float], footprint: str, family
         mask_sheen(ctx, img, base, rng, mask_gloss(config, MASK_GLOSS_PROBABILITY))
     finish = FINISHES["enig" if rng.random() < 0.5 else "hasl"] * float(rng.uniform(0.92, 1.06))
     if neighbours is None:
-        neighbours = neighbour_layout(pads, keepout, (h, w), rng, crowd)
+        neighbours = neighbour_layout(pads, keepout, (h, w), rng, crowd, ctx.look.packing)
     draw_neighbours(ctx, img, base, neighbours, finish, rng)
     draw_rework(ctx, img, keepout, pad_ref(pads), rng, rework_probability(config, REWORK_PROBABILITY))
     return img, base, pads, finish
@@ -141,13 +143,17 @@ def _render_photoreal_base(ctx: RenderContext,
     footprint: str,
     roi_size: tuple[int, int],
     post: dict[str, float] | None = None,
+    light_roll_deg: float = 0.0,
 ) -> np.ndarray:
-    """:func:`render_photoreal_base` with an explicit context."""
+    """:func:`render_photoreal_base` with an explicit context (*light_roll_deg*: see there)."""
     post = post or {}
     camera = camera_config(config)  # render.camera, or the preset of render.look
     cam = camera_settings(camera)
     view_pose = sample_camera_pose(cam, rng, float(post.get("rotation_deg", 0.0)))
     view_pose = fit_crop(view_pose, cam, rng, float(nominal["component_length"]), roi_size)
+    ss = effective_supersampling(ctx.ss, view_pose, cam)  # camera.max_oversampling: cheaper zoomed-out views
+    if ss != ctx.ss:
+        ctx = replace(ctx, ss=ss)
     canvas = view_canvas(roi_size, view_pose)  # larger board area for a zoomed-out / oblique / rolled view
     width, height = canvas
     h, w = height * ctx.ss, width * ctx.ss
@@ -214,7 +220,7 @@ def _render_photoreal_base(ctx: RenderContext,
     view = apply_view(cv2.resize(img, canvas, interpolation=cv2.INTER_AREA), view_pose, roi_size)
     # sensor_px_per_mm: one output pixel covers mm_per_px x zoom of the board
     return camera_model(view, rng, camera, view_pose, mm_per_px=mm_per_px(config) * view_pose["zoom"], extra_blur=float(post.get("blur_sigma", 0.0)),
-                        extra_noise_var=float(post.get("noise_stddev", 0.0)) ** 2)
+                        extra_noise_var=float(post.get("noise_stddev", 0.0)) ** 2, axis_roll_deg=light_roll_deg)
 
 
 def render_board(nominal: dict[str, float], defect_params: dict[str, Any], config: dict[str, Any],
@@ -233,12 +239,20 @@ def render_board(nominal: dict[str, float], defect_params: dict[str, Any], confi
 
 def render_photoreal_base(nominal: dict[str, float], defect_params: dict[str, Any], config: dict[str, Any],
                           tolerances: dict[str, Any] | None, rng: np.random.Generator, footprint: str,
-                          roi_size: tuple[int, int], post: dict[str, float] | None = None) -> np.ndarray:
+                          roi_size: tuple[int, int], post: dict[str, float] | None = None,
+                          light_roll_deg: float | None = None) -> np.ndarray:
     """Render substrate + pads + solder + component for *defect_params* at *roi_size* (BGR uint8).
 
     Rendered at ``render.supersampling`` x the camera resolution (default 2, up to 4) and downsampled.
     *post* (``render.post_filters: camera``): ``rotation_deg`` is applied as camera roll before the
     camera model, ``blur_sigma`` / ``noise_stddev`` go into the camera model (see :func:`camera_model`).
+    *light_roll_deg*: rotation the caller applies to the finished image (``render.post_filters:
+    legacy``), so a look with a fixed light direction (``quins``) and a fixed ``camera.channel_axis``
+    can compensate; default: the roll in *post* (which is applied before shading, so nothing to compensate).
     """
-    ctx = RenderContext.for_render(config, rng)
-    return _render_photoreal_base(ctx, nominal, defect_params, config, tolerances, rng, footprint, roi_size, post)
+    if light_roll_deg is None:
+        roll, after = float((post or {}).get("rotation_deg", 0.0)), 0.0
+    else:
+        roll = after = float(light_roll_deg)
+    ctx = RenderContext.for_render(config, rng, roll)
+    return _render_photoreal_base(ctx, nominal, defect_params, config, tolerances, rng, footprint, roi_size, post, after)

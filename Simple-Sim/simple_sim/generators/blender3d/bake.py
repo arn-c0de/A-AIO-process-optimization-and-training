@@ -7,29 +7,47 @@ itself (solder mask, traces, vias, silkscreen, pad finish) is the same procedura
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 
+from simple_sim.blender.job_schema import (BOARD_SCALE, DEFAULT_COMPONENT_HEIGHT_MM, BakeOptions, BlenderJob,  # noqa: F401 (BOARD_SCALE re-exported)
+                                           PreparedJob)
+from simple_sim.board.footprints import DEFAULT_FOOTPRINT
 from simple_sim.parallel import imap_ordered
-from simple_sim.generators.opencv2d.photoreal import (MASK_GLOSS_PROBABILITY, REWORK_PROBABILITY, camera_config, camera_model,
-                                                     camera_settings, mask_gloss, render_board, rework_probability, sample_camera_pose)
+from simple_sim.generators.opencv2d.photoreal import (DEFAULT_SUPERSAMPLING, MASK_GLOSS_PROBABILITY, REWORK_PROBABILITY,
+                                                     camera_config, camera_model, camera_settings, mask_gloss, render_board,
+                                                     rework_probability, sample_camera_pose)
 
-BOARD_SCALE = 2  # baked board covers at least 2x the ROI, so global rotations never reveal its edge
 # Supersampling above the default 2 is capped so the supersampled bake stays <= this many px per side
 # (a 1024 px ROI at 4x would bake 8192^2 px: ~20 s per image for no visible gain in a 2048 px texture).
 BAKE_MAX_SUPERSAMPLED_PX = 4096
 
+#: Job fields of the bake that become the render config of ``render_board`` in :func:`prepare_job`, with
+#: the value a job without the field gets (the renderer's defaults; ``camera`` is not baked: its pose
+#: is sampled for Blender and the camera model runs on the finished render).
+BAKE_CONFIG_DEFAULTS: dict[str, Any] = {
+    "texture_dir": None, "rework_artifacts": REWORK_PROBABILITY, "mask_gloss": MASK_GLOSS_PROBABILITY,
+    "supersampling": None, "board": None, "solder": None, "look": None,
+}
 
-def profile_job_fields(profile: dict[str, Any]) -> dict[str, Any]:
+
+def profile_job_fields(profile: Mapping[str, Any]) -> BakeOptions:
     """Job fields the board bake needs from a component profile (part type, tombstone threshold)."""
     return {"component_type": str((profile.get("component") or {}).get("type", "")),
             "tolerances": profile.get("tolerances")}
 
 
-def bake_fields(render_cfg: dict[str, Any], roi: dict[str, Any] | None = None, **overrides: Any) -> dict[str, Any]:
+def profile_component_height_mm(profile: Mapping[str, Any]) -> float:
+    """``component.nominal_dims_mm.height`` of a profile (:data:`DEFAULT_COMPONENT_HEIGHT_MM` when unset or 0)."""
+    dims = (profile.get("component") or {}).get("nominal_dims_mm") or {}
+    return float(dims.get("height", DEFAULT_COMPONENT_HEIGHT_MM) or DEFAULT_COMPONENT_HEIGHT_MM)
+
+
+def bake_fields(render_cfg: Mapping[str, Any], roi: Mapping[str, Any] | None = None, **overrides: Any) -> BakeOptions:
     """Job fields of the board bake from a run config's ``render`` section.
 
     ``texture_dir``, ``camera``, ``rework_artifacts``, ``mask_gloss``, ``supersampling``,
@@ -57,7 +75,7 @@ def bake_supersampling(requested: int, board_px: int) -> int:
     return max(2, min(requested, BAKE_MAX_SUPERSAMPLED_PX // max(1, int(board_px))))
 
 
-def prepare_job(job: dict[str, Any], work_dir: Path, index: int) -> dict[str, Any]:
+def prepare_job(job: BlenderJob, work_dir: Path, index: int) -> PreparedJob:
     """Bake the board texture of one job to ``work_dir/board_<index>.png``; return the job with ``board``.
 
     The camera view (``render.camera``: tilt, zoom) is sampled here, so Blender can place its camera
@@ -65,11 +83,9 @@ def prepare_job(job: dict[str, Any], work_dir: Path, index: int) -> dict[str, An
     job seed and thread-safe, so jobs can be baked in parallel or ahead of the Blender run.
     """
     w, h = int(job["roi_width_px"]), int(job["roi_height_px"])
-    config = {"component_type": job.get("component_type", ""), "texture_dir": job.get("texture_dir"),
-              "rework_artifacts": job.get("rework_artifacts", REWORK_PROBABILITY),
-              "mask_gloss": job.get("mask_gloss", MASK_GLOSS_PROBABILITY),
-              "supersampling": job.get("supersampling") or 2, "board": job.get("board"),
-              "solder": job.get("solder"), "look": job.get("look")}
+    config: dict[str, Any] = {"component_type": job.get("component_type", "")}
+    config.update((key, job.get(key, default)) for key, default in BAKE_CONFIG_DEFAULTS.items())
+    config["supersampling"] = config["supersampling"] or DEFAULT_SUPERSAMPLING
     if job.get("mm_per_px"):
         config["mm_per_px"] = float(job["mm_per_px"])
     seed = int(job.get("seed", 0))
@@ -77,7 +93,7 @@ def prepare_job(job: dict[str, Any], work_dir: Path, index: int) -> dict[str, An
     scale = max(float(BOARD_SCALE), 1.5 * pose["zoom"] / max(np.cos(np.radians(pose["tilt"])), 0.5))
     config["supersampling"] = bake_supersampling(config["supersampling"], int(np.ceil(max(w, h) * scale)))
     texture, scene = render_board(job["nominal"], job["defect"], config, job.get("tolerances"),
-                                  np.random.default_rng(seed), str(job.get("footprint", "chip_2pad")),
+                                  np.random.default_rng(seed), str(job.get("footprint", DEFAULT_FOOTPRINT)),
                                   (int(np.ceil(w * scale)), int(np.ceil(h * scale))), crowd=scale * scale)
     work_dir.mkdir(parents=True, exist_ok=True)
     path = (work_dir / f"board_{index:06d}.png").resolve()
@@ -86,16 +102,16 @@ def prepare_job(job: dict[str, Any], work_dir: Path, index: int) -> dict[str, An
     return {**job, "board": {"texture": str(path), "scale": scale, "pose": pose, **scene}}
 
 
-def prepare_jobs(jobs: list[dict[str, Any]], work_dir: Path, *, workers: int | None = None) -> list[dict[str, Any]]:
+def prepare_jobs(jobs: list[BlenderJob], work_dir: Path, *, workers: int | None = None) -> list[PreparedJob]:
     """Bake one board texture per job into *work_dir* (in parallel threads) and add the ``board`` scene."""
     work_dir.mkdir(parents=True, exist_ok=True)
     return list(imap_ordered(lambda item: prepare_job(item[1], work_dir, item[0]), list(enumerate(jobs)), workers=workers))
 
 
-def apply_camera(jobs: list[dict[str, Any]], output_root: Path, *, workers: int | None = None) -> None:
+def apply_camera(jobs: list[PreparedJob], output_root: Path, *, workers: int | None = None) -> None:
     """Run every rendered image through the same camera model as the 2D backend (seeded per job, in parallel)."""
 
-    def one(job: dict[str, Any]) -> None:
+    def one(job: PreparedJob) -> None:
         path = output_root / str(job["image_path"])
         img = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if img is None:

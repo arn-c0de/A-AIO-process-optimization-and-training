@@ -19,12 +19,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from simple_sim.board.geometry import disc, track
-from simple_sim.board.model import GND, TOP, Board, Pad, Part, Port, Track, Vec, Via, Zone, point_in_polygon
+from simple_sim.board.geometry import BBox, Vec, add, clip, disc, perp, polyline45, track, unit
+from simple_sim.board.model import GND, TOP, Board, Pad, Part, Port, Track, Via, Zone, point_in_polygon
 from simple_sim.board.netlist import connected_pads
 from simple_sim.board.occupancy import CopperMap
-from simple_sim.board.routing.base import (NetWidths, RouteResult, add, axial_room, border_point, perp, polyline45,
-                                           random_border_point, runs_along_border, unit)
+from simple_sim.board.routing.base import (NetWidths, RouteResult, axial_room, border_point, random_border_point,
+                                           runs_along_border)
 
 # Families with many small pads at a fine pitch: tracks neck down at the pad, ground pins fan out.
 FINE_PITCH_FAMILIES = ("soic", "qfn", "sot6", "array_r", "array_c")
@@ -34,12 +34,12 @@ def fine_pitch(part: Part) -> bool:
     return part.family in FINE_PITCH_FAMILIES
 
 
-def _inside(bbox: tuple[float, float, float, float], p: Vec, margin: float = 0.0) -> bool:
+def _inside(bbox: BBox, p: Vec, margin: float = 0.0) -> bool:
     x0, y0, x1, y1 = bbox
     return x0 + margin <= p[0] <= x1 - margin and y0 + margin <= p[1] <= y1 - margin
 
 
-def _clip(bbox: tuple[float, float, float, float], inside: Vec, outside: Vec) -> Vec:
+def _clip(bbox: BBox, inside: Vec, outside: Vec) -> Vec:
     """Point where the segment *inside* -> *outside* crosses the window border."""
     x0, y0, x1, y1 = bbox
     t = 1.0
@@ -51,18 +51,18 @@ def _clip(bbox: tuple[float, float, float, float], inside: Vec, outside: Vec) ->
     return (inside[0] + (outside[0] - inside[0]) * t, inside[1] + (outside[1] - inside[1]) * t)
 
 
-def _edge_dir(bbox: tuple[float, float, float, float], p: Vec) -> Vec:
+def _edge_dir(bbox: BBox, p: Vec) -> Vec:
     """Unit direction along the window edge that *p* lies on."""
     x0, _, x1, _ = bbox
     return (0.0, 1.0) if p[0] in (x0, x1) else (1.0, 0.0)
 
 
-def _on_same_edge(bbox: tuple[float, float, float, float], on_edge: Vec, p: Vec) -> Vec:
+def _on_same_edge(bbox: BBox, on_edge: Vec, p: Vec) -> Vec:
     """*p* moved back onto the window edge that *on_edge* lies on (clipped to the window)."""
     x0, y0, x1, y1 = bbox
     if on_edge[0] in (x0, x1):
-        return (on_edge[0], float(np.clip(p[1], y0, y1)))
-    return (float(np.clip(p[0], x0, x1)), on_edge[1])
+        return (on_edge[0], clip(p[1], y0, y1))
+    return (clip(p[0], x0, x1), on_edge[1])
 
 
 def _row_offset(part: Part, pad: Pad) -> float:
@@ -249,18 +249,18 @@ class EscapeRouter:
                 # the 45-degree jogs of a row run parallel instead of crossing.
                 offset = _row_offset(part, pad)
                 fan = self._draws(part, rng)[1]
-                outward = [float(np.clip(np.sign(offset) * abs(rng.uniform(0.0, span / 6.0)), -room, room))
+                outward = [clip(np.sign(offset) * abs(rng.uniform(0.0, span / 6.0)), -room, room)
                            for _ in range(self.attempts)]
                 if 0.70710678 * pitch - full >= rules.clearance:
                     # Parallel 45-degree jogs of neighbouring pins keep the clearance: fan out, and
                     # only ever outward (a jog towards the row centre crosses the next pins).
-                    lateral = [float(np.clip(offset * f, -room, room)) for f in (fan, 0.0, fan / 2.0)] + outward
+                    lateral = [clip(offset * f, -room, room) for f in (fan, 0.0, fan / 2.0)] + outward
                 else:
                     # Too tight for jogs next to each other: straight out; jog only where the
                     # copper map finds room (an NC neighbour pin, the row end).
                     lateral = [0.0] + outward + [-o for o in outward]
             else:
-                lateral = [float(np.clip(rng.uniform(-span / 6.0, span / 6.0), -room, room)) for _ in range(self.attempts)]
+                lateral = [clip(rng.uniform(-span / 6.0, span / 6.0), -room, room) for _ in range(self.attempts)]
                 if np.isfinite(pitch):
                     # Several pads on this side (SOT-23 pins 1/2): jog away from the other pads only.
                     sign = np.sign(_row_offset(part, pad)) or 1.0

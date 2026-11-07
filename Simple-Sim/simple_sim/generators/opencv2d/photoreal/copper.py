@@ -16,6 +16,7 @@ import numpy as np
 
 from simple_sim.board import (DEFAULT_MM_PER_PX, LEGACY, NONE, STREAM_PLACE, BoardOptions, PadSpec, build_window_board,
                               neighbour_layout)
+from simple_sim.board.geometry import octagon, polyline45
 from simple_sim.board.placement import pad_ref
 from simple_sim.board.raster import CopperLayers, rasterize
 
@@ -92,19 +93,16 @@ def draw_legacy_copper(ctx: RenderContext, img: np.ndarray, base: np.ndarray, pa
             pw_, ph_ = float(rng.uniform(0.4, 1.2)) * w, float(rng.uniform(0.4, 1.2)) * h
             ax, ay = float(rng.uniform(-0.2 * w, w - 0.5 * pw_)), float(rng.uniform(-0.2 * h, h - 0.5 * ph_))
             c = float(rng.uniform(0.05, 0.25)) * min(pw_, ph_)
-            poly = [(ax + c, ay), (ax + pw_ - c, ay), (ax + pw_, ay + c), (ax + pw_, ay + ph_ - c),
-                    (ax + pw_ - c, ay + ph_), (ax + c, ay + ph_), (ax, ay + ph_ - c), (ax, ay + c)]
-            cv2.fillPoly(pour, [np.round(poly).astype(np.int32)], 255)
+            cv2.fillPoly(pour, [np.round(octagon(ax, ay, pw_, ph_, c)).astype(np.int32)], 255)
         gap = int(round(float(rng.uniform(3.0, 6.0)) * ctx.ss))
         cv2.rectangle(pour, (x0 - gap, y0 - gap), (x1 + gap, y1 + gap), 0, -1)
         mask = np.maximum(mask, pour)
 
     def _polyline(p0: tuple[int, int], p1: tuple[int, int], width: int) -> None:
-        # Route with one 45-degree jog like real autorouted traces.
-        dx, dy = p1[0] - p0[0], p1[1] - p0[1]
-        jog = min(abs(dx), abs(dy))
-        mid = (p0[0] + int(np.sign(dx)) * jog, p0[1] + int(np.sign(dy)) * jog)
-        cv2.polylines(mask, [np.array([p0, mid, p1], dtype=np.int32)], False, 255, width, lineType=cv2.LINE_AA)
+        # Route with one 45-degree jog like real autorouted traces (the board model's polyline45; the
+        # jog of integer pixels is an integral float, cast back to int32 here; no dedupe: see there).
+        cv2.polylines(mask, [np.array(polyline45(p0, p1, dedupe=False), dtype=np.int32)], False, 255, width,
+                      lineType=cv2.LINE_AA)
 
     # Free traces crossing the ROI.
     for _ in range(int(rng.integers(1, 4))):
@@ -212,7 +210,7 @@ def board_model_copper(ctx: RenderContext, img: np.ndarray, base: np.ndarray, jo
     and keep clear of them; one draw from *rng* seeds the model's streams."""
     board_seed = int(rng.integers(1 << 62))
     neighbours = neighbour_layout(job.pads, job.keepout, job.shape, np.random.default_rng([board_seed, STREAM_PLACE]),
-                                  job.crowd)
+                                  job.crowd, ctx.look.packing)
     px_to_mm = job.mm_per_px / ctx.ss
     built = build_window_board(
         footprint=job.footprint, family=job.family, target_pads=job.specs, target_body_px=job.body_px,

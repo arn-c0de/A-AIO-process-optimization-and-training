@@ -7,6 +7,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from simple_sim.board.footprints import DEFAULT_FOOTPRINT
+
 from .geometry import body_geometry, draw_solder_bridge, lifted_corner_geometry, pad_positions, param_selector
 
 
@@ -15,13 +17,13 @@ def draw_substrate(img: np.ndarray, config: dict[str, Any]) -> None:
     img[:] = config["substrate_color"]
 
 
-def draw_pads(img: np.ndarray, nominal: dict[str, float], color: tuple[int, int, int], footprint: str = "chip_2pad") -> None:
+def draw_pads(img: np.ndarray, nominal: dict[str, float], color: tuple[int, int, int], footprint: str = DEFAULT_FOOTPRINT) -> None:
     pads = pad_positions(footprint, nominal, img.shape[:2])
     for pad in pads:
         cv2.rectangle(img, (pad["x"], pad["y"]), (pad["x"] + pad["w"], pad["y"] + pad["h"]), color, -1)
 
 
-def draw_solder(img: np.ndarray, nominal: dict[str, float], footprint: str = "chip_2pad") -> None:
+def draw_solder(img: np.ndarray, nominal: dict[str, float], footprint: str = DEFAULT_FOOTPRINT) -> None:
     solder_color = (200, 200, 200)
     pads = pad_positions(footprint, nominal, img.shape[:2])
     h, w = img.shape[:2]
@@ -85,7 +87,7 @@ def draw_component(
     defect_params: dict[str, Any],
     color: tuple[int, int, int],
     tolerances: dict[str, Any] | None = None,
-    footprint: str = "chip_2pad",
+    footprint: str = DEFAULT_FOOTPRINT,
 ) -> None:
     defect_type = defect_params["type"]
     if defect_type == "MISSING":
