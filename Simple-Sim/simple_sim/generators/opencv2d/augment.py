@@ -7,15 +7,20 @@ from typing import Any
 import numpy as np
 
 from simple_sim.filter_settings import NEUTRAL_AUGMENT, normalize_image_filters
-from .realism import apply_realism_groups
+from .realism import RealismPresets, apply_realism_groups
 
 
 def apply_image_filter_overrides(
     augment: dict[str, float],
     image_filters: dict[str, Any] | None,
     rng: np.random.Generator | None = None,
+    *,
+    realism_presets: RealismPresets | None = None,
 ) -> dict[str, float]:
     """Apply toggle + strength overrides to sampled augment params.
+
+    *realism_presets*: group probabilities of the realism mode (default: the preset file, see
+    :mod:`simple_sim.generators.opencv2d.realism`).
 
     Pass the per-sample ``rng`` to keep randomized filters reproducible; without it a
     fresh unseeded generator is used (e.g. for interactive previews).
@@ -32,7 +37,7 @@ def apply_image_filter_overrides(
     filt = dict(filt_base)
     filt["__source_keys"] = src_keys
     if str(filt.get("filter_mode", "custom")).strip().lower() == "realism" and bool(filt.get("realism_enabled", False)):
-        return apply_realism_groups(aug, filt, rng)
+        return apply_realism_groups(aug, filt, rng, presets=realism_presets)
 
     def _rand_float(base_key: str, default_value: float) -> float:
         base = float(filt.get(base_key, default_value))
@@ -178,7 +183,7 @@ def sample_augment_params(
         "perspective_angle_y": float(rng.uniform(-10.0, 10.0)),
         "motion_blur_angle": float(rng.uniform(0.0, 360.0)),
         # Mild colour jitter: +-15 deg hue turned the olive solder mask into lime or cyan, which no
-        # real board/camera produces (real crops: hue ~135-150 deg, see photoreal._MASK_PALETTE).
+        # real board/camera produces (real crops: hue ~135-150 deg, see photoreal.palette.MASK_PALETTE).
         "saturation_factor": float(rng.uniform(0.85, 1.1)),
         "hue_shift_deg": float(rng.uniform(-5.0, 5.0)),
         "color_temperature_kelvin": int(rng.choice([3000, 4000, 5500, 6500])),

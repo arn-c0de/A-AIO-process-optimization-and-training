@@ -1,7 +1,7 @@
 """Footprint library: pad geometry per package with pin numbers, roles and fan-out directions.
 
 Pad geometry is computed in **pixels** from the profile's ``nominal`` values, with exactly the
-integer arithmetic the renderers always used (``draw._compute_pad_positions`` is a thin wrapper
+integer arithmetic the renderers always used (``opencv2d.geometry.pad_positions`` is a thin wrapper
 around :func:`footprint_pads`), so defect geometry, labels and the Blender scene are unchanged.
 :func:`part_from_pads` converts a pad list to a :class:`~simple_sim.board.model.Part` in mm.
 """

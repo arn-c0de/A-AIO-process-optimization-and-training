@@ -9,6 +9,7 @@ from typing import Any
 
 from simple_sim.classes import VALID_CLASSES  # noqa: F401  (re-exported for existing importers)
 from simple_sim.config_schema import parse_config_typed
+from simple_sim.generators.backends import Backend, backend_of, parse_backend, supporting
 from simple_sim.io_utils import load_yaml
 
 log = logging.getLogger(__name__)
@@ -269,8 +270,9 @@ def _validate_domains(domains: dict[str, Any], render: dict[str, Any] | None = N
             if domain_cfg[field][0] > domain_cfg[field][1]:
                 raise ValueError(f"domains.{domain_name}.{field} min > max")
         if 'camera' in domain_cfg:
-            if render is not None and render.get('backend', 'opencv_2d') != 'opencv_2d':
-                raise ValueError(f"domains.{domain_name}.camera is only supported by render.backend: opencv_2d")
+            if render is not None and not backend_of(render).domain_camera:
+                raise ValueError(f"domains.{domain_name}.camera is only supported by render.backend: "
+                                 f"{' | '.join(supporting('domain_camera'))}")
             try:
                 _validate_camera(domain_cfg['camera'])
             except ValueError as exc:
@@ -310,20 +312,20 @@ def placement_sampling(cfg: dict[str, Any]) -> str:
 def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> None:
     if 'backend' not in render:
         raise ValueError("Missing render.backend")
-    backend = render['backend']
+    backend = parse_backend(render['backend'])
 
-    if mode == 'profile_classifier' and backend != 'opencv_2d':
-        raise ValueError("mode=profile_classifier currently supports only render.backend='opencv_2d'")
+    if mode == 'profile_classifier' and not backend_of(render).profile_classifier:
+        raise ValueError("mode=profile_classifier currently supports only render.backend="
+                         + " | ".join(repr(b) for b in supporting('profile_classifier')))
 
-    if backend == 'opencv_2d':
+    if backend is Backend.OPENCV_2D:
         _validate_render_2d(render, schema_version)
-    elif backend == 'blender_3d':
-        _validate_render_3d(render)
     else:
-        raise ValueError(f"Unsupported render backend: {backend}")
+        _validate_render_3d(render)
     _validate_camera(render.get('camera'))
     _validate_supersampling(render.get('supersampling'))
     _validate_solder(render.get('solder'))
+    _validate_look(render.get('look'))
     _validate_post_filters(render)
     _validate_board(render.get('board'))
     _validate_board_look(render)
@@ -371,10 +373,20 @@ def _validate_solder(style: Any) -> None:
     """``render.solder`` (both backends; 3D: the baked neighbour joints): solder joint model, default legacy."""
     if style is None:
         return
-    from simple_sim.generators.opencv2d.solder import SOLDER_STYLES
+    from simple_sim.generators.opencv2d.photoreal.meniscus import SOLDER_STYLES
 
     if style not in SOLDER_STYLES:
         raise ValueError(f"render.solder must be one of {list(SOLDER_STYLES)}")
+
+
+def _validate_look(look: Any) -> None:
+    """``render.look`` (both backends; 3D: the baked board and the camera): target look, default legacy."""
+    if look is None:
+        return
+    from simple_sim.generators.opencv2d.photoreal import LOOKS
+
+    if look not in LOOKS:
+        raise ValueError(f"render.look must be one of {list(LOOKS)}")
 
 
 def _validate_post_filters(render: dict[str, Any]) -> None:
@@ -386,7 +398,7 @@ def _validate_post_filters(render: dict[str, Any]) -> None:
 
     if mode not in POST_FILTER_MODES:
         raise ValueError(f"render.post_filters must be one of {list(POST_FILTER_MODES)}")
-    if mode == 'camera' and (render.get('backend', 'opencv_2d') != 'opencv_2d' or render.get('style', 'photoreal') != 'photoreal'):
+    if mode == 'camera' and (not backend_of(render).post_filters_camera or render.get('style', 'photoreal') != 'photoreal'):
         raise ValueError("render.post_filters: camera requires render.backend: opencv_2d with render.style: photoreal")
 
 
@@ -445,7 +457,8 @@ def _validate_render_2d(render: dict[str, Any], schema_version: int) -> None:
         raise ValueError(f"render.style must be one of {sorted(RENDER_STYLES)}")
 
     if render.get('style', 'photoreal') == 'flat':
-        ignored = [k for k in ('board', 'supersampling', 'camera', 'mask_gloss', 'rework_artifacts', 'texture_dir', 'solder')
+        ignored = [k for k in ('board', 'supersampling', 'camera', 'mask_gloss', 'rework_artifacts', 'texture_dir', 'solder',
+                                'look')
                    if render.get(k) is not None]
         if ignored:
             log.warning("render.style=flat ignores render.%s (photoreal-only settings)", ", render.".join(ignored))

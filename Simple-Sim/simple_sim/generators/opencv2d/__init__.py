@@ -24,6 +24,7 @@ from .filters import (
 )
 from .geometry import sample_nominal_geometry
 from .render import render_roi
+from .spec import RenderSpec, render_record, render_sample
 from simple_sim.filter_settings import normalize_image_filters
 
 __all__ = [
@@ -53,5 +54,8 @@ __all__ = [
     "apply_color_temperature",
     "apply_post_filters",
     "render_roi",
+    "RenderSpec",
+    "render_sample",
+    "render_record",
     "normalize_image_filters",
 ]

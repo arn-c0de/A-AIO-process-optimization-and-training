@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 from simple_sim.generators.opencv2d import photoreal
+from simple_sim.generators.opencv2d.photoreal import copper, parts
+from simple_sim.generators.opencv2d.photoreal.context import RenderContext
 
 
 def _pads(size_px: int) -> list[dict[str, int]]:
@@ -27,9 +29,9 @@ def test_rule_scale_follows_the_drawn_pad_not_mm_per_px():
 
 
 def test_body_extent_follows_the_body_angle():
-    assert photoreal._body_half_extent(30.0, 10.0, 0.0) == pytest.approx((30.0, 10.0))
-    assert photoreal._body_half_extent(30.0, 10.0, 90.0) == pytest.approx((10.0, 30.0))
-    ex, ey = photoreal._body_half_extent(30.0, 10.0, 45.0)
+    assert parts.body_half_extent(30.0, 10.0, 0.0) == pytest.approx((30.0, 10.0))
+    assert parts.body_half_extent(30.0, 10.0, 90.0) == pytest.approx((10.0, 30.0))
+    ex, ey = parts.body_half_extent(30.0, 10.0, 45.0)
     assert ex == pytest.approx(40.0 / np.sqrt(2.0)) and ey == pytest.approx(ex)
 
 
@@ -38,16 +40,16 @@ def test_draw_via_window_matches_full_canvas():
     rng = np.random.default_rng(3)
     base = np.array([40.0, 90.0, 30.0], dtype=np.float32)
     for ss in (1, 2, 4):
-        with photoreal._supersampling({"supersampling": ss}):
-            for _ in range(60):
-                h, w = (int(v) for v in rng.integers(20, 160, 2))
-                img = rng.uniform(0, 255, (h, w, 3)).astype(np.float32)
-                center = (int(rng.integers(-8, w + 8)), int(rng.integers(-8, h + 8)))
-                r, tented = int(rng.integers(1, 20)), bool(rng.integers(2))
-                full, local = img.copy(), img.copy()
-                photoreal._draw_via_window(full, base, center, r, tented)  # the drawing on the full canvas
-                photoreal._draw_via(local, base, center, r, tented)
-                assert np.array_equal(full, local)
+        ctx = RenderContext(ss=ss)
+        for _ in range(60):
+            h, w = (int(v) for v in rng.integers(20, 160, 2))
+            img = rng.uniform(0, 255, (h, w, 3)).astype(np.float32)
+            center = (int(rng.integers(-8, w + 8)), int(rng.integers(-8, h + 8)))
+            r, tented = int(rng.integers(1, 20)), bool(rng.integers(2))
+            full, local = img.copy(), img.copy()
+            copper.draw_via_window(ctx, full, base, center, r, tented)  # the drawing on the full canvas
+            copper.draw_via(ctx, local, base, center, r, tented)
+            assert np.array_equal(full, local)
 
 
 @pytest.mark.parametrize("footprint,mm_per_px", [("sot23", 0.01), ("qfn_32", 0.03), ("chip_2pad", 0.01)])

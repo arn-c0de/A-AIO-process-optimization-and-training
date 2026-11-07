@@ -298,6 +298,44 @@ Deviations from the plan:
 - D19: `tools/profile_editor/state_store.py` parses YAML text from the editor buffer
   (`yaml.safe_load(text)`), not a file; left as is.
 
+### Phase 6 status (2026-11-07, renderer part)
+
+Done, every 2D image bit-identical (both golden tests; `RENDERER_VERSION` unchanged):
+- Guard rail first: `tests/test_render_golden_variants.py` (589 cases: 16 2D configs x 8 classes,
+  flat, supersampling 1/3/4, meniscus, post_filters camera, routing none/escape/escape+DRC, phone,
+  gloss/rework/marking, texture_dir, all extended filters, realism filters, bake, camera model).
+- R5: `photoreal.py` split into the package `opencv2d/photoreal/` by whole-function moves (generated
+  from the AST, then reviewed); `opencv2d/solder.py` -> `photoreal/meniscus.py`. Legacy copper is
+  one entry of `copper.COPPER_SOURCES` next to `none` and the board-model routers.
+- R2: `RenderContext(ss, solder_look)` passed explicitly; thread-local `_TLS`, `_ss()`,
+  `photoreal.SS` removed. X5 is explicit (`solder_defect_layout(..., ss=DEFAULT_SUPERSAMPLING)` in
+  the flat path).
+- R6: `pad_positions`, `param_selector`, `body_geometry`, `lifted_corner_geometry`,
+  `draw_solder_bridge` public in `opencv2d/geometry.py`.
+- R1: `opencv2d/spec.py` (`RenderSpec.from_run_config`, `render_sample`, `render_record`), used by
+  `generate`, `generate-profile-dataset` and `preview.render`.
+- D23, D24 (noise, height-map normals shared by legacy and meniscus joints), D26 partly (all
+  `np.mgrid` in the photoreal package use `imageops.grid` / `local_coords` windows).
+- Speed: window-local drawing of bodies, leads, lead feet, tombstones and bulges (random fields
+  still drawn at full size via `imageops.WindowedNoise`), growing shared grid; 60 -> 35 ms per
+  image. Dataset rendering in worker processes (`parallel.imap_ordered(processes=True)`,
+  `render_executor`), 83 -> 264 images/s on 16 cores.
+
+Second round (2026-11-07, "go"): R3 (`generators/backends.py`, capabilities instead of string
+compares in config, generation, preview), R4 (`generate_dataset` = `resolve_run` + `plan_records` +
+render/write; config mapping, `profiles_dir`, `image_filters` parameters), R7 (package-relative
+Blender script, absolute paths, no `sim_root`; the `TypedDict` job contract is still open), R8
+(`realism_presets` parameter, `load_realism_presets`, mtime-keyed cache, no silent `except`), R9
+(`WindowBoard`), D25 (`clip8` in filters), D28 (chip families from `board.footprints`), RenderSpec
+in the GUI filter popup, profile-preview tab and sample gallery. New: `--extend` compares the
+resolved look options (`generation/render_options.py`), closing the open item of the board,
+solder, training-options and look work.
+
+Still open: D27 (legacy copper vs board-model jog/pour helpers), D29-D35 (mm/px helper, render
+defaults in one place, colour-jitter helper, Blender constants re-typed in `render_batch.py` / X12),
+the Blender job `TypedDict`s, `profile_dataset.py` continuing the sampling rng (documented, kept for
+pixel identity), the `typing` leftovers outside the renderer.
+
 ## 5. Guard rails
 
 - Legacy pixel identity: `tests/test_render_golden.py` after every renderer commit; add a

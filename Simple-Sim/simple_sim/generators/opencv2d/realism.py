@@ -5,19 +5,29 @@ Design goals:
 - Sparse group mixing (K in {0,1,2}).
 - Correlated, physically plausible group effects.
 - Optional compatibility constraints.
+
+Group probabilities come from a preset (``realism_profile_id`` of the image filters). Presets are
+the built-in :data:`BUILTIN_PRESETS` merged with a YAML file (``configs/realism_profiles.yaml``);
+:func:`load_realism_presets` reads one, and callers may pass their own mapping as ``presets`` to
+:func:`apply_realism_groups` (library use without a checkout). Without it the default file is used
+(``$SIMPLE_SIM_REALISM_PRESETS_PATH`` overrides its path), read once per path and modification time.
 """
 
 from __future__ import annotations
 
+import logging
 import os
-from typing import Any
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from simple_sim.filter_settings import NEUTRAL_AUGMENT
 from simple_sim.io_utils import load_yaml
+
+log = logging.getLogger(__name__)
 
 
 _HEAVY_GROUPS = {"G2", "G5", "G7"}
@@ -39,7 +49,7 @@ _G0_RESET_KEYS: Sequence[str] = (
     "shadow_strength",
 )
 
-_PROFILE_PRESETS: dict[str, dict[str, float]] = {
+BUILTIN_PRESETS: dict[str, dict[str, float]] = {
     # Baseline from issue #19
     "profile_industrial_cam": {
         "k0": 0.60,
@@ -69,8 +79,8 @@ _PROFILE_PRESETS: dict[str, dict[str, float]] = {
         "G8": 0.12,
     },
 }
-_PRESET_CACHE: dict[str, dict[str, float]] | None = None
-_PRESET_CACHE_PATH: str | None = None
+DEFAULT_PRESET = "profile_industrial_cam"
+RealismPresets = Mapping[str, Mapping[str, float]]
 
 
 def _tri_sample(rng: np.random.Generator, min_val: float, nom_val: float, max_val: float) -> float:
@@ -120,12 +130,14 @@ def _choose_groups(rng: np.random.Generator, probs: dict[str, float], k: int) ->
     return selected[:k]
 
 
-def _default_preset_path() -> Path:
+def default_presets_path() -> Path:
+    """``$SIMPLE_SIM_REALISM_PRESETS_PATH`` or the checkout's ``configs/realism_profiles.yaml``."""
+    env = str(os.environ.get("SIMPLE_SIM_REALISM_PRESETS_PATH", "")).strip()
     # .../Simple-Sim/simple_sim/generators/opencv2d/realism.py -> Simple-Sim/configs/realism_profiles.yaml
-    return Path(__file__).resolve().parents[3] / "configs" / "realism_profiles.yaml"
+    return Path(env) if env else Path(__file__).resolve().parents[3] / "configs" / "realism_profiles.yaml"
 
 
-def _normalize_yaml_preset(raw: dict[str, Any], fallback: dict[str, float]) -> dict[str, float]:
+def _normalize_yaml_preset(raw: dict[str, Any], fallback: Mapping[str, float]) -> dict[str, float]:
     out = dict(fallback)
     try:
         out["k0"] = float(raw.get("k0", out["k0"]))
@@ -144,49 +156,53 @@ def _normalize_yaml_preset(raw: dict[str, Any], fallback: dict[str, float]) -> d
                 out[g] = float(raw[key])
             elif g in raw:
                 out[g] = float(raw[g])
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        log.warning(f"Ignoring invalid realism preset values ({exc})")
         return dict(fallback)
     return out
 
 
-def _load_profile_presets() -> dict[str, dict[str, float]]:
-    global _PRESET_CACHE, _PRESET_CACHE_PATH
-
-    cfg_path = str(os.environ.get("SIMPLE_SIM_REALISM_PRESETS_PATH", "")).strip()
-    if not cfg_path:
-        cfg_path = str(_default_preset_path())
-
-    if _PRESET_CACHE is not None and _PRESET_CACHE_PATH == cfg_path:
-        return _PRESET_CACHE
-
-    presets = dict(_PROFILE_PRESETS)
-    p = Path(cfg_path)
-    if p.exists():
-        try:
-            obj = load_yaml(p) or {}
-            profiles = obj.get("profiles", obj) if isinstance(obj, dict) else {}
-            if isinstance(profiles, dict):
-                for pid, raw in profiles.items():
-                    if not isinstance(pid, str) or not isinstance(raw, dict):
-                        continue
-                    base = presets.get(
-                        pid,
-                        presets.get("profile_industrial_cam", _PROFILE_PRESETS["profile_industrial_cam"]),
-                    )
-                    presets[pid] = _normalize_yaml_preset(raw, base)
-        except Exception:
-            pass
-
-    _PRESET_CACHE = presets
-    _PRESET_CACHE_PATH = cfg_path
+def load_realism_presets(path: Path | str | None) -> dict[str, dict[str, float]]:
+    """:data:`BUILTIN_PRESETS` merged with the ``profiles`` of the YAML file *path* (``None`` or a
+    missing file: the built-ins). A preset missing in the file inherits from the built-in of the same
+    id, else from :data:`DEFAULT_PRESET`. An unreadable file is logged and ignored."""
+    presets = {k: dict(v) for k, v in BUILTIN_PRESETS.items()}
+    if path is None or not Path(path).exists():
+        return presets
+    try:
+        obj = load_yaml(Path(path)) or {}
+    except Exception as exc:  # noqa: BLE001 - any YAML/IO error: fall back to the built-ins
+        log.warning(f"Ignoring realism presets {path}: {exc}")
+        return presets
+    profiles = obj.get("profiles", obj) if isinstance(obj, dict) else {}
+    if isinstance(profiles, dict):
+        for pid, raw in profiles.items():
+            if isinstance(pid, str) and isinstance(raw, dict):
+                presets[pid] = _normalize_yaml_preset(raw, presets.get(pid, presets[DEFAULT_PRESET]))
     return presets
 
 
-def _resolve_policy(filt: dict[str, Any]) -> dict[str, float]:
+@lru_cache(maxsize=4)
+def _cached_presets(path: str, mtime_ns: int) -> dict[str, dict[str, float]]:
+    del mtime_ns  # cache key only: an edited file is read again
+    return load_realism_presets(path)
+
+
+def default_presets() -> dict[str, dict[str, float]]:
+    """Presets of :func:`default_presets_path` (cached per path and modification time; do not mutate)."""
+    path = default_presets_path()
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        mtime = -1
+    return _cached_presets(str(path), mtime)
+
+
+def _resolve_policy(filt: dict[str, Any], presets: RealismPresets | None = None) -> dict[str, float]:
     src_keys = set(filt.get("__source_keys", set()) or set())
-    pid = str(filt.get("realism_profile_id", "profile_industrial_cam") or "profile_industrial_cam")
-    presets = _load_profile_presets()
-    preset = presets.get(pid, presets.get("profile_industrial_cam", _PROFILE_PRESETS["profile_industrial_cam"]))
+    pid = str(filt.get("realism_profile_id", DEFAULT_PRESET) or DEFAULT_PRESET)
+    presets = default_presets() if presets is None else presets
+    preset = presets.get(pid, presets.get(DEFAULT_PRESET, BUILTIN_PRESETS[DEFAULT_PRESET]))
     out = dict(preset)
     if "realism_k_prob_0" in src_keys:
         out["k0"] = float(filt.get("realism_k_prob_0", out["k0"]))
@@ -223,13 +239,15 @@ def apply_realism_groups(
     augment: dict[str, float],
     filt: dict[str, Any],
     rng: np.random.Generator | None = None,
+    *,
+    presets: RealismPresets | None = None,
 ) -> dict[str, float]:
-    """Apply correlated realism groups on top of sampled augment values."""
+    """Apply correlated realism groups on top of sampled augment values (*presets*: see the module doc)."""
     aug = dict(augment or {})
     if rng is None:
         rng = np.random.default_rng()
     constraints_enabled = bool(filt.get("realism_constraints_enabled", True))
-    policy = _resolve_policy(filt)
+    policy = _resolve_policy(filt, presets)
 
     # G0: always-on mild day-to-day drift.
     aug["blur_sigma"] = _tri_sample(rng, 0.10, 0.50, 1.20)

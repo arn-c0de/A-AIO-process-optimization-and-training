@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 
+from simple_sim.classes import Backend
 from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
@@ -30,8 +31,8 @@ from simple_sim.profile_hash import load_profile
 
 log = logging.getLogger(__name__)
 
-BACKEND_2D = "opencv_2d"
-BACKEND_3D = "blender_3d"
+BACKEND_2D = Backend.OPENCV_2D.value
+BACKEND_3D = Backend.BLENDER_3D.value
 BACKEND_CHOICES = [BACKEND_2D, BACKEND_3D, "both", "auto"]
 DEFAULT_STATES = list(STANDARD_CLASSES)
 
@@ -369,7 +370,7 @@ def render_2d_previews(
 ) -> list[PreviewRec]:
     """Render one OpenCV 2D preview per defect state; return preview records."""
     from simple_sim.dataset_store import write_image
-    from simple_sim.generators.opencv2d import render_roi
+    from simple_sim.generators.opencv2d import RenderSpec, render_sample
 
     w, h, mpp = resolve_2d_roi(cfg, roi_override)
     roi_cfg = {"width_px": w, "height_px": h, "mm_per_px": mpp}
@@ -377,6 +378,7 @@ def render_2d_previews(
     footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
     geometry_ranges = profile.get("geometry_ranges") or {}
     tolerances = profile.get("tolerances")
+    spec = RenderSpec(roi_size=(w, h), render=render_cfg, footprint=footprint, tolerances=tolerances)
     rot_range = rotation_jitter_range(cfg)
 
     recs: list[PreviewRec] = []
@@ -386,16 +388,7 @@ def render_2d_previews(
         augment = apply_filter_overrides_to_augment(augment, image_filters, rng)
         nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
         defect = sample_defect_params(defect_type, rng, tolerances=tolerances)
-        img = render_roi(
-            nominal=nominal,
-            defect_params=defect,
-            augment=augment,
-            roi_size=(w, h),
-            config=render_cfg,
-            tolerances=tolerances,
-            rng=rng,
-            footprint=footprint,
-        )
+        img = render_sample(spec, nominal, defect, augment, rng)
         rel_path = preview_rel_path(profile_id, BACKEND_2D, defect_type)
         write_image((Path(out_root) / rel_path).resolve(), img)
         recs.append((profile_id, BACKEND_2D, defect_type, rel_path))
@@ -491,7 +484,7 @@ def render_profile_backend(
             enable_cardinal_rotation_90=enable_cardinal_rotation_90,
             image_filters=image_filters,
         )
-        run_blender_jobs(jobs, sim_root=sim_root, output_root=out_root, jobs_path=jobs_path, settings=_settings_dict(settings))
+        run_blender_jobs(jobs, output_root=out_root, jobs_path=jobs_path, settings=_settings_dict(settings))
         return recs
     return render_2d_previews(
         profile_id=pid,

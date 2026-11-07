@@ -134,6 +134,14 @@ import tab classes from their own modules (`gui.tabs.<name>.tab`), not from `gui
 
 `tests/test_pipeline_e2e.py` runs a tiny generate -> validate -> train -> eval on CPU.
 
+Renderer changes: `tests/test_render_golden.py` (dataset pipeline) and
+`tests/test_render_golden_variants.py` (589 cases: every 2D config, class and `render` option) must
+stay green; both skip when the OpenCV/NumPy versions differ from the golden files, so check they ran.
+An intended look change bumps `RENDERER_VERSION` and regenerates both (`python -m tests.<name> --update`).
+
+Rendering parallelism: `SIMPLE_SIM_RENDER_WORKERS` (count), `SIMPLE_SIM_RENDER_EXECUTOR=thread|process`
+(dataset generation picks processes for large runs by itself).
+
 ## Code map
 
 - `simple_sim/` - library (no CLI side effects: no `print`/`sys.exit`, progress and warnings via
@@ -142,7 +150,11 @@ import tab classes from their own modules (`gui.tabs.<name>.tab`), not from `gui
   `Backend`, class sets), `coerce` (`as_bool`/`as_float`/`as_int`), `cli_utils` (`--json`
   convention, `configure_cli_logging`, `with_hint`), `reports`, `manifest`, `config`, `schema`.
   `simple_sim/board/` - PCB model (footprints, nets, router, pours, DRC, raster) behind
-  `render.board` (`routing: legacy | none | escape`); `generators/` - the 2D/3D renderers.
+  `render.board` (`routing: legacy | none | escape`); `generators/` - the 2D/3D renderers
+  (`generators/opencv2d/photoreal/` one module per layer; render one image from a config with
+  `opencv2d.RenderSpec.from_run_config(cfg, profile)` + `render_sample`; a whole dataset from a config
+  dict with `generation.dataset.generate_dataset(cfg, out_dir, image_filters=...)`; backend capabilities in
+  `generators/backends.py`).
 - `scripts/` - pipeline CLIs; `tools/` - dataset maintenance CLIs, `tools/_common.sh`
   (venv/python detection for the `*.sh` launchers), `tools/profile_editor/` (Tk GUI).
 - `gui/` - Tk monitor GUI (`./run.sh`). `configs/` - run configs and `profiles/`.

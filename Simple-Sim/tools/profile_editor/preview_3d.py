@@ -441,7 +441,7 @@ class Preview3D(ttk.Frame):
 
         pads: list[BoxMesh] = []
         if footprint == "soic_16":
-            # 8 pads on the left + 8 pads on the right (2D layout, see draw._compute_pad_positions).
+            # 8 pads on the left + 8 pads on the right (2D layout, see opencv2d.geometry.pad_positions).
             # Keep pads distributed along package length and outside body width.
             row_x = max(pad_sx * 0.5, (body_len_x * 0.5) + (pad_h * 0.65))
             y_span = max(pad_w * 7.0, body_len_y * 0.82)

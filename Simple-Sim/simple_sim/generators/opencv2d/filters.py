@@ -5,6 +5,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from .photoreal.imageops import clip8
+
 
 def apply_blur(img: np.ndarray, sigma: float) -> np.ndarray:
     if sigma <= 0:
@@ -19,19 +21,19 @@ def apply_noise(img: np.ndarray, stddev: float, rng: np.random.Generator) -> np.
     if stddev <= 0:
         return img
     noise = rng.normal(0, stddev, img.shape).astype(np.float32)
-    return np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+    return clip8(img.astype(np.float32) + noise)
 
 
 def apply_brightness(img: np.ndarray, factor: float) -> np.ndarray:
     if abs(factor - 1.0) < 1e-6:
         return img
-    return np.clip(img.astype(np.float32) * factor, 0, 255).astype(np.uint8)
+    return clip8(img.astype(np.float32) * factor)
 
 
 def apply_contrast(img: np.ndarray, factor: float) -> np.ndarray:
     if abs(factor - 1.0) < 1e-6:
         return img
-    return np.clip((img.astype(np.float32) - 128.0) * factor + 128.0, 0, 255).astype(np.uint8)
+    return clip8((img.astype(np.float32) - 128.0) * factor + 128.0)
 
 
 def apply_perspective_transform(img: np.ndarray, strength: float, angle_x: float, angle_y: float) -> np.ndarray:
@@ -160,7 +162,7 @@ def apply_reflection(img: np.ndarray, strength: float, size: float, rng: np.rand
     reflection = np.zeros((h, w), dtype=np.float32)
     y1, x1 = min(y_pos + refl_h, h), min(x_pos + refl_w, w)
     reflection[y_pos:y1, x_pos:x1] = patch[: y1 - y_pos, : x1 - x_pos]
-    return np.clip(img.astype(np.float32) + np.stack([reflection] * 3, axis=-1), 0, 255).astype(np.uint8)
+    return clip8(img.astype(np.float32) + np.stack([reflection] * 3, axis=-1))
 
 
 def apply_dust_particles(img: np.ndarray, density: float, size: float, rng: np.random.Generator) -> np.ndarray:

@@ -1,10 +1,11 @@
-"""Meniscus solder joints (``render.solder: meniscus``, simple_sim/generators/opencv2d/solder.py)."""
+"""Meniscus solder joints (``render.solder: meniscus``, simple_sim/generators/opencv2d/photoreal/meniscus.py)."""
+
+import dataclasses
 
 import numpy as np
 import pytest
 
-from simple_sim.generators.opencv2d import solder
-from simple_sim.generators.opencv2d.photoreal import _solder_look
+from simple_sim.generators.opencv2d.photoreal import meniscus as solder
 from tests.test_photoreal import CLASSES, FOOTPRINTS, _render
 
 
@@ -25,7 +26,6 @@ def test_meniscus_renders_all_footprints_and_classes(footprint, defect_type):
     img = _render(footprint, defect_type, solder="meniscus")
     assert img.shape == (128, 128, 3) and img.dtype == np.uint8
     assert 10 < img.mean() < 200
-    assert _solder_look() is None  # the thread's joint model is reset after the render
 
 
 def test_meniscus_is_deterministic_and_only_changes_the_joints():
@@ -48,7 +48,7 @@ def test_side_stream_does_not_advance_the_generator():
 def test_fillet_is_concave_from_terminal_to_toe():
     rng = np.random.default_rng(0)
     look = solder.sample_look(rng)
-    look = solder.SolderLook(**{**look.__dict__, "lumps": 0.0, "grain": 0.0, "lip": 0.0})
+    look = dataclasses.replace(look, lumps=0.0, grain=0.0, lip=0.0)
     ph, pw, ss = 80, 60, 2
     covered = np.zeros((ph, pw), bool)
     covered[:, :20] = True

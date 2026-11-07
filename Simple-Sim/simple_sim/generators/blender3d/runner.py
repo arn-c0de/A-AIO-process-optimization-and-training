@@ -1,11 +1,15 @@
-"""Blender process runner for 3D batch rendering."""
+"""Blender process runner for 3D batch rendering.
+
+The Blender script (``simple_sim/blender/render_batch.py``) is found relative to this package, so
+rendering needs no checkout root; job, jobs-file and output paths are passed to Blender as absolute
+paths, so the working directory does not matter either.
+"""
 
 from __future__ import annotations
 
 import json
 import shutil
 import subprocess
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -24,7 +28,6 @@ class BlenderCancelled(RuntimeError):
 
 def render_blender_batch(
     *,
-    sim_root: Path,
     jobs_path: Path,
     output_root: Path,
     blender_executable: str,
@@ -39,12 +42,11 @@ def render_blender_batch(
     *should_stop*: polled while Blender runs (and before/after the bake); when it returns True the
     Blender process is terminated and :class:`BlenderCancelled` is raised. None: run to completion.
     """
-    sim_root = Path(sim_root)
     jobs_path = Path(jobs_path)
     output_root = Path(output_root)
     if not jobs_path.exists():
         raise FileNotFoundError(f"Missing jobs file: {jobs_path}")
-    _script_path(sim_root)  # fail before baking
+    script_path()  # fail before baking
     output_root.mkdir(parents=True, exist_ok=True)
 
     # Bake the shared board textures next to the output; removed again once Blender is done.
@@ -54,7 +56,7 @@ def render_blender_batch(
         _check_stop(should_stop)
         prepared = prepare_jobs(jobs, work_dir)
         _check_stop(should_stop)
-        _run_blender(sim_root=sim_root, prepared=prepared, prepared_path=work_dir / "jobs_prepared.jsonl",
+        _run_blender(prepared=prepared, prepared_path=work_dir / "jobs_prepared.jsonl",
                      output_root=output_root, blender_executable=blender_executable, cycles_samples=cycles_samples,
                      device=device, engine=engine, extra_env=extra_env, should_stop=should_stop)
     finally:
@@ -64,7 +66,6 @@ def render_blender_batch(
 
 def render_prepared_batch(
     *,
-    sim_root: Path,
     prepared: list[dict[str, Any]],
     prepared_path: Path,
     output_root: Path,
@@ -81,22 +82,24 @@ def render_prepared_batch(
     :func:`render_blender_batch`.
     """
     Path(output_root).mkdir(parents=True, exist_ok=True)
-    _run_blender(sim_root=Path(sim_root), prepared=prepared, prepared_path=Path(prepared_path),
+    _run_blender(prepared=prepared, prepared_path=Path(prepared_path),
                  output_root=Path(output_root), blender_executable=blender_executable, cycles_samples=cycles_samples,
                  device=device, engine=engine, extra_env=extra_env, should_stop=should_stop)
     apply_camera(prepared, Path(output_root))
 
 
-def _script_path(sim_root: Path) -> Path:
-    script_path = sim_root / "simple_sim" / "blender" / "render_batch.py"
-    if not script_path.exists():
-        raise FileNotFoundError(f"Missing Blender batch script: {script_path}")
-    return script_path
+BATCH_SCRIPT = Path(__file__).resolve().parents[2] / "blender" / "render_batch.py"
+
+
+def script_path() -> Path:
+    """The Blender batch script shipped with the package (``simple_sim/blender/render_batch.py``)."""
+    if not BATCH_SCRIPT.exists():
+        raise FileNotFoundError(f"Missing Blender batch script: {BATCH_SCRIPT}")
+    return BATCH_SCRIPT
 
 
 def _run_blender(
     *,
-    sim_root: Path,
     prepared: list[dict[str, Any]],
     prepared_path: Path,
     output_root: Path,
@@ -107,14 +110,15 @@ def _run_blender(
     extra_env: dict[str, str] | None,
     should_stop: StopCheck | None = None,
 ) -> None:
-    script_path = _script_path(sim_root)
+    script = script_path()
+    prepared_path, output_root = Path(prepared_path).resolve(), Path(output_root).resolve()
     write_jobs_jsonl(prepared_path, prepared)
     cmd = [
         blender_executable,
         "--background",
         "--factory-startup",
         "--python",
-        str(script_path),
+        str(script),
         "--",
         "--jobs",
         str(prepared_path),
@@ -136,9 +140,9 @@ def _run_blender(
         env.update({k: str(v) for k, v in extra_env.items()})
 
     if should_stop is None:
-        returncode = subprocess.run(cmd, cwd=str(sim_root), env=env).returncode
+        returncode = subprocess.run(cmd, env=env).returncode
     else:
-        returncode = _run_stoppable(cmd, cwd=str(sim_root), env=env, should_stop=should_stop)
+        returncode = _run_stoppable(cmd, env=env, should_stop=should_stop)
     if returncode != 0:
         raise RuntimeError(f"Blender batch render failed (exit code {returncode}). Command: {cmd}")
 
@@ -159,9 +163,9 @@ def _terminate(proc: subprocess.Popen) -> None:
         proc.wait()
 
 
-def _run_stoppable(cmd: list[str], *, cwd: str, env: dict[str, str] | None, should_stop: StopCheck) -> int:
+def _run_stoppable(cmd: list[str], *, env: dict[str, str] | None, should_stop: StopCheck) -> int:
     """Run *cmd*, polling *should_stop*; terminate (then kill) the process on stop or on any exception."""
-    proc = subprocess.Popen(cmd, cwd=cwd, env=env)
+    proc = subprocess.Popen(cmd, env=env)
     try:
         while True:
             try:

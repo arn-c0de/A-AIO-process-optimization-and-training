@@ -34,6 +34,10 @@ version = { attr = "simple_sim.__version__" }
 [tool.setuptools.packages.find]
 include = ["simple_sim*"]
 
+[tool.setuptools.package-data]
+# The Blender batch script runs inside Blender (no package import), it ships as a data file.
+simple_sim = ["blender/*.py"]
+
 [tool.pytest.ini_options]
 # Tests import gui/, scripts/ and tools/ from the checkout, which are not installed.
 pythonpath = ["."]

@@ -108,3 +108,28 @@ def test_realism_mode_uses_yaml_profile_preset(tmp_path) -> None:
             os.environ.pop("SIMPLE_SIM_REALISM_PRESETS_PATH", None)
         else:
             os.environ["SIMPLE_SIM_REALISM_PRESETS_PATH"] = old
+
+
+def test_realism_presets_as_a_parameter(tmp_path) -> None:
+    """Library callers pass presets directly (no file, no environment variable)."""
+    import numpy as np
+
+    from simple_sim.generators.opencv2d.realism import BUILTIN_PRESETS, default_presets, load_realism_presets
+
+    only_motion = {"k0": 0.0, "k1": 1.0, "k2": 0.0, **{f"G{i}": 0.0 for i in range(1, 9)}, "G2": 1.0}
+    filt = {"enable": True, "filter_mode": "realism", "realism_enabled": True, "realism_profile_id": "mine"}
+    for seed in range(20):
+        out = apply_image_filter_overrides(_base_augment(), filt, np.random.default_rng(seed),
+                                           realism_presets={"mine": only_motion})
+        assert float(out["motion_blur_strength"]) > 1e-6
+    # Same result as the default presets when the built-ins are passed explicitly.
+    std = {"enable": True, "filter_mode": "realism", "realism_enabled": True}
+    for seed in range(5):
+        a = apply_image_filter_overrides(_base_augment(), std, np.random.default_rng(seed))
+        b = apply_image_filter_overrides(_base_augment(), std, np.random.default_rng(seed), realism_presets=default_presets())
+        assert a == b
+    assert load_realism_presets(None) == BUILTIN_PRESETS
+    assert load_realism_presets(tmp_path / "missing.yaml") == BUILTIN_PRESETS
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("profiles: [unclosed", encoding="utf-8")
+    assert load_realism_presets(bad) == BUILTIN_PRESETS  # logged, not raised

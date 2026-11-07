@@ -183,7 +183,7 @@ class ProfilePreviewLogic:
 
     def _render_2d(self, req, profile, cfg, states, out_dir, on_image, on_log, should_stop) -> list[PreviewImage]:
         from simple_sim.dataset_store import write_image
-        from simple_sim.generators.opencv2d import render_roi
+        from simple_sim.generators.opencv2d import RenderSpec, render_sample
 
         roi = cfg["roi"]
         w, h = int(roi["width_px"]), int(roi["height_px"])
@@ -197,6 +197,7 @@ class ProfilePreviewLogic:
             render_cfg["camera"] = camera
         footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
         tolerances = profile.get("tolerances")
+        spec = RenderSpec(roi_size=(w, h), render=render_cfg, footprint=footprint, tolerances=tolerances)
         on_log(f"ROI {w}x{h} | style {req.style} | supersampling {req.supersampling}x | camera {req.camera}")
 
         def render_one(item: tuple[str, int]) -> PreviewImage:
@@ -206,8 +207,7 @@ class ProfilePreviewLogic:
             augment = self._augment(rng, cfg, req)
             nominal = sample_nominal_geometry(roi, rng, geometry_ranges=profile.get("geometry_ranges") or {})
             defect = sample_defect_params(state, rng, tolerances=tolerances)
-            img = render_roi(nominal=nominal, defect_params=defect, augment=augment, roi_size=(w, h),
-                             config=render_cfg, tolerances=tolerances, rng=rng, footprint=footprint)
+            img = render_sample(spec, nominal, defect, augment, rng)
             path = out_dir / f"{state}_v{v}.png"
             write_image(path, img)
             rec = PreviewImage(state, v, path, time.perf_counter() - t0, _defect_info(defect), defect, nominal)
@@ -283,7 +283,7 @@ class ProfilePreviewLogic:
                 on_log(f"[{n}/{len(jobs)}] {st} #{v}: Blender render ...")
                 path.unlink(missing_ok=True)  # never mistake a previous render for this one
                 try:
-                    run_prepared_blender_jobs([prepared], sim_root=self.sim_root, output_root=out_dir,
+                    run_prepared_blender_jobs([prepared], output_root=out_dir,
                                               jobs_path=work_dir / f"job_{n:06d}.jsonl", settings=settings,
                                               should_stop=should_stop)
                 except BlenderCancelled:

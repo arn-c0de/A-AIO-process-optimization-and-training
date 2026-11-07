@@ -1,6 +1,6 @@
 """Board model -> pixel masks of a render window (supersampled resolution).
 
-The renderer (``photoreal._board``) blends the copper mask under the solder mask exactly as it did
+The renderer (``photoreal.scene.draw_board``) blends the copper mask under the solder mask exactly as it did
 for the legacy generator and draws the vias with its own shading; this module only decides *where*
 copper is.
 """

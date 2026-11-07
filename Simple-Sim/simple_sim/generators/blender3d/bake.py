@@ -14,8 +14,8 @@ import cv2
 import numpy as np
 
 from simple_sim.parallel import imap_ordered
-from simple_sim.generators.opencv2d.photoreal import (MASK_GLOSS_PROBABILITY, REWORK_PROBABILITY, camera_model, camera_settings,
-                                                     render_board, sample_camera_pose)
+from simple_sim.generators.opencv2d.photoreal import (MASK_GLOSS_PROBABILITY, REWORK_PROBABILITY, camera_config, camera_model,
+                                                     camera_settings, mask_gloss, render_board, rework_probability, sample_camera_pose)
 
 BOARD_SCALE = 2  # baked board covers at least 2x the ROI, so global rotations never reveal its edge
 # Supersampling above the default 2 is capped so the supersampled bake stays <= this many px per side
@@ -33,18 +33,19 @@ def bake_fields(render_cfg: dict[str, Any], roi: dict[str, Any] | None = None, *
     """Job fields of the board bake from a run config's ``render`` section.
 
     ``texture_dir``, ``camera``, ``rework_artifacts``, ``mask_gloss``, ``supersampling``,
-    ``board`` and ``solder``; *overrides* replace any of them (e.g. a preview's camera or supersampling).
+    ``board``, ``solder`` and ``look`` (whose camera preset and mask gloss fill unset ``camera`` /
+    ``mask_gloss``); *overrides* replace any of them (e.g. a preview's camera or supersampling).
     ``mm_per_px`` is deliberately not a bake field: the job's top-level ``mm_per_px`` (always
     ``roi.mm_per_px``, see ``blender_job``) is the one scale of part, scene and board, so a stale
     ``render.mm_per_px`` (e.g. persisted in a dataset's ``config.yaml``) can never override it.
     *roi* is accepted for call-site symmetry and ignored.
     """
     del roi
-    fields = {"texture_dir": render_cfg.get("texture_dir"), "camera": render_cfg.get("camera"),
-              "rework_artifacts": render_cfg.get("rework_artifacts", REWORK_PROBABILITY),
-              "mask_gloss": render_cfg.get("mask_gloss", MASK_GLOSS_PROBABILITY),
+    fields = {"texture_dir": render_cfg.get("texture_dir"), "camera": camera_config(render_cfg),
+              "rework_artifacts": rework_probability(render_cfg, REWORK_PROBABILITY),
+              "mask_gloss": mask_gloss(render_cfg, MASK_GLOSS_PROBABILITY),
               "supersampling": render_cfg.get("supersampling"), "board": render_cfg.get("board"),
-              "solder": render_cfg.get("solder")}
+              "solder": render_cfg.get("solder"), "look": render_cfg.get("look")}
     return {**fields, **overrides}
 
 
@@ -68,7 +69,7 @@ def prepare_job(job: dict[str, Any], work_dir: Path, index: int) -> dict[str, An
               "rework_artifacts": job.get("rework_artifacts", REWORK_PROBABILITY),
               "mask_gloss": job.get("mask_gloss", MASK_GLOSS_PROBABILITY),
               "supersampling": job.get("supersampling") or 2, "board": job.get("board"),
-              "solder": job.get("solder")}
+              "solder": job.get("solder"), "look": job.get("look")}
     if job.get("mm_per_px"):
         config["mm_per_px"] = float(job["mm_per_px"])
     seed = int(job.get("seed", 0))
@@ -101,7 +102,7 @@ def apply_camera(jobs: list[dict[str, Any]], output_root: Path, *, workers: int 
             raise OSError(f"Missing Blender output image: {path}")
         rng = np.random.default_rng([int(job.get("seed", 0)), 1])  # own stream, independent of the bake
         pose = (job.get("board") or {}).get("pose")
-        if not cv2.imwrite(str(path), camera_model(img, rng, job.get("camera"), pose)):
+        if not cv2.imwrite(str(path), camera_model(img, rng, job.get("camera"), pose, mm_per_px=job.get("mm_per_px"))):
             raise OSError(f"Failed to write camera-processed image: {path}")
 
     for _ in imap_ordered(one, jobs, workers=workers):

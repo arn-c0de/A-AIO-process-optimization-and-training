@@ -1,4 +1,4 @@
-"""Solder joint model for the photoreal 2D renderer (``render.solder: meniscus``).
+"""Meniscus solder joint model of the photoreal renderer (``render.solder: meniscus``).
 
 The legacy joints (``render.solder: legacy``, the default) are a grey slab with a nearly linear ramp,
 shaded with a soft grey environment: low contrast, straight pad-shaped outline, no mirror look.
@@ -28,6 +28,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .imageops import grid, heightmap_normals, smooth_noise
+
 SOLDER_STYLES = ("legacy", "meniscus")
 DEFAULT_SOLDER_STYLE = "legacy"
 
@@ -43,7 +45,7 @@ def solder_style(config: dict | None) -> str:
     return str(style)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SolderLook:
     """Lighting and surface of all joints in one image."""
 
@@ -61,6 +63,8 @@ class SolderLook:
     lip: float                # contact-line lip height, fraction of the joint height
     bare_rim: float           # probability that a pad shows a rim of bare finish around the solder
     level: float              # overall brightness factor
+    paste_scale: float = 0.35  # reflowed paste without a part: dome height / joint height
+    paste_cap: float = 4.0     # ... at most this many pixels per ss
 
 
 def sample_look(rng: np.random.Generator) -> SolderLook:
@@ -83,6 +87,36 @@ def sample_look(rng: np.random.Generator) -> SolderLook:
     )
 
 
+def sample_scanner_look(rng: np.random.Generator) -> SolderLook:
+    """Joint lighting of a flatbed AOI scanner (``render.look: quins``): one ring light, no room lamps.
+
+    Tuned on classifiers trained on synthetic and tested on real QUINS crops (``tools/eval_real.py``):
+    real good 0402 joints show a bright terminal, a grey fillet slope and a bright rim at the contact
+    line. A bright overhead area (flat solder = white) made every good joint look like excess solder,
+    so the overhead brightness is low, starts at ~30 deg, and the ring light catches the rim.
+    """
+    return SolderLook(
+        ring_elev=float(np.radians(rng.uniform(26.0, 34.0))),
+        ring_width=float(np.radians(rng.uniform(10.0, 16.0))),
+        azimuths=(),
+        azimuth_width=float(np.radians(40.0)),
+        ring_gain=float(rng.uniform(270.0, 330.0)),
+        sky=float(rng.uniform(125.0, 155.0)),
+        sky_from=float(np.radians(rng.uniform(26.0, 34.0))),
+        board_mix=float(rng.uniform(0.9, 1.0)),
+        frost=float(rng.uniform(0.08, 0.16)),
+        lumps=float(rng.uniform(0.03, 0.08)),
+        grain=float(rng.uniform(0.02, 0.04)),
+        lip=float(rng.uniform(0.05, 0.12)),
+        bare_rim=float(rng.uniform(0.1, 0.4)),
+        level=float(rng.uniform(0.92, 1.0)),
+        # Empty pads in the scans show high, pillow-shaped solder (bright rolled edges, darker top):
+        # without a part the whole paste volume stays on the pad.
+        paste_scale=float(rng.uniform(0.6, 0.9)),
+        paste_cap=float(rng.uniform(8.0, 12.0)),
+    )
+
+
 def side_stream(rng: np.random.Generator, salt: int) -> np.random.Generator:
     """A generator derived from *rng*'s current state without advancing it.
 
@@ -93,16 +127,10 @@ def side_stream(rng: np.random.Generator, salt: int) -> np.random.Generator:
     return np.random.default_rng([int.from_bytes(digest, "little"), int(salt)])
 
 
-def _noise(shape: tuple[int, int], cell: float, rng: np.random.Generator) -> np.ndarray:
-    h, w = shape
-    small = rng.normal(0.0, 1.0, (int(h / cell) + 2, int(w / cell) + 2)).astype(np.float32)
-    return cv2.resize(small, (w, h), interpolation=cv2.INTER_CUBIC)
-
-
 def wetted_alpha(ph: int, pw: int, ss: int, look: SolderLook, rng: np.random.Generator) -> np.ndarray:
     """Anti-aliased area the solder covers on a ``ph`` x ``pw`` pad: rounded corners, wavy contact line,
     sometimes inset so a rim of bare finish stays visible."""
-    yy, xx = np.mgrid[0:ph, 0:pw].astype(np.float32)
+    yy, xx = grid(ph, pw)
     inset = float(rng.uniform(0.6, 2.2)) * ss if rng.random() < look.bare_rim else 0.0
     r = float(rng.uniform(0.18, 0.45)) * min(pw, ph)
     hx, hy = pw / 2.0 - inset, ph / 2.0 - inset
@@ -110,7 +138,7 @@ def wetted_alpha(ph: int, pw: int, ss: int, look: SolderLook, rng: np.random.Gen
     qy = np.maximum(np.abs(yy + 0.5 - ph / 2.0) - (hy - r), 0.0)
     inner = np.maximum(np.abs(xx + 0.5 - pw / 2.0) - (hx - r), np.abs(yy + 0.5 - ph / 2.0) - (hy - r))
     sdf = np.where((qx > 0) & (qy > 0), np.hypot(qx, qy), np.maximum(inner, 0.0)) - r  # < 0 inside
-    sdf += _noise((ph, pw), 5.0 * ss, rng) * 0.5 * ss  # contact line is not a ruler-straight edge
+    sdf += smooth_noise((ph, pw), 5.0 * ss, rng) * 0.5 * ss  # contact line is not a ruler-straight edge
     return np.clip(0.5 - sdf / ss, 0.0, 1.0)
 
 
@@ -144,7 +172,7 @@ def paste_height(ph: int, pw: int, wet: np.ndarray, amp: float, cells: tuple[int
                  rng: np.random.Generator, ss: int) -> np.ndarray:
     """Reflowed paste on a pad without a part: a low dome per stencil window (*cells* = (nx, ny))."""
     nx, ny = cells
-    yy, xx = np.mgrid[0:ph, 0:pw].astype(np.float32)
+    yy, xx = grid(ph, pw)
     u, v = ((xx / pw * nx) % 1.0) * 2 - 1, ((yy / ph * ny) % 1.0) * 2 - 1
     dome = np.clip(1.0 - (np.abs(u) ** 2.5 + np.abs(v) ** 2.5) * (0.9 if nx * ny == 1 else 1.25), 0, 1) ** 0.6
     return _relief(dome * amp, amp, look, rng, ss) * wet
@@ -152,8 +180,8 @@ def paste_height(ph: int, pw: int, wet: np.ndarray, amp: float, cells: tuple[int
 
 def _relief(h: np.ndarray, amp: float, look: SolderLook, rng: np.random.Generator, ss: int) -> np.ndarray:
     shape = h.shape
-    h = h * (1.0 + look.lumps * _noise(shape, 9.0 * ss, rng))
-    h += look.grain * ss * (_noise(shape, 1.6 * ss, rng) + 0.6 * _noise(shape, 3.0 * ss, rng))
+    h = h * (1.0 + look.lumps * smooth_noise(shape, 9.0 * ss, rng))
+    h += look.grain * ss * (smooth_noise(shape, 1.6 * ss, rng) + 0.6 * smooth_noise(shape, 3.0 * ss, rng))
     return np.maximum(h, 0.0)
 
 
@@ -175,7 +203,7 @@ def render_joint(region: np.ndarray, board: np.ndarray, covered: np.ndarray, amp
         norm = np.maximum(np.hypot(gx, gy), 1e-6)
         toward = np.dstack([-gx / norm, -gy / norm])  # from the joint towards the terminal
     else:
-        hmap = paste_height(ph, pw, wet, min(amp * 0.35, 4.0 * ss), cells, look, rng, ss)
+        hmap = paste_height(ph, pw, wet, min(amp * look.paste_scale, look.paste_cap * ss), cells, look, rng, ss)
     shaded = shade(hmap, board, look, toward_body=toward, body_height=np.radians(30.0))
     a = wet[..., None]
     region *= 1.0 - a
@@ -190,9 +218,7 @@ def shade(hmap: np.ndarray, board: np.ndarray, look: SolderLook, *, toward_body:
     from each pixel to the part terminal; slopes facing it mirror the dark body up to *body_height*
     (elevation in radians as seen from the joint).
     """
-    gy, gx = np.gradient(hmap)
-    n = np.dstack([-gx, -gy, np.ones_like(hmap)])
-    n /= np.linalg.norm(n, axis=2, keepdims=True)
+    n = heightmap_normals(hmap)
     # Reflected view ray (camera looks straight down, view vector (0, 0, 1)).
     rz = 2.0 * n[..., 2] ** 2 - 1.0
     rx, ry = 2.0 * n[..., 2] * n[..., 0], 2.0 * n[..., 2] * n[..., 1]

@@ -18,7 +18,7 @@ from simple_sim.board.routing.escape import EscapeRouter
 from simple_sim.board.rules import PRESETS, fit_to_pitch, sample_rules
 from simple_sim.board.zones import zone_fill
 from simple_sim.generators.opencv2d import sample_nominal_geometry
-from simple_sim.generators.opencv2d.draw import _compute_pad_positions
+from simple_sim.generators.opencv2d.geometry import pad_positions
 from tests.test_photoreal import FOOTPRINTS, _render
 
 WINDOW = (512, 512)   # 256 px ROI at 2x supersampling, as in the run configs
@@ -45,12 +45,15 @@ def _window(footprint: str, seed: int, options: BoardOptions = BoardOptions(rout
     xs = [p["x"] for p in pads] + [p["x"] + p["w"] for p in pads]
     ys = [p["y"] for p in pads] + [p["y"] + p["h"] for p in pads]
     neighbours = neighbour_layout(pads, (min(xs), min(ys), max(xs), max(ys)), shape, np.random.default_rng([seed, STREAM_PLACE]))
-    if keep is not None:
-        keep.append(neighbours)
-    return build_window_board(footprint=footprint, family=family_of(footprint), target_pads=specs,
+    before = [dict(n) for n in neighbours]
+    built = build_window_board(footprint=footprint, family=family_of(footprint), target_pads=specs,
                               target_body_px=(nom["component_length"], nom["component_width"]), shape=shape,
                               neighbours=neighbours, px_to_mm=PX_TO_MM * scale, options=options, seed=seed, scale=scale,
                               target_rotation=target_rotation)
+    assert neighbours == before  # the caller's list is not modified
+    if keep is not None:
+        keep.append(built.neighbours)
+    return built.board, built.report
 
 
 # ---- footprints ----------------------------------------------------------------------------
@@ -61,7 +64,7 @@ def _window(footprint: str, seed: int, options: BoardOptions = BoardOptions(rout
 def test_footprints_match_legacy_pads(footprint, seed, shape):
     nominal = sample_nominal_geometry({}, np.random.default_rng(seed), BOARD_FOOTPRINTS[footprint])
     specs = footprint_pads(footprint, nominal, shape)
-    assert [p.as_dict() for p in specs] == _compute_pad_positions(footprint, nominal, shape)
+    assert [p.as_dict() for p in specs] == pad_positions(footprint, nominal, shape)
     part = part_from_pads("U1", footprint, family_of(footprint), specs, (shape[1] / 2, shape[0] / 2), (10.0, 5.0), 0.0, 0.0137)
     assert pads_px(part, 0.0137) == [p.as_dict() for p in specs]  # mm round trip keeps the integers
 
@@ -297,12 +300,12 @@ def test_legacy_routing_is_the_default_and_unchanged(monkeypatch):
     b = _render("chip_2pad", "OK", seed=5, board={"routing": "legacy"})
     assert np.array_equal(a, b)
     # Legacy never builds a board model (router, zones, DRC changes cannot reach it).
-    import simple_sim.generators.opencv2d.photoreal as photoreal
+    from simple_sim.generators.opencv2d.photoreal import copper
 
     def boom(**_kw):
         raise AssertionError("legacy rendering called build_window_board")
 
-    monkeypatch.setattr(photoreal, "build_window_board", boom)
+    monkeypatch.setattr(copper, "build_window_board", boom)
     for footprint in FOOTPRINTS:
         _render(footprint, "OK", seed=5)
 
@@ -408,7 +411,7 @@ def test_grid_rect_covers_exactly_its_cells():
     assert Grid.for_window((0, 0, 1, 1), 0.1).shape == (11, 11)
 
 
-def test_neighbours_in_the_fanout_band_are_removed_in_place():
+def test_neighbours_in_the_fanout_band_are_left_out():
     for seed in range(10):
         keep: list = []
         board, _ = _window("qfn_32", seed, keep=keep)

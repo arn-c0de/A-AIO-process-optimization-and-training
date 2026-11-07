@@ -115,7 +115,6 @@ def test_run_blender_should_stop_terminates_the_process(tmp_path):
 
     pid_file = tmp_path / "pid"
     exe = _fake_blender(tmp_path, f"import os, time\nopen({str(pid_file)!r}, 'w').write(str(os.getpid()))\ntime.sleep(60)")
-    root = Path(__file__).parent.parent
     t0 = time.monotonic()
     calls = {"n": 0}
 
@@ -124,7 +123,7 @@ def test_run_blender_should_stop_terminates_the_process(tmp_path):
         return pid_file.exists()  # stop as soon as the fake Blender is running
 
     with pytest.raises(runner.BlenderCancelled):
-        runner._run_blender(sim_root=root, prepared=[], prepared_path=tmp_path / "jobs.jsonl", output_root=tmp_path,
+        runner._run_blender(prepared=[], prepared_path=tmp_path / "jobs.jsonl", output_root=tmp_path,
                             blender_executable=str(exe), cycles_samples=1, device="CPU", engine="X", extra_env=None,
                             should_stop=stop)
     assert time.monotonic() - t0 < 20
@@ -137,13 +136,20 @@ def test_run_blender_should_stop_terminates_the_process(tmp_path):
 def test_run_blender_without_should_stop_is_unchanged(tmp_path):
     from simple_sim.generators.blender3d import runner
 
-    root = Path(__file__).parent.parent
     ok = _fake_blender(tmp_path, "pass")
-    runner._run_blender(sim_root=root, prepared=[], prepared_path=tmp_path / "jobs.jsonl", output_root=tmp_path,
+    runner._run_blender(prepared=[], prepared_path=tmp_path / "jobs.jsonl", output_root=tmp_path,
                         blender_executable=str(ok), cycles_samples=1, device="CPU", engine="X", extra_env=None)
     bad = _fake_blender(tmp_path, "raise SystemExit(3)")
     for should_stop in (None, lambda: False):
         with pytest.raises(RuntimeError, match="exit code 3"):
-            runner._run_blender(sim_root=root, prepared=[], prepared_path=tmp_path / "jobs.jsonl", output_root=tmp_path,
+            runner._run_blender(prepared=[], prepared_path=tmp_path / "jobs.jsonl", output_root=tmp_path,
                                 blender_executable=str(bad), cycles_samples=1, device="CPU", engine="X", extra_env=None,
                                 should_stop=should_stop)
+
+
+def test_blender_script_is_found_without_a_checkout_root():
+    """The batch script is package-relative (no ``sim_root``)."""
+    from simple_sim.generators.blender3d import runner
+
+    path = runner.script_path()
+    assert path.name == "render_batch.py" and path.parent.name == "blender" and path.is_file()

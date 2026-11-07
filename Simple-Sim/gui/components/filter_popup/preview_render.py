@@ -47,22 +47,21 @@ def render_filter_preview_2d(sim_root: Path, profile_id: str, filter_vals: dict[
     """BGR image of an OK sample with *filter_vals*, plus the config source used."""
     from simple_sim.config import merge_profile_render
     from simple_sim.defects import sample_defect_params
-    from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
+    from simple_sim.generators.opencv2d import RenderSpec, render_sample, sample_nominal_geometry
 
     sim_root = Path(sim_root)
     profile, cfg, src = _profile_and_config(sim_root, profile_id, "opencv_2d")
     roi = cfg["roi"]
     tolerances = profile.get("tolerances")
     footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
-    render_cfg = merge_profile_render(copy.deepcopy(cfg.get("render") or {}), profile, cfg.get("roi"))
+    spec = RenderSpec(roi_size=(int(roi["width_px"]), int(roi["height_px"])), footprint=footprint, tolerances=tolerances,
+                      render=merge_profile_render(copy.deepcopy(cfg.get("render") or {}), profile, cfg.get("roi")))
 
     rng = np.random.default_rng(PREVIEW_SEED)
     nominal = sample_nominal_geometry(roi, rng, geometry_ranges=profile.get("geometry_ranges") or {})
     defect = sample_defect_params("OK", rng, tolerances=tolerances)
     augment = _augment(filter_vals, rng)
-    img = render_roi(nominal=nominal, defect_params=defect, augment=augment,
-                     roi_size=(int(roi["width_px"]), int(roi["height_px"])), config=render_cfg,
-                     tolerances=tolerances, rng=rng, footprint=footprint)
+    img = render_sample(spec, nominal, defect, augment, rng)
     return img, src
 
 
@@ -106,7 +105,7 @@ def render_filter_preview_3d(sim_root: Path, profile_id: str, filter_vals: dict[
                       component_height_mm=float((component.get("nominal_dims_mm") or {}).get("height", 0.45) or 0.45),
                       render_3d=profile.get("render_3d") or {}, bake=bake)
     (out_root / rel).unlink(missing_ok=True)  # a silent Blender failure must not show the previous render
-    run_blender_jobs([job], sim_root=sim_root, output_root=out_root, jobs_path=out_root / f"jobs_{profile_id}.jsonl",
+    run_blender_jobs([job], output_root=out_root, jobs_path=out_root / f"jobs_{profile_id}.jsonl",
                      settings=settings)
     path = out_root / rel
     img = cv2.imread(str(path), cv2.IMREAD_COLOR)

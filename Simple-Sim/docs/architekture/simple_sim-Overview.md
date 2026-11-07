@@ -268,7 +268,7 @@ Procedural PCB around the inspected part as plain data in mm (`render.board.rout
 | `board/routing/` | `Router` protocol, `RouteResult`, `seed_occupancy()`; `escape.py`: fan-out router (stubs, 45° routes to ports or vias, thermal via grids, through-nets, buses) |
 | `board/zones.py` | Ground pours: `sample_zones()`, `zone_fill()` (clearance, thermal relief) on any grid, `stitch_vias()` |
 | `board/drc.py` | `check(board) -> DrcReport`: clearance, dangling ends, forbidden pads, keep-out, widths |
-| `board/raster.py` | `rasterize(board, shape, px_to_mm) -> CopperLayers` (anti-aliased copper mask + via positions for `photoreal._draw_copper`) |
+| `board/raster.py` | `rasterize(board, shape, px_to_mm) -> CopperLayers` (anti-aliased copper mask + via positions for `photoreal.copper.draw_copper`) |
 
 ## Generators Package
 
@@ -294,11 +294,36 @@ Responsibilities:
 
 ## `opencv2d/__init__.py`
 
-- Re-exports rendering, geometry, draw primitives, filter primitives, and augment logic.
+- Re-exports rendering (`render_roi`, `RenderSpec`, `render_sample`, `render_record`), geometry, draw primitives, filter primitives, and augment logic.
+
+## `opencv2d/spec.py`
+
+- `RenderSpec(roi_size, render, footprint, tolerances, domain_render)`: frozen, picklable inputs of the 2D renderer that are fixed for a dataset; `RenderSpec.from_run_config(cfg, profile)` merges the profile defaults and the per-domain cameras.
+- `render_sample(spec, nominal, defect, augment, rng, domain=...)` renders one ROI; `render_record(spec, record, rng=None)` one dataset record (fresh generator from `record["seed"]` by default).
 
 ## `opencv2d/geometry.py`
 
 - `sample_nominal_geometry(...)` samples footprint geometry ranges.
+- Shared by flat, photoreal and the 3D bake: `pad_positions`, `body_geometry`, `lifted_corner_geometry`, `draw_solder_bridge`, `param_selector` (rng-free defect selector).
+
+## `opencv2d/photoreal/` (`render.style: photoreal`)
+
+| Module | Content |
+|---|---|
+| `__init__.py` | public API: `render_photoreal_base`, `render_board`, camera model, constants |
+| `context.py` | `RenderContext(ss, solder_look)`, passed to every drawing step (no thread-local state); `supersampling(config)` |
+| `palette.py` | colours, light direction, part families, marking vocabularies |
+| `imageops.py` | `blend`, `grid` (shared pixel grid views), `smooth_noise`, `text_layer`, `rect_alpha`, `local_window`/`rect_window`/`blur_window` (computation windows), `WindowedNoise`, `shade_solder`, `heightmap_normals`, `contact_shadow` |
+| `substrate.py` | procedural mask or `render.texture_dir`, mask gloss |
+| `copper.py` | `COPPER_SOURCES` (`legacy`, `none`, board model), vias, `board_rule_scale` |
+| `silkscreen.py`, `rework.py` | print next to the part; flux/dirt/wires kept off the part |
+| `parts.py` | bodies, leads, markings, tombstones, neighbour parts |
+| `joints.py`, `meniscus.py` | pad finish and joints (legacy fillets / `render.solder: meniscus`) |
+| `solder_defects.py` | `solder_defect_layout` (shared with the bake), balls, bulges |
+| `camera.py` | view pose, `apply_view`, `camera_model` (shared with the Blender backend) |
+| `scene.py` | the pipeline: `draw_board`, `render_photoreal_base`, `render_board` |
+
+Drawing steps compute on the window around their shape; random fields are drawn at full size so the random stream (and every image) is the same as a full-frame computation. `tests/test_render_golden.py` and `tests/test_render_golden_variants.py` pin the output.
 
 ## `opencv2d/draw.py`
 

@@ -107,7 +107,6 @@ def postprocess_blender_images(records: Iterable[dict[str, Any]], output_root: P
 def run_blender_jobs(
     jobs: list[dict[str, Any]],
     *,
-    sim_root: Path,
     output_root: Path,
     jobs_path: Path,
     settings: dict[str, Any],
@@ -120,7 +119,6 @@ def run_blender_jobs(
     """
     write_jobs_jsonl(jobs_path, jobs)
     render_blender_batch(
-        sim_root=sim_root,
         jobs_path=jobs_path,
         output_root=output_root,
         blender_executable=settings["executable"],
@@ -135,7 +133,6 @@ def run_blender_jobs(
 def run_prepared_blender_jobs(
     prepared: list[dict[str, Any]],
     *,
-    sim_root: Path,
     output_root: Path,
     jobs_path: Path,
     settings: dict[str, Any],
@@ -143,7 +140,6 @@ def run_prepared_blender_jobs(
 ) -> None:
     """Like :func:`run_blender_jobs` for jobs whose boards are already baked (``bake.prepare_job``)."""
     render_prepared_batch(
-        sim_root=sim_root,
         prepared=prepared,
         prepared_path=jobs_path,
         output_root=output_root,
@@ -166,7 +162,6 @@ def render_blender_records(
     component_height_mm: float,
     profile_render_3d: dict[str, Any],
     tolerances: dict[str, Any] | None,
-    project_root: Path,
     output_root: Path,
     jobs_filename: str,
     expect_at_least: bool = False,
@@ -190,7 +185,6 @@ def render_blender_records(
     ]
     run_blender_jobs(
         jobs,
-        sim_root=project_root,
         output_root=output_root,
         jobs_path=output_root / jobs_filename,
         settings=blender_settings(config),

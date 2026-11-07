@@ -134,7 +134,6 @@ class BlenderLivePreviewWorker:
 
         write_jobs_jsonl(jobs_path, [job])
         render_blender_batch(
-            sim_root=self.sim_root,
             jobs_path=jobs_path,
             output_root=out_root,
             blender_executable=blender_executable,

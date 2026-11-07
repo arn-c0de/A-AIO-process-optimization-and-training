@@ -2,35 +2,37 @@
 
 from __future__ import annotations
 
-import logging
+import copy
 import json
+import logging
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from tqdm import tqdm
 
-from simple_sim.config import DEFAULT_COMPONENT_PROFILE, domain_camera, load_config, merge_profile_render, validate_config
-from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files, write_image
+from simple_sim.config import DEFAULT_COMPONENT_PROFILE, load_config, merge_profile_render, validate_config
+from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files
 from simple_sim.generation.blender import blender_settings, render_blender_records
 from simple_sim.generation.common import (
-    DOMAIN,
     SPLIT_NAMES,
     build_rows,
     finalize_splits,
     project_root as default_project_root,
     rel_profile_path,
+    render_2d_records,
     sample_domain,
     sample_record,
     summarize,
 )
-from simple_sim.filter_settings import load_image_filters_env
-from simple_sim.generators.opencv2d import render_roi
-from simple_sim.parallel import imap_ordered, render_workers
+from simple_sim.filter_settings import load_image_filters_env, normalize_image_filters
+from simple_sim.generators.backends import Backend, backend_of
+from simple_sim.generators.opencv2d.spec import RenderSpec
 from simple_sim.generators.version import RENDERER_VERSION
-from simple_sim.manifest import (check_renderer_version, read_dataset_manifest, write_dataset_manifest,
+from simple_sim.generation.render_options import look_differences
+from simple_sim.manifest import (RendererMismatchError, check_renderer_version, read_dataset_manifest, write_dataset_manifest,
                                  write_multi_profile_manifest)
 from simple_sim.profile_hash import hash_profile, load_profile
 from simple_sim.schema import LabelRow, MetaRow, append_jsonl_rows, read_jsonl, validate_jsonl_pair
@@ -117,12 +119,27 @@ def _existing_profile(
     return profile_id, profile_hash, target
 
 
+def check_look_options(output_dir: Path, config: Mapping[str, Any], *, allow_mismatch: bool = False) -> None:
+    """Refuse to extend the dataset in *output_dir* with a config whose images would look different
+    (:func:`simple_sim.generation.render_options.look_differences` against its ``config.yaml``).
+    Raises :class:`~simple_sim.manifest.RendererMismatchError`; *allow_mismatch* only logs a warning."""
+    diffs = look_differences(load_config(output_dir / "config.yaml"), config)
+    if not diffs:
+        return
+    msg = ("Render options differ from the dataset being extended:\n  " + "\n  ".join(diffs)
+           + "\nNew images would look different from the existing ones. Generate a new dataset, or allow the "
+             "mismatch to mix them.")
+    if not allow_mismatch:
+        raise RendererMismatchError(msg, dataset_version=RENDERER_VERSION, current_version=RENDERER_VERSION)
+    log.warning(msg)
+
+
 def load_extend_state(
     output_dir: Path, *, profile_id: str, profile_hash: str, profile_rel_path: str, run_id: str,
-    allow_renderer_mismatch: bool = False,
+    allow_renderer_mismatch: bool = False, config: Mapping[str, Any] | None = None,
 ) -> ExtendState:
     """Validate an existing dataset for ``--extend`` (files, manifest, profile id/hash, renderer
-    version) and load it."""
+    version, and with *config* the look options of :func:`check_look_options`) and load it."""
     meta_path = output_dir / "meta.jsonl"
     labels_path = output_dir / "labels.jsonl"
     manifest_path = output_dir / "dataset_manifest.json"
@@ -161,6 +178,8 @@ def load_extend_state(
         )
     log.info("Profile validation passed for extend mode")
     check_renderer_version(manifest, RENDERER_VERSION, allow_mismatch=allow_renderer_mismatch)
+    if config is not None:
+        check_look_options(output_dir, config, allow_mismatch=allow_renderer_mismatch)
 
     validate_jsonl_pair(meta_path, labels_path)
     state = ExtendState(
@@ -207,62 +226,167 @@ def _dedup_profiles(profiles: list[dict[str, str]]) -> list[dict[str, str]]:
     return out
 
 
+@dataclass(frozen=True, slots=True)
+class RunInputs:
+    """A validated run config resolved against its component profile (input of :func:`plan_records`)."""
+
+    config: dict[str, Any]               # the run config, ``render`` merged with the profile defaults
+    profile_id: str
+    profile: dict[str, Any]
+    profile_hash: str
+    profile_rel_path: str                # as stored in manifests
+    footprint: str
+    geometry_ranges: dict[str, Any] | None
+    tolerances: dict[str, Any] | None
+    component_height_mm: float
+    profile_render_3d: dict[str, Any]
+
+    @property
+    def backend(self) -> str:
+        return backend_of(self.config.get("render")).backend.value
+
+    @property
+    def roi_size(self) -> tuple[int, int]:
+        return int(self.config["roi"]["width_px"]), int(self.config["roi"]["height_px"])
+
+
+def resolve_run(config: Mapping[str, Any], *, profiles_dir: Path, root: Path) -> RunInputs:
+    """Validate *config* (a copy is taken) and resolve its component profile from *profiles_dir*.
+
+    Schema v1 configs may override the profile's tolerances / geometry ranges; the ``render``
+    section gets the profile's defaults (``component_color``, ``component_type``, ``mm_per_px``).
+    """
+    config = copy.deepcopy(dict(config))
+    validate_config(config)
+    profile_id = config["run"].get("component_profile", DEFAULT_COMPONENT_PROFILE)
+    profile = load_profile(profile_id, profiles_dir)
+    profile_path = Path(profiles_dir) / f"{profile_id}.yaml"
+    geometry_ranges = profile.get("geometry_ranges")
+    tolerances = profile.get("tolerances")
+    # Backward compatibility: v1 configs can override from config
+    if config["run"]["schema_version"] == 1:
+        if "tolerances" in config:
+            tolerances = config["tolerances"].get(profile["component"]["package"], tolerances)
+        if "geometry_ranges" in config:
+            geometry_ranges = config["geometry_ranges"]
+    # Fill component_color/component_type from the profile (also persisted in config.yaml).
+    config["render"] = merge_profile_render(config["render"], profile, config.get("roi"))
+    return RunInputs(
+        config=config, profile_id=profile_id, profile=profile, profile_hash=hash_profile(profile_path),
+        profile_rel_path=rel_profile_path(profile_path, root), footprint=profile["component"]["footprint"],
+        geometry_ranges=geometry_ranges, tolerances=tolerances,
+        component_height_mm=float(profile.get("component", {}).get("nominal_dims_mm", {}).get("height", 0.45) or 0.45),
+        profile_render_3d=profile.get("render_3d") or {},
+    )
+
+
+#: ``progress(class_name, i, count, record)`` after sample *i* (1-based) of *count* of a class.
+SampleProgress = Callable[[str, int, int, dict[str, Any]], None]
+
+
+def plan_records(run: RunInputs, *, start_index: int = 0, image_filters: dict[str, Any],
+                 enable_cardinal_rotation_90: bool = True, labels_profile_id: str = "",
+                 progress: SampleProgress | None = None) -> list[dict[str, Any]]:
+    """Sample geometry, defect, augmentation and seed of every image of the run (no rendering, no I/O).
+
+    Indices count up from *start_index* over the classes in config order; each sample's domain is
+    :func:`~simple_sim.generation.common.sample_domain`. The label of a record is the one derived
+    from its geometry (a mismatch with the target class is logged).
+    """
+    config = run.config
+    records: list[dict[str, Any]] = []
+    sample_index = int(start_index)
+    for class_name, count in config["classes"].items():
+        log.info(f"\nGenerating {count} samples for class {class_name}")
+        for i in range(count):
+            rec, _rng = sample_record(
+                sample_index,
+                class_name,
+                config=config,
+                run_seed=config["run"]["seed"],
+                geometry_ranges=run.geometry_ranges,
+                tolerances=run.tolerances,
+                image_filters=image_filters,
+                enable_cardinal_rotation_90=enable_cardinal_rotation_90,
+                footprint=run.footprint,
+                profile_id=labels_profile_id,
+                domain=sample_domain(config, sample_index),
+            )
+            if rec["class_name"] != class_name:
+                # The derived label wins to keep labels consistent with geometry.
+                log.warning(f"\nLabel mismatch for sample {sample_index}: target={class_name}, derived={rec['class_name']}")
+            records.append(rec)
+            sample_index += 1
+            if progress is not None:
+                progress(class_name, i + 1, count, rec)
+    return records
+
+
+def _sampling_progress() -> SampleProgress:
+    """tqdm bar per class plus ``gen_progress`` telemetry every 10 samples (the CLI's progress output)."""
+    state: dict[str, Any] = {}
+
+    def progress(class_name: str, i: int, count: int, rec: dict[str, Any]) -> None:
+        if state.get("class") != class_name:
+            if state.get("bar") is not None:
+                state["bar"].close()
+            state.update({"class": class_name, "bar": tqdm(total=count, desc=class_name), "t0": time.perf_counter()})
+        rate = i / max(1e-9, time.perf_counter() - state["t0"])
+        bar = state["bar"]
+        bar.update(1)
+        bar.set_postfix({"idx": rec["index"], "samp/s": f"{rate:.1f}"})
+        if i % 10 == 0 or i == count:
+            emit("gen_progress", class_name=class_name, class_i=int(i), class_total=int(count),
+                 global_idx=int(rec["index"]), samp_per_s=float(rate), last_image_path=rec["image_path"])
+        if i == count:
+            bar.close()
+            state["bar"] = None
+
+    return progress
+
+
 def generate_dataset(
-    config_path: Path,
+    config_path: Path | Mapping[str, Any],
     output_dir: Path,
     *,
     extend: bool = False,
     enable_cardinal_rotation_90: bool = True,
     project_root: Path | None = None,
+    profiles_dir: Path | None = None,
+    image_filters: dict[str, Any] | None = None,
     allow_renderer_mismatch: bool = False,
 ) -> dict[str, Any]:
-    """Generate a complete dataset from a YAML config into *output_dir*.
+    """Generate a complete dataset from a run config into *output_dir*.
 
-    With ``extend=True`` and an existing dataset, new samples are appended (profile id/hash and
-    the renderer version must match; *allow_renderer_mismatch* turns the latter into a warning). Profiles are looked up under ``<project_root>/configs/profiles``.
+    *config_path*: a YAML file or an already loaded config mapping (not modified). With
+    ``extend=True`` and an existing dataset, new samples are appended (profile id/hash and the
+    renderer version must match; *allow_renderer_mismatch* turns the latter into a warning).
+    Profiles come from *profiles_dir* (default ``<project_root>/configs/profiles``); *image_filters*
+    (default: ``$IMAGE_FILTERS``, the GUI hand-off) are normalised with
+    :func:`simple_sim.filter_settings.normalize_image_filters`.
     Returns a summary (see :func:`simple_sim.generation.common.summarize`).
     """
     output_dir = Path(output_dir)
     root = Path(project_root) if project_root else default_project_root()
-    log.info(f"Loading configuration from {config_path}")
-    config = load_config(config_path)
-    validate_config(config)
-
-    image_filters = load_image_filters_env()
+    if isinstance(config_path, Mapping):
+        raw_config = config_path
+    else:
+        log.info(f"Loading configuration from {config_path}")
+        raw_config = load_config(config_path)
+    run = resolve_run(raw_config, profiles_dir=Path(profiles_dir) if profiles_dir else root / "configs" / "profiles",
+                      root=root)
+    config = run.config
+    image_filters = load_image_filters_env() if image_filters is None else normalize_image_filters(image_filters)
 
     run_id = config["run"]["run_id"]
     run_seed = config["run"]["seed"]
-    schema_version = config["run"]["schema_version"]
-    roi_width = config["roi"]["width_px"]
-    roi_height = config["roi"]["height_px"]
+    roi_width, roi_height = run.roi_size
     classes = config["classes"]
-    backend = config.get("render", {}).get("backend", "opencv_2d")
-
-    profile_id = config["run"].get("component_profile", DEFAULT_COMPONENT_PROFILE)
-    profiles_dir = root / "configs" / "profiles"
-    profile = load_profile(profile_id, profiles_dir)
-    profile_path = profiles_dir / f"{profile_id}.yaml"
-    profile_hash_str = hash_profile(profile_path)
-    relative_profile_path = rel_profile_path(profile_path, root)
+    backend = run.backend
+    profile_id, profile_hash_str, relative_profile_path = run.profile_id, run.profile_hash, run.profile_rel_path
 
     log.info(f"Component Profile: {profile_id}")
     log.info(f"Profile Hash: {profile_hash_str[:72]}...")
-
-    footprint = profile["component"]["footprint"]
-    geometry_ranges = profile.get("geometry_ranges")
-    tolerances = profile.get("tolerances")
-    component_height_mm = float(profile.get("component", {}).get("nominal_dims_mm", {}).get("height", 0.45) or 0.45)
-    profile_render_3d = profile.get("render_3d") or {}
-
-    # Backward compatibility: v1 configs can override from config
-    if schema_version == 1:
-        if "tolerances" in config:
-            tolerances = config["tolerances"].get(profile["component"]["package"], tolerances)
-        if "geometry_ranges" in config:
-            geometry_ranges = config["geometry_ranges"]
-
-    # Fill component_color/component_type from the profile (also persisted in config.yaml).
-    config["render"] = merge_profile_render(config["render"], profile, config.get("roi"))
 
     ext: ExtendState | None = None
     if extend and output_dir.exists():
@@ -273,6 +397,7 @@ def generate_dataset(
             profile_rel_path=relative_profile_path,
             run_id=run_id,
             allow_renderer_mismatch=allow_renderer_mismatch,
+            config=config,
         )
         run_id = ext.run_id
     start_index = ext.start_index if ext else 0
@@ -301,55 +426,20 @@ def generate_dataset(
     )
 
     # Intermediate records keyed by stable index; splits are assigned after stratification.
-    records: list[dict[str, Any]] = []
-    sample_index = int(start_index)
     t_total0 = time.perf_counter()
-    for class_name, count in classes.items():
-        log.info(f"\nGenerating {count} samples for class {class_name}")
-        t0 = time.perf_counter()
-        progress = tqdm(range(count), desc=class_name)
-        for i in progress:
-            rec, _rng = sample_record(
-                sample_index,
-                class_name,
-                config=config,
-                run_seed=run_seed,
-                geometry_ranges=geometry_ranges,
-                tolerances=tolerances,
-                image_filters=image_filters,
-                enable_cardinal_rotation_90=enable_cardinal_rotation_90,
-                footprint=footprint,
-                profile_id=labels_profile_id,
-                domain=sample_domain(config, sample_index),
-            )
-            if rec["class_name"] != class_name:
-                # The derived label wins to keep labels consistent with geometry.
-                log.warning(f"\nLabel mismatch for sample {sample_index}: target={class_name}, derived={rec['class_name']}")
-            records.append(rec)
-
-            sample_index += 1
-            rate = (i + 1) / max(1e-9, time.perf_counter() - t0)
-            progress.set_postfix({"idx": sample_index - 1, "samp/s": f"{rate:.1f}"})
-            if (i + 1) % 10 == 0 or (i + 1) == count:
-                emit(
-                    "gen_progress",
-                    class_name=class_name,
-                    class_i=int(i + 1),
-                    class_total=int(count),
-                    global_idx=int(sample_index - 1),
-                    samp_per_s=float(rate),
-                    last_image_path=rec["image_path"],
-                )
+    records = plan_records(run, start_index=start_index, image_filters=image_filters,
+                           enable_cardinal_rotation_90=enable_cardinal_rotation_90,
+                           labels_profile_id=labels_profile_id, progress=_sampling_progress())
 
     log.info("\nGenerating train/val/test splits")
     extra_render_meta = None
-    if backend == "blender_3d":
+    if backend_of(config["render"]).needs_blender:
         extra_render_meta = {
-            "backend": "blender_3d",
+            "backend": backend,
             "mm_per_px": float(config["roi"]["mm_per_px"]),
             "cycles_samples": int(((config.get("render") or {}).get("blender") or {}).get("samples", 0) or 0),
             "device": blender_settings(config)["device"],
-            "profile_render_3d": profile_render_3d,
+            "profile_render_3d": run.profile_render_3d,
         }
     meta_rows, label_rows, new_splits = build_rows(
         records,
@@ -362,48 +452,23 @@ def generate_dataset(
         split_seed=int(run_seed) + int(start_index),
         extra_render_meta=extra_render_meta,
     )
-    if backend not in ("opencv_2d", "blender_3d"):
-        raise ValueError(f"Unsupported render backend: {backend}")
-
-    # Per-domain camera (domains.<name>.camera) on top of render.camera; None = no override.
-    domain_render = {name: {**config["render"], "camera": domain_camera(config["render"], dcfg)}
-                     if domain_camera(config["render"], dcfg) is not None else dict(config["render"])
-                     for name, dcfg in config["domains"].items()}
-
-    def render_2d(r: dict[str, Any]) -> np.ndarray:
-        return render_roi(
-            nominal=r["nominal"],
-            defect_params=r["defect"],
-            augment=r["augment"],
-            roi_size=(roi_width, roi_height),
-            config=domain_render[str(r.get("domain") or DOMAIN)],
-            tolerances=tolerances,
-            rng=np.random.default_rng(int(r["seed"])),
-            footprint=footprint,
-        )
-
-    def write_2d(out_root: Path) -> None:
-        """Render + write all records in parallel threads (streamed: images are never all held in memory)."""
-        workers = render_workers()
-        log.info(f"Rendering {len(records)} images with {workers} worker thread(s)")
-
-        def job(r: dict[str, Any]) -> None:
-            write_image(out_root / r["image_path"], render_2d(r))
-
-        for _ in tqdm(imap_ordered(job, records, workers=workers), total=len(records), desc="render"):
-            pass
-
-    def render_3d(out_root: Path, jobs_filename: str, at_least: bool) -> None:
+    def render(out_root: Path, jobs_filename: str, at_least: bool) -> None:
+        if backend == Backend.OPENCV_2D:
+            # Per-domain camera (domains.<name>.camera) on top of render.camera.
+            spec = RenderSpec.from_run_config(config, run.profile, tolerances=run.tolerances)
+            bar = tqdm(total=len(records), desc="render")
+            render_2d_records([(spec, r, None) for r in records], out_root, progress=lambda done, _total: bar.update(1))
+            bar.close()
+            return
         render_blender_records(
             records,
             config=config,
             roi_width=roi_width,
             roi_height=roi_height,
-            footprint=footprint,
-            component_height_mm=component_height_mm,
-            profile_render_3d=profile_render_3d,
-            tolerances=tolerances,
-            project_root=root,
+            footprint=run.footprint,
+            component_height_mm=run.component_height_mm,
+            profile_render_3d=run.profile_render_3d,
+            tolerances=run.tolerances,
             output_root=out_root,
             jobs_filename=jobs_filename,
             expect_at_least=at_least,
@@ -413,10 +478,7 @@ def generate_dataset(
     if ext is not None and ext.meta_rows:
         # Append mode: keep existing dataset, add new images + rows + update split files.
         (output_dir / "images").mkdir(parents=True, exist_ok=True)
-        if backend == "opencv_2d":
-            write_2d(output_dir)
-        else:
-            render_3d(output_dir, "blender_jobs_extend.jsonl", True)
+        render(output_dir, "blender_jobs_extend.jsonl", True)
         append_jsonl_rows(output_dir / "meta.jsonl", meta_rows)
         append_jsonl_rows(output_dir / "labels.jsonl", label_rows)
 
@@ -427,10 +489,7 @@ def generate_dataset(
         all_label_rows = ext.label_rows + label_rows
     else:
         with atomic_dataset_dir(output_dir) as temp_dir:
-            if backend == "opencv_2d":
-                write_2d(temp_dir)
-            else:
-                render_3d(temp_dir, "blender_jobs.jsonl", False)
+            render(temp_dir, "blender_jobs.jsonl", False)
             write_dataset_files(temp_dir, meta_rows, label_rows, config)
         final_splits = new_splits
         all_meta_rows = meta_rows

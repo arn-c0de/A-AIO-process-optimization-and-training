@@ -9,9 +9,10 @@ import numpy as np
 
 from simple_sim.classes import SOLDER_ONLY_CLASSES
 
-from .draw import _compute_pad_positions, body_geometry, draw_component, draw_pads, draw_solder, draw_substrate
+from .draw import draw_component, draw_pads, draw_solder, draw_substrate
 from .filters import apply_post_filters
-from .photoreal import render_photoreal_base, solder_defect_layout
+from .geometry import body_geometry, pad_positions
+from .photoreal import DEFAULT_SUPERSAMPLING, render_photoreal_base, solder_defect_layout
 
 # ``render.post_filters`` (photoreal only):
 #   legacy  domain blur/noise and the augmentation rotation are applied to the finished camera image
@@ -33,13 +34,17 @@ def post_filter_mode(config: dict[str, Any]) -> str:
 
 
 def _draw_flat_solder_defects(img, nominal, defect_params, tolerances, footprint, rng) -> None:
-    """SOLDER_BALL / EXCESS_SOLDER for the legacy flat style (same layout as photoreal)."""
+    """SOLDER_BALL / EXCESS_SOLDER for the legacy flat style (same layout as photoreal).
+
+    The layout gets ``ss=DEFAULT_SUPERSAMPLING`` although the flat image is at camera resolution: the
+    flat style always did so (minimum ball size), and changing it would change every flat image.
+    """
     if defect_params["type"] not in SOLDER_ONLY_CLASSES:
         return
-    pads = _compute_pad_positions(footprint, nominal, img.shape[:2])
+    pads = pad_positions(footprint, nominal, img.shape[:2])
     geo = body_geometry(nominal, defect_params, tolerances, img.shape[:2])
     rect = cv2.boxPoints(((float(geo["center"][0]), float(geo["center"][1])), (geo["length"], geo["width"]), geo["rotation_deg"]))
-    layout = solder_defect_layout(defect_params["type"], pads, rect, rng)
+    layout = solder_defect_layout(defect_params["type"], pads, rect, rng, ss=DEFAULT_SUPERSAMPLING)
     for i in layout["excess"]:
         p = pads[i]
         cv2.ellipse(img, (p["x"] + p["w"] // 2, p["y"] + p["h"] // 2), (int(p["w"] * 0.65), int(p["h"] * 0.65)),

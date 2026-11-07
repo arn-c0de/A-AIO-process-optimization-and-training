@@ -36,7 +36,7 @@ from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params  # noqa: E402
 from simple_sim.generators.blender3d.bake import bake_fields  # noqa: E402
 from simple_sim.generators.blender3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # noqa: E402
-from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry  # noqa: E402
+from simple_sim.generators.opencv2d import RenderSpec, render_sample, sample_nominal_geometry  # noqa: E402
 from simple_sim.classes import STANDARD_CLASSES  # noqa: E402
 from simple_sim.io_utils import atomic_write_text, load_yaml  # noqa: E402
 
@@ -155,16 +155,8 @@ def _render_one_2d(
         "rotation_deg": 0.0,
     }
 
-    img = render_roi(
-        nominal=nominal,
-        defect_params=defect,
-        augment=augment,
-        roi_size=(roi_w, roi_h),
-        config=render_cfg,
-        tolerances=tolerances,
-        rng=rng,
-        footprint=footprint,
-    )
+    spec = RenderSpec(roi_size=(roi_w, roi_h), render=render_cfg, footprint=footprint, tolerances=tolerances)
+    img = render_sample(spec, nominal, defect, augment, rng)
     img = draw_defect_overlay(img, defect, nominal)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ok = cv2.imwrite(str(out_path), img)
@@ -432,7 +424,6 @@ def _run(args: argparse.Namespace) -> None:
             print(f"\nRendering {len(jobs)} 3D sample(s) via Blender (exe={exe!r} samples={samples} device={device!r} engine={engine})...")
             try:
                 render_blender_batch(
-                    sim_root=project_root,
                     jobs_path=jobs_path,
                     output_root=project_root,
                     blender_executable=str(exe),

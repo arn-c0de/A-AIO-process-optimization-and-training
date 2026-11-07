@@ -5,7 +5,7 @@ import pytest
 
 from simple_sim.defects import sample_defect_params
 from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
-from simple_sim.generators.opencv2d.draw import _compute_pad_positions
+from simple_sim.generators.opencv2d.geometry import pad_positions
 
 TOL = {"ok_shift_px": 3.0, "ok_rotation_deg": 5.0, "tombstone_tilt_deg": 75.0}
 CFG = {"component_color": [20, 20, 20], "substrate_color": [40, 90, 40], "copper_color": [60, 120, 180]}
@@ -63,7 +63,7 @@ def test_flat_style_still_available():
 def test_qfn_footprint_has_pad_rows_and_thermal_pad():
     nominal = {"pad_width": 16, "pad_height": 40, "pad_spacing": 180, "pad_spacing_y": 180,
                "component_length": 168, "component_width": 168}
-    pads = _compute_pad_positions("qfn_32", nominal, (256, 256))
+    pads = pad_positions("qfn_32", nominal, (256, 256))
     assert len(pads) == 33
     assert pads[-1]["w"] == pads[-1]["h"] == round(168 * 0.6)
 
@@ -93,13 +93,13 @@ def test_texture_dir_is_validated(tmp_path):
 
 def test_tombstone_pose_shows_top_and_raised_end_face():
     """Pivot about the anchored bottom edge: top face L*cos(t) starts H*sin(t) behind the anchor."""
-    from simple_sim.generators.opencv2d.photoreal import _THICKNESS_RATIO, _tombstone_pose
+    from simple_sim.generators.opencv2d.photoreal.parts import THICKNESS_RATIO, tombstone_pose
 
     geo = {"length": 60.0, "width": 30.0, "tilt_deg": 80.0, "rotation_deg": 0.0, "center": (64, 64)}
-    pose = _tombstone_pose(geo, selector=0, img_shape=(128, 128))
+    pose = tombstone_pose(geo, selector=0, img_shape=(128, 128))
     t = np.radians(80.0)
     assert pose["top_len"] == pytest.approx(60.0 * np.cos(t), rel=1e-5)
-    assert pose["end_len"] == pytest.approx(30.0 * _THICKNESS_RATIO * np.sin(t), rel=1e-5)
+    assert pose["end_len"] == pytest.approx(30.0 * THICKNESS_RATIO * np.sin(t), rel=1e-5)
     xs = pose["box"][:, 0]
     anchor_x = pose["anchor"][0]  # raised towards +x for selector 0
     assert xs.min() == pytest.approx(anchor_x - pose["end_len"], abs=1.0)
@@ -127,14 +127,14 @@ def test_tombstone_tilt_spans_threshold_to_upright():
 
 
 def test_rework_residue_stays_out_of_the_keepout():
-    import cv2
 
-    from simple_sim.generators.opencv2d.photoreal import _rework
+    from simple_sim.generators.opencv2d.photoreal.context import RenderContext
+    from simple_sim.generators.opencv2d.photoreal.rework import draw_rework
 
     img = np.full((256, 256, 3), 100.0, dtype=np.float32)
     keepout = (96, 112, 160, 144)
     for seed in range(20):
-        _rework(img, keepout, 20.0, np.random.default_rng(seed), 1.0)
+        draw_rework(RenderContext(), img, keepout, 20.0, np.random.default_rng(seed), 1.0)
     x0, y0, x1, y1 = keepout
     assert np.all(img[y0:y1, x0:x1] == 100.0)  # label-relevant area untouched
     assert np.abs(img - 100.0).max() > 20      # but residue was drawn elsewhere
@@ -153,13 +153,13 @@ def test_solder_defect_layout():
     body = np.array([[35, 45], [125, 45], [125, 75], [35, 75]], dtype=np.float32)
     for seed in range(20):
         rng = np.random.default_rng(seed)
-        assert 1 <= len(solder_defect_layout("EXCESS_SOLDER", pads, body, rng)["excess"]) <= 2
-        balls = solder_defect_layout("SOLDER_BALL", pads, body, rng)["balls"]
+        assert 1 <= len(solder_defect_layout("EXCESS_SOLDER", pads, body, rng, ss=2)["excess"]) <= 2
+        balls = solder_defect_layout("SOLDER_BALL", pads, body, rng, ss=2)["balls"]
         assert 1 <= len(balls) <= 4
         for x, y, r in balls:  # never on a pad, never under the body
             assert not any(p["x"] - r < x < p["x"] + p["w"] + r and p["y"] - r < y < p["y"] + p["h"] + r for p in pads)
             assert cv2_point_outside(body, x, y, r)
-    assert solder_defect_layout("OK", pads, body, np.random.default_rng(0)) == {"excess": [], "balls": []}
+    assert solder_defect_layout("OK", pads, body, np.random.default_rng(0), ss=2) == {"excess": [], "balls": []}
 
 
 def cv2_point_outside(poly, x, y, r):
@@ -199,12 +199,9 @@ def test_phone_camera_preset():
 @pytest.mark.parametrize("footprint", list(FOOTPRINTS))
 @pytest.mark.parametrize("factor", [1, 3, 4])
 def test_supersampling_factors_render(footprint, factor):
-    """``render.supersampling`` 1-4 renders every footprint; the default (2) is unchanged and SS is restored."""
-    from simple_sim.generators.opencv2d import photoreal
-
+    """``render.supersampling`` 1-4 renders every footprint; the default (2) is unchanged."""
     img = _render(footprint, "TOMBSTONE", supersampling=factor)
     assert img.shape == (128, 128, 3) and img.dtype == np.uint8
-    assert photoreal.SS == photoreal.DEFAULT_SUPERSAMPLING
     assert np.array_equal(_render(footprint, "OK", seed=3), _render(footprint, "OK", seed=3, supersampling=2))
 
 
@@ -264,8 +261,8 @@ def test_sot23_body_is_vertical_and_leads_move_with_it():
     assert nominal_body_angle("sot") == 90.0 and nominal_body_angle("resistor") == 0.0
     nom = {"pad_width": 22, "pad_height": 18, "pad_spacing": 50, "pad_spacing_y": 42,
            "component_length": 64, "component_width": 29}
-    pads = _compute_pad_positions("sot23", nom, (128, 128))
-    leads = lead_layout("sot", pads, (64, 64), 64.0, 29.0)
+    pads = pad_positions("sot23", nom, (128, 128))
+    leads = lead_layout("sot", pads, (64, 64), 64.0, 29.0, ss=2)
     assert len(leads) == 3 and all(l["axis"] == "v" for l in leads)  # all leave the long sides
     assert sorted(sum(l["side"] == s for l in leads) for s in (-1.0, 1.0)) == [1, 2]  # pins 1+2 on one side, pin 3 opposite
     assert all(l["tip"] > l["edge"] for l in leads)

@@ -4,9 +4,9 @@ Pipeline (window mode, one inspected part per image):
 
     footprints -> placement -> netlist -> zones -> routing -> stitching -> DRC -> raster
 
-:func:`build_window_board` runs it for one render window; ``photoreal._board`` rasterises the
+:func:`build_window_board` runs it for one render window; ``photoreal.scene.draw_board`` rasterises the
 result. ``render.board`` in the run config selects the router (``legacy`` keeps the old
-``_traces_and_vias`` generator bit-for-bit), the design-rule preset, the pour probability and
+``photoreal.copper.draw_legacy_copper`` generator bit-for-bit), the design-rule preset, the pour probability and
 whether the DRC runs per sample. See ``docs/refactoring/PCB_TRACE_ROUTING_PLAN.md``.
 """
 
@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -130,16 +131,24 @@ def _clear_of(n: dict[str, Any], rects: list[tuple[float, float, float, float]])
     return all(nx1 < r[0] or nx0 > r[2] or ny1 < r[1] or ny0 > r[3] for r in rects)
 
 
+class WindowBoard(NamedTuple):
+    """Result of :func:`build_window_board`."""
+
+    board: Board
+    report: DrcReport | None              # ``None`` with ``drc: off``
+    neighbours: list[dict[str, Any]]      # the neighbour parts of the board (what the renderer draws)
+
+
 def build_window_board(*, footprint: str, family: str, target_pads: list[PadSpec], target_body_px: Vec,
                        shape: tuple[int, int], neighbours: list[dict[str, Any]], px_to_mm: float,
                        options: BoardOptions, seed: int, scale: float = 1.0,
-                       target_rotation: float = 0.0) -> tuple[Board, DrcReport | None]:
+                       target_rotation: float = 0.0) -> WindowBoard:
     """Model of the render window around the inspected part: parts, nets, pours, tracks, vias.
 
     *target_pads* / *neighbours* are in supersampled pixels (what the renderer draws), *px_to_mm*
     converts them to mm. Neighbours that sit in the inspected part's fan-out band (where its
-    stubs, jogs and vias must go) are removed from *neighbours* **in place**, so the renderer draws
-    exactly the parts of the returned board. *scale* multiplies every design-rule length (the presets are tuned for
+    stubs, jogs and vias must go) are left out: ``WindowBoard.neighbours`` are the parts the renderer
+    must draw (*neighbours* itself is not modified). *scale* multiplies every design-rule length (the presets are tuned for
     parts drawn at 0.01 mm/px, see :mod:`simple_sim.board.rules`); *target_rotation* is the
     inspected part's body angle in degrees (0 or 90: a SOT-23 body stands upright).
 
@@ -169,22 +178,19 @@ def build_window_board(*, footprint: str, family: str, target_pads: list[PadSpec
         for zone in board.zones:
             board.vias += stitch_vias(board, zone, occ, rng_route)
         if options.drc == "off":
-            neighbours[:] = kept
-            return board, None
+            return WindowBoard(board, None, kept)
         report = check(board)
         if report.ok:
-            neighbours[:] = kept
-            return board, report
+            return WindowBoard(board, report, kept)
     assert board is not None and report is not None
-    neighbours[:] = kept
     if options.drc == "strict":
         raise BoardDrcError(report, seed)
     log.warning("board DRC: %s (seed %s, %s)", report.to_dict(), seed, options.routing)
-    return board, report
+    return WindowBoard(board, report, kept)
 
 
 __all__ = [
     "BOARD_ROUTERS", "DEFAULT_MM_PER_PX", "DRC_MODES", "LEGACY", "NONE", "Board", "BoardDrcError", "BoardOptions", "DrcReport",
-    "PadSpec",
+    "PadSpec", "WindowBoard",
     "board_options", "build_window_board", "family_of", "footprint_pads", "neighbour_layout", "validate_board_options",
 ]

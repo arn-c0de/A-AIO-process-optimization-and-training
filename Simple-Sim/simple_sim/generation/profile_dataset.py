@@ -8,21 +8,22 @@ import time
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from tqdm import tqdm
 
 from simple_sim.config import load_config, merge_profile_render, validate_config
-from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files, write_image
-from simple_sim.parallel import imap_ordered, render_workers
+from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files
 from simple_sim.generation.common import (
     build_rows,
     finalize_splits,
+    RenderTask,
     project_root as default_project_root,
+    render_2d_records,
     sample_record,
     summarize,
 )
 from simple_sim.filter_settings import load_image_filters_env
-from simple_sim.generators.opencv2d import render_roi
+from simple_sim.generators.backends import backend_of, supporting
+from simple_sim.generators.opencv2d.spec import RenderSpec
 from simple_sim.generators.version import RENDERER_VERSION
 from simple_sim.manifest import write_multi_profile_manifest
 from simple_sim.profile_hash import hash_profile, load_profile
@@ -59,9 +60,11 @@ def generate_profile_dataset(
     profile_ids = config["run"]["component_profiles"]
     profiles_dir = root / "configs" / "profiles"
 
-    backend = config.get("render", {}).get("backend", "opencv_2d")
-    if backend != "opencv_2d":
-        raise ValueError("generate_profile_dataset.py currently supports only render.backend='opencv_2d'")
+    info = backend_of(config.get("render"))
+    backend = info.backend.value
+    if not info.profile_classifier:
+        raise ValueError("generate_profile_dataset.py currently supports only render.backend="
+                         + " | ".join(repr(b) for b in supporting("profile_classifier")))
 
     profile_data = []
     for pid in profile_ids:
@@ -83,7 +86,7 @@ def generate_profile_dataset(
     log.info(f"Total samples: {total_per_class * len(profile_ids)}")
     log.info(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
 
-    jobs: list[tuple[dict[str, Any], np.random.Generator, dict[str, Any], dict[str, Any] | None, str]] = []
+    jobs: list[RenderTask] = []
     records: list[dict[str, Any]] = []
     global_index = 0
     t_total0 = time.perf_counter()
@@ -94,8 +97,9 @@ def generate_profile_dataset(
         footprint = profile["component"]["footprint"]
         geometry_ranges = profile.get("geometry_ranges")
         tolerances = profile.get("tolerances")
-
-        render_config = merge_profile_render(config["render"], profile, config.get("roi"))
+        # Per-domain cameras do not apply here: every sample of this generator is in DOMAIN.
+        spec = RenderSpec(roi_size=(roi_width, roi_height), footprint=footprint, tolerances=tolerances,
+                          render=merge_profile_render(config["render"], profile, config.get("roi")))
 
         log.info(f"\nGenerating samples for profile: {pid}")
         for class_name, count in classes.items():
@@ -114,7 +118,7 @@ def generate_profile_dataset(
                 )
                 # Rendering continues the sampling rng (unlike generate.py, which reseeds); each
                 # record has its own rng, so rendering them later in threads gives the same images.
-                jobs.append((rec, rng, render_config, tolerances, footprint))
+                jobs.append((spec, rec, rng))
                 records.append(rec)
                 global_index += 1
 
@@ -130,26 +134,10 @@ def generate_profile_dataset(
     )
 
     log.info(f"\nWriting dataset to {output_dir}")
-    workers = render_workers()
-
-    def render_job(job: tuple[dict[str, Any], np.random.Generator, dict[str, Any], dict[str, Any] | None, str]) -> None:
-        rec, rng, render_config, tolerances, footprint = job
-        img = render_roi(
-            nominal=rec["nominal"],
-            defect_params=rec["defect"],
-            augment=rec["augment"],
-            roi_size=(roi_width, roi_height),
-            config=render_config,
-            tolerances=tolerances,
-            rng=rng,
-            footprint=footprint,
-        )
-        write_image(temp_dir / rec["image_path"], img)
-
     with atomic_dataset_dir(output_dir) as temp_dir:
-        log.info(f"Rendering {len(jobs)} images with {workers} worker thread(s)")
-        for _ in tqdm(imap_ordered(render_job, jobs, workers=workers), total=len(jobs), desc="render"):
-            pass
+        bar = tqdm(total=len(jobs), desc="render")
+        render_2d_records(jobs, temp_dir, progress=lambda done, _total: bar.update(1))
+        bar.close()
         write_dataset_files(temp_dir, meta_rows, label_rows, config)
     finalize_splits(output_dir, splits, label_rows)
 

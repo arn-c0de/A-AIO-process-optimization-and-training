@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.generators.opencv2d import photoreal  # noqa: E402
+from simple_sim.generators.opencv2d.photoreal.imageops import blend  # noqa: E402
 from simple_sim.parallel import imap_ordered, render_workers  # noqa: E402
 from tests.test_photoreal import CLASSES, FOOTPRINTS, _render  # noqa: E402
 
@@ -54,13 +54,12 @@ def test_render_workers(monkeypatch):
 
 
 def test_parallel_renders_with_mixed_supersampling_match_sequential():
-    """Supersampling is thread-local: concurrent renders with different factors do not interfere."""
+    """Each render has its own RenderContext: concurrent renders with different factors do not interfere."""
     jobs = [(fp, cls, seed, ss) for fp in FOOTPRINTS for cls in CLASSES[:4] for seed in (1, 2) for ss in (1, 2, 4)]
     sequential = [_render(fp, cls, seed=seed, supersampling=ss) for fp, cls, seed, ss in jobs]
     with ThreadPoolExecutor(8) as ex:
         parallel = list(ex.map(lambda j: _render(j[0], j[1], seed=j[2], supersampling=j[3]), jobs))
     assert all(np.array_equal(a, b) for a, b in zip(sequential, parallel))
-    assert photoreal.SS == photoreal.DEFAULT_SUPERSAMPLING
 
 
 def test_blend_matches_full_image_blend():
@@ -72,15 +71,15 @@ def test_blend_matches_full_image_blend():
         color = rng.uniform(0, 255, (64, 80, 3)).astype(np.float32) if per_pixel else np.array([1.0, 2.0, 3.0], np.float32)
         expected = img * (1.0 - alpha[..., None]) + color * alpha[..., None]
         got = img.copy()
-        photoreal._blend(got, color, alpha)
+        blend(got, color, alpha)
         assert np.array_equal(got, expected.astype(np.float32))
     untouched = img.copy()
-    photoreal._blend(untouched, color, np.zeros((64, 80), dtype=np.float32))
+    blend(untouched, color, np.zeros((64, 80), dtype=np.float32))
     assert np.array_equal(untouched, img)
 
 
 def test_generate_dataset_parallel_matches_sequential(tmp_path, monkeypatch):
-    """Threaded 2D dataset rendering writes the same images as a sequential run."""
+    """Threaded and multi-process 2D dataset rendering write the same images as a sequential run."""
     import cv2
     import yaml
 
@@ -94,16 +93,19 @@ def test_generate_dataset_parallel_matches_sequential(tmp_path, monkeypatch):
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
     outs = {}
-    for workers in ("1", "4"):
+    for workers, executor in (("1", "thread"), ("4", "thread"), ("2", "process")):
         monkeypatch.setenv("SIMPLE_SIM_RENDER_WORKERS", workers)
+        monkeypatch.setenv("SIMPLE_SIM_RENDER_EXECUTOR", executor)
         out = tmp_path / f"ds_{workers}"
         generate_dataset(cfg_path, out, project_root=root)
         outs[workers] = out
     imgs = sorted(p.relative_to(outs["1"]) for p in (outs["1"] / "images").glob("*.png"))
     assert len(imgs) == 12
     for rel in imgs:
-        assert np.array_equal(cv2.imread(str(outs["1"] / rel)), cv2.imread(str(outs["4"] / rel)))
-    assert (outs["1"] / "labels.jsonl").read_text() == (outs["4"] / "labels.jsonl").read_text()
+        ref = cv2.imread(str(outs["1"] / rel))
+        assert np.array_equal(ref, cv2.imread(str(outs["4"] / rel))) and np.array_equal(ref, cv2.imread(str(outs["2"] / rel)))
+    labels = (outs["1"] / "labels.jsonl").read_text()
+    assert labels == (outs["4"] / "labels.jsonl").read_text() == (outs["2"] / "labels.jsonl").read_text()
 
 
 def test_parallel_board_bake_matches_sequential(tmp_path, monkeypatch):
@@ -141,13 +143,49 @@ def test_generate_profile_dataset_parallel_matches_sequential(tmp_path, monkeypa
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
     outs = {}
-    for workers in ("1", "4"):
+    for workers, executor in (("1", "thread"), ("4", "thread"), ("2", "process")):
         monkeypatch.setenv("SIMPLE_SIM_RENDER_WORKERS", workers)
+        monkeypatch.setenv("SIMPLE_SIM_RENDER_EXECUTOR", executor)
         out = tmp_path / f"ds_{workers}"
         generate_profile_dataset(cfg_path, out, project_root=root)
         outs[workers] = out
     imgs = sorted(p.relative_to(outs["1"]) for p in (outs["1"] / "images").rglob("*.png"))
     assert len(imgs) >= 6
     for rel in imgs:
-        assert np.array_equal(cv2.imread(str(outs["1"] / rel)), cv2.imread(str(outs["4"] / rel)))
-    assert (outs["1"] / "labels.jsonl").read_text() == (outs["4"] / "labels.jsonl").read_text()
+        ref = cv2.imread(str(outs["1"] / rel))
+        assert np.array_equal(ref, cv2.imread(str(outs["4"] / rel))) and np.array_equal(ref, cv2.imread(str(outs["2"] / rel)))
+    labels = (outs["1"] / "labels.jsonl").read_text()
+    assert labels == (outs["4"] / "labels.jsonl").read_text() == (outs["2"] / "labels.jsonl").read_text()
+
+
+def test_process_rendering_falls_back_to_threads_without_a_main_guard(tmp_path):
+    """A script that calls generate_dataset at module level (no ``__main__`` guard) breaks spawned
+    workers; generation must still finish, with the same images as a thread run."""
+    import subprocess
+    import sys
+
+    import cv2
+
+    root = Path(__file__).parent.parent
+    script = tmp_path / "gen.py"
+    script.write_text(f"""
+import os, sys
+sys.path.insert(0, {str(root)!r})
+os.environ["SIMPLE_SIM_RENDER_WORKERS"] = "2"
+os.environ["SIMPLE_SIM_RENDER_EXECUTOR"] = sys.argv[1]
+from pathlib import Path
+from simple_sim.config import load_config
+from simple_sim.generation.dataset import generate_dataset
+cfg = load_config(Path({str(root / 'configs' / 'run_0001.yaml')!r}))
+cfg["classes"] = {{"OK": 2, "MISSING": 1}}
+cfg["roi"].update(width_px=64, height_px=64)
+generate_dataset(cfg, Path(sys.argv[2]), project_root=Path({str(root)!r}))
+""", encoding="utf-8")
+    for executor in ("process", "thread"):
+        proc = subprocess.run([sys.executable, str(script), executor, str(tmp_path / executor)], cwd=tmp_path,
+                              capture_output=True, text=True, timeout=300)
+        assert proc.returncode == 0, proc.stderr[-2000:]
+    imgs = sorted((tmp_path / "thread" / "images").glob("*.png"))
+    assert len(imgs) == 3
+    for p in imgs:
+        assert np.array_equal(cv2.imread(str(p)), cv2.imread(str(tmp_path / "process" / "images" / p.name)))

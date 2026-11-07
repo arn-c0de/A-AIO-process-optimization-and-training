@@ -17,7 +17,7 @@ profile + run config
   -> caller applies the usual image filters (augment)
 ```
 
-Both backends therefore share one look and one pad layout (`draw._compute_pad_positions`). Blender
+Both backends therefore share one look and one pad layout (`opencv2d.geometry.pad_positions`). Blender
 only models what needs real 3D: solder fillets, part bodies, leads, lighting.
 
 ## What the scene contains
@@ -52,7 +52,7 @@ render_3d:
 
 The default ring strength is calibrated so the board renders at its baked (photo-calibrated) colours.
 Board colours, traces, silkscreen and pad finish are changed in the 2D generator
-(`simple_sim/generators/opencv2d/photoreal.py`), or replaced with real photos via `render.texture_dir`
+(`simple_sim/generators/opencv2d/photoreal/`), or replaced with real photos via `render.texture_dir`
 (see `PHOTOREAL_RENDERING.md`).
 
 `geometry_ranges` have the same meaning as in 2D profiles (pixels at `roi.mm_per_px`;

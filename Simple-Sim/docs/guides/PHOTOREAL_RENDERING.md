@@ -12,7 +12,9 @@ Set `style: flat` to reproduce the old look (e.g. for ablations or extending a f
 
 ## What `photoreal` renders
 
-Implemented in `simple_sim/generators/opencv2d/photoreal.py`. Everything is rendered at 2x and
+Implemented in the package `simple_sim/generators/opencv2d/photoreal/` (one module per layer, see its
+`__init__`; `scene.py` composes them, an immutable `RenderContext` carries the supersampling factor and
+the solder look of one render). Everything is rendered at 2x and
 downsampled (anti-aliasing; `render.supersampling: 1-4`, default 2, 4 = "Ultra": cleaner edges and
 markings at about 4-5x the render time; also used for the baked board of the Blender backend); all randomness comes from the sample's seeded `rng`, so images stay
 deterministic per seed.
@@ -115,7 +117,7 @@ Lighting and surface parameters (`solder.SolderLook`) are drawn once per image, 
 image share them. All meniscus randomness comes from a **side stream** of the sample generator
 (`solder.side_stream`, which does not advance it): with the same seed, everything except the joints,
 end caps, solder balls and bulges is pixel-identical to the legacy render, which makes A/B
-comparisons (arena, `tools/sim_to_real.py`) direct. Code: `simple_sim/generators/opencv2d/solder.py`.
+comparisons (arena, `tools/sim_to_real.py`) direct. Code: `simple_sim/generators/opencv2d/photoreal/meniscus.py`.
 
 ```yaml
 render:
@@ -123,8 +125,107 @@ render:
   solder: meniscus
 ```
 
-`generate --extend` does not compare `render.solder` yet: do not extend a legacy-solder dataset with
-`meniscus` (or the other way round) unless you want both looks mixed.
+`generate --extend` refuses to mix joint models: it compares the resolved `render.solder` (and the
+other look options, see `generation/render_options.py`) with the dataset's `config.yaml`;
+`--allow-renderer-mismatch` turns that into a warning.
+
+## Target look (`render.look`)
+
+`render.look` picks the domain the renderer imitates. `legacy` (default) is the palette above,
+bit-identical to earlier output. `quins` imitates the **QUINS AOI flatbed scans of the DeepVision xpa
+production boards** (`DeepVision-Web/data/store/datasets/xpa-top/quins/crops`, 23.7 px/mm). It was
+tuned by measuring ~20 000 good crops (median colour of each part form, centre patch of the part)
+and comparing whole-image statistics with `tools/look_stats.py`:
+
+| Material / effect | QUINS scans | `legacy` | `quins` |
+|---|---|---|---|
+| Solder mask (BGR, per-image median) | (62..72, 80..94, 46..55) | similar palette, stronger weave/mottling | measured palette, weave 1.2 %, mottling 2 % |
+| Copper under the mask | faint | x1.29-1.40 | x1.12-1.20 |
+| MLCC ceramic | (86, 108, 121) | (120, 152, 170) | measured |
+| Moulded IC/SOT, resistor, ferrite, power inductor, LED housing | (64, 68, 65), ~(44, 47, 44), dark, (99, 105, 104), white | all (34, 34, 34) | measured (only when the profile keeps the dark default colour) |
+| Chip terminals | flat bright tin, brightest where the plating rolls over the cap edges | tube-like ridge | flat, bright edges, darker middle |
+| Joints | ring-light reflections, no room lamps | legacy fillets | `meniscus` with a fixed ring light (`meniscus.sample_scanner_look`) |
+| Mask glare, rework artifacts | none / rare | 50 % / 25 % | 0 % / 3 % |
+| Camera | 23.7 px/mm, upscaled, ~0.9 levels noise, RGB fringes at edges | AOI preset | preset `quins` |
+
+Whole images (p10/p50/p90 over 600 real crops vs. 42 renders of 7 run configs, `tools/look_stats.py`):
+
+| Metric | QUINS | `legacy` | `quins` |
+|---|---|---|---|
+| mask hue (OpenCV) | 71/74/75 | 61/69.5/75 | 70/71/74 |
+| p1 grey | 44/51/62 | 17/34/60 | 28/50/62 |
+| p99 grey | 170/199/229 | 142/166/186 | 141/193/219 |
+| white share | 0.3/1.2/3.8 % | 0.02/0.5/1.3 % | 0.1/1.8/3.1 % |
+
+The camera preset `quins` adds three keys to `render.camera` (all off by default, without a random
+draw, so other presets render as before):
+
+- `sensor_px_per_mm: [min, max]`: sensor resolution. Replaces `capture_scale` by
+  `sensor_px_per_mm x roi.mm_per_px x zoom` (at most 1), so the scan resolution holds for every profile
+  scale and field of view.
+- `channel_shift: [min, max]`: line-scanner RGB misregistration in sensor pixels. Blue and red are
+  shifted apart along one of the four axis directions, which gives the colour fringes at bright edges.
+- `crop_part_lengths: [min, max]` (2D): field of view in body lengths, replacing `zoom`. DeepVision cuts
+  every QUINS crop at 3x the body length (measured 3.02-3.04 on all chip forms), so the preset uses
+  `[3, 3]`; for the 0402 profiles that magnifies the view (zoom 0.73), for 0603 at 100 px/mm it zooms out.
+
+`render.look: quins` sets the defaults `camera.preset: quins`, `mask_gloss: 0`, `rework_artifacts: 0.03`
+and `solder: meniscus`, and raises the neighbour-part density (`Look.crowd` 6; the xpa boards are densely
+populated); anything set explicitly in `render` wins. Look-specific randomness is drawn from the
+meniscus side stream only, so `quins` shares part placement and labels of a seed with `legacy`. Code:
+`simple_sim/generators/opencv2d/photoreal/look.py`.
+
+The example config `configs/run_0402_c_quins.yaml` also sets `post_filters: camera` and a calm domain
+(blur <= 0.3, noise <= 2, brightness 0.95-1.05). The domain noise of the other run configs (up to
+sigma 10, added at ROI resolution after the camera) alone made the images ~20x sharper than the scans
+(Laplacian variance 68 vs. 4.7).
+
+```yaml
+render:
+  backend: opencv_2d
+  look: quins
+  post_filters: camera
+```
+
+A/B against 300 good 0402-MLCC crops (form-02) of the scans, 300 OK renders each, ImageNet ResNet18
+embedding (`tools/sim_to_real.py`; NN distance ratio, 1.0 = as close as real to real):
+
+| Render | NN distance ratio | Laplacian variance (real 4.7) |
+|---|---|---|
+| `run_0402_c.yaml` (legacy) | 3.42 | 101 |
+| `look: quins`, run_0402_c domain | 2.70 | 68 |
+| `run_0402_c_quins.yaml` (crop 3x, crowd 2, calm domain, camera post filters; before the classifier tuning below) | 2.57 | 4.5 |
+
+1-NN accuracy stays ~1.0 (still separable): what is left is content (silkscreen and via placement,
+part arrangement) rather than colour. Variants of the joint lighting (low ring light, dark fillet
+slopes, more frost) and a darker mask did not move the ratio or made it worse.
+
+### Classifier test on real crops (`tools/eval_real.py`)
+
+`tools/eval_real.py --checkpoint model.pt --real DIR` scores a checkpoint on real crops sorted into one
+sub-folder per class (`OK`, `MISSING`, `MISSING@empty_pad`, ...; the part after `@` is a sub-group).
+Test set used: 400 good 0402 MLCCs (form-02, QUINS test split), 35 crops labelled "fehlt", 400 empty
+0402 pads ("leer") and 5 "versetzt". ResNet18, 2400 synthetic images, 6 epochs on CPU:
+
+| Training data | good -> OK | "fehlt" -> MISSING | empty pad -> MISSING |
+|---|---|---|---|
+| `run_0402_c` (legacy) | 3 % | 0 % | 0 % |
+| `run_0402_c_quins` (state of the A/B table above) | 0 % | 0 % | 1 % |
+| + train augment, high pillow-shaped paste on empty pads (`SolderLook.paste_scale`) | 0 % | 57 % | 79 % |
+| + narrow terminals (`Look.cap_len`), dim overhead / bright ring joint light | 0 % | 0 % | 0 % |
+
+So far no model trained on synthetic images alone accepts the real good parts: they are predicted as
+TOMBSTONE (or EXCESS_SOLDER). Diagnostics on the real OK crops: the prediction stays TOMBSTONE with
+the part masked out, so a global image property decides; transferring the real LAB colour statistics
+to synthetic OK images flips ~45 % of them to TOMBSTONE. The real scans have far more luminance spread
+(L std 32 vs. 20: densely packed bright terminals on dark mask) and twice the yellow-blue spread
+(tan MLCC neighbours, colour fringes). `Look.crowd` cannot reach that density: `neighbour_layout`
+places neighbours on a coarse grid with a large clearance. Next steps: denser packing in
+`simple_sim/board/placement.py` for this look, then repeat the test with several seeds (single runs
+vary strongly).
+
+`generate --extend` compares the resolved look (`render.look` and the camera preset, mask gloss and
+rework defaults it implies) with the dataset, so looks are not mixed by accident.
 
 ## Real board backgrounds (`render.texture_dir`)
 
