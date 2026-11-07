@@ -50,12 +50,16 @@ def test_gui_logic_imports_without_cv2_and_torch(tab: str) -> None:
 
 
 @pytest.mark.parametrize("module", [
+    "simple_sim.dataset_index",
     "simple_sim.filter_settings",
     "simple_sim.filter_profiles",
     "simple_sim.generators",
     "simple_sim.generators.version",
+    "simple_sim.images",
     "simple_sim.manifest",
     "simple_sim.model_bundle",
+    "simple_sim.reports",
+    "simple_sim.telemetry",
     "gui.components.filter_popup",
     "gui.tabs",
 ])
@@ -77,5 +81,54 @@ def test_filter_popup_exports_resolve_lazily() -> None:
         "import gui.components.filter_popup as fp\n"
         "assert 'gui.components.filter_popup.popup' not in sys.modules\n"
         "try:\n    fp.no_such_name\nexcept AttributeError:\n    pass\nelse:\n    raise SystemExit('expected AttributeError')\n"
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_eval_utils_imports_without_torch() -> None:
+    # I5: torch/tqdm are imported inside the functions that need them
+    proc = _run("import simple_sim.eval_utils as eu\n"
+                "assert eu.format_distribution('x', {'OK': 1}).endswith('OK: 1')\n",
+                blocked=("torch", "torchvision", "tqdm", "cv2"))
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("module", [
+    "simple_sim.board",
+    "simple_sim.board.model",
+    "simple_sim.board.geometry",
+    "simple_sim.board.rules",
+    "simple_sim.board.footprints",
+    "simple_sim.board.options",
+    "simple_sim.board.placement",
+])
+def test_board_data_model_does_not_load_cv2(module: str) -> None:
+    proc = _run(
+        f"import {module}\n"
+        "assert 'cv2' not in sys.modules, 'cv2 loaded'\n"
+        "assert 'simple_sim.board.pipeline' not in sys.modules\n"
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_board_options_validate_without_cv2() -> None:
+    """``config._validate_board`` (render.board, I7 for the board part) stays cv2-free."""
+    proc = _run(
+        "from simple_sim.board import BOARD_ROUTERS, DRC_MODES, board_options, validate_board_options\n"
+        "from simple_sim.config import _validate_board\n"
+        "_validate_board({'routing': 'escape', 'drc': 'warn', 'pour_probability': 0.5})\n"
+        "assert board_options({'board': {'routing': 'escape'}}).routing == 'escape'\n"
+        "assert 'cv2' not in sys.modules, 'cv2 loaded'\n",
+        blocked=("cv2", "torch", "torchvision"),
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_board_lazy_exports_load_on_access() -> None:
+    proc = _run(
+        "import simple_sim.board as b\n"
+        "assert 'simple_sim.board.drc' not in sys.modules\n"
+        "from simple_sim.board import build_window_board, BoardDrcError\n"
+        "assert 'simple_sim.board.pipeline' in sys.modules and 'cv2' in sys.modules\n"
     )
     assert proc.returncode == 0, proc.stderr

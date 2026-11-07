@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from simple_sim.cli import COMMANDS, collect_status, list_commands, main
 from simple_sim.cli_utils import parse_result
 
@@ -101,3 +103,23 @@ def test_validate_json_reports_failed_checks(tmp_path):
     assert res["ok"] is False and res["command"] == "validate"
     assert "file:meta.jsonl" in res["failed"]
     assert all({"name", "status", "detail"} <= set(c) for c in res["checks"])
+
+
+SIM_TO_REAL_COMMANDS = ["sim-to-real", "calibrate-camera", "look-stats", "eval-real", "mix-real", "real-crops",
+                        "look-montage"]
+
+
+@pytest.mark.parametrize("name", SIM_TO_REAL_COMMANDS)
+def test_sim_to_real_tool_commands_show_help(name):
+    assert name in COMMANDS
+    proc = _run(name, "--help")
+    assert proc.returncode == 0, proc.stderr
+    assert "usage:" in proc.stdout
+
+
+@pytest.mark.parametrize("script", ["tools/look_montage.py", "tools/real_crops.py"])
+def test_tool_scripts_run_directly_without_pythonpath(script, tmp_path):
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    proc = subprocess.run([sys.executable, str(SIM_ROOT / script), "--help"], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr

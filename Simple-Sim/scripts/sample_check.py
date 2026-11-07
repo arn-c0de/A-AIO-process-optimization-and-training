@@ -25,7 +25,8 @@ from simple_sim.cli_utils import UsageError, add_json_flag, run_cli
 from simple_sim.data_loader import load_image_bgr, preprocess_bgr
 from simple_sim.eval_utils import predict_probs
 from simple_sim.models import load_checkpoint_model
-from simple_sim.schema import LabelRow, MetaRow, read_jsonl
+from simple_sim.dataset_index import DatasetIndex
+from simple_sim.schema import MetaRow
 
 
 def choose_samples(
@@ -33,15 +34,23 @@ def choose_samples(
 ) -> tuple[list[tuple[str, str]], dict[str, MetaRow]]:
     """Pick up to *per_class* random sample IDs per class from *split*.
 
+    Split membership comes from ``splits/<split>.txt`` (the same source as ``ROIDataset``), not from
+    the ``/<split>/`` part of the sample id, which is wrong for merged or re-split datasets (plan C1).
+    A missing split file selects nothing. Candidates keep the ``labels.jsonl`` order.
+
     Returns ``([(sample_id, gt_class), ...] sorted by id, id_to_meta)``.
     """
-    id_to_meta = {r.id: r for r in read_jsonl(data_dir / "meta.jsonl", MetaRow)}
-    id_to_label = {r.id: r.class_name for r in read_jsonl(data_dir / "labels.jsonl", LabelRow)}
+    index = DatasetIndex(data_dir)
+    id_to_meta = dict(index.id_to_meta())
+    id_to_label = {r.id: r.class_name for r in index.label_rows()}
+    try:
+        in_split = set(index.split_ids(split))
+    except FileNotFoundError:
+        in_split = set()
 
     candidates: dict[str, list[str]] = {c: [] for c in class_names}
-    want_token = f"/{split}/"
     for sid, cls in id_to_label.items():
-        if want_token in sid and cls in candidates and sid in id_to_meta:
+        if sid in in_split and cls in candidates and sid in id_to_meta:
             candidates[cls].append(sid)
 
     rng = random.Random(seed)

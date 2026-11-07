@@ -29,16 +29,18 @@ from typing import Any
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.generators.opencv2d.photoreal import CAMERA_DEFAULTS, IMAGE_EXTENSIONS  # noqa: E402
+from simple_sim.generators.opencv2d.photoreal import CAMERA_DEFAULTS  # noqa: E402
+from simple_sim.images import list_images  # noqa: E402
 
 _BLUR_GRID = np.arange(0.0, 3.01, 0.05)
 _IMMERKAER = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], dtype=np.float32)
 
 
 def load_gray(folder: Path, limit: int, rng: np.random.Generator) -> list[np.ndarray]:
-    files = sorted(p for p in folder.rglob("*") if p.suffix.lower() in IMAGE_EXTENSIONS)
+    files = list_images(folder)
     if not files:
         raise SystemExit(f"No images found in {folder}")
     if len(files) > limit:

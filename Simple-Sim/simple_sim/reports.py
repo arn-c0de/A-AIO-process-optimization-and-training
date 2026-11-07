@@ -7,12 +7,43 @@ report lookup and metric extraction behave identically everywhere. Pure stdlib.
 from __future__ import annotations
 
 import os
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 from simple_sim.io_utils import parse_iso_ts, read_json
 
 REPORT_GLOBS = ("report_*.json", "batch_report_*.json")
+
+#: Parsed report files kept per process (see :func:`_read_report`).
+REPORT_CACHE_MAX = 4096
+_REPORT_CACHE: OrderedDict[str, tuple[tuple[int, int, int], Any]] = OrderedDict()
+_REPORT_LOCK = threading.Lock()
+
+
+def _read_report(p: Path, st: os.stat_result) -> Any:
+    """``read_json(p)``, reused while the file's inode, size and mtime are unchanged (plan S5)."""
+    sp = str(p)
+    sig = (st.st_ino, st.st_size, st.st_mtime_ns)
+    with _REPORT_LOCK:
+        hit = _REPORT_CACHE.get(sp)
+        if hit is not None and hit[0] == sig:
+            _REPORT_CACHE.move_to_end(sp)
+            return hit[1]
+    obj = read_json(p)
+    with _REPORT_LOCK:
+        _REPORT_CACHE[sp] = (sig, obj)
+        _REPORT_CACHE.move_to_end(sp)
+        while len(_REPORT_CACHE) > REPORT_CACHE_MAX:
+            _REPORT_CACHE.popitem(last=False)
+    return obj
+
+
+def clear_report_cache() -> None:
+    """Drop the parsed-report cache of :func:`load_reports`."""
+    with _REPORT_LOCK:
+        _REPORT_CACHE.clear()
 
 
 def report_search_dirs(sim_root: Path) -> list[Path]:
@@ -46,6 +77,10 @@ def load_reports(dirs: list[Path], model_stem: str | None = None) -> list[dict[s
 
     With *model_stem*, only ``report_<stem>.json`` and ``batch_report_<stem>_*.json`` are read.
     Each report gets its source path under the ``_path`` key.
+
+    Parsed files are cached per path and stat signature, so repeated scans (status, arena, GUI
+    refreshes) only parse new or changed reports. Every call returns fresh top-level dicts; nested
+    values are shared with the cache and must not be mutated.
     """
     globs = (f"report_{model_stem}.json", f"batch_report_{model_stem}_*.json") if model_stem else REPORT_GLOBS
     reports: list[dict[str, Any]] = []
@@ -53,14 +88,15 @@ def load_reports(dirs: list[Path], model_stem: str | None = None) -> list[dict[s
     for d in dirs:
         if not Path(d).is_dir():
             continue
-        cand = [p for g in globs for p in Path(d).glob(g)]
-        for p in sorted(cand, key=lambda x: x.stat().st_mtime, reverse=True):
+        stats = {p: p.stat() for g in globs for p in Path(d).glob(g)}
+        for p in sorted(stats, key=lambda x: stats[x].st_mtime, reverse=True):
             sp = str(p)
             if sp in seen:
                 continue
             seen.add(sp)
-            obj = read_json(p)
+            obj = _read_report(p, stats[p])
             if isinstance(obj, dict) and "metrics" in obj:
+                obj = dict(obj)
                 obj["_path"] = sp
                 reports.append(obj)
     return reports

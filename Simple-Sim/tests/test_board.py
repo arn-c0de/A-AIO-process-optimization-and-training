@@ -200,7 +200,7 @@ def test_drc_strict_rerolls_until_clean(caplog):
 
 
 def test_drc_strict_raises_when_every_attempt_fails(monkeypatch):
-    import simple_sim.board as board_pkg
+    import simple_sim.board.pipeline as board_pkg
     from simple_sim.board.drc import DrcReport
 
     def always_bad(board):
@@ -411,6 +411,41 @@ def test_grid_rect_covers_exactly_its_cells():
     assert Grid.for_window((0, 0, 1, 1), 0.1).shape == (11, 11)
 
 
+def _rows_mask(grid, rows):
+    mask = grid.scratch()
+    for y, x0, x1 in rows:
+        mask[y, x0:x1] = 255
+    return mask
+
+
+def test_inflated_rect_rows_equal_inflate_of_rect():
+    """Fast span path == dilating the drawn rect, incl. boxes partly or wholly outside the grid."""
+    rng = np.random.default_rng(7)
+    for _ in range(300):
+        res = float(rng.uniform(0.01, 0.2))
+        rows, cols = (int(v) for v in rng.integers(4, 60, size=2))
+        g = Grid(origin=(float(rng.uniform(-1, 1)), float(rng.uniform(-1, 1))), res=res, shape=(rows, cols))
+        x0, y0 = g.origin[0] + rng.uniform(-0.3, cols * res + 0.3), g.origin[1] + rng.uniform(-0.3, rows * res + 0.3)
+        bbox = (x0, y0, x0 + rng.uniform(0, 12) * res, y0 + rng.uniform(0, 12) * res)
+        mm = float(rng.choice([0.0, rng.uniform(0, 15) * res]))
+        want = g.inflate(g.rect(bbox), mm)
+        got = g.inflated_rect_rows(bbox, mm)
+        assert isinstance(got, list)
+        assert np.array_equal(_rows_mask(g, got), want)
+        assert np.array_equal(g.inflated_rect(bbox, mm), want)
+
+
+def test_inflated_rect_rows_fallback_without_kernel_spans(monkeypatch):
+    from simple_sim.board import occupancy
+
+    monkeypatch.setattr(occupancy, "_ellipse_spans", lambda n: None)
+    g = Grid(origin=(0.0, 0.0), res=0.1, shape=(30, 40))
+    bbox, mm = (1.0, 1.0, 2.0, 1.6), 0.45
+    rows = g.inflated_rect_rows(bbox, mm)
+    assert rows and np.array_equal(_rows_mask(g, rows), g.inflate(g.rect(bbox), mm))
+    assert occupancy._mask_rows(np.array([[0, 255, 255, 0, 255]], dtype=np.uint8)) == [(0, 1, 3), (0, 4, 5)]
+
+
 def test_neighbours_in_the_fanout_band_are_left_out():
     for seed in range(10):
         keep: list = []
@@ -471,6 +506,36 @@ def test_shared_geometry_helpers_keep_both_behaviours():
     assert pts.tolist() == [[3, 7], [-5, 15], [-5, 20]]
     assert octagon(1.0, 2.0, 10.0, 6.0, 1.5) == [(2.5, 2.0), (9.5, 2.0), (11.0, 3.5), (11.0, 6.5), (9.5, 8.0), (2.5, 8.0),
                                                  (1.0, 6.5), (1.0, 3.5)]
+
+
+def test_router_names_match_the_routers():
+    from simple_sim.board.options import ROUTER_NAMES
+    from simple_sim.board.routing import ROUTERS
+
+    assert tuple(ROUTERS) == ROUTER_NAMES
+    assert BOARD_ROUTERS == ("legacy", "none", *ROUTERS)
+
+
+def test_package_exports_resolve():
+    import simple_sim.board as board_pkg
+    from simple_sim.board import drc, pipeline, zones
+
+    for name in board_pkg.__all__:
+        assert getattr(board_pkg, name) is not None, name
+    assert board_pkg.build_window_board is pipeline.build_window_board and board_pkg.check is drc.check
+    assert board_pkg.sample_zones is zones.sample_zones and board_pkg.zones is zones
+    assert {"build_window_board", "drc", "ROUTERS"} <= set(dir(board_pkg))
+    with pytest.raises(AttributeError):
+        board_pkg.no_such_name
+
+
+def test_fine_pitch_has_one_definition():
+    from simple_sim.board.footprints import FINE_PITCH_FAMILIES, is_fine_pitch
+    from simple_sim.board.routing import escape
+
+    assert escape.FINE_PITCH_FAMILIES is FINE_PITCH_FAMILIES
+    assert [f for f in ("resistor", "sot", "soic", "qfn", "sot6", "array_r", "array_c") if is_fine_pitch(f)] == \
+        ["soic", "qfn", "sot6", "array_r", "array_c"]
 
 
 def test_pour_raster_resolution_is_one_constant():

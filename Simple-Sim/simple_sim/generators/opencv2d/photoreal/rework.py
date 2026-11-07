@@ -8,10 +8,8 @@ import numpy as np
 
 from .context import RenderContext
 from .imageops import blend, smooth_noise
+from .look import REWORK_PROBABILITY  # noqa: F401 (re-exported; the look owns the default)
 from .palette import jittered
-
-
-REWORK_PROBABILITY = 0.15  # default share of images with rework residue (``render.rework_artifacts``)
 
 
 FLUX = np.array((55, 105, 140), dtype=np.float32)   # amber, translucent

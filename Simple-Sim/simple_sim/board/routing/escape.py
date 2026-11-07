@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from simple_sim.board.footprints import FINE_PITCH_FAMILIES, is_fine_pitch  # noqa: F401 (FINE_PITCH_FAMILIES re-exported)
 from simple_sim.board.geometry import BBox, Vec, add, clip, disc, perp, polyline45, track, unit
 from simple_sim.board.model import GND, TOP, Board, Pad, Part, Port, Track, Via, Zone, point_in_polygon
 from simple_sim.board.netlist import connected_pads
@@ -26,12 +27,10 @@ from simple_sim.board.occupancy import CopperMap
 from simple_sim.board.routing.base import (NetWidths, RouteResult, axial_room, border_point, random_border_point,
                                            runs_along_border)
 
-# Families with many small pads at a fine pitch: tracks neck down at the pad, ground pins fan out.
-FINE_PITCH_FAMILIES = ("soic", "qfn", "sot6", "array_r", "array_c")
-
 
 def fine_pitch(part: Part) -> bool:
-    return part.family in FINE_PITCH_FAMILIES
+    """Tracks neck down at the pad, ground pins fan out (:func:`~simple_sim.board.footprints.is_fine_pitch`)."""
+    return is_fine_pitch(part.family)
 
 
 def _inside(bbox: BBox, p: Vec, margin: float = 0.0) -> bool:

@@ -30,11 +30,12 @@ import cv2
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import preprocess_bgr  # noqa: E402
 from simple_sim.eval_utils import model_outputs  # noqa: E402
-from simple_sim.generators.opencv2d.photoreal import IMAGE_EXTENSIONS  # noqa: E402
+from simple_sim.images import list_images  # noqa: E402
 from simple_sim.metrics import calibration_metrics, format_calibration  # noqa: E402
 from simple_sim.models import load_checkpoint_model  # noqa: E402
 
@@ -49,7 +50,7 @@ def class_folders(root: Path) -> list[tuple[str, str, list[Path]]]:
     """``(group, class, files)`` for every sub-folder of *root* that holds images (sorted)."""
     out = []
     for folder in sorted(p for p in root.iterdir() if p.is_dir()):
-        files = sorted(p for p in folder.rglob("*") if p.suffix.lower() in IMAGE_EXTENSIONS)
+        files = list_images(folder)
         if files:
             out.append((folder.name, folder.name.split("@", 1)[0], files))
     if not out:

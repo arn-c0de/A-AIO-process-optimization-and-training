@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from simple_sim.board.placement import pad_ref
+from simple_sim.classes import DefectClass
 
 from .context import RenderContext
 from .imageops import blend, grid, rect_alpha, rect_window
@@ -27,10 +28,10 @@ def solder_defect_layout(defect_type: str, pads: list[dict[str, int]], body: np.
     out: dict[str, Any] = {"excess": [], "balls": []}
     thermal = thermal_pad_index(pads)
     joints = [i for i in range(len(pads)) if i != thermal]
-    if defect_type == "EXCESS_SOLDER":
+    if defect_type == DefectClass.EXCESS_SOLDER:
         k = int(rng.integers(1, min(len(joints), 4) + 1))
         out["excess"] = sorted(int(i) for i in rng.choice(joints, size=k, replace=False))
-    elif defect_type == "SOLDER_BALL":
+    elif defect_type == DefectClass.SOLDER_BALL:
         ref = pad_ref([pads[i] for i in joints])
         for _ in range(int(rng.integers(1, 5))):
             r = max(float(rng.uniform(0.12, 0.25)) * ref, float(rng.uniform(2.5, 4.5)) * ss)  # >= ~5-9 camera px across

@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from simple_sim.board.footprints import DEFAULT_FOOTPRINT
+from simple_sim.classes import DefectClass
 
 from .geometry import body_geometry, draw_solder_bridge, lifted_corner_geometry, pad_positions, param_selector
 
@@ -90,7 +91,7 @@ def draw_component(
     footprint: str = DEFAULT_FOOTPRINT,
 ) -> None:
     defect_type = defect_params["type"]
-    if defect_type == "MISSING":
+    if defect_type == DefectClass.MISSING:
         return
 
     geo = body_geometry(nominal, defect_params, tolerances, img.shape[:2])
@@ -104,7 +105,7 @@ def draw_component(
     rect_size = (comp_height, comp_width)
     box = cv2.boxPoints((center, rect_size, geo["rotation_deg"]))
 
-    if defect_type == "CORNER_LIFT":
+    if defect_type == DefectClass.CORNER_LIFT:
         _draw_corner_lift(img, box, center, comp_width, color, geo["tilt_deg"], param_selector(defect_params))
         return
 
@@ -114,7 +115,7 @@ def draw_component(
     edge = tuple(int(min(255, max(0, c * 1.2))) for c in color)
     cv2.polylines(img, [box], True, edge, 1)
 
-    if defect_type == "SOLDER_BRIDGE":
+    if defect_type == DefectClass.SOLDER_BRIDGE:
         # Drawn on top of the body so a bridge routed along the body edge stays visible.
         draw_solder_bridge(
             img, nominal, footprint, center, rect_size, param_selector(defect_params), geo["tilt_deg"],

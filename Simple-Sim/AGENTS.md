@@ -95,7 +95,9 @@ of performance cores).
 Other commands: `generate-profile-dataset` / `train-profile` / `eval-profile` (component
 type classifier), `predict` (single image), `predict-two-stage`, `sample-check`,
 `create-multi-dataset` (merge datasets), `backfill-manifest` / `backfill-labels` (legacy
-datasets), `render-debug-previews`, `update-sample-gallery`.
+datasets), `render-debug-previews`, `update-sample-gallery`. Sim-to-real helpers (real camera
+crops vs. the synthetic look): `real-crops`, `look-stats`, `look-montage`, `sim-to-real`,
+`calibrate-camera`, `eval-real`, `mix-real` (each also runs as `python tools/<name>.py`).
 
 ## Where outputs land
 

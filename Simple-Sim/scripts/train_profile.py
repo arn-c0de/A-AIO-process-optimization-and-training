@@ -82,7 +82,7 @@ def train_profile_model(
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
-    model, criterion, optimizer, scaler = build_training(len(profile_names), train_config, device, use_amp)
+    model, criterion, optimizer, scaler, frozen = build_training(len(profile_names), train_config, device, use_amp)
 
     best_val_f1 = 0.0
     best_val_acc: float | None = None
@@ -99,7 +99,7 @@ def train_profile_model(
     for epoch in range(epochs):
         stats = fit_epoch(
             model, train_loader, val_loader, criterion, optimizer, device, profile_names,
-            epoch=epoch, total_epochs=epochs, use_amp=use_amp, scaler=scaler, emit_events=False,
+            epoch=epoch, total_epochs=epochs, use_amp=use_amp, scaler=scaler, emit_events=False, frozen=frozen,
         )
         val_f1 = stats['val_macro_f1']
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import hashlib
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -45,8 +46,13 @@ def hash_file(file_path: Path) -> str:
     return f"sha256:{hash_obj.hexdigest()}"
 
 
+@lru_cache(maxsize=1)
 def _get_git_commit() -> str | None:
     """Get current git commit hash (short).
+
+    Resolved once per process (plan S2: a manifest write used to spawn ``git rev-parse`` every
+    time); a commit made while a long-lived process (GUI) runs is picked up after a restart or
+    ``_get_git_commit.cache_clear()``. Writers also accept an explicit ``git_commit``.
 
     Returns:
         Short commit hash or None if not in git repo or error occurs
@@ -95,6 +101,7 @@ def write_dataset_manifest(
     extend: bool = False,
     script_name: str = "scripts/generate.py",
     renderer_version: str | None = None,
+    git_commit: str | None = None,
 ) -> None:
     """Write or update dataset manifest.
 
@@ -112,6 +119,8 @@ def write_dataset_manifest(
         renderer_version: ``simple_sim.generators.version.RENDERER_VERSION`` of the images written
             (``generator.renderer_version``; also recorded per extend history entry). None for
             tools that do not render (merges).
+        git_commit: commit recorded in ``generator``/history; default (``None``): the checkout's
+            short HEAD, cached per process (:func:`_get_git_commit`).
 
     Raises:
         ValueError: If extend=True but manifest doesn't exist
@@ -120,7 +129,7 @@ def write_dataset_manifest(
     output_dir = Path(output_dir)
     manifest_path = output_dir / "dataset_manifest.json"
 
-    git_commit = _get_git_commit()
+    git_commit = git_commit if git_commit is not None else _get_git_commit()
     if extend and manifest_path.exists():
         # Update existing manifest
         manifest = load_json(manifest_path)
@@ -367,6 +376,7 @@ def write_multi_profile_manifest(
     script_name: str = "scripts/generate_profile_dataset.py",
     existing: dict[str, Any] | None = None,
     renderer_version: str | None = None,
+    git_commit: str | None = None,
 ) -> None:
     """Write a multi-profile dataset manifest (manifest_version 2).
 
@@ -383,11 +393,12 @@ def write_multi_profile_manifest(
             (``samples_added`` = growth of ``total_samples``).
         renderer_version: renderer of the images written now (see :func:`write_dataset_manifest`);
             None keeps the existing manifest's value (merges do not render).
+        git_commit: see :func:`write_dataset_manifest`.
     """
     output_dir = Path(output_dir)
     manifest_path = output_dir / "dataset_manifest.json"
 
-    git_commit = _get_git_commit()
+    git_commit = git_commit if git_commit is not None else _get_git_commit()
 
     # Profile sample counts
     profile_counts: dict[str, int] = {}
@@ -457,3 +468,28 @@ def check_renderer_version(manifest: dict[str, Any], current: str, *, allow_mism
     if not allow_mismatch:
         raise RendererMismatchError(msg, dataset_version=None if existing is None else str(existing), current_version=str(current))
     log.warning(msg)
+
+
+def record_added_samples(manifest_path: Path, *, split: str, classes: dict[str, int],
+                         log_key: str, log_entry: dict[str, Any]) -> bool:
+    """Count samples appended to a dataset in place (no re-scan of meta/labels).
+
+    Adds ``sum(classes)`` to ``dataset_stats.total_samples`` and ``splits[split]``, each count
+    to ``classes[name]``, and appends *log_entry* to the list ``manifest[log_key]`` (e.g.
+    ``real_crops``). Returns False (and writes nothing) when *manifest_path* does not exist.
+    """
+    manifest_path = Path(manifest_path)
+    if not manifest_path.exists():
+        return False
+    manifest = load_json(manifest_path)
+    stats = manifest.setdefault('dataset_stats', {})
+    total = sum(classes.values())
+    stats['total_samples'] = int(stats.get('total_samples', 0)) + total
+    split_counts = stats.setdefault('splits', {})
+    split_counts[split] = int(split_counts.get(split, 0)) + total
+    class_counts = stats.setdefault('classes', {})
+    for cls, n in classes.items():
+        class_counts[cls] = int(class_counts.get(cls, 0)) + n
+    manifest.setdefault(log_key, []).append(log_entry)
+    atomic_write_json(manifest_path, manifest)
+    return True

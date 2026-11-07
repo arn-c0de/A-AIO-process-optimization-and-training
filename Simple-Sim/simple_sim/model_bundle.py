@@ -100,12 +100,22 @@ def read_bundle_meta(bundle_dir: Path) -> BundleMeta | None:
         return None
 
 
+def _load_checkpoint_lazily(ckpt_path: Path) -> object:
+    """``torch.load`` with ``mmap=True``: unpickles the metadata, maps the tensor storage instead of
+    reading it (plan S8; 45 MB ResNet-18 checkpoint: 8.1 -> 1.6 ms warm). Checkpoints in the legacy
+    non-zip format cannot be mapped and are loaded in full, as before."""
+    import torch
+
+    try:
+        return torch.load(ckpt_path, map_location="cpu", weights_only=False, mmap=True)
+    except RuntimeError:
+        return torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+
 def _checkpoint_profile_id(ckpt_path: Path) -> str | None:
     """Best-effort read of ``component_profile.profile_id`` from a checkpoint."""
     try:
-        import torch
-
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        ckpt = _load_checkpoint_lazily(ckpt_path)
         pid = (ckpt.get("component_profile") or {}).get("profile_id")
         return str(pid) if pid else None
     except Exception:  # noqa: BLE001 - torch.load can raise many error types on bad files

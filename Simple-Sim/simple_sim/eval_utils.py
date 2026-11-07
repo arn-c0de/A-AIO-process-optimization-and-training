@@ -2,6 +2,9 @@
 
 Covers batch unpacking, the no-grad inference loop used by validation and evaluation,
 softmax prediction, and dataset-manifest / model-bundle resolution.
+
+torch and tqdm are imported inside the functions that need them, so importing this module
+(e.g. for :func:`require_manifest` or :func:`format_distribution`) stays cheap and torch-free.
 """
 
 from __future__ import annotations
@@ -11,17 +14,18 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
 
 from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
 from simple_sim.model_bundle import bundle_checkpoint_path
 from simple_sim.telemetry import emit
+
+if TYPE_CHECKING:
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, Dataset
 
 MANIFEST_NAME = "dataset_manifest.json"
 
@@ -53,7 +57,11 @@ class ThroughputMeter:
 
 def amp_autocast(use_amp: bool) -> contextlib.AbstractContextManager[Any]:
     """CUDA autocast context when *use_amp*, else a no-op context."""
-    return torch.autocast(device_type="cuda") if use_amp else contextlib.nullcontext()
+    if not use_amp:
+        return contextlib.nullcontext()
+    import torch
+
+    return torch.autocast(device_type="cuda")
 
 
 def to_device(t: torch.Tensor, device: torch.device) -> torch.Tensor:
@@ -80,6 +88,8 @@ TTA_VIEWS = 8
 
 def tta_views(images: torch.Tensor) -> list[torch.Tensor]:
     """The :data:`TTA_VIEWS` dihedral views of an ``[N, C, H, W]`` batch (the first is the input)."""
+    import torch
+
     views = []
     for k in range(4):
         turned = torch.rot90(images, k, dims=(2, 3))
@@ -96,6 +106,8 @@ def model_outputs(model: nn.Module, images: torch.Tensor, *, tta: bool = False) 
     """
     if not tta:
         return model(images)
+    import torch
+
     mean = None
     for view in tta_views(images):
         p = torch.softmax(model(view).float(), dim=1)
@@ -123,6 +135,9 @@ def run_inference(
     (predictions, loss and probabilities then come from the averaged distribution);
     *collect_probs* keeps the softmax probabilities (``[N, C]``) in ``probs``.
     """
+    import torch
+    from tqdm import tqdm
+
     model.eval()
     preds: list[np.ndarray] = []
     labels_all: list[np.ndarray] = []
@@ -186,6 +201,8 @@ def run_inference(
 
 def predict_probs(model: nn.Module, x: torch.Tensor) -> np.ndarray:
     """Softmax probabilities of *model* for batch *x* (shape ``[N, C]``, numpy)."""
+    import torch
+
     with torch.no_grad():
         return torch.softmax(model(x), dim=1).cpu().numpy()
 
@@ -211,6 +228,8 @@ def eval_loader(dataset: Dataset, checkpoint: dict[str, Any]) -> DataLoader:
 
     Falls back to batch size 64 / no workers when the checkpoint has no config (ensembles).
     """
+    from torch.utils.data import DataLoader
+
     eval_cfg = checkpoint_eval_config(checkpoint)
     return DataLoader(
         dataset,

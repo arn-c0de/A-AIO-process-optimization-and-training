@@ -117,15 +117,40 @@ def path_size_bytes(p: Path) -> int:
             return 0
     except OSError:
         return 0
+    return _tree_size(str(p))
+
+
+def _tree_size(top: str) -> int:
+    """Sum of ``st_size`` below *top*, the walk of ``os.walk(top)`` (no symlinked files or dirs,
+    unreadable entries skipped) with one ``scandir`` entry per file instead of two ``Path`` stats."""
     total = 0
-    for root, _dirs, files in os.walk(str(p)):
-        for fn in files:
-            fp = Path(root) / fn
-            try:
-                if not fp.is_symlink():
-                    total += int(fp.stat().st_size)
-            except OSError:
-                continue
+    stack = [top]
+    while stack:
+        try:
+            it = os.scandir(stack.pop())
+        except OSError:
+            continue
+        with it:
+            while True:
+                try:
+                    entry = next(it)
+                except StopIteration:
+                    break
+                except OSError:
+                    break
+                try:
+                    is_dir = entry.is_dir()
+                except OSError:
+                    is_dir = False
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if is_dir:
+                        stack.append(entry.path)
+                    else:
+                        total += int(entry.stat(follow_symlinks=False).st_size)
+                except OSError:
+                    continue
     return total
 
 

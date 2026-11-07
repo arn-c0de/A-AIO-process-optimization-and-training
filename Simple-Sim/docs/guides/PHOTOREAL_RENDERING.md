@@ -218,7 +218,7 @@ draw, so other presets render as before):
   `[3, 3]`; for the 0402 profiles that magnifies the view (zoom 0.73), for 0603 at 100 px/mm it zooms out.
 
 `render.look: quins` sets the defaults `camera.preset: quins`, `mask_gloss: 0`, `rework_artifacts: 0.03`
-and `solder: meniscus`, and packs the neighbour parts densely (`Look.packing`: `board.placement.DENSE_PACKING`; the xpa boards are densely
+and `solder: meniscus`, and packs the neighbour parts densely (`Look.packing`: `look.DENSE_PACKING`; the xpa boards are densely
 populated); anything set explicitly in `render` wins. Look-specific randomness is drawn from the
 meniscus side stream only, so `quins` shares part placement and labels of a seed with `legacy`. Code:
 `simple_sim/generators/opencv2d/photoreal/look.py`.
@@ -263,7 +263,7 @@ Test set used: 400 good 0402 MLCCs (form-02, QUINS test split), 35 crops labelle
 | `run_0402_c_quins` (state of the A/B table above) | 0 % | 0 % | 1 % | 100 % | 0 % |
 | + train augment, high pillow-shaped paste on empty pads (`SolderLook.paste_scale`) | 0 % | 57 % | 79 % | 100 % | 0 % |
 | + narrow terminals (`Look.cap_len`), dim overhead / bright ring joint light | 0 % | 0 % | 0 % | 100 % | 0 % |
-| + dense neighbour rows (`Look.packing`, `board.placement.DENSE_PACKING`) | 0 % | 0 % | 0 % | 100 % | 0 % |
+| + dense neighbour rows (`Look.packing`, `look.DENSE_PACKING`) | 0 % | 0 % | 0 % | 100 % | 0 % |
 | + 200 real good crops (QUINS train split) | 99.5 % | 9 % | 4 % | 0.5 % | 96 % |
 | + 200 real good + 200 real empty pads (train split) | 96.5 % | 94 % | 100 % | 3.5 % | 0.7 % |
 | only those 400 real crops, no synthetic images | 96 % | 97 % | 100 % | 4 % | 0.2 % |

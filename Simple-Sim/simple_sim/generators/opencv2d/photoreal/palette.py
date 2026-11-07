@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 
 from simple_sim.board.footprints import CHIP_FAMILIES
+from simple_sim.board.placement import REFDES_PREFIX  # noqa: F401 (re-exported for silkscreen)
 
 
 def jittered(colour: np.ndarray, rng: np.random.Generator, lo: float, hi: float) -> np.ndarray:
@@ -61,9 +62,7 @@ END_CAP = np.array((168, 171, 174), dtype=np.float32)
 RESISTOR_CODES = ("103", "472", "1002", "000", "0", "221", "4R7", "100", "330", "10K", "1R0", "5602")
 
 
-REFDES_PREFIX = {"resistor": "R", "capacitor": "C", "inductor": "L", "power_inductor": "L", "led": "D", "sot": "Q",
-                  "soic": "U", "qfn": "U", "sot6": "U", "array_r": "RN",
-                  "array_c": "CN"}
+# REFDES_PREFIX (family -> reference-designator prefix) lives in the board layer (D28: one definition).
 
 
 # 4-element R/C arrays (chip_array_8): body colour and terminal look.

@@ -136,10 +136,12 @@ def test_look_defaults_yield_to_explicit_settings():
     assert camera_config({"look": "quins"}) == {"preset": "quins"}
     assert camera_config({"look": "quins", "camera": {"read_noise": [1, 2]}}) == {"preset": "quins", "read_noise": [1, 2]}
     assert camera_config({"look": "quins", "camera": {"preset": "phone"}}) == {"preset": "phone"}
-    assert mask_gloss({}, 0.5) == 0.5 and mask_gloss({"look": "quins"}, 0.5) == 0.0
-    assert mask_gloss({"look": "quins", "mask_gloss": 0.7}, 0.5) == 0.7
-    assert rework_probability({}, 0.25) == 0.25 and rework_probability({"look": "quins"}, 0.25) == QUINS_LOOK.rework
-    assert rework_probability({"look": "quins", "rework_artifacts": 1.0}, 0.25) == 1.0
+    # D30: the look carries numeric defaults (legacy: the former renderer constants).
+    assert mask_gloss({}) == LEGACY_LOOK.mask_gloss == 0.5 and mask_gloss({"look": "quins"}) == 0.0
+    assert mask_gloss({"look": "quins", "mask_gloss": 0.7}) == 0.7
+    assert rework_probability({}) == LEGACY_LOOK.rework == 0.15 and rework_probability({"look": "quins"}) == QUINS_LOOK.rework
+    assert rework_probability({"look": "quins", "rework_artifacts": 1.0}) == 1.0
+    assert mask_gloss({}, 0.9) == 0.5  # the old *default* argument only applies to a look without a value
 
 
 def test_quins_body_colours_replace_only_the_dark_default():
@@ -212,13 +214,17 @@ def test_crop_part_lengths_sets_the_field_of_view():
     assert apply_view(canvas, fitted, (256, 256)).shape == (256, 256, 3)  # magnified crop, ROI size
 
 
-def test_neighbour_count_factor_defaults():
-    """Density comes from ``Look.packing`` (see the packing test); the count factor stays neutral."""
-    assert LEGACY_LOOK.crowd == 1.0 and QUINS_LOOK.crowd == 1.0
+def test_neighbour_density_lives_in_packing_only():
+    """Density comes from ``Look.packing`` (see the packing test); the former ``Look.crowd`` factor
+    (always 1.0) is folded into ``Packing.parts``."""
+    import dataclasses
+
+    assert "crowd" not in {f.name for f in dataclasses.fields(LEGACY_LOOK)}
 
 
 def test_quins_uses_dense_packing_and_legacy_layout_is_unchanged():
-    from simple_sim.board import DENSE_PACKING, LEGACY_PACKING, neighbour_layout
+    from simple_sim.board import LEGACY_PACKING, neighbour_layout
+    from simple_sim.generators.opencv2d.photoreal.look import DENSE_PACKING
 
     assert LEGACY_LOOK.packing is LEGACY_PACKING and QUINS_LOOK.packing is DENSE_PACKING
     pads = [{"x": 100, "y": 110, "w": 30, "h": 36}, {"x": 160, "y": 110, "w": 30, "h": 36}]

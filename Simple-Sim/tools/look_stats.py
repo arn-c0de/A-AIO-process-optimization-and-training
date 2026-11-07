@@ -28,9 +28,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.generators.opencv2d.photoreal import IMAGE_EXTENSIONS  # noqa: E402
+from simple_sim.images import list_images  # noqa: E402
 
 METRICS = ("mask_h", "mask_s", "mask_v", "p1", "p99", "white", "spec", "sharp")
 
@@ -50,7 +51,7 @@ def image_stats(img: np.ndarray, size: int) -> dict[str, float]:
 
 
 def folder_stats(folder: Path, limit: int, size: int, seed: int = 0) -> dict[str, list[float] | int]:
-    files = sorted(p for p in folder.rglob("*") if p.suffix.lower() in IMAGE_EXTENSIONS)
+    files = list_images(folder)
     if not files:
         raise SystemExit(f"No images found in {folder}")
     if len(files) > limit:

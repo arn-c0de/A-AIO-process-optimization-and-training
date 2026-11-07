@@ -159,6 +159,8 @@ RULE_SCALE_LIMITS = (0.3, 6.0)
 
 
 # Families whose rules follow their (large) pads; the others are fine-pitch ICs and get the boost.
+# X8: this is the rule-scale-boost predicate, deliberately NOT board.footprints FINE_PITCH_FAMILIES /
+# is_fine_pitch (SOT gets the boost here, chip arrays do not), so do not merge the two.
 RULE_CHIP_FAMILIES = (*CHIPS, *ARRAY_FAMILIES)
 
 

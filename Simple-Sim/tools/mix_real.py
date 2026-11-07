@@ -31,10 +31,12 @@ from typing import Any
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.classes import VALID_CLASSES  # noqa: E402
-from simple_sim.io_utils import atomic_write_json, load_json, load_yaml, now_iso  # noqa: E402
+from simple_sim.io_utils import load_yaml, now_iso  # noqa: E402
+from simple_sim.manifest import record_added_samples  # noqa: E402
 from simple_sim.schema import LabelRow, MetaRow, append_jsonl_rows, read_jsonl  # noqa: E402
 from tools.eval_real import class_folders  # noqa: E402
 
@@ -112,21 +114,9 @@ def mix_real(data: Path, real: Path, *, split: str = "train", limit: int = 200, 
 
 
 def _update_manifest(data: Path, real: Path, split: str, domain: str, added: Counter) -> None:
-    path = data / "dataset_manifest.json"
-    if not path.exists():
-        return
-    manifest = load_json(path)
-    stats = manifest.setdefault("dataset_stats", {})
-    total = sum(added.values())
-    stats["total_samples"] = int(stats.get("total_samples", 0)) + total
-    splits = stats.setdefault("splits", {})
-    splits[split] = int(splits.get(split, 0)) + total
-    classes = stats.setdefault("classes", {})
-    for cls, n in added.items():
-        classes[cls] = int(classes.get(cls, 0)) + n
-    manifest.setdefault("real_crops", []).append(
-        {"added_at": now_iso(), "source": str(real), "split": split, "domain": domain, "classes": dict(added)})
-    atomic_write_json(path, manifest)
+    record_added_samples(data / "dataset_manifest.json", split=split, classes=dict(added), log_key="real_crops",
+                         log_entry={"added_at": now_iso(), "source": str(real), "split": split, "domain": domain,
+                                    "classes": dict(added)})
 
 
 def main(argv: list[str] | None = None) -> int:

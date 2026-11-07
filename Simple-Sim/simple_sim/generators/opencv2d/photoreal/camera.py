@@ -4,6 +4,8 @@ the sensor model (blur, illumination, highlight roll-off, noise, ISP sharpening,
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import cv2
@@ -50,10 +52,105 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
 }
 
 
-def camera_settings(cfg: dict[str, Any] | None) -> dict[str, Any]:
-    """Effective camera parameters: defaults < preset < explicit ``render.camera`` keys."""
-    cfg = dict(cfg or {})
-    return {**CAMERA_DEFAULTS, **CAMERA_PRESETS[str(cfg.pop("preset", "aoi"))], **cfg}
+CHANNEL_AXES = ("random", "x", "y")
+_RANGE_LIMITS = {"tilt_deg": 60.0, "jpeg_quality": 100.0, "capture_scale": 1.0}
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class CameraSettings(Mapping):
+    """Effective camera parameters of one render (:data:`CAMERA_DEFAULTS` keys), immutable.
+
+    A read-only mapping, so ``c["blur_sigma"]``, ``c.get(..)``, ``dict(c)`` and ``{**c, ...}`` work as on
+    the dict :func:`camera_settings` used to return (and ``==`` compares with plain dicts). Values are
+    kept exactly as configured (ranges stay ``[lo, hi]`` lists, so every random draw is unchanged).
+    Unknown keys fail on construction; :func:`validate_camera_config` checks the value ranges.
+    """
+
+    blur_sigma: Any
+    read_noise: Any
+    shot_noise: Any
+    tilt_deg: Any
+    zoom: Any
+    defocus: Any
+    sharpen: Any
+    jpeg_quality: Any
+    capture_scale: Any
+    chroma_shift: Any
+    sensor_px_per_mm: Any
+    channel_shift: Any
+    channel_axis: Any
+    crop_part_lengths: Any
+    max_oversampling: Any
+
+    def __post_init__(self) -> None:
+        if self.channel_axis not in CHANNEL_AXES:
+            raise ValueError(f"render.camera.channel_axis must be one of {list(CHANNEL_AXES)}")
+
+    @classmethod
+    def from_config(cls, cfg: Mapping[str, Any] | None) -> CameraSettings:
+        """Defaults < preset < explicit ``render.camera`` keys."""
+        cfg = dict(cfg or {})
+        preset = str(cfg.pop("preset", "aoi"))
+        if preset not in CAMERA_PRESETS:
+            raise ValueError(f"render.camera.preset must be one of {sorted(CAMERA_PRESETS)}")
+        unknown = set(cfg) - set(CAMERA_DEFAULTS)
+        if unknown:
+            raise ValueError(f"render.camera: unknown keys {sorted(unknown)} (known: {sorted(set(CAMERA_DEFAULTS) | {'preset'})})")
+        return cls(**{**CAMERA_DEFAULTS, **CAMERA_PRESETS[preset], **cfg})
+
+    def __getitem__(self, key: str) -> Any:
+        if key not in CAMERA_DEFAULTS:
+            raise KeyError(key)
+        return getattr(self, key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(CAMERA_DEFAULTS)
+
+    def __len__(self) -> int:
+        return len(CAMERA_DEFAULTS)
+
+    def __repr__(self) -> str:
+        return f"CameraSettings({dict(self)!r})"
+
+
+def camera_settings(cfg: Mapping[str, Any] | None) -> CameraSettings:
+    """Effective camera parameters: defaults < preset < explicit ``render.camera`` keys (:class:`CameraSettings`)."""
+    if isinstance(cfg, CameraSettings):
+        return cfg
+    return CameraSettings.from_config(cfg)
+
+
+def validate_camera_config(camera: Any) -> None:
+    """Raise ``ValueError`` unless *camera* is a valid ``render.camera`` mapping (preset + overrides).
+
+    ``config._validate_camera`` runs this at config time, so typos and bad ranges fail before rendering.
+    """
+    if camera is None:
+        return
+    if not isinstance(camera, dict) or set(camera) - set(CAMERA_DEFAULTS) - {'preset'}:
+        raise ValueError(f"render.camera must be a mapping with keys from {sorted(set(CAMERA_DEFAULTS) | {'preset'})}")
+    if camera.get('preset', 'aoi') not in CAMERA_PRESETS:
+        raise ValueError(f"render.camera.preset must be one of {sorted(CAMERA_PRESETS)}")
+    for key, default in CAMERA_DEFAULTS.items():
+        if key not in camera or not isinstance(default, list):
+            continue
+        rng = camera[key]
+        limit = _RANGE_LIMITS.get(key, float('inf'))
+        if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(v, (int, float)) for v in rng)
+                and 0 <= rng[0] <= rng[1] <= limit):
+            raise ValueError(f"render.camera.{key} must be [min, max] with 0 <= min <= max <= {_RANGE_LIMITS.get(key, 'inf')}")
+    if 'capture_scale' in camera and camera['capture_scale'][0] < 0.05:
+        raise ValueError("render.camera.capture_scale must be in [0.05, 1] (sensor pixels per ROI pixel)")
+    if 'zoom' in camera and camera['zoom'][0] < 1:
+        raise ValueError("render.camera.zoom must be >= 1 (1 = profile scale, larger = farther away)")
+    if 'shot_noise' in camera and not (isinstance(camera['shot_noise'], (int, float)) and camera['shot_noise'] >= 0):
+        raise ValueError("render.camera.shot_noise must be a number >= 0")
+    if 'channel_axis' in camera and camera['channel_axis'] not in CHANNEL_AXES:
+        raise ValueError(f"render.camera.channel_axis must be one of {list(CHANNEL_AXES)}")
+    if 'max_oversampling' in camera and not (isinstance(camera['max_oversampling'], (int, float))
+                                             and camera['max_oversampling'] >= 0):
+        raise ValueError("render.camera.max_oversampling must be a number >= 0 (0 = off)")
+    CameraSettings.from_config(camera)  # the merged settings must construct as well
 
 
 def sample_camera_pose(cam: dict[str, Any], rng: np.random.Generator, roll_deg: float = 0.0) -> dict[str, float]:

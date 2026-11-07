@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from simple_sim.classes import TYPE_LABELLED_CLASSES
+from simple_sim.classes import TYPE_LABELLED_CLASSES, DefectClass
 
 _Sample = tuple[float, float, float, float]  # shift_x, shift_y, rotation_deg, tilt_deg
 
@@ -56,8 +56,8 @@ _MISALIGNED_TAIL_SCALE = 5.0
 #       The number of RNG draws is the same in both modes (only the bounds differ).
 DEFECT_UNITS = ("px", "mm")
 DEFAULT_DEFECT_UNITS = "px"
-_LEGACY_SHIFT_PX = {'TOMBSTONE': 5.0, 'SOLDER_BRIDGE': 1.0, 'CORNER_LIFT': 2.0}
-_SHIFT_MM = {'TOMBSTONE': 0.10, 'SOLDER_BRIDGE': 0.025, 'CORNER_LIFT': 0.05}
+_LEGACY_SHIFT_PX = {DefectClass.TOMBSTONE: 5.0, DefectClass.SOLDER_BRIDGE: 1.0, DefectClass.CORNER_LIFT: 2.0}
+_SHIFT_MM = {DefectClass.TOMBSTONE: 0.10, DefectClass.SOLDER_BRIDGE: 0.025, DefectClass.CORNER_LIFT: 0.05}
 
 
 # ---------------------------------------------------------------------------
@@ -100,16 +100,16 @@ def classify_defect(nominal: dict[str, float], defect_params: dict[str, Any], to
 
     tilt_deg = abs(defect_params['tilt_deg'])
     if tilt_deg >= tombstone_tilt_deg:
-        return 'TOMBSTONE'
+        return DefectClass.TOMBSTONE.value
 
     shift_x = defect_params['shift_x']
     shift_y = defect_params['shift_y']
     rotation_deg = abs(defect_params['rotation_deg'])
     shift_magnitude = np.sqrt(shift_x**2 + shift_y**2)
     if shift_magnitude > ok_shift_px or rotation_deg > ok_rotation_deg:
-        return 'MISALIGNED'
+        return DefectClass.MISALIGNED.value
 
-    return 'OK'
+    return DefectClass.OK.value
 
 
 def sample_defect_params(
@@ -145,15 +145,15 @@ def sample_defect_params(
     ok_sampler = _sample_ok_continuous if continuous else _sample_ok
 
     samplers: dict[str, Callable[..., _Sample]] = {
-        'OK':           ok_sampler,
-        'MISSING':      _sample_missing,
-        'MISALIGNED':   _sample_misaligned_continuous if continuous else _sample_misaligned,
-        'TOMBSTONE':    _sample_tombstone,
-        'SOLDER_BRIDGE': _sample_solder_bridge,
-        'CORNER_LIFT':  _sample_corner_lift,
+        DefectClass.OK:           ok_sampler,
+        DefectClass.MISSING:      _sample_missing,
+        DefectClass.MISALIGNED:   _sample_misaligned_continuous if continuous else _sample_misaligned,
+        DefectClass.TOMBSTONE:    _sample_tombstone,
+        DefectClass.SOLDER_BRIDGE: _sample_solder_bridge,
+        DefectClass.CORNER_LIFT:  _sample_corner_lift,
         # Solder defects on a correctly placed part (placement like OK; the renderer draws the solder).
-        'SOLDER_BALL':  ok_sampler,
-        'EXCESS_SOLDER': ok_sampler,
+        DefectClass.SOLDER_BALL:  ok_sampler,
+        DefectClass.EXCESS_SOLDER: ok_sampler,
     }
 
     if defect_type not in samplers:
@@ -187,9 +187,9 @@ def fixed_shift_px(units: str, mm_per_px: float | None, ok_shift_px: float) -> d
     scale = 1.0 / float(mm_per_px)
     wobble_cap = _OK_SAFETY_MARGIN * float(ok_shift_px)
     return {
-        'TOMBSTONE': _SHIFT_MM['TOMBSTONE'] * scale,
-        'SOLDER_BRIDGE': min(_SHIFT_MM['SOLDER_BRIDGE'] * scale, wobble_cap),
-        'CORNER_LIFT': min(_SHIFT_MM['CORNER_LIFT'] * scale, wobble_cap),
+        DefectClass.TOMBSTONE: _SHIFT_MM[DefectClass.TOMBSTONE] * scale,
+        DefectClass.SOLDER_BRIDGE: min(_SHIFT_MM[DefectClass.SOLDER_BRIDGE] * scale, wobble_cap),
+        DefectClass.CORNER_LIFT: min(_SHIFT_MM[DefectClass.CORNER_LIFT] * scale, wobble_cap),
     }
 
 

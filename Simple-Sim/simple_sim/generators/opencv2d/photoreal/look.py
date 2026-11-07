@@ -29,21 +29,34 @@ names a preset. The look also switches the joints to the meniscus model with a f
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, fields
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
 
-from simple_sim.board.placement import DENSE_PACKING, LEGACY_PACKING, Packing
+from simple_sim.board.placement import LEGACY_PACKING, Packing
 
+from .meniscus import SolderLook, sample_look, sample_scanner_look
 from .palette import CAP_BODY, COPPER_UNDER_MASK, END_CAP, LEAD, MASK_PALETTE
 
-LOOKS = ("legacy", "quins")
 DEFAULT_LOOK = "legacy"
+MASK_GLOSS_PROBABILITY = 0.5  # legacy share of images with a glossy reflection on the mask (``render.mask_gloss``)
+REWORK_PROBABILITY = 0.15     # legacy share of images with rework residue (``render.rework_artifacts``)
 
 
 def _bgr(*v: float) -> np.ndarray:
     return np.array(v, dtype=np.float32)
+
+
+def _room_joints(rng: np.random.Generator, roll_deg: float) -> SolderLook:
+    """Joint lighting of the default looks: random room lamps / ring light (the roll is irrelevant)."""
+    del roll_deg
+    return sample_look(rng)
+
+
+JointSampler = Callable[[np.random.Generator, float], SolderLook]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,16 +72,32 @@ class Look:
     end_cap: np.ndarray           # tin-plated chip terminals
     lead: np.ndarray              # gull-wing lead metal
     flat_caps: bool               # flat tin terminal tops with bright edges (else: legacy ridge rule)
-    bodies: dict[str, np.ndarray] = field(default_factory=dict)  # family -> colour for the dark default body
-    crowd: float = 1.0                # neighbour-part density factor (board population)
-    packing: Packing = LEGACY_PACKING  # neighbour layout (row pitch, clearances, families)
-    cap_len: dict[str, float] = field(default_factory=dict)  # family -> terminal length / body length
-    mask_gloss: float | None = None   # default of render.mask_gloss (None: the renderer default)
-    rework: float | None = None       # default of render.rework_artifacts (None: the renderer default)
+    bodies: Mapping[str, np.ndarray] = field(default_factory=dict)  # family -> colour for the dark default body
+    # Neighbour layout (row pitch, clearances, families) and density: ``Packing.parts`` is the look's
+    # neighbour count (the former ``Look.crowd`` factor, always 1.0, is folded into it).
+    packing: Packing = LEGACY_PACKING
+    cap_len: Mapping[str, float] = field(default_factory=dict)  # family -> terminal length / body length
+    mask_gloss: float = MASK_GLOSS_PROBABILITY  # default of render.mask_gloss
+    rework: float = REWORK_PROBABILITY          # default of render.rework_artifacts
     camera_preset: str | None = None  # default of render.camera.preset (None: aoi)
     solder: str | None = None         # joint model this look implies (None: render.solder decides)
     shadow: float = 1.0               # contact-shadow strength factor (diffuse scanner light: < 1)
     silkscreen_skip: float = 0.45     # probability that no silkscreen is printed next to the part
+    # Meniscus joint lighting ``(side stream, roll_deg) -> SolderLook`` when the joints use the meniscus
+    # model; *roll_deg* is the roll of the board in the final image (fixed scanner lights follow it).
+    joint_sampler: JointSampler = _room_joints
+
+    def __post_init__(self) -> None:
+        # Shared, immutable registry entries: arrays read-only, dicts behind read-only proxies.
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, np.ndarray):
+                value.setflags(write=False)
+            elif isinstance(value, dict):
+                for v in value.values():
+                    if isinstance(v, np.ndarray):
+                        v.setflags(write=False)
+                object.__setattr__(self, f.name, MappingProxyType(value))
 
     def body_colour(self, family: str, base_color: np.ndarray) -> np.ndarray:
         """Body colour of a part whose profile colour is the dark default (legacy: ``max(base, 34)``)."""
@@ -78,6 +107,11 @@ class Look:
 
 LEGACY_LOOK = Look(name="legacy", mask_palette=MASK_PALETTE, mask_mottle=0.03, mask_weave=0.03,
                    copper_under_mask=COPPER_UNDER_MASK, cap_body=CAP_BODY, end_cap=END_CAP, lead=LEAD, flat_caps=False)
+
+# Neighbour layout of the quins look (DeepVision xpa QUINS scans): rows of passives almost touching,
+# mostly MLCCs, 4-10 neighbours in a crop of 3x the part length.
+DENSE_PACKING = Packing(array_probability=0.9, pitch=(1.12, 1.3), clearance=0.18, spacing=0.05, parts=10.0,
+                        capacitor_share=0.75, tries=24)
 
 _MOULD = _bgr(64, 68, 65)
 _RESISTOR = _bgr(44, 47, 44)
@@ -97,7 +131,6 @@ QUINS_LOOK = Look(
     bodies={"resistor": _RESISTOR, "array_r": _RESISTOR, "inductor": _bgr(58, 61, 59),
             "power_inductor": _bgr(99, 105, 104), "led": _bgr(200, 207, 209), "*": _MOULD},
     cap_len={"capacitor": 0.16, "resistor": 0.16},  # scans: narrow bright terminals, the joint shows around them
-    crowd=1.0,
     packing=DENSE_PACKING,                        # xpa boards: rows of almost touching passives, mostly MLCCs, 4-10 per 3x crop
     mask_gloss=0.0,                               # diffuse scanner light: no glare on the mask
     rework=0.03,                                  # good production boards: patch wires and flux are rare
@@ -105,9 +138,11 @@ QUINS_LOOK = Look(
     solder="meniscus",
     shadow=0.3,                                   # diffuse ring light: hardly any contact shadow
     silkscreen_skip=0.85,                         # the crops show almost no print next to the passives
+    joint_sampler=sample_scanner_look,            # two line lights fixed in the final image
 )
 
 _LOOKS = {"legacy": LEGACY_LOOK, "quins": QUINS_LOOK}
+LOOKS = tuple(_LOOKS)  # registered names, in registration order
 
 
 def look_name(config: dict[str, Any] | None) -> str:
@@ -122,27 +157,30 @@ def get_look(config: dict[str, Any] | None) -> Look:
     return _LOOKS[look_name(config)]
 
 
-def camera_config(config: dict[str, Any] | None) -> dict[str, Any] | None:
-    """``render.camera`` with the look's preset filled in when the config names none."""
+def camera_config(config: dict[str, Any] | None, look: Look | None = None) -> dict[str, Any] | None:
+    """``render.camera`` with the look's preset filled in when the config names none (*look*: the
+    already resolved :func:`get_look` of *config*)."""
     cam = (config or {}).get("camera")
-    preset = get_look(config).camera_preset
+    preset = (look or get_look(config)).camera_preset
     if preset is None or (isinstance(cam, dict) and "preset" in cam):
         return cam
     return {"preset": preset, **(cam or {})}
 
 
-def _probability(config: dict[str, Any] | None, key: str, attr: str, default: float) -> float:
+def _probability(config: dict[str, Any] | None, key: str, attr: str, default: float | None,
+                 look: Look | None = None) -> float:
     value = (config or {}).get(key)
     if value is None:
-        value = getattr(get_look(config), attr)
+        value = getattr(look or get_look(config), attr)
     return float(default if value is None else value)
 
 
-def mask_gloss(config: dict[str, Any] | None, default: float) -> float:
-    """``render.mask_gloss``, else the look's default, else *default*."""
-    return _probability(config, "mask_gloss", "mask_gloss", default)
+def mask_gloss(config: dict[str, Any] | None, default: float | None = None, *, look: Look | None = None) -> float:
+    """``render.mask_gloss``, else the look's default (:attr:`Look.mask_gloss`). *default* is only used for a
+    custom look whose ``mask_gloss`` is ``None`` (kept for callers of the old two-argument form)."""
+    return _probability(config, "mask_gloss", "mask_gloss", default, look)
 
 
-def rework_probability(config: dict[str, Any] | None, default: float) -> float:
-    """``render.rework_artifacts``, else the look's default, else *default*."""
-    return _probability(config, "rework_artifacts", "rework", default)
+def rework_probability(config: dict[str, Any] | None, default: float | None = None, *, look: Look | None = None) -> float:
+    """``render.rework_artifacts``, else the look's default (:attr:`Look.rework`); *default*: see :func:`mask_gloss`."""
+    return _probability(config, "rework_artifacts", "rework", default, look)

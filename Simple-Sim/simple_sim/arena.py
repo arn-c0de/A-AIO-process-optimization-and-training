@@ -186,13 +186,15 @@ def best_rows_by_model(
         # Rank on the test split when available; train/val reports would inflate "best" scores.
         # Reports without a split key (older eval.py) are test reports.
         rs = [rr for rr in rs if str(rr.get("split") or "test") == "test"] or rs
+        # Timestamps parsed once per report (ISO parse / stat), not inside the sort key (plan S5).
+        stamps = [report_timestamp(rr) for rr in rs]
 
-        def key(rr: dict[str, Any]) -> tuple[float, float, float]:
-            acc = metric_value(rr, "accuracy")
-            f1 = metric_value(rr, "macro_f1")
-            return (acc if acc is not None else -1.0, f1 if f1 is not None else -1.0, report_timestamp(rr))
+        def key(i: int) -> tuple[float, float, float]:
+            acc = metric_value(rs[i], "accuracy")
+            f1 = metric_value(rs[i], "macro_f1")
+            return (acc if acc is not None else -1.0, f1 if f1 is not None else -1.0, stamps[i])
 
-        best = max(rs, key=key)
+        best = rs[max(range(len(rs)), key=key)]
         ds_path_s = str(best.get("dataset_path") or "")
         ds_size_b: int | None = None
         ds_abs = _resolve(sim_root, ds_path_s)
@@ -210,7 +212,7 @@ def best_rows_by_model(
                 f1=metric_value(best, "macro_f1"),
                 seen=as_int(best.get("seen_samples") or best.get("test_size"), None),
                 dataset_size_bytes=ds_size_b,
-                last_ts=max(report_timestamp(rr) for rr in rs),
+                last_ts=max(stamps),
                 report_path=str(best.get("_path") or ""),
                 extra={
                     "critical_fn": _critical_fn_summary(best),

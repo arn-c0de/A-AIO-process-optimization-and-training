@@ -105,10 +105,21 @@ S < 0.5 d, M 0.5-2 d, L > 2 d.
 - **I4** `simple_sim/board/__init__.py:21-29` imports everything eagerly; the data model
   (`model`, `footprints`, `netlist`, `rules`, `geometry`, `placement`, `routing/base`) is
   cv2-free. Lazy submodule attributes (PEP 562) or split `board/pipeline.py`. S.
+  **Done 2026-11-07:** both. `board/options.py` (cv2-free: `render.board` options, streams,
+  `collect_drc` sink, `ROUTER_NAMES`, `POUR_PROBABILITY`), `board/pipeline.py`
+  (`build_window_board`, `WindowBoard`, `min_row_pitch`, `fanout_band_px`, logger still
+  `simple_sim.board`); `board/__init__.py` imports options/footprints/geometry/model/netlist/
+  placement/rules eagerly and resolves the DRC, routers, pours, pipeline and the submodules via
+  PEP 562 `__getattr__`. Every `__all__` name stays importable. Guarded by
+  `tests/test_headless_imports.py::test_board_data_model_does_not_load_cv2` (7 modules) and
+  `test_board_lazy_exports_load_on_access`.
 - **I5** `eval_utils.py:16-24` top-imports torch/tqdm but holds torch-free helpers
   (`MANIFEST_NAME`, `metrics_summary`, `require_manifest`, `dataset_profile`,
   `resolve_bundle_checkpoint`, `checkpoint_eval_config`, `checkpoint_val_accuracy`).
   Move them to `manifest.py` / `model_bundle.py`. S.
+  **Done 2026-11-07** differently: torch, `torch.nn`, `DataLoader` and tqdm are imported inside
+  the functions that use them (annotations via `TYPE_CHECKING`), so the helpers stay where they
+  are and `import simple_sim.eval_utils` is torch-free (`tests/test_headless_imports.py`).
 - **I6** `schema.py:13` imports `simple_sim.config` (PyYAML) for `VALID_CLASSES`;
   `metrics.py:9-10` needs scikit-learn for three functions that are trivial in numpy.
   New dependency-free `simple_sim/classes.py` (see A3); numpy metrics with exact-value
@@ -412,11 +423,11 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
 | Phase | Status | Evidence |
 |---|---|---|
 | 0, 1 | done | `tests/test_headless_imports.py` guards I1/I8; `print(` only in `cli*.py` + Blender script |
-| 2 shared helpers | open except D14/D17/D18/D19/D23-D25 | D1 device pick at 7 script sites; D5 three history blocks `manifest.py:146,186,399`; D7 108 literal file-name sites; D11 `hash_profile` re-reads YAML; D16 `sha256:` built twice; I5 `import simple_sim.eval_utils` 2.8 s; I7 `validate_config` still loads cv2 + `simple_sim.board` (measured via `sys.modules`); I4 `import simple_sim.board.model` loads cv2 via `board/__init__.py:22 -> drc -> occupancy` |
+| 2 shared helpers | open except D14/D17/D18/D19/D23-D25 | D1 device pick at 7 script sites; D5 three history blocks `manifest.py:146,186,399`; D7 108 literal file-name sites; D11 `hash_profile` re-reads YAML; D16 `sha256:` built twice; I5 done 2026-11-07 (torch/tqdm lazy in `eval_utils`, 0.74 -> 0.05 s warm; was 2.8 s cold); I7 `validate_config` still loads cv2 via the photoreal option constants (`config.py:357,376,386,396,407,419`); its board part (`_validate_board`) is cv2-free since I4 (`test_board_options_validate_without_cv2`); I4 done 2026-11-07 (`board/options.py` + `board/pipeline.py`, lazy `board/__init__.py`) |
 | 3 typed records | open | `_path` key in 6 places, `load_checkpoint_model` 3-tuple, `parse_config_typed` result discarded (`config.py:79`), 11-positional `write_dataset_manifest` |
 | 4 logic into library | open | none of `training/evaluation/batch_predict/validation/dataset_merge/dataset_edit/inference/...` exist; `train_model` 256 lines / 44 prints; `gui/utils/validation_suite.py:13` is the only `gui -> tools` import; `simple_sim/preview/viewer_tk.py:219` the only `simple_sim -> gui` import |
-| 5 command registry | open | `cli.py:264 subprocess.call`, `:75 "add_json_flag" in src`; 7 tools not in `COMMANDS` (sim-to-real, calibrate-camera, look-stats, eval-real, mix-real, real-crops, look-montage); 40 `sys.path.insert` |
-| 6 renderer | mostly done | R2, R5, R6, R9, X5, D23-D25 done. Partly: R1 (5 callers still hand-merge via `merge_profile_render`: `profile_dataset.py:101`, `preview/render.py:377`, `filter_popup/preview_render.py:58`, `profile_preview/logic.py:190`, `update_sample_gallery.py:148`), R3 (`backends.py` holds capabilities only; dispatch `if backend == Backend.OPENCV_2D` at `dataset.py:456-475`), R4 (`generate_dataset` 208 lines, `generate_profile_dataset` 134 lines not decomposed), R7 (job contract still dicts), R8 (env read inside `realism.py:135`), D26, D28 (`REFDES_PREFIX` twice), D29, X8 (two live `fine_pitch` definitions: `escape.py:30` vs `copper.py:164`). Open: D27, D30, D31, D33, D34, D35/X12, R10 |
+| 5 command registry | open | `cli.py:264 subprocess.call`, `:75 "add_json_flag" in src`; the 7 sim-to-real tools are in `COMMANDS` since 2026-11-07 (N12); 40 `sys.path.insert` (the 6 in those tools now only fire when run as a script, `real_crops.py` has none) |
+| 6 renderer | mostly done | R2, R5, R6, R9, X5, D23-D25 done. Partly: R1 (5 callers still hand-merge via `merge_profile_render`: `profile_dataset.py:101`, `preview/render.py:377`, `filter_popup/preview_render.py:58`, `profile_preview/logic.py:190`, `update_sample_gallery.py:148`), R3 (`backends.py` holds capabilities only; dispatch `if backend == Backend.OPENCV_2D` at `dataset.py:456-475`), R4 (`generate_dataset` 208 lines, `generate_profile_dataset` 134 lines not decomposed), R7 (job contract still dicts), R8 (env read inside `realism.py:135`), D26, D28 (`REFDES_PREFIX` twice: `board/placement.py:18-19` and `photoreal/palette.py:64-66`, same mapping; fix: `palette.py` imports it from `board.placement`), D29, X8 (escape side done 2026-11-07: `board.footprints.FINE_PITCH_FAMILIES` / `is_fine_pitch` is the single source, `escape.py` and `pipeline.py` import it; `copper.py:164` `RULE_CHIP_FAMILIES` is a different predicate (rule-scale boost for `sot, soic, qfn, sot6`; arrays are not boosted) and cannot use `is_fine_pitch` bit-identically). Open: D27, D30, D31, D33, D34, D35/X12, R10 |
 | 7 GUI | open | `pipeline/tab.py` 2033 lines / 105 methods; threads in 6 tabs; GUI plan phase 4 untouched |
 | X1-X12 | only X5 closed | X1 `model_inference.py:22`, X2 `preview_render.py:24`, X3 `validation_suite.py:18`, X4 `train_profile.py:98`, X6, X7 `predictions/logic.py:91`, X9, X10 `preview_3d.py:475`, X11 `weights/logic.py:97` |
 
@@ -432,25 +443,53 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
 
 - **U1** `light_roll_deg` threaded through 4 layers under 4 names (`render.py:76` -> `scene.py:248`
   `roll`/`after` with `None` sentinel -> `context.py:41 roll_deg` -> `camera.py:142 axis_roll_deg`).
-  One `RenderContext.post_roll_deg`. S.
+  One `RenderContext.post_roll_deg`. S. **Done 2026-11-07:** `RenderContext.post_roll_deg` set by
+  `for_render(config, rng, roll_deg, *, post_roll_deg=)`; `_render_photoreal_base` lost its
+  `light_roll_deg` parameter and passes `ctx.post_roll_deg` to `camera_model(axis_roll_deg=)`. The
+  public `render_photoreal_base(light_roll_deg=)` / `camera_model(axis_roll_deg=)` are unchanged.
 - **U2** `context.py:52 if look.name == "quins"` selects the joint sampler by string. Make it a
-  `Look.joint_sampler: Callable` field so a third look needs no core edit. S.
+  `Look.joint_sampler: Callable` field so a third look needs no core edit. S. **Done 2026-11-07:**
+  `Look.joint_sampler(stream, roll_deg) -> SolderLook` (legacy: `sample_look`, quins:
+  `sample_scanner_look`); `look.py` now imports `meniscus` (no cycle).
 - **U3** `Grid.inflated_rect_rows` returns a `None` sentinel; the fallback is duplicated in
-  `zones.py:98-103` and `occupancy.py:124-131`. Always return rows. S.
+  `zones.py:98-103` and `occupancy.py:124-131`. Always return rows. S. **Done 2026-11-07:**
+  falls back internally (`_mask_rows(inflate(rect()))`), both call-site fallbacks removed;
+  `tests/test_board.py::test_inflated_rect_rows_equal_inflate_of_rect` (300 random grids/boxes/n)
+  and `..._fallback_without_kernel_spans`.
 - **U4** `drc._end_connected(items=None)` (`drc.py:129-140`) rebuilds `_copper(board)` per call
-  when omitted. Make `items` required. S.
+  when omitted. Make `items` required. S. **Done 2026-11-07** (only caller `check` passes it).
 - **U5** `imageops.gradient`, `heightmap_normals`, `contact_shadow`/`_rolled_spans`
   (`imageops.py:59-85,231-269`) re-implement `np.gradient`/`np.linalg.norm`/`np.roll` and claim
   bit identity; only the golden tests pin it. Add equality property tests incl. border cases. S.
+  **Done 2026-11-07:** `tests/test_imageops_equivalence.py` (76 cases: shapes 2x2..64x48 and
+  2x1000, 1-px maps raise like `np.gradient`, int fallback, float32/float64, shadow masks at all
+  corners/edge midpoints/centre for ss 1-4 and both looks, full/empty masks, `_rolled_spans`
+  vs `np.roll` for n 1-17 and every shift/span, `blend` bbox vs full frame). All bit-identical.
 - **U6** `DENSE_PACKING` (`placement.py:46`, a look constant) lives in the board layer; `crowd`
   overlaps `Packing` (`scene.py:97,160` vs `placement.py:77`). Move to `look.py`, fold `crowd` in. S.
+  **Partly done 2026-11-07:** `Look.crowd` (1.0 on every look, a duplicate of `Packing.parts`) is
+  removed: pixel-identical since `x * 1.0 == x`. The `crowd` argument of `neighbour_layout`
+  (rendered area / ROI area) is geometry, not packing, and stays. **Done 2026-11-07:**
+  `DENSE_PACKING` is defined in `photoreal/look.py`; `simple_sim.board` no longer exports it
+  (no re-export: the board layer must not depend on the generators), `tests/test_look.py`
+  imports it from `look`.
 - **U7** `Look` is becoming the render-defaults object (`shadow`, `silkscreen_skip`, `packing`).
   Finish D30 there: numeric `mask_gloss`/`rework` on `LEGACY_LOOK`, drop the `default` args of
   `mask_gloss()/rework_probability()` and the constant re-imports in `bake.py:45-46,69-70`,
-  `render_options.py:18`. S.
+  `render_options.py:18`. S. **Done 2026-11-07:** `Look.mask_gloss`/`rework` are `float`
+  (legacy defaults `MASK_GLOSS_PROBABILITY = 0.5`, `REWORK_PROBABILITY = 0.15`, now defined in
+  `look.py` and re-exported by `substrate`/`rework`/the package); `default` is optional (only used
+  for a look whose value is `None`); `scene.py`, `render_options.py`, `bake.py` call
+  `mask_gloss(cfg)`/`rework_probability(cfg)`; `BAKE_CONFIG_DEFAULTS` uses `LEGACY_LOOK`'s values.
 - **U8** `camera_model` is 83 lines (`camera.py:139`); `camera_settings` returns an untyped dict and
   `CAMERA_DEFAULTS["channel_axis"]` is a string among range lists, so typos surface at render
-  time. Frozen `CameraSettings` validated in `config._validate_camera`. M.
+  time. Frozen `CameraSettings` validated in `config._validate_camera`. M. **Done 2026-11-07
+  (settings + validation; `camera_model` not split):** `camera.CameraSettings` is a frozen slots
+  dataclass that is also a read-only `Mapping` (`c[key]`, `.get`, `{**c}`, `== dict` keep working;
+  values kept as configured so the draws are unchanged); unknown keys / preset / `channel_axis`
+  raise on construction. `camera.validate_camera_config` holds the former `config._validate_camera`
+  body (+ a construction check), and `config._validate_camera` calls it. `render_options._camera`
+  returns `dict(...)` for readable `look_differences`.
 
 ### 6.4 New findings: modularity and extension points
 
@@ -466,7 +505,12 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   `texture_dir`, `component_type`, `component_color`, `marking_probability`, `mm_per_px`,
   `camera`, `mask_gloss`, `rework`; `board_options` validates per image (`:51`); `get_look`
   runs 3x per image. Resolve once in `RenderContext.for_render` (typed fields) or a
-  `ResolvedRender` cached on `RenderSpec`. Pixel-safe. M.
+  `ResolvedRender` cached on `RenderSpec`. Pixel-safe. M. **Done 2026-11-07:** `RenderContext`
+  fields `texture_dir`, `component_type`, `component_color`, `marking_probability`, `mm_per_px`,
+  `camera`, `mask_gloss`, `rework`, `board` (`BoardOptions`), resolved in `for_render` with one
+  `get_look` (`camera_config`/`mask_gloss`/`rework_probability` accept the resolved `look=`).
+  `draw_board`/`_render_board`/`_render_photoreal_base` no longer take `config`. No RNG change
+  (`for_render` draws nothing from the image stream). `copper.mm_per_px()` is now unused.
 - **N3 Scene prologue duplicated.** `_render_board:94-117` and `_render_photoreal_base:154-185`
   both do scaled_geometry, family_of, draw_board, body_geometry, boxPoints,
   solder_defect_layout; the latter has 10 args. Extract `_scene_setup() -> SceneGeometry`
@@ -479,11 +523,21 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   "rng continues into render" flag (keeps `:119-121`). M.
 - **N6 Defect types as raw strings** at 14 renderer sites (`scene.py:99,120,171-212`,
   `solder_defects.py:30,33`) and in `defects.py:85,94,118-127`, `batch_predict.py:518`,
-  although `DefectClass(StrEnum)` exists. S.
+  although `DefectClass(StrEnum)` exists. S. **Done 2026-11-07** for the renderer (`scene.py`,
+  `solder_defects.py`, `draw.py`) and `defects.py` (dict keys and comparisons; `classify_defect`
+  returns `.value`, i.e. plain `str`, so labels/YAML are unchanged). `batch_predict.py` was owned
+  by another session and is left.
 - **N7 Registries duplicated:** `LOOKS` tuple vs `_LOOKS` dict (`look.py:41,110`, validated via
   lazy import in `config.py:386`); `BOARD_ROUTERS` vs `ROUTERS` (`board/__init__.py:40`). Derive
   tuples from dicts. `Look`/`Packing` frozen dataclasses hold mutable arrays/dicts
-  (`look.py:57-65`): `setflags(write=False)` + `MappingProxyType`. S.
+  (`look.py:57-65`): `setflags(write=False)` + `MappingProxyType`. S. **Done 2026-11-07 for the
+  looks:** `LOOKS = tuple(_LOOKS)`; `Look.__post_init__` marks every array (also the shared
+  `palette` constants and `bodies` values) read-only and wraps `bodies`/`cap_len` in
+  `MappingProxyType`; nothing mutated them (all suites pass). `Packing` holds only floats and
+  tuples. Note: `Look` is no longer picklable (MappingProxyType); nothing pickles it (`RenderSpec`
+  carries the config). `LOOKS` is still not cv2-free (`photoreal/__init__` loads cv2), so
+  `gui/utils/pipeline_helpers.py` keeps loading cv2 for it; a cv2-free name list would have to live
+  outside the `photoreal` package. `BOARD_ROUTERS` left to the board session.
 - **N8 Profile editor duplicates geometry:** `preview_3d.py:374-523 _build_scene` (149 lines) and
   `blender_live_preview.py:150-169` each define `mid()` over `geometry_ranges`; pads hand-placed
   (X10) instead of `footprint_pads`/`geometry.pad_positions`; `_render:72-147` builds the Blender
@@ -507,6 +561,13 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   `spec_from_file_location` or `pythonpath=["."]`; `tools/mix_real.py:114-131` edits the manifest
   by hand. `simple_sim/images.py` (`IMAGE_EXTENSIONS`, `list_images`), `simple_sim/realism/`
   package, register the commands. S.
+  **Done 2026-11-07** except the `simple_sim/realism/` package: `simple_sim/images.py`
+  (`IMAGE_EXTENSIONS`, `is_image`, `list_images`) used by the four tools (`eval_real.class_folders`
+  keeps its signature); the 7 tools are `COMMANDS` entries (`tests/test_cli.py` checks `--help`);
+  `mix_real` uses `manifest.record_added_samples`. Open: `photoreal/substrate.py:17` still defines
+  its own `IMAGE_EXTENSIONS` (renderer owner: `from simple_sim.images import IMAGE_EXTENSIONS`),
+  the tool tests still load via `spec_from_file_location` / `pythonpath`, the tool logic is not
+  yet a library package (P2).
 - **N13 Packaging gap:** `pyproject.toml` packages only `simple_sim*`; `gui/monitor.py:15`,
   `profile_editor/app.py:15`, `filter_popup/preview_panel.py:258` mutate `sys.path`;
   `simple-sim gui` only works from a checkout. Package `gui` under the `[gui]` extra. M.
@@ -519,15 +580,29 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   `read_jsonl` recomputes `dataclasses.fields()` per line (`schema.py:150-153`);
   `_get_label_index` does `class_names.index()` per `__getitem__` (`data_loader.py:244`).
   Fix: hoist the field set (S), one `DatasetIndex` (L11) shared by datasets, predictors and GUI (M).
+  **Done 2026-11-07** (datasets + `batch_predict`; GUI = S6 still open): `simple_sim/dataset_index.py`
+  (per-file cache keyed by path + inode/size/mtime/ctime, 32 files), used by `_BaseROIDataset`,
+  `batch_predict.dataset_info/_gt_profile_map/build_dataset` and `sample_check`; field set hoisted;
+  `_get_label_index` via dict. Measured on 12k rows (CPU): `--split all` data loading 2.09 -> 0.45 s,
+  `read_jsonl(meta)` 473 -> 407 ms, labels 30 -> 21 ms; label lookup unchanged at 6 classes (~77 ns).
+  Tests: `tests/test_dataset_index.py`.
 - **S2 Per-call env/subprocess/file work in hot paths.** `telemetry.emit` reads the env var,
   `makedirs` and opens the file per batch (`telemetry.py:20-27`, called from
   `eval_utils.py:127`, `train.py:103`); `manifest._get_git_commit` spawns `git rev-parse` on
   every manifest write (`manifest.py:48-61`); `parallel.py:48,61,76`, `realism.py:135`,
   `filter_settings.py:234` read env inside library functions. Fix: `telemetry.set_sink()`,
   cached git commit as optional parameter, env resolution at the CLI boundary only. S.
+  **Done 2026-11-07:** `telemetry.set_sink/reset_sink/current_sink`, sink resolved on the first
+  event, file kept open and flushed per line (12.2 -> 3.0 us/event); `_get_git_commit` `lru_cache`
+  (1.8 ms -> 1 us) + `git_commit=` on both manifest writers; `generate_profile_dataset(image_filters=)`.
+  Kept on purpose: `parallel.py` (explicit args already win, env is the fallback) and
+  `realism.py:135` (read inside render worker processes, which only inherit the environment; the
+  real fix is carrying the presets in `RenderSpec`, R8). Tests: `tests/test_perf_caches.py`.
 - **S3 Texture substrate decodes the photo per image** (`substrate.py:29 cv2.imread`); only the
   directory listing is cached. Per-process `lru_cache` of read-only decoded arrays keyed by
-  path+mtime. Pixel-safe. S.
+  path+mtime. Pixel-safe. S. **Done 2026-11-07:** `substrate.load_texture` /
+  `_decoded_texture` (`lru_cache(8)`, key path + mtime_ns + size, read-only arrays; the caller only
+  takes views and `cv2.resize` copies). `IMAGE_EXTENSIONS` now comes from `simple_sim.images`.
 - **S4 `--extend` holds the whole old dataset in lists** (`dataset.py:186-187,488-489`;
   `records/tmp_meta/tmp_labels/meta_rows` coexist in `common.py:191-207`). Stream rows, keep only
   ids/splits of the old set. M.
@@ -536,6 +611,11 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   `arena.best_rows_by_model` re-parses timestamps inside sort keys (`:176-187`);
   `path_size_bytes` walks a dataset dir per dataset per model per report (`arena.py:189-194,261-263`).
   mtime-keyed caches. S-M.
+  **Done 2026-11-07:** `load_reports` caches parsed files per path + inode/size/mtime (fresh
+  top-level dicts per call; 400 reports x 300 rows: 64 -> 2 ms warm, 67 ms cold);
+  `best_rows_by_model` parses each timestamp once. `path_size_bytes` is not cached across calls (a
+  directory mtime does not change when a file in it grows, so an mtime key would go stale; within a
+  report each path was already walked once); instead a `scandir` walk, same sum (20k files 144 -> 33 ms).
 - **S6 Blocking I/O on the Tk thread.** `pipeline/tab.py:1603-1609` reads whole
   `meta.jsonl`/`labels.jsonl` per dataset selection; `pipeline/ui.py:519-539` decodes 12 images
   + overlays per refresh on the UI thread; `_refresh_models:1290-1298` stats every checkpoint
@@ -547,14 +627,23 @@ scalability (per-call work that is constant per run, whole-dataset memory, UI-th
   `procedural_substrate` ~9 ms (rng-bound, not skippable), `camera_model` 7 ms,
   `meniscus.shade` 6 ms. Pixel-safe: `blend(..., window=)` so callers that know the box skip
   the boundingRect. S. `RenderSpec` pickles to 370 B, so pool overhead is not an issue.
+  **Measured 2026-11-07, not done:** per 256² image (30 renders, ss 2) the `boundingRect` inside
+  `blend` costs 0.4 ms (legacy, 37 ms/img) / 0.4 ms (quins, 41 ms/img), ~1 %; the ~10 ms is the
+  blend arithmetic itself (largest: `copper.py:35` full-frame copper, 2.2-3.4 ms, whose alpha
+  really covers most of the frame). A `window=` argument would save < 1 % and is not worth the
+  extra API; revisit only if the copper layer gets a known small box.
 - **S8 `model_bundle` does a full `torch.load` per `.pt` to list a bundle** (`model_bundle.py:103-113`;
   plan L8). Sidecar JSON or `torch.load(..., mmap=True)` of the metadata only. S.
+  **Done 2026-11-07** with `mmap=True` (no new files in bundles), full-load fallback for legacy
+  non-zip checkpoints: 5 ResNet-18 checkpoints 640 -> 164 ms cold, 88 -> 24 ms warm.
 
 ### 6.6 New findings: correctness found on the way
 
 - **C1** `sample_check.choose_samples` selects the split by substring `f"/{split}/" in sample_id`
   (`sample_check.py:42`) instead of `splits.read_split`, so it diverges from `ROIDataset` for
-  merged or re-split datasets. S.
+  merged or re-split datasets. S. **Done 2026-11-07:** split from `DatasetIndex.split_ids`
+  (missing split file -> no samples); regression test with a re-split dataset; identical
+  selection when ids name their split.
 - **C2** `augment.apply_image_filter_overrides` is a 144-line ladder (`augment.py:13`); table-drive
   it in the existing key order (rng draw order preserved). M.
 - **C3** The divergent modules of section 2 have no tests at all (`gui/utils/model_inference.py`,

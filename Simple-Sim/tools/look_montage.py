@@ -31,9 +31,9 @@ from typing import Any
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.generators.opencv2d.photoreal import IMAGE_EXTENSIONS  # noqa: E402
 from tools.eval_real import class_folders  # noqa: E402
 
 STAT_KEYS = ("L_std", "b_std", ">200", ">150", "p90", "p99", "metal")

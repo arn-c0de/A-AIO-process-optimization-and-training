@@ -22,7 +22,7 @@ from simple_sim.generation.common import (
     sample_record,
     summarize,
 )
-from simple_sim.filter_settings import load_image_filters_env
+from simple_sim.filter_settings import load_image_filters_env, normalize_image_filters
 from simple_sim.generators.backends import backend_of, supporting
 from simple_sim.generators.opencv2d.spec import RenderSpec
 from simple_sim.generators.version import RENDERER_VERSION
@@ -39,10 +39,13 @@ def generate_profile_dataset(
     *,
     enable_cardinal_rotation_90: bool = True,
     project_root: Path | None = None,
+    image_filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate a mixed-profile dataset (``run.component_profiles``) with v2 labels.
 
-    Only ``render.backend='opencv_2d'`` is supported. Returns a summary
+    Only ``render.backend='opencv_2d'`` is supported. *image_filters* default to ``$IMAGE_FILTERS``
+    (the GUI hand-off, read here as before) and are normalised like in
+    :func:`simple_sim.generation.dataset.generate_dataset`. Returns a summary
     (see :func:`simple_sim.generation.common.summarize`).
     """
     output_dir = Path(output_dir)
@@ -51,7 +54,7 @@ def generate_profile_dataset(
     config = load_config(config_path)
     validate_config(config)
 
-    image_filters = load_image_filters_env()
+    image_filters = load_image_filters_env() if image_filters is None else normalize_image_filters(image_filters)
 
     run_id = config["run"]["run_id"]
     run_seed = config["run"]["seed"]

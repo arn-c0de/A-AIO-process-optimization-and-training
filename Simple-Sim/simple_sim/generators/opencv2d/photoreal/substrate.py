@@ -9,12 +9,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from simple_sim.images import IMAGE_EXTENSIONS  # also re-exported by the photoreal package
+
 from .context import RenderContext
 from .imageops import blend, grid, smooth_noise
+from .look import MASK_GLOSS_PROBABILITY  # noqa: F401 (re-exported; the look owns the default)
 from .palette import jittered
-
-
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 @lru_cache(maxsize=8)
@@ -23,13 +23,32 @@ def texture_files(texture_dir: str) -> tuple[Path, ...]:
     return tuple(sorted(p for p in Path(texture_dir).iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS))
 
 
+TEXTURE_CACHE_SIZE = 8  # decoded board photos kept per process (a 12 Mpx photo is ~36 MB)
+
+
+@lru_cache(maxsize=TEXTURE_CACHE_SIZE)
+def _decoded_texture(path: str, mtime_ns: int, size: int) -> np.ndarray:
+    """``cv2.imread`` of *path*, read-only and cached per process. *mtime_ns* / *size* are part of the
+    key, so a photo replaced on disk is decoded again."""
+    del mtime_ns, size
+    tex = cv2.imread(path, cv2.IMREAD_COLOR)
+    if tex is None:
+        raise OSError(f"Failed to read substrate texture: {path}")
+    tex.setflags(write=False)
+    return tex
+
+
+def load_texture(path: Path | str) -> np.ndarray:
+    """Decoded BGR photo of *path* (read-only, shared: copy before modifying it)."""
+    st = Path(path).stat()
+    return _decoded_texture(str(path), st.st_mtime_ns, st.st_size)
+
+
 def texture_substrate(ctx: RenderContext, h: int, w: int, texture_dir: str, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     """Random crop of a real photo of empty board area, randomly flipped/rotated, scaled to (h, w)."""
     files = texture_files(texture_dir)
     path = files[int(rng.integers(len(files)))]
-    tex = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if tex is None:
-        raise OSError(f"Failed to read substrate texture: {path}")
+    tex = load_texture(path)  # read-only: only views and new arrays below
     tex = np.rot90(tex, int(rng.integers(4)))
     if rng.random() < 0.5:
         tex = tex[:, ::-1]
@@ -57,9 +76,6 @@ def procedural_substrate(ctx: RenderContext, h: int, w: int, rng: np.random.Gene
     img *= (1.0 + ctx.look.mask_mottle * coarse + ctx.look.mask_weave * weave)[..., None]
     img += rng.normal(0.0, 1.2, (h, w, 1)).astype(np.float32)
     return img, base
-
-
-MASK_GLOSS_PROBABILITY = 0.5  # default share of images with a glossy reflection on the mask (``render.mask_gloss``)
 
 
 def mask_sheen(ctx: RenderContext, img: np.ndarray, base: np.ndarray, rng: np.random.Generator, probability: float) -> None:

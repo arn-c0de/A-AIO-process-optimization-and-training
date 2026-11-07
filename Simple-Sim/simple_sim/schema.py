@@ -137,6 +137,11 @@ def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:
         raise FileNotFoundError(f"JSONL file not found: {path}")
 
     rows = []
+    # Per-file constants (hoisted out of the per-line loop; plan S1). The dataclass check stays
+    # lazy so an empty file still returns [] for any class, as before.
+    expected_fields: frozenset[str] | None = None
+    is_label = schema_cls == LabelRow
+    is_meta = schema_cls == MetaRow
     with open(path, encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
@@ -149,19 +154,20 @@ def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:
                 raise ValueError(f"Invalid JSON at line {line_num}: {e}") from e
 
             # Check for unknown fields using dataclass introspection
-            if not dataclasses.is_dataclass(schema_cls):
-                raise ValueError(f"Unknown schema class: {schema_cls}")
-            expected_fields = {f.name for f in dataclasses.fields(schema_cls)}
+            if expected_fields is None:
+                if not dataclasses.is_dataclass(schema_cls):
+                    raise ValueError(f"Unknown schema class: {schema_cls}")
+                expected_fields = frozenset(f.name for f in dataclasses.fields(schema_cls))
 
-            unknown_fields = set(data.keys()) - expected_fields
+            unknown_fields = data.keys() - expected_fields
             if unknown_fields:
                 raise ValueError(f"Unknown fields at line {line_num}: {unknown_fields}")
 
             # Backward compat: default profile_id for v1 LabelRows
-            if schema_cls == LabelRow and 'profile_id' not in data:
+            if is_label and 'profile_id' not in data:
                 data['profile_id'] = ""
             # Backward compat: meta.jsonl v1 doesn't have render_meta
-            if schema_cls == MetaRow and 'render_meta' not in data:
+            if is_meta and 'render_meta' not in data:
                 data['render_meta'] = {}
 
             try:

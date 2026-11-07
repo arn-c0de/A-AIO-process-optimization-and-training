@@ -38,14 +38,11 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 #: DeepVision review class -> class folder of ``tools/eval_real.py`` / ``tools/mix_real.py``.
 CLASS_FOLDERS: dict[str, str] = {

@@ -62,3 +62,16 @@ def test_mix_real_rejects_untrained_or_unknown_classes(dataset, tmp_path):
     _crops(tmp_path, "GOOD", 1, 90)
     with pytest.raises(SystemExit, match="unknown class"):
         mix_real(dataset, tmp_path)
+
+
+def test_record_added_samples(tmp_path):
+    from simple_sim.manifest import record_added_samples
+
+    path = tmp_path / "dataset_manifest.json"
+    assert record_added_samples(path, split="train", classes={"OK": 1}, log_key="real_crops", log_entry={}) is False
+    path.write_text(json.dumps({"dataset_stats": {"total_samples": 5, "splits": {"train": 5}, "classes": {"OK": 5}}}))
+    assert record_added_samples(path, split="val", classes={"OK": 2, "MISSING": 1}, log_key="real_crops",
+                                log_entry={"n": 3}) is True
+    m = json.loads(path.read_text())
+    assert m["dataset_stats"] == {"total_samples": 8, "splits": {"train": 5, "val": 3}, "classes": {"OK": 7, "MISSING": 1}}
+    assert m["real_crops"] == [{"n": 3}]

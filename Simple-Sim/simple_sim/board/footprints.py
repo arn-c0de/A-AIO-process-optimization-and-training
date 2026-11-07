@@ -27,6 +27,14 @@ FAMILIES = ("resistor", "capacitor", "sot", "soic", "qfn", "sot6", "array_r", "a
             "led")
 # Two-terminal chip parts (chip_2pad); component_type picks the family.
 CHIP_FAMILIES = ("resistor", "capacitor", "inductor", "power_inductor", "led")
+# Families with many small pads at a fine pitch: the escape router necks their tracks down at the
+# pad and fans their ground pins out, and the window board keeps their fan-out corridor clear.
+FINE_PITCH_FAMILIES = ("soic", "qfn", "sot6", "array_r", "array_c")
+
+
+def is_fine_pitch(family: str) -> bool:
+    """True for a fine-pitch family (:data:`FINE_PITCH_FAMILIES`)."""
+    return family in FINE_PITCH_FAMILIES
 
 # Footprints with two pad columns (left/right of the body) and this many pads per column:
 # SOIC-16, SOT-363 / SOT-23-6 and 4-element resistor/capacitor arrays (0804 / 0805 size).

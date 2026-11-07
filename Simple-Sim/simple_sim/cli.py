@@ -48,6 +48,14 @@ COMMANDS: dict[str, str] = {
     "backfill-labels": "tools/backfill_labels_v2.py",
     "update-sample-gallery": "tools/update_sample_gallery.py",
     "gui-screenshots": "tools/gui_screenshots.py",
+    # sim-to-real helpers (real camera crops vs. the synthetic look)
+    "sim-to-real": "tools/sim_to_real.py",
+    "calibrate-camera": "tools/calibrate_camera.py",
+    "look-stats": "tools/look_stats.py",
+    "look-montage": "tools/look_montage.py",
+    "real-crops": "tools/real_crops.py",
+    "eval-real": "tools/eval_real.py",
+    "mix-real": "tools/mix_real.py",
 }
 
 BUILTINS: dict[str, str] = {

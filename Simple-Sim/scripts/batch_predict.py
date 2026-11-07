@@ -32,13 +32,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from simple_sim.cli_utils import add_json_flag, run_cli
 from simple_sim.data_loader import ROIDataset
+from simple_sim.dataset_index import DatasetIndex
 from simple_sim.io_utils import append_jsonl, atomic_write_json, now_iso, now_tag, unique_path
 from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.model_bundle import bundle_checkpoint_path
 from simple_sim.models import load_checkpoint_model
 from simple_sim.reports import load_reports, metric_value
-from simple_sim.schema import LabelRow, MetaRow, read_jsonl
 
 COMMAND = "batch_predict"
 
@@ -65,22 +65,13 @@ class PredictResult:
 
 
 def dataset_info(data_dir: Path) -> RunInfo:
+    """Sizes and class distribution of *data_dir* (via the shared :class:`DatasetIndex`)."""
     data_dir = Path(data_dir)
-    meta_rows = read_jsonl(data_dir / "meta.jsonl", MetaRow)
-    label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
-
-    split_sizes: dict[str, int] = {}
-    for s in ["train", "val", "test"]:
-        p = data_dir / "splits" / f"{s}.txt"
-        if p.exists():
-            with p.open("r", encoding="utf-8") as fh:
-                split_sizes[s] = sum(1 for line in fh if line.strip())
-        else:
-            split_sizes[s] = 0
-
-    class_dist: dict[str, int] = {}
-    for r in label_rows:
-        class_dist[r.class_name] = class_dist.get(r.class_name, 0) + 1
+    index = DatasetIndex(data_dir)
+    meta_rows = index.meta_rows()
+    index.label_rows()  # validated (raises) before the split files are looked at, as before
+    split_sizes = index.split_sizes()
+    class_dist = index.class_distribution()
 
     # split is filled later by caller
     return RunInfo(
@@ -131,7 +122,7 @@ def resolve_model_path(requested: Path, data_dir: Path) -> tuple[Path, str | Non
 def _gt_profile_map(data_dir: Path) -> dict[str, str]:
     """Sample id -> GT profile_id from v2 labels (empty for legacy datasets)."""
     try:
-        return {lr.id: lr.profile_id for lr in read_jsonl(data_dir / "labels.jsonl", LabelRow) if lr.profile_id}
+        return DatasetIndex(data_dir).profile_map()
     except (OSError, ValueError, TypeError, KeyError):
         return {}
 

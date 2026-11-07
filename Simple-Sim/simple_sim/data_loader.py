@@ -14,8 +14,8 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from simple_sim.schema import read_jsonl, MetaRow, LabelRow
-from simple_sim.splits import read_split
+from simple_sim.dataset_index import DatasetIndex
+from simple_sim.schema import LabelRow
 
 log = logging.getLogger(__name__)
 
@@ -138,8 +138,21 @@ def make_loader_kwargs(num_workers: int, device: torch.device) -> dict[str, Any]
 # Shared base class
 # ---------------------------------------------------------------------------
 
+def _first_index(names: list[str]) -> dict[str, int]:
+    """Name -> position of its first occurrence (what ``list.index`` returns), as a dict."""
+    out: dict[str, int] = {}
+    for i, name in enumerate(names):
+        out.setdefault(name, i)
+    return out
+
+
 class _BaseROIDataset(Dataset):
-    """Base class with shared image loading and metadata handling."""
+    """Base class with shared image loading and metadata handling.
+
+    Meta, labels and the split file come from a :class:`~simple_sim.dataset_index.DatasetIndex`
+    (parsed once per process and file version), so several splits of one dataset share the
+    parsed rows; ``id_to_meta`` is that shared mapping (read-only).
+    """
 
     def __init__(self, data_dir: Path, split: str, return_id: bool = False,
                  transform: Any | None = None, cache_images: bool = False) -> None:
@@ -150,14 +163,11 @@ class _BaseROIDataset(Dataset):
         self.cache_images = bool(cache_images)
         self._rgb_cache: dict[str, np.ndarray] = {}
 
-        split_file = self.data_dir / 'splits' / f'{split}.txt'
-        self.sample_ids = read_split(split_file)
+        index = DatasetIndex(self.data_dir)
+        self.sample_ids = list(index.split_ids(split))
 
-        meta_rows = read_jsonl(self.data_dir / 'meta.jsonl', MetaRow)
-        label_rows = read_jsonl(self.data_dir / 'labels.jsonl', LabelRow)
-
-        self.id_to_meta = {row.id: row for row in meta_rows}
-        self._init_label_mapping(label_rows)
+        self.id_to_meta = index.id_to_meta()
+        self._init_label_mapping(list(index.label_rows()))
 
         self.samples = [
             sid for sid in self.sample_ids
@@ -232,6 +242,7 @@ class ROIDataset(_BaseROIDataset):
                 about 200 KB per 256 px image, each DataLoader worker holds its own copy)
         """
         self.class_names = class_names
+        self._class_index = _first_index(class_names)
         super().__init__(data_dir, split, return_id, transform, cache_images)
 
     def _init_label_mapping(self, label_rows: list[LabelRow]) -> None:
@@ -245,7 +256,7 @@ class ROIDataset(_BaseROIDataset):
         )
 
     def _get_label_index(self, sample_id: str) -> int:
-        return self.class_names.index(self.id_to_label[sample_id])
+        return self._class_index[self.id_to_label[sample_id]]
 
     def get_class_distribution(self) -> dict[str, int]:
         """Return class name → sample count for this split."""
@@ -273,6 +284,7 @@ class ProfileDataset(_BaseROIDataset):
             return_id: If True, __getitem__ returns (image, label, sample_id, image_rel_path)
         """
         self.profile_names = list(profile_names)
+        self._profile_index = _first_index(self.profile_names)
         super().__init__(data_dir, split, return_id)
 
     def _init_label_mapping(self, label_rows: list[LabelRow]) -> None:
@@ -286,7 +298,7 @@ class ProfileDataset(_BaseROIDataset):
         )
 
     def _get_label_index(self, sample_id: str) -> int:
-        return self.profile_names.index(self.id_to_profile[sample_id])
+        return self._profile_index[self.id_to_profile[sample_id]]
 
     def get_class_distribution(self) -> dict[str, int]:
         """Return profile name → sample count for this split."""

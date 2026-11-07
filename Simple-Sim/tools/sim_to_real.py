@@ -28,15 +28,16 @@ import cv2
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import preprocess_bgr  # noqa: E402
-from simple_sim.generators.opencv2d.photoreal import IMAGE_EXTENSIONS  # noqa: E402
+from simple_sim.images import list_images  # noqa: E402
 from simple_sim.models import build_resnet18, load_checkpoint_model  # noqa: E402
 
 
 def load_images(folder: Path, limit: int, size: int, rng: np.random.Generator) -> list[np.ndarray]:
-    files = sorted(p for p in folder.rglob("*") if p.suffix.lower() in IMAGE_EXTENSIONS)
+    files = list_images(folder)
     if not files:
         raise SystemExit(f"No images found in {folder}")
     if len(files) > limit:

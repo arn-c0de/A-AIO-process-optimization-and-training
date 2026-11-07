@@ -18,8 +18,8 @@ from simple_sim.blender.job_schema import (BOARD_SCALE, DEFAULT_COMPONENT_HEIGHT
                                            PreparedJob)
 from simple_sim.board.footprints import DEFAULT_FOOTPRINT
 from simple_sim.parallel import imap_ordered
-from simple_sim.generators.opencv2d.photoreal import (DEFAULT_SUPERSAMPLING, MASK_GLOSS_PROBABILITY, REWORK_PROBABILITY,
-                                                     camera_config, camera_model, camera_settings, mask_gloss, render_board,
+from simple_sim.generators.opencv2d.photoreal.look import LEGACY_LOOK
+from simple_sim.generators.opencv2d.photoreal import (DEFAULT_SUPERSAMPLING, camera_config, camera_model, camera_settings, mask_gloss, render_board,
                                                      rework_probability, sample_camera_pose)
 
 # Supersampling above the default 2 is capped so the supersampled bake stays <= this many px per side
@@ -30,7 +30,7 @@ BAKE_MAX_SUPERSAMPLED_PX = 4096
 #: the value a job without the field gets (the renderer's defaults; ``camera`` is not baked: its pose
 #: is sampled for Blender and the camera model runs on the finished render).
 BAKE_CONFIG_DEFAULTS: dict[str, Any] = {
-    "texture_dir": None, "rework_artifacts": REWORK_PROBABILITY, "mask_gloss": MASK_GLOSS_PROBABILITY,
+    "texture_dir": None, "rework_artifacts": LEGACY_LOOK.rework, "mask_gloss": LEGACY_LOOK.mask_gloss,
     "supersampling": None, "board": None, "solder": None, "look": None,
 }
 
@@ -60,8 +60,8 @@ def bake_fields(render_cfg: Mapping[str, Any], roi: Mapping[str, Any] | None = N
     """
     del roi
     fields = {"texture_dir": render_cfg.get("texture_dir"), "camera": camera_config(render_cfg),
-              "rework_artifacts": rework_probability(render_cfg, REWORK_PROBABILITY),
-              "mask_gloss": mask_gloss(render_cfg, MASK_GLOSS_PROBABILITY),
+              "rework_artifacts": rework_probability(render_cfg),
+              "mask_gloss": mask_gloss(render_cfg),
               "supersampling": render_cfg.get("supersampling"), "board": render_cfg.get("board"),
               "solder": render_cfg.get("solder"), "look": render_cfg.get("look")}
     return {**fields, **overrides}

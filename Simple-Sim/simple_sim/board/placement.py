@@ -43,10 +43,6 @@ class Packing:
 
 
 LEGACY_PACKING = Packing()
-# Densely populated production boards (DeepVision xpa QUINS scans): rows of passives almost touching,
-# mostly MLCCs, 4-10 neighbours in a crop of 3x the part length.
-DENSE_PACKING = Packing(array_probability=0.9, pitch=(1.12, 1.3), clearance=0.18, spacing=0.05, parts=10.0,
-                        capacitor_share=0.75, tries=24)
 
 
 def neighbour_layout(pads: list[dict[str, int]], keepout: tuple[int, int, int, int], shape: tuple[int, int],

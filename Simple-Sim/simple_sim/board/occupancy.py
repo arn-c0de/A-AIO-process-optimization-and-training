@@ -43,6 +43,15 @@ def _ellipse_spans(n: int) -> tuple[np.ndarray, np.ndarray] | None:
     return left, right
 
 
+def _mask_rows(mask: np.ndarray) -> list[tuple[int, int, int]]:
+    """Runs of set cells of *mask* as ``(row, x0, x1)`` spans (``x1`` exclusive), row by row."""
+    out = []
+    for y in np.flatnonzero(mask.any(axis=1)):
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], (mask[y] > 0).astype(np.int8), [0]))))
+        out.extend((int(y), int(a), int(b)) for a, b in zip(edges[::2], edges[1::2]))
+    return out
+
+
 @dataclass(slots=True)
 class Grid:
     origin: Vec                    # mm of the centre of cell (0, 0)
@@ -97,11 +106,13 @@ class Grid:
         i1, j1 = min(self.shape[1] - 1, int(np.ceil(u1 - 1e-9)) - 1), min(self.shape[0] - 1, int(np.ceil(v1 - 1e-9)) - 1)
         return (i0, j0, i1, j1) if i1 >= i0 and j1 >= j0 else None
 
-    def inflated_rect_rows(self, bbox: BBox, mm: float) -> list[tuple[int, int, int]] | None:
-        """Row spans ``(row, x0, x1)`` (``x1`` exclusive) of ``inflate(rect(bbox), mm)``, computed from
-        the structuring element instead of dilating the whole grid; ``None`` when that is not possible
-        (then call the two methods). A rectangle dilated by a kernel whose rows are contiguous spans
-        through the centre is, per row, the rectangle widened by the widest kernel row that reaches it."""
+    def inflated_rect_rows(self, bbox: BBox, mm: float) -> list[tuple[int, int, int]]:
+        """Row spans ``(row, x0, x1)`` (``x1`` exclusive) whose cells are exactly ``inflate(rect(bbox), mm)``.
+
+        Computed from the structuring element instead of dilating the grid: a rectangle dilated by a
+        kernel whose rows are contiguous spans through the centre is, per row, the rectangle widened
+        by the widest kernel row that reaches it. For any other kernel the mask is dilated and its
+        runs are read back (a row may then hold several spans)."""
         n = self.cells(mm)
         cells = self._rect_cells(bbox)
         if cells is None:
@@ -111,7 +122,7 @@ class Grid:
             return [(y, i0, i1 + 1) for y in range(j0, j1 + 1)]
         spans = _ellipse_spans(n)
         if spans is None:
-            return None
+            return _mask_rows(self.inflate(self.rect(bbox), mm))
         left, right = spans
         rows_h, cols_w = self.shape
         out = []
@@ -123,11 +134,8 @@ class Grid:
 
     def inflated_rect(self, bbox: BBox, mm: float) -> np.ndarray:
         """``inflate(rect(bbox), mm)`` without dilating the whole grid (same cells)."""
-        rows = self.inflated_rect_rows(bbox, mm)
-        if rows is None:
-            return self.inflate(self.rect(bbox), mm)
         mask = self.scratch()
-        for y, x0, x1 in rows:
+        for y, x0, x1 in self.inflated_rect_rows(bbox, mm):
             mask[y, x0:x1] = 255
         return mask
 

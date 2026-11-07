@@ -15,8 +15,8 @@ import numpy as np
 from simple_sim.board.geometry import add, disc, octagon, perp, unit
 from simple_sim.board.model import GND, TOP, Board, ThermalRelief, Via, Zone, point_in_polygon
 from simple_sim.board.occupancy import CopperMap, Grid
+from simple_sim.board.options import POUR_PROBABILITY
 
-POUR_PROBABILITY = 0.6  # default share of boards with a copper pour (``render.board.pour_probability``)
 # Pour raster resolution (stitching vias, DRC): cells per clearance.
 POUR_CELLS_PER_CLEARANCE = 4
 
@@ -89,12 +89,8 @@ def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
             for pad in part.pads:
                 if pad.net != zone.net or not point_in_polygon(pad.center, zone.outline):
                     continue
-                rows = grid.inflated_rect_rows(pad.bbox, relief.gap)
-                if rows is None:
-                    fill[grid.inflate(grid.rect(pad.bbox), relief.gap) > 0] = 0
-                else:
-                    for y, x0, x1 in rows:
-                        fill[y, x0:x1] = 0
+                for y, x0, x1 in grid.inflated_rect_rows(pad.bbox, relief.gap):
+                    fill[y, x0:x1] = 0
                 if part.is_target:
                     continue
                 d = unit(pad.escape_dir) if pad.escape_dir != (0.0, 0.0) else (1.0, 0.0)

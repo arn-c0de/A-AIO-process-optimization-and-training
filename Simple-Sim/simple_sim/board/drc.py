@@ -124,8 +124,9 @@ def _near_fill(fill: np.ndarray, grid: Grid, p: Vec, radius: float) -> bool:
 
 
 def _end_connected(board: Board, t: Track, p: Vec, fills: dict[int, np.ndarray], grid: Grid,
-                   items: list[_Copper] | None = None) -> bool:
-    """*items*: :func:`_copper` of the board (built here when not given)."""
+                   items: list[_Copper]) -> bool:
+    """True if track end *p* touches copper of its net, a pour of its net or the window border.
+    *items*: :func:`_copper` of the board (built once per :func:`check`)."""
     tol = t.width / 2.0 + board.rules.clearance / 2.0
     x0, y0, x1, y1 = board.bbox
     if min(abs(p[0] - x0), abs(p[0] - x1), abs(p[1] - y0), abs(p[1] - y1)) <= tol:
@@ -133,7 +134,7 @@ def _end_connected(board: Board, t: Track, p: Vec, fills: dict[int, np.ndarray],
     end = disc(p, 2.0 * tol)
     eb = end.bbox
     # Copper of the net that touches the end (a gap above TOUCH is ruled out by the bounding boxes already).
-    for it in (_copper(board) if items is None else items):
+    for it in items:
         if it.net != t.net or (it.kind == "track" and (it.source is t or it.layer != t.layer)):
             continue
         if bbox_near(eb, it.shape.bbox, TOUCH) and gap(end, it.shape) <= TOUCH:
