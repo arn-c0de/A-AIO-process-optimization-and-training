@@ -51,7 +51,8 @@ HELP: dict[str, str] = {
     "pipeline.render": "opencv_2d: fast 2D rendering. blender_3d: photoreal 3D rendering (needs Blender, slower).",
     "pipeline.look": (
         "render.look override: legacy = default materials, quins = materials and scanner joints tuned to the "
-        "QUINS scans. 'from config' keeps the run config's value. Applied through a temporary config under "
+        "QUINS scans, dv_top / dv_bottom = the DeepVision app crops (phone photo / flatbed capture). "
+        "'from config' keeps the run config's value. Applied through a temporary config under "
         "outputs/live; extending a dataset with another look is refused like any config change."
     ),
     "pipeline.board_routing": (

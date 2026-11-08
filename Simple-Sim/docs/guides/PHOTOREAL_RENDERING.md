@@ -337,6 +337,116 @@ unknown), so they must not be used for geometry regression or seed replay.
 `generate --extend` compares the resolved look (`render.look` and the camera preset, mask gloss and
 rework defaults it implies) with the dataset, so looks are not mixed by accident.
 
+## DeepVision app looks (`dv_top`, `dv_bottom`)
+
+The DeepVision inspection app does not use the QUINS scanner: it photographs the TOP side of a board
+with a phone (handheld, flash, ~19-22 px/mm source) and captures the BOTTOM side with a flatbed-like
+top-down camera, cuts one crop per part and lets reviewers judge it. `render.look: dv_top` and
+`dv_bottom` imitate those crops; `legacy` and `quins` are untouched (`tests/test_render_golden_variants.py`:
+620 earlier cases unchanged, 60 added). Both looks exist for the `aoi-judge` Siamese model (see
+[Export for DeepVision](#export-for-deepvision-toolsexport_deepvisionpy)).
+
+### The real crops (`tools/dv_crops.py`)
+
+`tools/dv_crops.py` exports the reviewed app crops (`.../products/xpa/aoi/labels/<side>.ndjson`, newest
+review per `(board, id)`, retracted reviews and reviews without a colour crop skipped) into the class
+folders of `tools/eval_real.py` / `tools/look_montage.py`, with the package of each crop from the
+product's `pnp.csv` (nearest placement; TOP centres match within 0.02 mm, BOTTOM within 0.3 mm median,
+0.6 mm p90):
+
+```bash
+python tools/dv_crops.py --labels .../products/xpa/aoi/labels --side top --out outputs/dv_real/top \
+    --pnp .../products/xpa/pnp.csv --limit-ok 500                        # all packages
+python tools/dv_crops.py ... --out outputs/dv_real_pkg/top/CAPC1005 --packages CAPC1005 --limit-ok 300
+```
+
+Review `fault` -> folder: `fehlt` -> `MISSING`, `versetzt` -> `MISALIGNED`, `verdreht` -> `TOMBSTONE` (the
+export contract below maps TOMBSTONE back to `verdreht`; on the xpa boards "verdreht" is a *rotated* part
+and the 5 true tombstones are labelled `grabstein` -> `TOMBSTONE@grabstein`), `loetbruecke` ->
+`SOLDER_BRIDGE`, everything else `DEFECT@<fault>`. Counts (2026-11-08, `outputs/dv_real/<side>/summary.json`):
+
+| Side | latest reviews | OK available (exported) | fehlt | loetbruecke | verdreht | grabstein | versetzt | other faults | skipped |
+|---|---|---|---|---|---|---|---|---|---|
+| TOP | 4197 | 3417 (500) | 116 | 68 | 28 | 5 | 6 | 29 | dnp 168, unclear 129, unjudgeable 86, no colour crop 133 |
+| BOTTOM | 3238 | 2624 (500) | 28 | 150 | 16 | 0 | 1 | 82 | dnp 127, unclear 29, unjudgeable 55, no colour crop 120 |
+
+Crop geometry (PNG sizes of the exported colour crops): the app cuts **3.04 body lengths** (`fieldMm`
+3.037 for a 1.0 mm 0402, 4.81 for a 1.6 mm 0603, 6.03 for the 2.0 mm arrays) and resamples to a fixed
+**49 px (TOP) / 50 px (BOTTOM)** for the small parts, i.e. **16.1 px/mm for 0402**, 10.1 px/mm for 0603
+and 8.1 px/mm for arrays on TOP; BOTTOM keeps ~16 px/mm for arrays (68 px) and 0603 (76 px) in most runs
+but also has 34/38 px variants (older runs). The 1210 MLCC crops are 30 px on TOP (9.2 mm field, 3.2 px/mm)
+and 24-156 px on BOTTOM. The judge upscales every crop to 64 px.
+
+### Measurements and the derived looks
+
+Per-image medians of 300 good 0402 crops per side (centre patch of the part, bare mask, pixels > 200;
+`tools/look_stats.py`, `tools/look_montage.py --stats`, 256 px):
+
+| Material / effect | TOP (phone) | BOTTOM (flatbed) | QUINS scans | `dv_top` / `dv_bottom` |
+|---|---|---|---|---|
+| Solder mask, per-image median BGR (p25-p75) | (85, 105, 47) ((69, 91, 24)-(115, 127, 70)), teal glare up to hue 89 | (70, 89, 48) ((64, 84, 37)-(95, 119, 58)) | (67, 87, 49) | k-means centres of the medians as palettes (9 / 6 colours), mottling 6 % / 3 % |
+| MLCC body (centre) | (114, 138, 143) | (85, 106, 113) | (86, 108, 121) | `Look.cap_body` (110, 134, 142) / (85, 106, 113) |
+| 0402 resistor body (centre, blurred) | (80, 82, 59) | (68, 80, 65) | ~(44, 47, 44) | (48, 52, 42) / (40, 44, 38) before shading |
+| Metal (median of pixels > 200, share) | (209, 219, 215), 7.3 % | (207, 220, 221), 2.9 % | (209, 228, 214), 1.0 % | flat tin caps (205, 214, 210) / (196, 206, 204); meniscus joints under a flash lobe (`meniscus.sample_flash_look`: one wide lobe at 50-72 deg, bright overhead) / a diffuse ring (`sample_flatbed_look`) |
+| p1 grey (dark gaps, bodies) | 32 | 34 | 51 | `Look.shadow` 1.0, `DV_PACKING` with 50 % resistor neighbours (xpa pnp: 278 R vs 272 C 0402) |
+| Laplacian variance (256 px) | 4.8 | 3.8 (CAPC1005) / 4.7 (RESC1005) | 4.7 | camera presets `dv_top` / `dv_bottom` |
+| Flat-area noise (`calibrate_camera`) | 0.28 | 0.26 | ~0.9 | read noise 0.5-3 / 0.3-2 |
+| Mask glare, silkscreen | flash glare in most crops, little print | hardly any glare | none | `mask_gloss` 0.6 / 0.15, `silkscreen_skip` 0.8 |
+
+The camera presets (`camera.CAMERA_PRESETS`): `sensor_px_per_mm: [15.5, 16.5]` (the app's 16 px/mm crop
+is the resolution the judge sees), `crop_part_lengths: [3.0, 3.1]`, JPEG 75-92 / 80-95, lens blur 0.35-0.8 /
+0.35-0.75 sensor px, `dv_top` additionally tilt 0-12 deg with depth of field and ISP sharpening (handheld
+phone), `dv_bottom` stronger lateral chromatic aberration (`chroma_shift` 0.2-0.9: the red/blue fringes on
+every terminal edge) and almost no tilt. The `phone` preset was not a usable starting point: its
+blur/JPEG/upscale happen at `capture_scale` 0.2-0.7 of the ROI, not at a fixed 16 px/mm, so its renders are
+17x sharper than the app crops (Laplacian variance 80 vs 4.8).
+
+Whole-image statistics (p10/p50/p90 over the images; real: 300 good 0402 crops of one package, synthetic:
+160 renders (120 OK + 40 MISSING) of the matching 0402 run config, 256 px):
+
+| Metric | real TOP CAPC1005 | `legacy` (run_0402_c) | `quins` | `phone` preset | **`dv_top`** | real BOTTOM RESC1005 | `legacy` (run_0402_r) | `quins` | **`dv_bottom`** |
+|---|---|---|---|---|---|---|---|---|---|
+| mask hue (OpenCV) | 72/79/89 | 62/70/74 | 69/72/74 | 62/71/75 | 76/80/86 | 70/75/83 | 62/70/74 | 69/72/74 | 72/74/77 |
+| p1 grey | 9/32/55 | 27/56/70 | 40/64/73 | 28/52/69 | 36/64/90 | 8/34/59 | 22/34/52 | 34/44/65 | 28/39/59 |
+| p99 grey | 187/221/249 | 163/184/222 | 170/208/231 | 154/172/207 | 198/228/250 | 163/222/254 | 161/184/222 | 168/207/229 | 214/231/250 |
+| white share | 1.4/7.3/17 % | 0.4/1.5/3.6 % | 0.2/0.8/2.6 % | 0.1/0.8/2.3 % | 2.3/4.4/8.1 % | 0.3/4.4/16 % | 0.3/1.5/3.6 % | 0.2/0.8/2.4 % | 3.3/5.3/8.5 % |
+| Laplacian variance | 3.2/4.8/9.4 | 33/102/234 | 4.0/5.3/6.8 | 16/80/218 | 3.2/4.8/8.3 | 2.7/4.7/8.6 | 37/99/236 | 4.3/5.4/6.8 | 3.2/4.7/7.1 |
+
+Sim-to-real gap (`tools/sim_to_real.py`, ImageNet ResNet18, 300 real good crops vs. the same 160 renders,
+128 px; NN distance ratio, 1 = covered; the 1-NN accuracy is 0.99-1.0 for every variant):
+
+| Real crops | `legacy` | `quins` | `phone` preset | **`dv_top`** | **`dv_bottom`** |
+|---|---|---|---|---|---|
+| TOP CAPC1005 (vs. run_0402_c renders) | 2.40 | 2.49 | 2.45 | **1.90** | - |
+| BOTTOM RESC1005 (vs. run_0402_r renders) | 2.33 | 2.35 | - | - | **2.03** |
+| BOTTOM CAPC1005 (vs. run_0402_c renders) | 2.13 | 2.16 | 2.22 | 1.86 | - |
+| TOP RESC1005 (vs. run_0402_r renders) | - | 2.42 | - | - | 1.91 |
+
+`tools/calibrate_camera.py` on the real crops upscaled to 256 px: noise 0.28 / 0.26 real vs. 0.26 / 0.23
+synthetic (variance ratio 1.15 / 1.30, i.e. matched within the tool's resolution); its edge-steepness
+measure asks for +2.5 px more blur on TOP and -1.6 px on BOTTOM while the Laplacian variance already
+matches (4.8 vs 4.8, 4.7 vs 4.7); the two statistics disagree on these saturated, upscaled crops, so the
+Laplacian variance of `look_stats` was used as the sharpness criterion.
+
+Reading: both criteria of the task are met (NN distance ratio and Laplacian variance closer to the app
+crops than `quins`), with three tuning rounds (round 1: 2.05 / 2.18, Laplacian 3.8 / 4.5, highlights too hot
+(p99 238 / 244) and bottom fringes too strong (LAB b std 7.0 vs 4.9); round 2: 1.88 / 2.03 after dimming
+the joint lights and halving `chroma_shift`; round 3: more resistor neighbours, final blur). The cross
+table shows what carries the gain: `dv_top` is as close to the BOTTOM crops (1.86) as to the TOP crops, so
+the 16 px/mm crop scale, the bright flat joints and the dense packing matter, the side-specific mask
+colours and lights much less on this metric. Still open (montage `outputs/dv_look/dv_top_0402c.png`,
+`dv_bottom_0402r.png`, `tools/look_montage.py --stats`): the real TOP crops have far more bright area
+(21.7 % of pixels > 150 vs. 10.7 %, LAB L std 41 vs 29) because flash-lit fillets and glare merge into
+large white blobs, and darker gaps (p1 32 vs 64); the BOTTOM crops match on contrast (L std 36.9 vs 35.9)
+and dark end (p1 34 vs 39) but also show more bright area (15.8 % vs 9.3 %).
+
+Configs: `configs/run_0402_c_dv_top.yaml` (0402 MLCC, TOP) and `configs/run_0402_r_dv_bottom.yaml` (0402
+resistor, BOTTOM), both `post_filters: camera` with the calm domain of `run_0402_c_quins.yaml`. Looks and
+presets validate like the others (`render.look`, `render.camera.preset`); a look's preset, gloss and
+rework defaults yield to explicit `render` keys as for `quins`. Tests: `tests/test_look.py` (registration,
+every footprint and class, determinism, presets, joint lights, materials, bottom mask colour),
+`tests/test_dv_crops.py`, golden variants `look_dv_top` / `look_dv_bottom`.
+
 ## Real board backgrounds (`render.texture_dir`)
 
 Optional. Point `render.texture_dir` at a folder of photos of **empty board areas** taken with the

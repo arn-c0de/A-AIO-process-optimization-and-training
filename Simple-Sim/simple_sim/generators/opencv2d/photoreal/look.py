@@ -38,7 +38,7 @@ import numpy as np
 
 from simple_sim.board.placement import LEGACY_PACKING, Packing
 
-from .meniscus import SolderLook, sample_look, sample_scanner_look
+from .meniscus import SolderLook, sample_flash_look, sample_flatbed_look, sample_look, sample_scanner_look
 from .palette import CAP_BODY, COPPER_UNDER_MASK, END_CAP, LEAD, MASK_PALETTE
 
 from simple_sim.generators.options import DEFAULT_LOOK  # noqa: E402 (I7: cv2-free definition)
@@ -141,7 +141,79 @@ QUINS_LOOK = Look(
     joint_sampler=sample_scanner_look,            # two line lights fixed in the final image
 )
 
-_LOOKS = {"legacy": LEGACY_LOOK, "quins": QUINS_LOOK}
+# DeepVision inspection app (``tools/dv_crops.py`` exports its crops): phone photos of the TOP side and a
+# flatbed-like capture of the BOTTOM side of the xpa boards, per-part crops at ~16 px/mm. Measured on 300
+# good 0402 crops per side and package (per-image medians, 256 px; see the "DeepVision app looks" section
+# of docs/guides/PHOTOREAL_RENDERING.md):
+#
+#   material / effect        TOP (phone)                 BOTTOM (flatbed)             quins scans
+#   solder mask (BGR)        (85, 105, 47) p25-p75       (70, 89, 48) p25-p75         (67, 87, 49)
+#                            (69, 91, 24)-(115, 127, 70) (64, 84, 37)-(95, 119, 58)
+#   MLCC body (centre)       (114, 138, 143)             (85, 106, 113)               (86, 108, 121)
+#   0402 resistor (centre)   (80, 82, 59) blurred        (68, 80, 65) blurred         ~(44, 47, 44)
+#   metal (pixels > 200)     (209, 219, 215), 7.3 %      (207, 220, 221), 2.9 %       (209, 228, 214), 1.0 %
+#   p1 grey                  32                          40                           51
+#   Laplacian variance       4.8                         3.8                          4.7
+#
+# The TOP mask is a brighter, yellower green with teal flash glare (mask gloss stays on); the BOTTOM mask
+# is the dark olive of the scans with strong red/blue fringes (camera preset). Both sides are densely
+# populated like the scans. The joints get a flash (TOP) or diffuse ring (BOTTOM) light with bright flat
+# tops, as the terminals read as white blobs in both captures. Legacy and quins are untouched.
+# The xpa boards carry as many 0402 resistors as MLCCs (pnp: 278 RESC1005, 272 CAPC1005), so half the
+# packed neighbours are black resistors: their bodies and side walls are the dark 1 % of the real crops.
+DV_PACKING = Packing(array_probability=0.9, pitch=(1.12, 1.3), clearance=0.18, spacing=0.05, parts=10.0,
+                     capacitor_share=0.5, tries=24)
+_DV_RESISTOR = _bgr(48, 52, 42)      # black 0402 body seen through the soft phone optics: dark olive-grey
+_DV_RESISTOR_BOTTOM = _bgr(40, 44, 38)
+_DV_MOULD = _bgr(60, 64, 62)
+
+DV_TOP_LOOK = Look(
+    name="dv_top",
+    # ... plus the teal variants (hue p90 89 in OpenCV units: flash-lit mask reads blue-green).
+    mask_palette=((52, 66, 30), (70, 91, 24), (76, 95, 48), (85, 105, 47), (96, 100, 52), (103, 120, 74),
+                  (115, 127, 70), (118, 122, 68), (125, 135, 85)),
+    mask_mottle=0.06, mask_weave=0.015,          # handheld photo: uneven light over the crop, weave hardly resolved
+    copper_under_mask=_bgr(1.15, 1.2, 1.2),
+    cap_body=_bgr(110, 134, 142),
+    end_cap=_bgr(205, 214, 210),
+    lead=_bgr(196, 204, 200),
+    flat_caps=True,
+    bodies={"resistor": _DV_RESISTOR, "array_r": _DV_RESISTOR, "inductor": _bgr(58, 61, 59),
+            "power_inductor": _bgr(99, 105, 104), "led": _bgr(200, 207, 209), "*": _DV_MOULD},
+    cap_len={"capacitor": 0.2, "resistor": 0.2},
+    packing=DV_PACKING,
+    mask_gloss=0.6,                              # phone flash: whitish-teal glare on the mask in most crops
+    rework=0.05,
+    camera_preset="dv_top",
+    solder="meniscus",
+    shadow=1.0,                                  # the crops show deep gaps between the packed parts (p1 grey 32)
+    silkscreen_skip=0.8,
+    joint_sampler=sample_flash_look,
+)
+
+DV_BOTTOM_LOOK = Look(
+    name="dv_bottom",
+    mask_palette=((47, 54, 34), (60, 78, 42), (67, 88, 47), (72, 92, 50), (87, 113, 54), (102, 132, 69)),
+    mask_mottle=0.03, mask_weave=0.012,
+    copper_under_mask=_bgr(1.12, 1.18, 1.2),
+    cap_body=_bgr(85, 106, 113),
+    end_cap=_bgr(196, 206, 204),
+    lead=_bgr(188, 198, 196),
+    flat_caps=True,
+    bodies={"resistor": _DV_RESISTOR_BOTTOM, "array_r": _DV_RESISTOR_BOTTOM, "inductor": _bgr(56, 60, 58),
+            "power_inductor": _bgr(99, 105, 104), "led": _bgr(200, 207, 209), "*": _DV_MOULD},
+    cap_len={"capacitor": 0.2, "resistor": 0.2},
+    packing=DV_PACKING,
+    mask_gloss=0.15,
+    rework=0.04,
+    camera_preset="dv_bottom",
+    solder="meniscus",
+    shadow=1.0,                                  # dark halos around the terminals (p1 grey 34)
+    silkscreen_skip=0.8,
+    joint_sampler=sample_flatbed_look,
+)
+
+_LOOKS = {"legacy": LEGACY_LOOK, "quins": QUINS_LOOK, "dv_top": DV_TOP_LOOK, "dv_bottom": DV_BOTTOM_LOOK}
 LOOKS = tuple(_LOOKS)  # registered names, in registration order
 
 

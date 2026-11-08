@@ -6,6 +6,12 @@ All notable changes to **Simple-Sim** are documented in this file.
 
 ## [Unreleased]
 
+### Added (DeepVision app looks `dv_top` / `dv_bottom`, S1)
+- `render.look: dv_top` / `dv_bottom` (`photoreal/look.py`: `DV_TOP_LOOK`, `DV_BOTTOM_LOOK`, `DV_PACKING`) imitate the per-part crops of the DeepVision inspection app (phone photo of the TOP side, flatbed-like BOTTOM capture, 3.04 body lengths at ~16 px/mm): measured mask palettes, MLCC / resistor bodies, bright flat tin terminals, meniscus joints under a phone flash (`meniscus.sample_flash_look`) or a diffuse ring (`sample_flatbed_look`), dense rows with 50 % resistor neighbours, full contact shadows. Camera presets `dv_top` / `dv_bottom` (`sensor_px_per_mm` 15.5-16.5, `crop_part_lengths` 3.0-3.1, JPEG, phone tilt + depth of field / strong lateral chromatic aberration). `legacy` and `quins` unchanged (golden variants: 620 cases identical, 60 added).
+- `tools/dv_crops.py`: exports the reviewed app crops (`<side>.ndjson`, newest review per part, package via `pnp.csv`) into the class folders of `eval_real` / `look_montage`; `outputs/dv_real/<side>/summary.json` with counts and crop geometry.
+- Configs `configs/run_0402_c_dv_top.yaml`, `configs/run_0402_r_dv_bottom.yaml`; measurements (look_stats, sim_to_real NN distance ratio 1.90 / 2.03 vs quins 2.49 / 2.35, calibrate_camera) in `docs/guides/PHOTOREAL_RENDERING.md`, "DeepVision app looks". Tests: `tests/test_look.py`, `tests/test_dv_crops.py`.
+
+
 ### Changed (library plan N11 + S6: GUI without polling loops, no blocking file reads on the Tk thread)
 - N11: `gui.core.tasks.DispatchQueue` - a `queue.Queue` that drains itself on the Tk thread through the `UiDispatcher` (one coalesced drain per burst of `put`s, batch cap, rest on the next tick via the new `UiDispatcher.post_next_tick`). The Pipeline, Weights, Predictions and Profile Preview tabs use it instead of their `after(100/120/150)` drain loops; the profile editor's HQ status goes through a `UiDispatcher`. Log lines, events, progress and their order are unchanged (Pipeline: up to 200 log lines joined + 120 events per drain, as before).
 - N11: `BaseTab.post` / `bind_queue` / `quiet_tasks` and `gui.core.tasks.dispatcher_for`; every `frame.after(0, ...)` that ran on a worker thread (pipeline, weights, predictions, board detection) now posts through the dispatcher.

@@ -127,6 +127,68 @@ def sample_scanner_look(rng: np.random.Generator, roll_deg: float = 0.0) -> Sold
     )
 
 
+def sample_flash_look(rng: np.random.Generator, roll_deg: float = 0.0) -> SolderLook:
+    """Joint lighting of a handheld phone photo with flash (``render.look: dv_top``).
+
+    The flash sits next to the lens, so the mirror-like solder shows the light at a high elevation
+    over a wide range of slopes, and the flat solder tops and tin terminals mirror the bright flash /
+    sky as well: the DeepVision TOP crops show the terminals and fillets as blazing white blobs
+    (median BGR of the pixels > 200: (209, 219, 215), 7 % of the crop above 200) with the fillet
+    toes fading into the mask. One wide lobe at a random azimuth (the phone is held at any angle;
+    *roll_deg* is added so the direction is fixed in the finished image), plus a bright overhead
+    area. Measured on the app crops, see ``docs/guides/PHOTOREAL_RENDERING.md``.
+    """
+    azimuth = float(rng.uniform(0.0, 2.0 * np.pi)) + float(np.radians(roll_deg))
+    return SolderLook(
+        ring_elev=float(np.radians(rng.uniform(50.0, 72.0))),
+        ring_width=float(np.radians(rng.uniform(12.0, 20.0))),
+        azimuths=(azimuth,),
+        azimuth_width=float(np.radians(rng.uniform(60.0, 95.0))),
+        ring_gain=float(rng.uniform(300.0, 400.0)),
+        sky=float(rng.uniform(165.0, 215.0)),          # flash next to the lens: flat solder is bright too
+        sky_from=float(np.radians(rng.uniform(12.0, 28.0))),
+        board_mix=float(rng.uniform(0.55, 0.85)),
+        frost=float(rng.uniform(0.18, 0.32)),
+        lumps=float(rng.uniform(0.05, 0.12)),
+        grain=float(rng.uniform(0.02, 0.05)),
+        lip=float(rng.uniform(0.05, 0.12)),
+        bare_rim=float(rng.uniform(0.1, 0.4)),
+        level=float(rng.uniform(0.95, 1.06)),
+        paste_scale=float(rng.uniform(0.5, 0.9)),   # empty pads: flat grey solder with a bright rim, not white blobs
+        paste_cap=float(rng.uniform(8.0, 12.0)),
+        tint=(0.97, 1.0, 0.98),
+    )
+
+
+def sample_flatbed_look(rng: np.random.Generator, roll_deg: float = 0.0) -> SolderLook:
+    """Joint lighting of the DeepVision BOTTOM capture (``render.look: dv_bottom``): a flatbed-like
+    top-down camera with diffuse light all around the axis (a full ring, no fixed direction), so every
+    slope mirrors light and the terminals read as bright white with the flat tops almost as bright
+    (median BGR of the pixels > 200: (207, 220, 221), ~3 % of the crop above 200). The roll is
+    irrelevant for a ring. Measured on the app crops, see ``docs/guides/PHOTOREAL_RENDERING.md``.
+    """
+    del roll_deg
+    return SolderLook(
+        ring_elev=float(np.radians(rng.uniform(35.0, 55.0))),
+        ring_width=float(np.radians(rng.uniform(12.0, 20.0))),
+        azimuths=(),
+        azimuth_width=float(np.radians(45.0)),
+        ring_gain=float(rng.uniform(260.0, 360.0)),
+        sky=float(rng.uniform(130.0, 180.0)),
+        sky_from=float(np.radians(rng.uniform(10.0, 24.0))),
+        board_mix=float(rng.uniform(0.6, 0.9)),
+        frost=float(rng.uniform(0.15, 0.28)),           # grey-white terminals with structure, not blazing
+        lumps=float(rng.uniform(0.04, 0.1)),
+        grain=float(rng.uniform(0.02, 0.05)),
+        lip=float(rng.uniform(0.05, 0.12)),
+        bare_rim=float(rng.uniform(0.0, 0.25)),
+        level=float(rng.uniform(0.95, 1.03)),
+        paste_scale=float(rng.uniform(0.6, 1.0)),
+        paste_cap=float(rng.uniform(9.0, 13.0)),
+        tint=(0.96, 1.0, 0.99),
+    )
+
+
 def side_stream(rng: np.random.Generator, salt: int) -> np.random.Generator:
     """A generator derived from *rng*'s current state without advancing it.
 

@@ -7,7 +7,7 @@ from simple_sim.defects import sample_defect_params
 from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal import (LOOKS, RenderContext, camera_config, camera_model, camera_settings,
                                                       get_look, mask_gloss, rework_probability)
-from simple_sim.generators.opencv2d.photoreal.look import LEGACY_LOOK, QUINS_LOOK
+from simple_sim.generators.opencv2d.photoreal.look import DV_BOTTOM_LOOK, DV_TOP_LOOK, LEGACY_LOOK, QUINS_LOOK
 from simple_sim.generators.opencv2d.photoreal.meniscus import SOLDER_TINT as LEGACY_TINT
 
 from tests.test_photoreal import CFG as BASE_CFG
@@ -235,3 +235,91 @@ def test_quins_uses_dense_packing_and_legacy_layout_is_unchanged():
     counts = [len(neighbour_layout(pads, keepout, (256, 290), np.random.default_rng(s), 1.0, p))
               for p in (LEGACY_PACKING, DENSE_PACKING) for s in range(20)]
     assert sum(counts[20:]) > sum(counts[:20])
+
+
+# --- DeepVision app looks (dv_top: phone photo of the TOP side, dv_bottom: flatbed-like BOTTOM capture) -------
+
+DV_LOOKS = {"dv_top": DV_TOP_LOOK, "dv_bottom": DV_BOTTOM_LOOK}
+
+
+def test_dv_looks_are_registered_after_quins_and_legacy_quins_are_untouched():
+    assert LOOKS == ("legacy", "quins", "dv_top", "dv_bottom")
+    for name, look in DV_LOOKS.items():
+        assert get_look({"look": name}) is look and look.name == name and look.camera_preset == name
+        assert look.solder == "meniscus" and look.flat_caps
+    # Additive: the earlier looks keep their registry objects and camera presets.
+    assert get_look({"look": "quins"}) is QUINS_LOOK and QUINS_LOOK.camera_preset == "quins"
+    assert camera_settings({"preset": "quins"})["sensor_px_per_mm"] == [22.0, 25.5]
+
+
+@pytest.mark.parametrize("look", list(DV_LOOKS))
+@pytest.mark.parametrize("footprint", list(FOOTPRINTS))
+@pytest.mark.parametrize("defect_type", CLASSES)
+def test_dv_looks_render_every_footprint_and_class(look, footprint, defect_type):
+    img = _render(footprint, defect_type, look=look)
+    assert img.shape == (128, 128, 3) and img.dtype == np.uint8
+    assert 20 < img.mean() < 200
+
+
+@pytest.mark.parametrize("look", list(DV_LOOKS))
+def test_dv_looks_are_deterministic_and_differ_from_the_other_looks(look):
+    a, b = _render(seed=5, look=look), _render(seed=5, look=look)
+    assert np.array_equal(a, b)
+    others = [n for n in LOOKS if n != look]
+    for other in others:
+        assert not np.array_equal(a, _render(seed=5, look=other)), other
+
+
+def test_dv_camera_presets_model_the_app_crops():
+    """~16 px/mm crops of 3 body lengths (the app's 49/50 px crops), JPEG, soft focus; no draw-free gaps."""
+    from simple_sim.config import _validate_camera
+    from simple_sim.generators.opencv2d.photoreal.camera import fit_crop
+
+    for name in DV_LOOKS:
+        _validate_camera({"preset": name})
+        cam = camera_settings({"preset": name})
+        assert cam["sensor_px_per_mm"] == [15.5, 16.5] and cam["crop_part_lengths"] == [3.0, 3.1]
+        assert cam["jpeg_quality"][1] < 100 and cam["blur_sigma"][0] > 0
+        pose = fit_crop({"tilt": 0.0, "azimuth": 0.0, "zoom": 1.0, "roll": 0.0}, cam, np.random.default_rng(0), 62.0, (256, 256))
+        assert 3.0 * 62.0 / 256.0 <= pose["zoom"] <= 3.1 * 62.0 / 256.0
+    assert camera_settings({"preset": "dv_top"})["tilt_deg"][1] > camera_settings({"preset": "dv_bottom"})["tilt_deg"][1]
+    assert camera_config({"look": "dv_top"}) == {"preset": "dv_top"}
+    assert camera_config({"look": "dv_bottom", "camera": {"preset": "aoi"}}) == {"preset": "aoi"}
+
+
+def test_dv_joint_lights_flash_lobe_follows_the_roll_and_flatbed_is_a_ring():
+    rng = np.random.default_rng(0)
+    state = rng.bit_generator.state
+    top = RenderContext.for_render({"look": "dv_top"}, rng)
+    assert rng.bit_generator.state == state  # side stream only
+    assert len(top.solder_look.azimuths) == 1 and top.solder_look.tint != LEGACY_TINT
+    rolled = RenderContext.for_render({"look": "dv_top"}, rng, roll_deg=90.0)
+    assert rolled.solder_look.azimuths[0] == pytest.approx(top.solder_look.azimuths[0] + np.pi / 2)
+    bottom = RenderContext.for_render({"look": "dv_bottom"}, rng)
+    assert bottom.solder_look.azimuths == () and bottom.solder_look.sky > 100
+    assert RenderContext.for_render({"look": "dv_top", "solder": "legacy"}, rng).solder_look is None
+
+
+def test_dv_look_defaults_and_materials():
+    assert mask_gloss({"look": "dv_top"}) == DV_TOP_LOOK.mask_gloss > mask_gloss({"look": "dv_bottom"}) > 0.0
+    assert mask_gloss({"look": "dv_top", "mask_gloss": 0.0}) == 0.0
+    assert rework_probability({"look": "dv_bottom"}) == DV_BOTTOM_LOOK.rework < LEGACY_LOOK.rework
+    # Dark 0402 resistor bodies (the dark 1 % of the real crops), bright flat tin terminals, dense rows of parts
+    # with as many resistors as MLCCs (the xpa pnp: 278 RESC1005 vs 272 CAPC1005).
+    dark = np.array((20, 20, 20), np.float32)
+    for look in DV_LOOKS.values():
+        assert float(look.body_colour("resistor", dark).mean()) < 60 and float(look.end_cap.mean()) > 190
+        assert look.packing.capacitor_share == 0.5 and look.packing.parts >= QUINS_LOOK.packing.parts
+        assert look.shadow == 1.0 and look.silkscreen_skip >= 0.8
+    # The TOP mask palette is brighter and yellower than the dark olive BOTTOM / quins one.
+    top_mean = np.mean(DV_TOP_LOOK.mask_palette, axis=0)
+    bottom_mean = np.mean(DV_BOTTOM_LOOK.mask_palette, axis=0)
+    assert top_mean.sum() > bottom_mean.sum() and top_mean[2] > bottom_mean[2]
+
+
+def test_dv_bottom_mask_matches_the_measured_app_colour():
+    """Bare board of a MISSING part: median near the BOTTOM app crops' mask, BGR ~ (70, 89, 48) (p25-p75
+    (64, 84, 37)-(95, 119, 58))."""
+    meds = np.array([np.median(_render(defect_type="MISSING", seed=s, look="dv_bottom").reshape(-1, 3), axis=0)
+                     for s in range(6)])
+    assert np.all(np.abs(np.median(meds, axis=0) - (70, 89, 48)) < 16)

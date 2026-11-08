@@ -51,6 +51,20 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
               "shot_noise": 0.015, "channel_shift": [1.6, 3.2], "channel_axis": "x",
               # DeepVision cuts every QUINS crop at 3x the body length (measured: 3.02-3.04 for all chip forms).
               "crop_part_lengths": [3.0, 3.0]},
+    # DeepVision inspection app, TOP side: handheld phone photo of the whole board (~19 px/mm source), cut
+    # into per-part crops of 3.04 body lengths that the app resamples to ~16 px/mm (0402: 49 px) and the
+    # judge upscales to 64 px. Measured on the app crops (docs/guides/PHOTOREAL_RENDERING.md, "DeepVision
+    # app looks"): Laplacian variance 4.8 at 256 px, flat-area noise ~0.3 levels, soft focus with depth
+    # of field, JPEG, faint lateral colour fringes.
+    "dv_top": {"sensor_px_per_mm": [15.5, 16.5], "blur_sigma": [0.35, 0.8], "tilt_deg": [0.0, 12.0],
+               "defocus": [0.2, 1.0], "read_noise": [0.5, 3.0], "shot_noise": 0.02, "sharpen": [0.1, 0.5],
+               "jpeg_quality": [75, 92], "chroma_shift": [0.1, 0.6], "crop_part_lengths": [3.0, 3.1]},
+    # DeepVision app, BOTTOM side: flatbed-like top-down capture, same 16 px/mm crops (0402: 50 px), a
+    # little sharper (Laplacian variance 3.8 at 256 px with the coarser crops), strong lateral chromatic
+    # aberration (red/blue fringes on every terminal edge), hardly any tilt.
+    "dv_bottom": {"sensor_px_per_mm": [15.5, 16.5], "blur_sigma": [0.35, 0.75], "tilt_deg": [0.0, 4.0],
+                  "defocus": [0.0, 0.5], "read_noise": [0.3, 2.0], "shot_noise": 0.015, "sharpen": [0.0, 0.3],
+                  "jpeg_quality": [80, 95], "chroma_shift": [0.2, 0.9], "crop_part_lengths": [3.0, 3.1]},
 }
 
 

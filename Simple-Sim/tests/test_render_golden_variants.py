@@ -67,6 +67,8 @@ VARIANTS: dict[str, tuple[dict[str, Any], dict[str, Any] | None]] = {
     "route_escape_drc": ({"board": {"routing": "escape", "design_rules": "hdi", "drc": "warn"}}, None),
     "phone": ({"camera": {"preset": "phone"}}, None),
     "look_quins": ({"look": "quins"}, None),
+    "look_dv_top": ({"look": "dv_top"}, None),
+    "look_dv_bottom": ({"look": "dv_bottom"}, None),
     "gloss_rework": ({"mask_gloss": 1.0, "rework_artifacts": 1.0, "marking_probability": 1.0}, None),
     "texture": ({"texture_dir": "<textures>"}, None),
     "filters_all": ({}, _ALL_FILTERS),

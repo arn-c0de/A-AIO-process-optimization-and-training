@@ -27,7 +27,7 @@ SOLDER_STYLES = ("legacy", "meniscus")
 DEFAULT_SOLDER_STYLE = "legacy"
 
 #: ``render.look``: registered target looks, in registration order.
-LOOKS = ("legacy", "quins")
+LOOKS = ("legacy", "quins", "dv_top", "dv_bottom")
 DEFAULT_LOOK = "legacy"
 
 #: ``render.post_filters`` (2D photoreal): where the domain blur/noise and the rotation are applied.
@@ -35,7 +35,7 @@ POST_FILTER_MODES = ("legacy", "camera")
 DEFAULT_POST_FILTERS = "legacy"
 
 #: ``render.camera.preset`` names (the parameters live in ``photoreal.camera.CAMERA_PRESETS``).
-CAMERA_PRESET_NAMES = ("aoi", "phone", "quins")
+CAMERA_PRESET_NAMES = ("aoi", "phone", "quins", "dv_top", "dv_bottom")
 DEFAULT_CAMERA_PRESET = "aoi"
 
 #: ``render.camera`` keys and their defaults (same as ``photoreal.camera.CAMERA_DEFAULTS``).
