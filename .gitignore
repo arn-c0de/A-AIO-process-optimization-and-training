@@ -30,6 +30,8 @@ Thumbs.db
 # Project-specific
 
 Simple-Sim/outputs/
+# Real board photos cut for render.texture_dir (production images stay local; tools/board_backgrounds.py)
+Simple-Sim/data/board_textures/
 Simple-Sim/wheelhouse/
 Simple-Sim/.venv-wheelhouse/
 

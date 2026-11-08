@@ -465,6 +465,58 @@ render:
   folder content does not change.
 - The run fails at config validation if the folder does not exist or contains no images.
 
+### Cutting backgrounds from the DeepVision stills (`tools/board_backgrounds.py`)
+
+The DeepVision autopilot keeps a still per inspection run (`test-results/auto/**/<run>/still.jpg`, 1047 runs,
+293 distinct photos, phone photos at 17-29 px/mm (median 20 / 22 px/mm TOP / BOTTOM) plus 33 scans) with
+`geometry.json` (`boardToSource`: board mm -> still px homography, `side`) and `components.json` (every part
+with `centerMm`, `fieldMm`; body polygons on 30 % of the runs). `tools/board_backgrounds.py` slides a window
+over the populated board area, drops windows that touch a part (square keep-out from `fieldMm / 3.04`, the
+body polygon when present, plus 0.4 mm), rectifies the rest through the homography to the profile scale
+(`--mm-per-px`, default 0.01613 = 62 px/mm of the 0402 configs, 5.2 mm window -> 322 px) and keeps only
+windows that look like bare mask: >= 90 % green pixels, <= 0.5 % bright (grey > 200), <= 2 % grey/white print,
+<= 1 % very dark pixels. One run per photo and side (the one with the most parts), at most 12 windows per
+photo, `--dry-run` prints the summary only:
+
+```bash
+python tools/board_backgrounds.py --runs .../DeepVision-Web/test-results/auto --out data/board_textures [--dry-run]
+```
+
+Result (2026-11-08; `data/board_textures/<side>/summary.json`, the folder is git-ignored):
+
+| Side | photos used | candidate windows | accepted textures | rejected: bright / print / dark / colour |
+|---|---|---|---|---|
+| TOP | 106 | 888 | 326 | 371 / 74 / 39 / 72 |
+| BOTTOM | 65 | 17 717 (sparse side) | 780 | 82 / 23 / 78 / 35 |
+
+Known gap: `geometry.json` has the pose, not the board outline, drill or test-point layout, and the pose
+of a run can be off by a few mm (`refine.error: implausible:shift` on some runs); the bounding-box margin
+(4 mm inside the part centres) and the colour heuristic stand in for both. The sample montage
+`outputs/dv_look/board_textures_sample.png` shows mostly bare mask with vias; a few cuts still carry the
+edge of a label or a light-green board region.
+
+**A/B with and without real backgrounds** (`configs/run_0402_c_dv_top_bg.yaml`, `run_0402_r_dv_bottom_bg.yaml`
+= the dv configs plus `texture_dir`; 1800 images per dataset (OK 400, MISSING 400, SOLDER_BRIDGE 300,
+MISALIGNED / TOMBSTONE 200, SOLDER_BALL / EXCESS_SOLDER 150), ResNet18, 8 epochs, flips / quarter turns /
+colour jitter, RTX 3080; scored with `tools/eval_real.py` on the exported app crops of the whole side
+(`outputs/dv_real/<side>`: 500 good + all faults) and with `tools/sim_to_real.py` (300 OK renders vs. 300
+real good 0402 crops)):
+
+| Training data | real good -> OK | "fehlt" detected (as any defect) | false calls | escapes | NN distance ratio (OK renders) |
+|---|---|---|---|---|---|
+| `run_0402_c_dv_top` (procedural board) | 0.4 % | 100 % | 99.6 % | 0 % | 1.79 |
+| `run_0402_c_dv_top_bg` (real backgrounds) | 0.4 % | 100 % | 99.6 % | 0.4 % | 1.85 |
+| `run_0402_r_dv_bottom` (procedural board) | 1.2 % | 100 % | 98.8 % | 0.4 % | 1.96 |
+| `run_0402_r_dv_bottom_bg` (real backgrounds) | 0.2 % | 100 % | 99.8 % | 0 % | 2.00 |
+
+Reading: the real backgrounds change nothing measurable. The synthetic-only classifiers reject almost every
+real crop (mostly as TOMBSTONE, then SOLDER_BALL / MISALIGNED), exactly as the earlier QUINS experiment found
+("Synthetic images alone do not transfer"), and the embedding distance is even slightly larger with the
+textures (the 20 px/mm stills are upscaled 3x to the profile scale, so their texture is softer than the
+procedural mask before the camera model resamples it). The textures remain available for the mixed
+training recipe (synthetic defects + real good parts) and for the judge export, where the board around the
+part is not what the model compares.
+
 ## Calibration source
 
 Colours and proportions were taken from macro photos of real boards (dark olive solder mask, traces

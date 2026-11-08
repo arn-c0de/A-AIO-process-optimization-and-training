@@ -1,0 +1,91 @@
+# 0402 MLCCs (CAPC1005) as the DeepVision inspection app sees them on the TOP side (render.look: dv_top): handheld
+# phone photo of the board, per-part crops of 3 body lengths at ~16 px/mm (49 px), flash glare on the mask,
+# blazing white terminals, soft focus, JPEG; meniscus joints under a flash light. Same profile and seed as
+# run_0402_c.yaml; the domain is calm like run_0402_c_quins.yaml (the camera preset carries blur and noise).
+# Variant with real board backgrounds: render.texture_dir points at the empty-board cuts of the DeepVision autopilot
+# stills (tools/board_backgrounds.py --out data/board_textures, top side, 62 px/mm). The folder is not in git: cut it
+# first, or the config fails validation (texture_dir must exist and hold images).
+# roi.mm_per_px = 1 / 62 px/mm (the profile's pixel scale).
+run:
+  run_id: run_0402_c_dv_top_bg
+  seed: 42
+  schema_version: 2
+  component_profile: chip_0402_capacitor@1
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.01613
+classes:
+  OK: 100
+  MISSING: 100
+  MISALIGNED: 100
+  TOMBSTONE: 100
+  SOLDER_BALL: 100
+  EXCESS_SOLDER: 100
+domains:
+  domain_A:
+    lighting_brightness:
+    - 0.95
+    - 1.05
+    blur_sigma:
+    - 0.0
+    - 0.3
+    noise_stddev:
+    - 0.0
+    - 2.0
+splits:
+  train_domains:
+  - domain_A
+  val_domains:
+  - domain_A
+  test_domains:
+  - domain_A
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+render:
+  backend: opencv_2d
+  substrate_color:
+  - 40
+  - 90
+  - 40
+  copper_color:
+  - 60
+  - 120
+  - 180
+  solder_mask_alpha: 0.3
+  look: dv_top
+  post_filters: camera
+  texture_dir: data/board_textures/top
+augment:
+  rotation_deg_range:
+  - -5
+  - 5
+  brightness_factor_range:
+  - 0.85
+  - 1.15
+  contrast_factor_range:
+  - 0.9
+  - 1.1
+train:
+  model: resnet18
+  pretrained: true
+  epochs: 10
+  batch_size: 32
+  num_workers: 0
+  lr: 0.001
+  optimizer: adam
+  weight_decay: 0.0001
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - confusion_matrix
+  critical_classes:
+  - MISSING
+  - MISALIGNED
+  - TOMBSTONE
