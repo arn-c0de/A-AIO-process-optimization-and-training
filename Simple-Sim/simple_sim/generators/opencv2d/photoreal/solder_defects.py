@@ -95,3 +95,25 @@ def draw_excess(ctx: RenderContext, img: np.ndarray, base: np.ndarray, family: s
             out = pc - np.array(center)
             out = np.where(np.abs(out) >= np.abs(out).max(), np.sign(out), 0.0)
             draw_solder_bulge(ctx, img, base, pc + out * 0.35 * np.array([p["w"], p["h"]]), p["w"] * 1.1, p["h"] * 1.1, 0.0)
+
+
+def tht_layout(defect_type: str, n_pins: int, selector: int) -> dict[str, Any]:
+    """Defect layout of a through-hole pin row (``tht_pin``) for the Blender scene (``board["tht"]``).
+
+    ``missing_pins``: pins absent from their holes (MISSING: one pin, chosen by *selector*); ``bridge``: the
+    two neighbouring pins joined by a solder bar (SOLDER_BRIDGE; the same adjacent pair the baked
+    :func:`~simple_sim.generators.opencv2d.geometry.draw_solder_bridge` picks: ``selector % (n - 1)``);
+    ``unwetted``: the pins stand in their holes without a meniscus (CORNER_LIFT on this footprint: an
+    unwetted / insufficiently soldered joint). No random draw.
+    """
+    out: dict[str, Any] = {"missing_pins": [], "bridge": None, "unwetted": False}
+    if n_pins <= 0:
+        return out
+    if defect_type == DefectClass.MISSING:
+        out["missing_pins"] = [int(selector % n_pins)]
+    elif defect_type == DefectClass.SOLDER_BRIDGE and n_pins >= 2:
+        k = int(selector % (n_pins - 1))
+        out["bridge"] = [k, k + 1]
+    elif defect_type == DefectClass.CORNER_LIFT:
+        out["unwetted"] = True
+    return out

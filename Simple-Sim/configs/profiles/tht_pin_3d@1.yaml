@@ -1,0 +1,72 @@
+# Component Profile (Schema v1, 3D only)
+#
+# Through-hole pin row seen from the solder side (BOTTOM of the xpa boards: the connectors' pins, e.g. the
+# 2.54 mm JST / pin headers): N = 3 round plated pads (annular rings, 1.7 mm) with a hole, a pin in each and a
+# conical solder meniscus around the pin. No body is visible from the solder side. Rendered by the Blender
+# backend only (board.footprints.BLENDER_ONLY_FOOTPRINTS): the 2D backend has no model of a through-hole joint
+# and refuses the footprint.
+#
+# Scale: 25 px/mm (roi.mm_per_px 0.04 in configs/run_tht_pin_3d.yaml): a 256 px ROI is 10.2 mm, the 3-pin row
+# at 2.54 mm pitch spans 7.6 mm. Geometry in pixels at that scale: pad diameter 1.6-1.8 mm, pitch 2.54 mm.
+#
+# Defects (semantics of the classes on this footprint):
+#   MISSING        one pin missing: empty plated hole with a bare annular ring (board.footprints / render_batch "missing_pins")
+#   SOLDER_BRIDGE  solder bar between two neighbouring pins (3D) plus the baked bridge on the board texture
+#   CORNER_LIFT    unwetted joint: the pin stands in the hole without a meniscus (bare ring, dark hole around the pin)
+#   EXCESS_SOLDER  convex, higher meniscus on 1-4 pins (as for SMD)
+#   SOLDER_BALL    solder balls on the mask next to the pins
+#   MISALIGNED     the pin row shifted / rotated in its holes (bent pins)
+# TOMBSTONE has no meaning here and is not in the defect set.
+
+profile:
+  profile_id: "tht_pin_3d@1"
+  schema_version: 1
+  supported_render_backends: ["blender_3d"]
+  description: "THT pin row (3 pins, 2.54 mm) on the solder side, Blender/Cycles only"
+  created_at: "2026-11-08T00:00:00Z"
+
+component:
+  type: "tht_pin_header"
+  footprint: "tht_pin"
+  package: "pin header 1x3 2.54 mm (THT)"
+  nominal_dims_mm:
+    length: 7.6     # pad row extent (keep-out)
+    width: 1.8
+    height: 2.5     # pin protrusion above the solder side
+
+geometry_ranges:
+  pad_width: [40.0, 45.0]        # pad (annular ring) diameter in px: 1.6-1.8 mm
+  pad_height: [40.0, 45.0]
+  pad_spacing: [62.0, 65.0]      # pitch 2.5-2.6 mm
+  component_length: [188.0, 192.0]
+  component_width: [40.0, 45.0]
+
+tolerances:
+  ok_shift_px: 3.0
+  ok_rotation_deg: 3.0
+  tombstone_tilt_deg: 89.0       # never reached: the row cannot tombstone
+
+defect_set:
+  - "OK"
+  - "MISSING"
+  - "MISALIGNED"
+  - "SOLDER_BRIDGE"
+  - "CORNER_LIFT"
+  - "SOLDER_BALL"
+  - "EXCESS_SOLDER"
+
+render_3d:
+  camera:
+    location_mm: [0.0, 0.0, 14.0]
+    look_at_mm: [0.0, 0.0, 0.0]
+  lighting:
+    ring_light: {}
+  materials:
+    body:
+      base_color: [0.02, 0.02, 0.02]
+      roughness: 0.6
+      metallic: 0.0
+    solder:
+      base_color: [0.70, 0.70, 0.72]
+      roughness: 0.2
+      metallic: 1.0

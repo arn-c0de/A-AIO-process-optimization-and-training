@@ -1,7 +1,7 @@
 # Documentation Index
 
 Simple-Sim comprehensive documentation organized by topic and use case.
-Last updated: November 6, 2026 (v1.0.3)
+Last updated: November 8, 2026 (v1.0.3 + DeepVision looks / export)
 
 ## Guides
 
@@ -10,9 +10,9 @@ Practical how-to guides for common tasks and workflows.
 | Document | Purpose |
 |----------|---------|
 | [Command Cheatsheet](guides/CHEATSHEET.md) | Quick reference for common commands and operations |
-| [3D Rendering Quickstart](guides/3D_RENDERING_QUICKSTART.md) | How the Blender backend builds its scene (shared 2D board bake, fillets, ring light) and what to change where |
+| [3D Rendering Quickstart](guides/3D_RENDERING_QUICKSTART.md) | How the Blender backend builds its scene (shared 2D board bake, fillets, ring light, through-hole pins `tht_pin`) and what to change where |
 | [Filter Settings](guides/FILTER_SETTINGS.md) | Guide to configuring filter settings for image processing |
-| [Photoreal 2D Rendering](guides/PHOTOREAL_RENDERING.md) | What the default `photoreal` render style draws, how to switch to `flat`, and the realism roadmap |
+| [Photoreal 2D Rendering](guides/PHOTOREAL_RENDERING.md) | What the default `photoreal` render style draws, the target looks (`quins`, DeepVision app `dv_top` / `dv_bottom`), real board backgrounds, the sim-to-real measurements and the export of reference/probe pairs for the DeepVision judge (`tools/export_deepvision.py`) |
 | [Model Merge: Bundles vs Ensembles](guides/MODEL_MERGE_BUNDLES_ENSEMBLES.md) | Bundles vs ensembles, and what you need for unknown images (profile dispatch vs general models) |
 
 ## Architecture
@@ -46,6 +46,7 @@ In-depth technical documentation for advanced topics and system design.
 
 - **Get started quickly**: Read [Command Cheatsheet](guides/CHEATSHEET.md)
 - **Set up 3D rendering**: Read [3D Rendering Quickstart](guides/3D_RENDERING_QUICKSTART.md)
+- **Feed the DeepVision judge**: Read [Photoreal 2D Rendering](guides/PHOTOREAL_RENDERING.md), sections "DeepVision app looks" and "Export for DeepVision"
 - **Understand architecture**: Read [simple_sim Package Overview](architekture/simple_sim-Overview.md), [Scripts Overview](architekture/scripts-Overview.md), [Tabs Overview](architekture/Tabs-Overview.md), and [Tools Overview](architekture/tools-Overview.md)
 - **Understand component profiles**: Read [Profile System Implementation](../PROFILE_SYSTEM_IMPLEMENTATION.md)
 - **See example outputs**: View [Sample Gallery](../SAMPLE_GALLERY.md)

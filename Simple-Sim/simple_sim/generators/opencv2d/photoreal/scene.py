@@ -25,13 +25,13 @@ from .camera import (apply_view, camera_model, camera_settings, effective_supers
 from .context import RenderContext
 from .copper import CopperJob, draw_board_copper
 from .imageops import blend, clip8, contact_shadow
-from .joints import pads_and_solder, thermal_pad_index
+from .joints import draw_tht_pads, pads_and_solder, thermal_pad_index
 from .palette import FINISHES
 from .parts import (body_half_extent, draw_body_local, draw_leads, draw_neighbours, draw_tombstone, lead_feet_mask,
                     lead_layout, nominal_body_angle, tombstone_pose)
 from .rework import draw_rework
 from .silkscreen import draw_silkscreen
-from .solder_defects import draw_excess, draw_solder_balls, solder_defect_layout
+from .solder_defects import draw_excess, draw_solder_balls, solder_defect_layout, tht_layout
 from .substrate import mask_sheen, procedural_substrate, texture_substrate
 
 
@@ -138,6 +138,9 @@ def _render_board(ctx: RenderContext,
     sg = _scene_setup(ctx, nominal, defect_params, tolerances, rng, footprint, size, crowd)
     h, w, nom, dp, family, img, base, pads = sg.h, sg.w, sg.nom, sg.dp, sg.family, sg.img, sg.base, sg.pads
     pads_and_solder(ctx, img, base, pads, np.zeros((h, w), dtype=np.uint8), rng, sg.finish, with_solder=False)
+    tht = family == "tht_pin"
+    if tht:  # through-hole row: round annular rings with a hole; pins and menisci are Blender geometry
+        draw_tht_pads(ctx, img, base, pads, sg.finish)
     if dp["type"] == DefectClass.SOLDER_BRIDGE:  # flat solder between neighbouring pads
         geo = sg.geo
         img8 = clip8(img)
@@ -156,7 +159,9 @@ def _render_board(ctx: RenderContext,
     solder = solder_defect_layout(dp["type"], pads, sg.rect, rng, ss=ctx.ss)
     scene["excess"] = solder["excess"]
     scene["balls"] = [[(x - w / 2.0) / ctx.ss, (y - h / 2.0) / ctx.ss, r / ctx.ss] for x, y, r in solder["balls"]]
-    if dp["type"] != DefectClass.MISSING:
+    if tht:  # which pins are absent / unwetted / bridged (board["tht"]); the row itself stays for MISSING
+        scene["tht"] = tht_layout(dp["type"], len(pads), param_selector(defect_params))
+    if dp["type"] != DefectClass.MISSING or tht:
         geo = body_geometry(nominal, defect_params, tolerances, (height, width))
         # rotation_deg: of the body's length axis (SOT-23: vertical, see nominal_body_angle);
         # lead_frame_deg: that axis for the nominal placement, so leads can stay rigid with the body.

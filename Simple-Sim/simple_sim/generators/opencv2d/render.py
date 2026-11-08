@@ -7,6 +7,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from simple_sim.board.footprints import BLENDER_ONLY_FOOTPRINTS
 from simple_sim.classes import SOLDER_ONLY_CLASSES
 
 from .draw import draw_component, draw_pads, draw_solder, draw_substrate
@@ -73,6 +74,9 @@ def render_roi(
     joint light and sensor draws, only the inspected part differs, since the part's draws come after the
     board's), another *camera_rng* for an OK probe gives the same board under another exposure.
     """
+    if footprint in BLENDER_ONLY_FOOTPRINTS:
+        raise ValueError(f"footprint {footprint!r} is rendered by the Blender backend only (render.backend: blender_3d); "
+                         "the 2D renderer has no model for a through-hole joint")
     width, height = roi_size
     photoreal = str(config.get("style", "photoreal")) == "photoreal"
     in_camera = photoreal and post_filter_mode(config) == "camera"

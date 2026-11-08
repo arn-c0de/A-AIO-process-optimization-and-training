@@ -45,6 +45,11 @@ MARK_CHARS = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
 # Part builders of the Blender script (``blender/render_batch.py``, D35).
 BLENDER_CHIP = "chip"   # body with two end caps
 BLENDER_IC = "ic"       # moulded body with pin-1 dimple and laser marking (every other family)
+BLENDER_THT = "tht"     # through-hole pins in plated holes with a solder meniscus, no body (solder side)
+
+# Footprints only the Blender backend renders (``opencv_2d`` rejects them: a through-hole joint is 3D geometry
+# the flat renderer has no model for; the 2D pipeline still bakes their board for the 3D backend).
+BLENDER_ONLY_FOOTPRINTS = ("tht_pin",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +80,10 @@ class BlenderPart:
     marking: str | None = MARK_LASER        # MARK_RESISTOR_CODE (one RESISTOR_CODES pick) | MARK_LASER | None
     marking_lines: int = 3                  # laser marking lines of 3-6 MARK_CHARS
     marking_size: tuple[float, float | None] = (0.13, 0.085)  # (a, b): text size = min(a * W, b * L); b None: a * W
+    # BLENDER_THT only: pin diameter / pad diameter, pin protrusion / component_height_mm, meniscus height / pad radius.
+    pin_diameter: float = 0.38
+    pin_height: float = 1.0
+    solder_height: float = 0.45
 
 
 BLENDER_GENERIC = BlenderPart()
@@ -130,6 +139,12 @@ FAMILIES: Mapping[str, PartFamily] = MappingProxyType({f.name: f for f in (
     PartFamily("inductor", KIND_CHIP, "L", None, chip=True, cap_len=0.25, grain_sd=0.05),
     PartFamily("power_inductor", KIND_POWER_INDUCTOR, "L", None, chip=True, grain_sd=0.07),
     PartFamily("led", KIND_CHIP, "D", None, chip=True, cap_len=0.16, grain_sd=0.015),
+    # Through-hole pin row seen from the solder side: round plated pads with a hole, a pin in each, a conical
+    # solder meniscus around the pin; no body. Blender only (BLENDER_ONLY_FOOTPRINTS): the 2D drawer kind is a
+    # placeholder, ``opencv2d.render_roi`` refuses the footprint.
+    PartFamily("tht_pin", KIND_IC, "J", None, edge_inset=0.0,
+               blender=BlenderPart(BLENDER_THT, height_ratio=0.0, standoff=0.0, marking=None, pin_diameter=0.38,
+                                   pin_height=1.0, solder_height=0.45)),
 )})
 FAMILY_NAMES = tuple(FAMILIES)
 
@@ -151,8 +166,11 @@ def scene_part(name: str) -> dict[str, Any]:
         codes = list(RESISTOR_CODES) if b.marking == MARK_RESISTOR_CODE else []
         marking = {"codes": codes, "chars": MARK_CHARS, "lines": 1 if codes else b.marking_lines, "length": [3, 6],
                    "size": list(b.marking_size)}
-    return {"body": b.body, "height_ratio": b.height_ratio, "standoff": b.standoff, "body_material": b.body_material,
-            "cap_len": b.cap_len, "leads": b.leads, "lead_width": list(b.lead_width), "marking": marking}
+    out: dict[str, Any] = {"body": b.body, "height_ratio": b.height_ratio, "standoff": b.standoff, "body_material": b.body_material,
+                           "cap_len": b.cap_len, "leads": b.leads, "lead_width": list(b.lead_width), "marking": marking}
+    if b.body == BLENDER_THT:
+        out["pin"] = {"diameter": b.pin_diameter, "height": b.pin_height, "solder_height": b.solder_height}
+    return out
 
 
 def _names(pred) -> tuple[str, ...]:
@@ -204,6 +222,8 @@ def family_of(footprint: str, component_type: str = "") -> str:
     """Part family of a footprint (``component_type`` tells chip resistors and capacitors apart)."""
     if footprint == "sot23":
         return "sot"
+    if footprint.startswith("tht_pin"):
+        return "tht_pin"
     if footprint.startswith("qfn"):
         return "qfn"
     if footprint == "soic_16" or footprint.startswith("tssop"):
@@ -220,6 +240,14 @@ def family_of(footprint: str, component_type: str = "") -> str:
     if "led" in ct:
         return "led"
     return "capacitor" if "cap" in ct else "resistor"
+
+
+def tht_pins(footprint: str) -> int:
+    """Pin count of ``tht_pin`` (3) / ``tht_pin_<N>`` (at least 2)."""
+    try:
+        return max(2, int(footprint.split("_", 2)[2]))
+    except (IndexError, ValueError):
+        return 3
 
 
 def qfn_pins(footprint: str) -> int:
@@ -273,6 +301,15 @@ def footprint_pads(footprint: str, nominal: dict[str, float], img_shape: tuple[i
         thermal = int(round(body * 0.6))
         pads.append(PadSpec("EP", center_x - thermal // 2, center_y - thermal // 2, thermal, thermal, NONE, "thermal"))
         return pads
+
+    if footprint.startswith("tht_pin"):
+        # N round plated pads (diameter pad_width) in a row along x at pitch pad_spacing; the pixel dict is the
+        # bounding square. Pins are numbered 1..N, every pin a signal; no fan-out direction (the board model
+        # routes nothing to them: through-hole pads connect on both layers).
+        n = tht_pins(footprint)
+        d = max(pad_width, pad_height)
+        x0 = center_x - int(round((n - 1) * pad_spacing / 2.0))
+        return [PadSpec(str(i + 1), x0 + i * pad_spacing - d // 2, center_y - d // 2, d, d) for i in range(n)]
 
     if footprint in DUAL_ROW_PADS_PER_SIDE:
         # Pads along y over pad_spacing_y (first to last pad centre); pad_height across, pad_width along.

@@ -55,27 +55,28 @@ def test_legacy_constants_equal_the_derived_ones():
     from simple_sim.generators.opencv2d.photoreal import copper, palette
 
     assert fp.FAMILY_NAMES == ("resistor", "capacitor", "sot", "soic", "qfn", "sot6", "array_r", "array_c", "inductor",
-                               "power_inductor", "led")
+                               "power_inductor", "led", "tht_pin")
     assert fp.CHIP_FAMILIES == ("resistor", "capacitor", "inductor", "power_inductor", "led")
     assert fp.FINE_PITCH_FAMILIES == ("soic", "qfn", "sot6", "array_r", "array_c")
     assert palette.CHIPS == fp.CHIP_FAMILIES == tuple(n for n, f in FAMILIES.items() if f.chip)
     assert palette.LEADED == ("sot", "soic", "sot6")
     assert palette.ARRAY_FAMILIES == ("array_r", "array_c")
-    assert palette.UNMARKED == ("capacitor", "array_c", "inductor", "power_inductor", "led")
+    assert palette.UNMARKED == ("capacitor", "array_c", "inductor", "power_inductor", "led", "tht_pin")
     assert palette.CAP_LEN == {"capacitor": 0.26, "resistor": 0.22, "inductor": 0.25, "led": 0.16}
     legacy_refdes = {"resistor": "R", "capacitor": "C", "sot": "Q", "soic": "U", "qfn": "U", "sot6": "U",
-                     "array_r": "RN", "array_c": "CN", "inductor": "L", "power_inductor": "L", "led": "D"}
+                     "array_r": "RN", "array_c": "CN", "inductor": "L", "power_inductor": "L", "led": "D",
+                     "tht_pin": "J"}  # tht_pin: the Blender-only through-hole row added after the legacy set
     assert placement.REFDES_PREFIX == legacy_refdes
     assert list(placement.REFDES_PREFIX) == list(legacy_refdes)
     assert palette.REFDES_PREFIX is placement.REFDES_PREFIX
     assert copper.RULE_CHIP_FAMILIES == (*fp.CHIP_FAMILIES, "array_r", "array_c")
     # The former inline dicts of parts.draw_body.
-    insets = {"qfn": 0.012, "soic": 0.035, "sot": 0.05, "sot6": 0.05, "array_r": 0.05, "array_c": 0.05}
+    insets = {"qfn": 0.012, "soic": 0.035, "sot": 0.05, "sot6": 0.05, "array_r": 0.05, "array_c": 0.05, "tht_pin": 0.0}
     grains = {"resistor": 0.025, "capacitor": 0.025, "led": 0.015, "inductor": 0.05, "power_inductor": 0.07}
     for name, fam in FAMILIES.items():
         assert fam.edge_inset == insets.get(name, 0.07)
         assert fam.grain_sd == grains.get(name, 0.06)
-        assert (fam.kind == fp.KIND_IC) == (name in ("qfn", "soic", "sot", "sot6"))  # gloss, pin-1, silk dot
+        assert (fam.kind == fp.KIND_IC) == (name in ("qfn", "soic", "sot", "sot6", "tht_pin"))  # gloss, pin-1, silk dot
         assert fam.printed == (name in ("resistor", "array_r"))
 
 
@@ -93,7 +94,8 @@ def test_blender_part_table():
     for gone in ("_HEIGHT_RATIO", "_RESISTOR_CODES", "_MARK_CHARS", '"capacitor"', '"sot"', '"soic"'):
         assert gone not in src
     ratios = {n: f.blender.height_ratio for n, f in FAMILIES.items() if f.blender is not BLENDER_GENERIC}
-    assert ratios == {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18}
+    assert ratios == {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18, "tht_pin": 0.0}
+    assert {n for n, f in FAMILIES.items() if f.blender.body == "tht"} == {"tht_pin"}
     # X12: the Blender chip height (0.56) differs from the 2D tombstone thickness ratio (0.55) on purpose.
     from simple_sim.generators.opencv2d.photoreal.parts import THICKNESS_RATIO
     assert THICKNESS_RATIO == 0.55 and FAMILIES["resistor"].blender.height_ratio == 0.56

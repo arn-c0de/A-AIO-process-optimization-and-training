@@ -1,0 +1,67 @@
+# THT pin row (tht_pin_3d@1) on the solder side, Blender/Cycles on the GPU. The footprint is Blender-only:
+# with render.backend opencv_2d the generator refuses it (board.footprints.BLENDER_ONLY_FOOTPRINTS).
+# roi.mm_per_px = 0.04 (25 px/mm): 256 px = 10.2 mm, the 3-pin 2.54 mm row spans 7.6 mm.
+
+run:
+  run_id: "run_tht_pin_3d"
+  seed: 2026
+  schema_version: 2
+  component_profile: "tht_pin_3d@1"
+
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.04
+
+classes:
+  OK: 100
+  MISSING: 100
+  MISALIGNED: 60
+  SOLDER_BRIDGE: 100
+  CORNER_LIFT: 100
+  SOLDER_BALL: 40
+  EXCESS_SOLDER: 60
+
+domains:
+  domain_A:
+    lighting_brightness: [0.95, 1.05]
+    blur_sigma: [0.0, 0.3]
+    noise_stddev: [0.0, 2.0]
+
+splits:
+  train_domains: ['domain_A']
+  val_domains: ['domain_A']
+  test_domains: ['domain_A']
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+
+render:
+  backend: 'blender_3d'
+  look: dv_bottom          # baked board in the DeepVision BOTTOM look (mask palette, dense neighbours, no glare)
+  blender:
+    executable: "blender"
+    engine: "CYCLES"
+    samples: 32
+    device: "GPU"          # RTX 3080 (OptiX/CUDA enabled by render_batch.py); set CPU without a usable GPU
+
+augment:
+  rotation_deg_range: [-3, 3]
+  brightness_factor_range: [1.0, 1.0]
+  contrast_factor_range: [1.0, 1.0]
+
+train:
+  model: 'resnet18'
+  pretrained: true
+  epochs: 10
+  batch_size: 32
+  num_workers: 0
+  lr: 0.001
+  optimizer: 'adam'
+  weight_decay: 0.0001
+
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics: ['accuracy', 'precision', 'recall', 'f1', 'confusion_matrix']
+  critical_classes: ['MISSING', 'SOLDER_BRIDGE', 'CORNER_LIFT']

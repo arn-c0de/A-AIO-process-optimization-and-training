@@ -179,7 +179,8 @@ def test_job_schema_is_the_contract_of_both_sides(tmp_path):
                       component_height_mm=0.45, render_3d={}, bake=bake.bake_fields({}))
     assert set(job) == job_keys - {"component_type", "tolerances"}
     prepared = bake.prepare_jobs([_job("OK")], tmp_path)[0]
-    assert set(prepared["board"]) == set(job_schema.BoardScene.__annotations__)
+    # ``tht`` is present for through-hole footprints only (tests/test_tht_pin.py); every other key always.
+    assert set(prepared["board"]) == set(job_schema.BoardScene.__annotations__) - {"tht"}
     assert set(prepared["board"]["body"]) <= set(job_schema.SceneBody.__annotations__)
     assert set(prepared["board"]["pose"]) == set(job_schema.CameraPose.__annotations__)
     # Defaults exist once: the runner, ``render.blender`` settings and the script agree.

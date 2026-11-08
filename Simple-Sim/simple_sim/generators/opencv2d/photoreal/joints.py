@@ -96,3 +96,26 @@ def pads_and_solder(ctx: RenderContext, img: np.ndarray, base: np.ndarray, pads:
         alpha = np.clip(hmap / (0.08 * amp), 0.0, 1.0)
         blend(region, shaded, alpha)
         img[y0:y1, x0:x1] = region
+
+
+def draw_tht_pads(ctx: RenderContext, img: np.ndarray, base: np.ndarray, pads: list[dict[str, int]], finish: np.ndarray,
+                  hole_ratio: float = 0.45) -> None:
+    """Round plated through-hole pads (annular rings) with a dark hole, drawn over the rectangular pads
+    :func:`pads_and_solder` painted (bake for ``tht_pin``: the solder meniscus and the pins are Blender geometry).
+    No random draw."""
+    h, w = img.shape[:2]
+    mask_edge = (base * 0.65).tolist()
+    hole = (18.0, 18.0, 20.0)
+    for pad in pads:
+        x0, y0 = max(0, pad["x"]), max(0, pad["y"])
+        x1, y1 = min(w, pad["x"] + pad["w"]), min(h, pad["y"] + pad["h"])
+        if x1 - x0 < 3 or y1 - y0 < 3:
+            continue
+        # back to bare mask (the rectangle plus its dark rim), then ring, finish and hole
+        cv2.rectangle(img, (x0 - ctx.ss, y0 - ctx.ss), (x1 + ctx.ss - 1, y1 + ctx.ss - 1), base.tolist(), -1)
+        cx, cy = pad["x"] + pad["w"] / 2.0, pad["y"] + pad["h"] / 2.0
+        r = min(pad["w"], pad["h"]) / 2.0
+        centre = (int(round(cx)), int(round(cy)))
+        cv2.circle(img, centre, int(round(r)) + ctx.ss, mask_edge, -1, lineType=cv2.LINE_AA)
+        cv2.circle(img, centre, int(round(r)), finish.tolist(), -1, lineType=cv2.LINE_AA)
+        cv2.circle(img, centre, max(1, int(round(r * hole_ratio))), hole, -1, lineType=cv2.LINE_AA)

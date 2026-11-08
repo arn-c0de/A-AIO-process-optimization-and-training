@@ -74,8 +74,17 @@ class ScenePart(TypedDict):
     marking: SceneMarking | None
 
 
-class BoardScene(TypedDict):
-    """``board`` of a :class:`PreparedJob`: the baked texture and the layout Blender builds geometry for."""
+class ThtLayout(TypedDict):
+    """``tht`` of a :class:`BoardScene` (``tht_pin`` footprints only, ``photoreal.solder_defects.tht_layout``)."""
+
+    missing_pins: list[int]      # pad indices whose pin is absent (empty plated hole)
+    bridge: list[int] | None     # [a, b]: neighbouring pins joined by a solder bar
+    unwetted: bool               # pins without a meniscus (CORNER_LIFT on this footprint)
+
+
+class BoardScene(TypedDict, total=False):
+    """``board`` of a :class:`PreparedJob`: the baked texture and the layout Blender builds geometry for.
+    ``tht`` is present for through-hole footprints only."""
 
     texture: str                 # absolute path of the baked board PNG
     scale: float                 # board size in ROIs per side (>= BOARD_SCALE)
@@ -87,6 +96,7 @@ class BoardScene(TypedDict):
     balls: list[list[float]]     # [x, y, r] solder balls on the mask
     body: SceneBody | None
     part: ScenePart
+    tht: ThtLayout
 
 
 class JobFields(TypedDict):
@@ -135,5 +145,5 @@ __all__ = [
     "BOARD_SCALE", "DEFAULT_BLENDER_EXECUTABLE", "DEFAULT_CAMERA_POSE", "DEFAULT_COMPONENT_HEIGHT_MM",
     "DEFAULT_CYCLES_SAMPLES", "DEFAULT_DEVICE", "DEFAULT_ENGINE",
     "BakeOptions", "BlenderJob", "BoardScene", "CameraPose", "JobFields", "PreparedJob", "SceneBody",
-    "SceneMarking", "ScenePart",
+    "SceneMarking", "ScenePart", "ThtLayout",
 ]

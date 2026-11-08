@@ -8,7 +8,8 @@ script shares with the library): the sample fields (``image_path``, ``seed``, ``
 ``roi_width_px``, ``roi_height_px``, ``component_height_mm``, ``augment``, ``render_3d``) plus the
 ``board`` scene added by the bake (``blender3d/bake.py``): texture, scale, camera pose, family,
 pads, thermal pad, excess pads, solder balls, the body and ``part`` (how to build the part: the
-family's row of ``board.footprints.FAMILIES``).
+family's row of ``board.footprints.FAMILIES``; ``part["body"] == "tht"`` builds a through-hole pin row
+from ``board["tht"]``: pins, holes, menisci, a bridge bar).
 
 Layout values are camera pixels relative to the ROI centre, image convention (x right, y down),
 identical to the 2D renderer. The scene (1 Blender unit = 1 mm): board plane with the baked
@@ -169,13 +170,15 @@ def _rect_distance(x: float, y: float, rect: dict[str, float]) -> float:
 
 
 def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big: bool, mat,
-            excess: bool = False) -> bpy.types.Object:
+            excess: bool = False) -> bpy.types.Object | None:
     """Solder as a height-field mesh over the pad.
 
     With a part terminal on the pad: concave fillet rising towards the terminal. Without one
     (MISSING, raised tombstone end, part shifted off the pad): reflowed paste dome; large thermal
     pads get window-pane islands like the stencil prints them.
     """
+    if contact is not None and contact.get("tht"):
+        return _tht_joint(name, pad, contact, h_term, mat, excess)
     cx, cy, pw, ph = pad
     n = 48 if big else 24
     xs = [cx - pw / 2 + pw * i / n for i in range(n + 1)]
@@ -246,6 +249,15 @@ def part_params(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
     p: dict[str, Any] = {"length": L, "width": W, "height": H, "standoff": part["standoff"] * H,
                          "body_material": part["body_material"], "end_caps": chip, "cap": None, "marking": [],
                          "marking_size": 0.0, "leads": [], "contacts": "body", "solder_height": 0.0}
+    if part["body"] == "tht":
+        # Through-hole pin row (solder side): no body, a pin in every plated hole, a conical meniscus around it.
+        # Ratios of ``part["pin"]``: pin diameter / pad diameter, protrusion / component_height_mm,
+        # meniscus height / pad radius. No rng draw (no marking).
+        pin = part["pin"]
+        r_pad = min(min(pw, ph) for _, _, pw, ph in pads) / 2.0 if pads else 0.5
+        p.update({"contacts": "tht", "pin_radius": 0.5 * float(pin["diameter"]) * 2.0 * r_pad,
+                  "pin_height": float(pin["height"]) * comp_h_mm, "solder_height": float(pin["solder_height"]) * r_pad})
+        return p
     mark = part["marking"]
     if mark is not None:
         size_w, size_l = mark["size"]
@@ -291,6 +303,8 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
     angle = -math.radians(float(body["rotation_deg"]))  # image y-down -> Blender y-up
     cx, cy = _mm_xy(body["center"][0], body["center"][1], mmpp)
     axis = Vector((math.cos(angle), math.sin(angle), 0.0))
+    if p["contacts"] == "tht":
+        return _build_tht(pads, board, p, mats, (cx, cy), angle)
 
     root = bpy.data.objects.new("part_root", None)
     bpy.context.collection.objects.link(root)
@@ -372,6 +386,82 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
     if p["contacts"] == "none":
         return objs, [None] * len(pads), 0.0  # tombstoned leaded part: leads lifted, paste only
     return objs, [contact] * len(pads), p["solder_height"]
+
+
+def _build_tht(pads: list[PadMm], board: BoardScene, p: dict[str, Any], mats: dict[str, Any],
+               centre: tuple[float, float], angle: float) -> tuple[list[bpy.types.Object], list, float]:
+    """Through-hole pin row: a metal pin standing in every plated hole (except ``board["tht"]["missing_pins"]``),
+    a dark hole cylinder where the hole shows (missing or unwetted pins) and a solder bar between the two
+    pins of ``board["tht"]["bridge"]``. The row follows the body pose (shift / rotation about the nominal
+    centre: bent pins); the holes stay where the pads are. Returns the objects, one THT contact per pad for
+    :func:`_fillet` (``tht``, pin position, pin radius, ``missing`` / ``unwetted``) and the meniscus height.
+    """
+    tht = board.get("tht") or {}
+    missing = {int(i) for i in tht.get("missing_pins") or []}
+    unwetted = bool(tht.get("unwetted"))
+    bridge = tht.get("bridge")
+    cx, cy = centre
+    r_pin, h_pin = p["pin_radius"], p["pin_height"]
+    root = bpy.data.objects.new("part_root", None)
+    bpy.context.collection.objects.link(root)
+    root.location = (cx, cy, 0.0)
+    root.rotation_euler = (0.0, 0.0, angle)
+    m_pin = _material("mat_pin", (0.78, 0.78, 0.76), roughness=0.35, metallic=1.0, bump=0.02)
+    m_hole = _material("mat_hole", (0.01, 0.01, 0.012), roughness=0.9)
+    objs: list[bpy.types.Object] = [root]
+    contacts: list[dict[str, Any] | None] = []
+    pin_xy: list[tuple[float, float]] = []
+    for i, (px, py, pw, ph) in enumerate(pads):
+        # pin position in the row's frame (pads are relative to the nominal centre), then into the world
+        x = cx + px * math.cos(angle) - py * math.sin(angle)
+        y = cy + px * math.sin(angle) + py * math.cos(angle)
+        pin_xy.append((x, y))
+        if i not in missing:
+            bpy.ops.mesh.primitive_cylinder_add(radius=r_pin, depth=h_pin, location=(x, y, h_pin / 2.0))
+            pin = bpy.context.active_object
+            pin.name = f"pin_{i}"
+            pin.data.materials.append(m_pin)
+            pin.parent = root
+            objs.append(pin)
+        if i in missing or unwetted:  # the hole shows: dark bore slightly wider than the pin
+            bpy.ops.mesh.primitive_cylinder_add(radius=1.35 * r_pin, depth=0.4, location=(px, py, -0.19))
+            hole = bpy.context.active_object
+            hole.name = f"hole_{i}"
+            hole.data.materials.append(m_hole)
+            objs.append(hole)
+        contacts.append({"tht": True, "cx": x, "cy": y, "pin_r": r_pin, "missing": i in missing, "unwetted": unwetted})
+    if bridge and len(bridge) == 2 and all(0 <= int(k) < len(pads) for k in bridge):
+        a_i, b_i = (int(k) for k in bridge)
+        if a_i not in missing and b_i not in missing:
+            m_solder = _cfg_material("mat_tht_bridge", mats.get("solder") or {}, (0.7, 0.7, 0.72), 0.18, 1.0)
+            z = 0.55 * p["solder_height"]
+            objs.append(_box_between("tht_bridge", Vector((*pin_xy[a_i], z)), Vector((*pin_xy[b_i], z)),
+                                     1.6 * r_pin, 1.4 * r_pin, m_solder))
+    return objs, contacts, p["solder_height"]
+
+
+def _tht_joint(name: str, pad: PadMm, contact: dict[str, Any], h: float, mat, excess: bool) -> bpy.types.Object | None:
+    """Solder meniscus of a through-hole joint: a polar ring mesh from the pin (height *h*) out to the annular
+    ring (height 0), concave ``(1 - t)^1.7``, convex and 1.5x higher for *excess*. ``None`` for a missing or
+    unwetted pin: the bare ring of the baked texture stays visible."""
+    if contact.get("missing") or contact.get("unwetted"):
+        return None
+    _, _, pw, ph = pad
+    r_pad = min(pw, ph) / 2.0
+    r_pin = min(contact["pin_r"], 0.9 * r_pad)
+    px, py = contact["cx"], contact["cy"]
+    n_ang, n_rad = 48, 12
+    verts = []
+    for i in range(n_rad + 1):
+        t = i / n_rad
+        r = r_pin + (r_pad - r_pin) * t
+        z = h * (1.5 * math.sqrt(max(0.0, 1.0 - t * t)) if excess else (1.0 - t) ** 1.7)
+        for j in range(n_ang):
+            a = 2.0 * math.pi * j / n_ang
+            verts.append((px + r * math.cos(a), py + r * math.sin(a), 0.001 + z))
+    faces = [(i * n_ang + j, i * n_ang + (j + 1) % n_ang, (i + 1) * n_ang + (j + 1) % n_ang, (i + 1) * n_ang + j)
+             for i in range(n_rad) for j in range(n_ang)]
+    return _mesh_object(name, verts, faces, mat)
 
 
 # --------------------------------------------------------------------------- scene
@@ -502,7 +592,9 @@ def _build_scene_for_job(job: PreparedJob, *, samples: int, device: str, engine:
                              (0.7, 0.7, 0.72), 0.18, 1.0, bump=0.02)
     for i, (pad, contact) in enumerate(zip(pads, contacts)):
         big = i == board.get("thermal_pad")  # window-pane stencil, as in 2D
-        scene_objs.append(_fillet(f"solder_{i}", pad, contact, h_solder, big, m_solder, excess=i in board.get("excess", [])))
+        joint = _fillet(f"solder_{i}", pad, contact, h_solder, big, m_solder, excess=i in board.get("excess", []))
+        if joint is not None:  # None: a bare through-hole ring (missing / unwetted pin)
+            scene_objs.append(joint)
     for k, (bx, by, br) in enumerate(board.get("balls", [])):  # solder balls on the mask
         r = _mm(br, mmpp)
         bpy.ops.mesh.primitive_uv_sphere_add(radius=r, location=(*_mm_xy(bx, by, mmpp), 0.7 * r), segments=16, ring_count=8)
