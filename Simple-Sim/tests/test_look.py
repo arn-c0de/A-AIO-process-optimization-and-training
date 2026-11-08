@@ -145,7 +145,7 @@ def test_look_defaults_yield_to_explicit_settings():
 
 
 def test_quins_body_colours_replace_only_the_dark_default():
-    dark, brown = np.array((20, 20, 20), np.float32), np.array((60, 90, 140), np.float32)
+    dark, _brown = np.array((20, 20, 20), np.float32), np.array((60, 90, 140), np.float32)
     assert np.array_equal(LEGACY_LOOK.body_colour("qfn", dark), np.full(3, 34.0, np.float32))
     assert np.array_equal(QUINS_LOOK.body_colour("resistor", dark), QUINS_LOOK.bodies["resistor"])
     assert np.array_equal(QUINS_LOOK.body_colour("sot", dark), QUINS_LOOK.bodies["*"])

@@ -106,7 +106,7 @@ def unique_dataset_labels(dataset_dirs: Iterable[Path], *, runs_root: Path, vers
     )
 
 
-def catalog_labels(sim_root: Path, catalog: "DatasetCatalog", *, save_widget=None) -> dict[str, Path]:
+def catalog_labels(sim_root: Path, catalog: DatasetCatalog, *, save_widget=None) -> dict[str, Path]:
     """Unique ``[Category] name`` labels -> dataset dir for every non-archived dataset.
 
     Reloads ``catalog``, prunes entries for datasets that no longer exist and

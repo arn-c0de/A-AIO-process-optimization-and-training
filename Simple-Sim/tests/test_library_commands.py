@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -119,6 +118,7 @@ def test_eval_report_paths():
 
     assert report_path_for(Path("/m/run.pt")) == Path("/m/report_run.json")
     assert report_path_for(Path("/m/b.bundle")) == Path("/m/report_b.json")
+    assert report_path_for(Path("/m/b.bundle"), profile_id="chip_0603_resistor@1") == Path("/m/report_b_chip_0603_resistor@1.json")
     assert report_path_for(Path("/m/p.pt"), profile_classifier=True) == Path("/m/report_profile_classifier_p.json")
 
 

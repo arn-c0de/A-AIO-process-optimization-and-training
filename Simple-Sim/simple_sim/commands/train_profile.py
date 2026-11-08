@@ -22,6 +22,8 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     add_out_arg(parser, 'Output path for trained model (.pt)')
     parser.add_argument('--device', type=str, default=default_device_name(), help='Device (cuda/cpu)')
     add_amp_flags(parser)
+    parser.add_argument('--threads', type=int, default=None,
+                        help='Torch intra-op threads for CPU training (default: torch picks)')
     add_json_flag(parser)
     return parser
 
@@ -31,6 +33,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
     from simple_sim.training import train_profile_model
 
     run_cli(COMMAND, lambda: train_profile_model(
-        Path(args.data), Path(args.out), device=args.device, amp=args.amp,
+        Path(args.data), Path(args.out), device=args.device, amp=args.amp, threads=args.threads,
     ), args.json)
     return 0

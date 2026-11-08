@@ -28,7 +28,7 @@ sys.meta_path.insert(0, _Block(BLOCKED))
 
 def _run(code: str, *, blocked: tuple[str, ...] = ()) -> subprocess.CompletedProcess[str]:
     src = _BLOCKER.replace("BLOCKED", repr(list(blocked))) + code
-    return subprocess.run([sys.executable, "-c", src], cwd=SIM_ROOT, capture_output=True, text=True, timeout=120)
+    return subprocess.run([sys.executable, "-c", src], cwd=SIM_ROOT, capture_output=True, text=True, timeout=120, check=False)
 
 
 GUI_LOGIC_MODULES = [

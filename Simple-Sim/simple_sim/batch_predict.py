@@ -391,11 +391,17 @@ def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
     info.split = opts.split
 
     dataset_classes = info.class_list
-    if set(dataset_classes) != set(class_names):
+    unknown = sorted(set(dataset_classes) - set(class_names))
+    if unknown:
         raise ValueError(
-            f"Model classes {class_names} do not match dataset classes {dataset_classes}. "
+            f"Model classes {class_names} do not match dataset classes {dataset_classes}: "
+            f"the dataset has labels the model was not trained on ({unknown}). "
             "Train a checkpoint on this dataset before running batch_predict."
         )
+    absent = sorted(set(class_names) - set(dataset_classes))
+    if absent:
+        # A configured class without samples in this dataset is fine; it just has support 0.
+        log.warning(f"Model classes without samples in this dataset: {absent}")
 
     ds = build_dataset(data_dir, opts.split, class_names, return_id=True)
     pr = oom_retry(
@@ -498,7 +504,7 @@ def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
     log.info(format_history(hist, scope=opts.history_scope, split_mode=opts.history_split,
                             metric=opts.history_metric, crit=crit, limit=opts.history_limit))
 
-    n_mismatch = int(sum(1 for t, p in zip(pr.y_true, pr.y_pred) if t != p))
+    n_mismatch = int(sum(1 for t, p in zip(pr.y_true, pr.y_pred, strict=True) if t != p))
     return {
         "report_path": str(out_report),
         "preds_path": str(preds_path) if opts.save_preds else None,

@@ -20,7 +20,7 @@ def _run(*args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONPATH": str(SIM_ROOT)}
     return subprocess.run(
         [sys.executable, "-m", "simple_sim", *args],
-        cwd=SIM_ROOT, env=env, capture_output=True, text=True, timeout=120,
+        cwd=SIM_ROOT, env=env, capture_output=True, text=True, timeout=120, check=False,
     )
 
 
@@ -153,5 +153,5 @@ def test_sim_to_real_tool_commands_show_help(name):
 def test_tool_scripts_run_directly_without_pythonpath(script, tmp_path):
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     proc = subprocess.run([sys.executable, str(SIM_ROOT / script), "--help"], cwd=tmp_path, env=env,
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=120, check=False)
     assert proc.returncode == 0, proc.stderr

@@ -7,7 +7,6 @@ import queue
 import shutil
 import subprocess
 import threading
-import re
 import zipfile
 from pathlib import Path
 from typing import Any

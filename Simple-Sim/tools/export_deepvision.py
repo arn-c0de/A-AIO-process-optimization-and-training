@@ -71,7 +71,7 @@ if not __package__:  # run as a script (python tools/x.py): make the checkout im
 from simple_sim.classes import DefectClass  # noqa: E402
 from simple_sim.config import defect_units, load_config, merge_profile_render, placement_sampling, validate_config  # noqa: E402
 from simple_sim.defects import classify_defect, sample_defect_params  # noqa: E402
-from simple_sim.generation.common import DOMAIN, project_root  # noqa: E402
+from simple_sim.generation.common import project_root  # noqa: E402
 from simple_sim.generators.backends import backend_of  # noqa: E402
 from simple_sim.generators.opencv2d import render_roi, sample_augment_params, sample_nominal_geometry  # noqa: E402
 from simple_sim.generators.opencv2d.photoreal import camera_config, camera_settings  # noqa: E402

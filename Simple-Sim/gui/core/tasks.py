@@ -207,13 +207,13 @@ class TaskHandle:
                 self.fraction = max(0.0, min(1.0, float(fraction)))
             if message is not None:
                 self.message = str(message)
-        if self._on_progress is not None:
-            # Coalesce: at most one progress notification is in flight; the
-            # receiver reads the latest fraction/message via ``snapshot()``.
-            if self._progress_pending.is_set():
+            # Coalesce: at most one progress notification is in flight; the receiver reads the
+            # latest fraction/message via ``snapshot()``. Test-and-set under the lock, so two
+            # worker threads reporting at once cannot both post.
+            if self._on_progress is None or self._progress_pending.is_set():
                 return
             self._progress_pending.set()
-            self._on_progress(self)
+        self._on_progress(self)
 
     def snapshot(self) -> tuple[float | None, str]:
         """Consistent (fraction, message) pair; clears the coalescing flag."""

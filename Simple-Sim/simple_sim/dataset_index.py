@@ -18,7 +18,8 @@ import threading
 from collections import OrderedDict
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL, SPLITS_DIR
 from simple_sim.manifest import DatasetManifest, load_dataset_manifest

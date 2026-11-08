@@ -10,7 +10,8 @@ board so that layouts stay varied.
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
+from collections.abc import Mapping
 
 import numpy as np
 

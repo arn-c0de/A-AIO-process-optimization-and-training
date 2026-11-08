@@ -142,7 +142,7 @@ def _run_blender(
         env.update({k: str(v) for k, v in extra_env.items()})
 
     if should_stop is None:
-        returncode = subprocess.run(cmd, env=env).returncode
+        returncode = subprocess.run(cmd, env=env, check=False).returncode
     else:
         returncode = _run_stoppable(cmd, env=env, should_stop=should_stop)
     if returncode != 0:

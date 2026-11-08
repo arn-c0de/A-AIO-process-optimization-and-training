@@ -7,7 +7,8 @@ import random
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 from simple_sim.classes import SPLIT_NAMES
 from simple_sim.dataset_files import SPLITS_DIR
@@ -82,7 +83,9 @@ def stratified_splits(
     for meta_row in meta_rows:
         sample_id = meta_row.id
         profile_id = id_to_profile.get(sample_id, '')
-        class_name = id_to_label[sample_id]
+        class_name = id_to_label.get(sample_id)
+        if class_name is None:
+            raise ValueError(f"Sample {sample_id!r} has a meta row but no label row (labels.jsonl incomplete)")
         groups[(meta_row.domain, profile_id, class_name)].append(sample_id)
 
     # Initialize splits
@@ -103,7 +106,7 @@ def stratified_splits(
         n = len(sample_ids)
         fracs = [train_frac, val_frac, test_frac]
         if any(domain in names for names in allowed.values()):  # unlisted domains (minimal configs): no restriction
-            fracs = [f if domain in allowed[name] else 0.0 for name, f in zip(SPLIT_NAMES, fracs)]
+            fracs = [f if domain in allowed[name] else 0.0 for name, f in zip(SPLIT_NAMES, fracs, strict=True)]
         n_train, n_val, _n_test = _split_counts(n, fracs)
         # Remaining goes to test to ensure all samples are used
 

@@ -112,7 +112,7 @@ crops vs. the synthetic look): `real-crops`, `look-stats`, `look-montage`, `sim-
 | Datasets | `outputs/sim_data/runs/<run>/` (`meta.jsonl`, `labels.jsonl`, `images/`, `splits/{train,val,test}.txt`, `config.yaml`, `dataset_manifest.json`) |
 | Dataset snapshots | `outputs/sim_data/versions/<name>/<version>/` |
 | Checkpoints | path given to `train --out` (plus `<stem>_last.pt`); multi-profile bundles are `*.bundle/` dirs |
-| Eval report | `report_<model_stem>.json` next to the checkpoint |
+| Eval report | `report_<model_stem>.json` next to the checkpoint; for a bundle dir `report_<bundle_stem>_<profile>.json` next to the dir |
 | Batch-predict reports | `<model_dir>/history/batch_report_<stem>_<split>_<timestamp>.json` (or `--out-dir`) |
 | Arena | `outputs/models/arena.json` -> `ARENA_REPORT.md` |
 | Telemetry (optional) | JSONL events at `$SIMPLE_SIM_EVENT_LOG` if set |

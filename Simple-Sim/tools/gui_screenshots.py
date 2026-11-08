@@ -35,7 +35,7 @@ def _make_demo_dataset(sim_root: Path) -> Path | None:
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     out = sim_root / "outputs" / "sim_data" / "runs" / "demo"
     proc = subprocess.run([sys.executable, "-m", "simple_sim", "generate", "--config", str(cfg_path), "--out", str(out)],
-                          cwd=str(ROOT), capture_output=True, text=True)
+                          cwd=str(ROOT), capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         print("demo dataset generation failed:\n" + proc.stdout[-2000:] + proc.stderr[-2000:], file=sys.stderr)
         return None

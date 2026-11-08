@@ -65,7 +65,11 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "BOARD_ROUTERS", "DEFAULT_FOOTPRINT", "DEFAULT_MM_PER_PX", "DRC_MODES", "LEGACY", "NONE", "BBox", "Board", "BoardDrcError",
-    "BoardOptions", "DrcReport", "PadSpec", "Vec", "WindowBoard",
-    "board_options", "build_window_board", "collect_drc", "drc_summary", "family_of", "footprint_pads", "neighbour_layout", "profile_footprint", "Packing", "LEGACY_PACKING", "validate_board_options",
+    "BOARD_ROUTERS", "DEFAULT_FOOTPRINT", "DEFAULT_MM_PER_PX", "DEFAULT_PRESET", "DRC_MODES", "DRC_STRICT_ATTEMPTS",
+    "FINE_PITCH_FAMILIES", "LEGACY", "LEGACY_PACKING", "NONE", "POUR_PROBABILITY", "PRESETS", "ROUTERS", "ROUTER_NAMES",
+    "STREAM_NET", "STREAM_PLACE", "STREAM_ROUTE", "STREAM_RULES", "STREAM_ZONE",
+    "BBox", "Board", "BoardDrcError", "BoardOptions", "DesignRules", "DrcReport", "Packing", "PadSpec", "Vec", "WindowBoard",
+    "assign_nets", "board_options", "build_window_board", "check", "collect_drc", "drc_summary", "family_of", "fanout_band_px",
+    "fit_to_pitch", "footprint_pads", "is_fine_pitch", "min_row_pitch", "neighbour_layout", "place_window", "profile_footprint",
+    "sample_rules", "sample_zones", "seed_occupancy", "stitch_vias", "validate_board_options", "window_board",
 ]

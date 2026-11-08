@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "simple-sim"
 description = "Synthetic PCB-defect ROI generator and ResNet18 train/eval pipeline"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dynamic = ["version"]
 # Core: config, schema, manifests, reports, 2D rendering and dataset generation.
 dependencies = [
@@ -42,3 +42,20 @@ simple_sim = ["blender/*.py"]
 # Tests import gui/, scripts/ and tools/ from the checkout, which are not installed.
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 130
+extend-exclude = ["outputs", "images", "docs"]
+
+[tool.ruff.lint]
+# Correctness and modernisation only; formatting / style rules are deliberately off (the code
+# base keeps its own layout). `ruff check .` must stay clean; run it before committing.
+select = ["F", "E9", "B", "UP", "PLE", "PLW1510"]
+ignore = [
+    "B023",  # closures over loop variables that are called inside the same iteration (arena, batch_predict)
+    "B905",  # zip() strictness is decided per call site, not globally
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B008", "B018"]

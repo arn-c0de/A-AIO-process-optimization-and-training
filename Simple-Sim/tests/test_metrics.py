@@ -80,7 +80,7 @@ def test_matches_scikit_learn_bit_for_bit():
 
 def test_metrics_module_does_not_import_scikit_learn():
     code = "import sys, simple_sim.metrics; assert 'sklearn' not in sys.modules"
-    assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+    assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
 
 
 def test_success_criteria_ignores_zero_support():

@@ -3,7 +3,6 @@ with a held-out domain, ``render.post_filters: camera``, train-time augmentation
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -415,3 +414,116 @@ def test_freeze_stages_stops_gradients_and_keeps_bn_stats():
     assert not torch.equal(before["layer2.0.conv1.weight"], after["layer2.0.conv1.weight"])
     assert not torch.equal(before["layer2.0.bn1.running_mean"], after["layer2.0.bn1.running_mean"])
     assert model.training  # the model as a whole is still in train mode
+
+
+# --------------------------------------------------------------------------- review fixes (training comparability)
+
+def test_val_loss_is_plain_cross_entropy_under_label_smoothing():
+    """fit_epoch validates with plain CE even when the training criterion smooths labels."""
+    from simple_sim.models import build_resnet18
+    from simple_sim.training import fit_epoch, plain_criterion
+
+    torch.manual_seed(0)
+    model = build_resnet18(3)
+    x, y = torch.randn(4, 3, 32, 32), torch.tensor([0, 1, 2, 0])
+    smoothed = torch.nn.CrossEntropyLoss(label_smoothing=0.3)
+    assert plain_criterion(smoothed).label_smoothing == 0.0
+    plain = torch.nn.CrossEntropyLoss()
+    assert plain_criterion(plain) is plain
+
+    opt = torch.optim.SGD(model.parameters(), lr=0.0)
+    stats = fit_epoch(model, [], [(x, y)], smoothed, opt, torch.device("cpu"), ["a", "b", "c"],  # type: ignore[arg-type]
+                      epoch=0, total_epochs=1, emit_events=False)
+    model.eval()
+    with torch.no_grad():
+        expected = float(torch.nn.functional.cross_entropy(model(x), y))
+        smoothed_val = float(smoothed(model(x), y))
+    assert stats["val_loss"] == pytest.approx(expected, rel=1e-5)
+    assert stats["val_loss"] != pytest.approx(smoothed_val, rel=1e-3)
+
+
+def test_epoch_loss_is_sample_weighted():
+    from simple_sim.eval_utils import run_inference
+    from simple_sim.models import build_resnet18
+    from simple_sim.training import train_epoch
+
+    torch.manual_seed(0)
+    model = build_resnet18(2)
+    big = (torch.randn(3, 3, 32, 32), torch.tensor([0, 1, 0]))
+    small = (torch.randn(2, 3, 32, 32), torch.tensor([1, 1]))  # BatchNorm needs > 1 sample in train mode
+    crit = torch.nn.CrossEntropyLoss()
+    res = run_inference(model, [big, small], torch.device("cpu"), criterion=crit)  # type: ignore[arg-type]
+    model.eval()
+    with torch.no_grad():
+        per_sample = torch.cat([torch.nn.functional.cross_entropy(model(x), y, reduction="none") for x, y in (big, small)])
+    assert res.avg_loss == pytest.approx(float(per_sample.mean()), rel=1e-5)
+    assert res.num_samples == 5
+
+    opt = torch.optim.SGD(model.parameters(), lr=0.0)  # lr 0: the weights stay, losses are comparable
+    loss, seen = train_epoch(model, [big, small], crit, opt, torch.device("cpu"))  # type: ignore[arg-type]
+    assert seen == 5
+    model.train()
+    with torch.no_grad():
+        # train mode (BatchNorm batch stats), same as the epoch saw; weights unchanged under lr 0
+        ps = torch.cat([torch.nn.functional.cross_entropy(model(x), y, reduction="none") for x, y in (big, small)])
+    assert loss == pytest.approx(float(ps.mean()), rel=1e-3)
+
+
+def test_resume_takes_lr_from_config_and_keeps_the_resumed_best(tmp_path):
+    """Resume: the dataset config's lr / weight_decay win over the optimizer state in the checkpoint,
+    and a worse epoch after resume does not replace the resumed best score (also with --out-mode last)."""
+    from simple_sim.generation.dataset import generate_dataset
+    from simple_sim.models import load_checkpoint
+    from simple_sim.training import train_model
+
+    cfg = _base_config()
+    cfg["roi"] = {"width_px": 64, "height_px": 64, "mm_per_px": 0.04}
+    cfg["classes"] = {"OK": 4, "MISSING": 4, "MISALIGNED": 4}
+    cfg["train"].update({"epochs": 1, "batch_size": 4, "pretrained": False, "num_workers": 0, "lr": 0.01})
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    data = tmp_path / "ds"
+    generate_dataset(cfg_path, data, project_root=ROOT)
+
+    first = tmp_path / "first.pt"
+    tr = train_model(data, first, device="cpu")
+    assert tr["epochs_run"] == 1
+    ck1 = load_checkpoint(first)
+    assert ck1["best_epoch"] == 1 and ck1["optimizer_state_dict"]["param_groups"][0]["lr"] == pytest.approx(0.01)
+
+    # Change lr and weight_decay in the dataset config, resume into a new --out with one extra epoch.
+    ds_cfg_path = data / "config.yaml"
+    ds_cfg = yaml.safe_load(ds_cfg_path.read_text(encoding="utf-8"))
+    ds_cfg["train"]["lr"] = 0.00123
+    ds_cfg["train"]["weight_decay"] = 0.5
+    ds_cfg_path.write_text(yaml.safe_dump(ds_cfg), encoding="utf-8")
+
+    second = tmp_path / "second.pt"
+    tr2 = train_model(data, second, resume=first, extra_epochs=1, device="cpu", out_mode="last")
+    assert tr2["start_epoch"] == 1 and tr2["epochs_run"] == 1
+    ck2 = load_checkpoint(second)
+    group = ck2["optimizer_state_dict"]["param_groups"][0]
+    assert group["lr"] == pytest.approx(0.00123) and group["weight_decay"] == pytest.approx(0.5)
+    assert group["initial_lr"] == pytest.approx(0.00123)
+    # --out-mode last writes epoch 2 to --out, but the best bookkeeping stays honest.
+    assert ck2["epoch"] == 2
+    assert ck2["best_val_f1"] == pytest.approx(max(ck1["best_val_f1"], ck2["val_f1"]))
+    assert ck2["best_epoch"] == (2 if ck2["val_f1"] > ck1["best_val_f1"] else 1)
+    assert tr2["best_val_f1"] == pytest.approx(ck2["best_val_f1"])
+
+
+def test_pretrained_download_failure_is_an_error(monkeypatch):
+    from torchvision import models as tv_models
+
+    from simple_sim.models import build_resnet18
+
+    def boom(*_a, **kw):
+        if kw.get("weights") is not None:
+            raise OSError("no network")
+        return original(*_a, **kw)
+
+    original = tv_models.resnet18
+    monkeypatch.setattr(tv_models, "resnet18", boom)
+    with pytest.raises(RuntimeError, match="train.pretrained: false"):
+        build_resnet18(3, pretrained=True)
+    assert build_resnet18(3, pretrained=False).fc.out_features == 3

@@ -75,6 +75,6 @@ def test_cli_json_headless(tmp_path: Path) -> None:
     bad = subprocess.run(
         [sys.executable, str(SIM_ROOT / "scripts" / "render_debug_previews.py"), "--profiles", "nope@1",
          "--out", str(tmp_path), "--json"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     assert bad.returncode == 1 and parse_result(bad.stdout)["ok"] is False

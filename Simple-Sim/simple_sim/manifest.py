@@ -17,7 +17,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
+from collections.abc import Callable
 
 from simple_sim import __version__ as _VERSION
 from simple_sim.dataset_files import DATASET_MANIFEST
@@ -68,6 +69,7 @@ def _get_git_commit() -> str | None:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
             cwd=Path(__file__).parent.parent
         )
         if result.returncode == 0:
@@ -166,7 +168,7 @@ class ProfileRef:
     key_order: tuple[str, ...] = _PROFILE_FIELDS
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "ProfileRef":
+    def from_dict(cls, d: Mapping[str, Any]) -> ProfileRef:
         known = {k: d[k] for k in _PROFILE_FIELDS if k in d}
         extra = {k: copy.deepcopy(v) for k, v in d.items() if k not in _PROFILE_FIELDS}
         return cls(**known, extra=extra, key_order=tuple(d.keys()))
@@ -218,7 +220,7 @@ class DatasetManifest:
     key_order: tuple[str, ...] = ()
 
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> "DatasetManifest":
+    def from_dict(cls, d: Mapping[str, Any]) -> DatasetManifest:
         """Wrap a parsed manifest (no validation; :func:`load_dataset_manifest` validates)."""
         known: dict[str, Any] = {}
         extra: dict[str, Any] = {}
@@ -487,9 +489,9 @@ def read_dataset_manifest(manifest_path: Path) -> dict[str, Any]:
         'extend_history'
     ]
 
-    for field in required_fields:
-        if field not in manifest:
-            raise ValueError(f"Invalid manifest: missing field '{field}'")
+    for name in required_fields:
+        if name not in manifest:
+            raise ValueError(f"Invalid manifest: missing field '{name}'")
 
     version = manifest.get('manifest_version', 1)
 

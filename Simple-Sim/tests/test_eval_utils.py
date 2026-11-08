@@ -220,5 +220,6 @@ def test_ensemble_and_bundle_eval_predict(tmp_path):
     bundle.mkdir()
     shutil.copy(model, bundle_checkpoint_path(bundle, dataset_profile(data)[0]))
     ev = run_eval(data, bundle, "cpu")
-    assert Path(ev["report_path"]) == bundle.parent / "report_my.json"
+    # One report per (bundle, profile): evaluating the bundle on another profile's dataset must not overwrite it.
+    assert Path(ev["report_path"]) == bundle.parent / f"report_my_{dataset_profile(data)[0]}.json"
     assert ev["model_path"] == str(bundle) and ev["resolved_model_path"] != str(bundle)

@@ -64,7 +64,7 @@ def test_generate_cli_json_and_extend(tmp_path: Path) -> None:
     assert res2["extend"] and res2["total_samples"] == 2 * n and res2["new_samples"] == n
     assert len(list((out / "images").glob("*.png"))) == 2 * n
 
-    bad = subprocess.run(cmd[:3] + [str(tmp_path / "missing.yaml")] + cmd[4:], capture_output=True, text=True)
+    bad = subprocess.run(cmd[:3] + [str(tmp_path / "missing.yaml")] + cmd[4:], capture_output=True, text=True, check=False)
     assert bad.returncode == 1 and parse_result(bad.stdout)["ok"] is False
 
 

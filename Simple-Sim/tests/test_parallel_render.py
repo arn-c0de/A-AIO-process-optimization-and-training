@@ -183,7 +183,7 @@ generate_dataset(cfg, Path(sys.argv[2]), project_root=Path({str(root)!r}))
 """, encoding="utf-8")
     for executor in ("process", "thread"):
         proc = subprocess.run([sys.executable, str(script), executor, str(tmp_path / executor)], cwd=tmp_path,
-                              capture_output=True, text=True, timeout=300)
+                              capture_output=True, text=True, timeout=300, check=False)
         assert proc.returncode == 0, proc.stderr[-2000:]
     imgs = sorted((tmp_path / "thread" / "images").glob("*.png"))
     assert len(imgs) == 3

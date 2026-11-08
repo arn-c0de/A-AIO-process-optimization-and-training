@@ -8,9 +8,10 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -79,7 +80,7 @@ def sha256_tag(digest: Any) -> str:
 def now_iso(*, utc: bool = False, timespec: str = "auto") -> str:
     """Current time as ISO 8601: naive local time (manifests, reports), or UTC with a ``Z`` suffix."""
     if utc:
-        return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec=timespec) + "Z"
+        return datetime.now(UTC).replace(tzinfo=None).isoformat(timespec=timespec) + "Z"
     return datetime.now().isoformat(timespec=timespec)
 
 

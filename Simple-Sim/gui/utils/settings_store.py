@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 from collections.abc import Iterable, Sequence
 
 from simple_sim.io_utils import atomic_write_json
@@ -71,7 +71,7 @@ class SettingsStore:
 
 # A binding is ``(key, var)`` or ``(key, var, default)``; ``var`` is any Tk
 # variable-like object with ``get()``, ``set()`` and ``trace_add()``.
-VarBinding = Union[tuple[str, Any], tuple[str, Any, Any]]
+VarBinding = tuple[str, Any] | tuple[str, Any, Any]
 
 
 def restore_persisted_vars(

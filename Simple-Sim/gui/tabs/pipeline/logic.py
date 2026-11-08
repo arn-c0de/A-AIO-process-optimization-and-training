@@ -21,7 +21,7 @@ from gui.utils.paths import list_model_paths, model_root
 from gui.utils.process import terminate_process
 from simple_sim.cli import argv_for
 from simple_sim.dataset_files import CONFIG_YAML, DATASET_MANIFEST, LABELS_JSONL, META_JSONL, SPLITS_DIR
-from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, now_tag, path_size_bytes, read_json, rel_to
+from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, path_size_bytes, read_json, rel_to
 from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
 from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest

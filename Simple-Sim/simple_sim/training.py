@@ -56,6 +56,8 @@ __all__ = [
     "load_dataset_config",
     "lr_factor",
     "make_checkpoint",
+    "plain_criterion",
+    "set_torch_threads",
     "train_epoch",
     "train_model",
     "train_profile_model",
@@ -101,7 +103,6 @@ def train_epoch(
     for m in frozen or ():
         m.eval()
     total_loss = 0.0
-    num_batches = 0
     num_samples = 0
     meter = ThroughputMeter()
     last_seen_id = None
@@ -138,8 +139,7 @@ def train_epoch(
 
         bs = int(images.shape[0])
         ema_ips = meter.update(bs, time.perf_counter() - t0)
-        total_loss += loss.item()
-        num_batches += 1
+        total_loss += loss.item() * bs  # sample-weighted: the last, smaller batch counts proportionally
         num_samples += bs
 
         postfix = {'loss': f'{loss.item():.4f}', 'img/s': f'{ema_ips:.1f}'}
@@ -158,7 +158,20 @@ def train_epoch(
             batch_size=bs,
         )
 
-    return total_loss / max(1, num_batches), num_samples
+    return total_loss / max(1, num_samples), num_samples
+
+
+def plain_criterion(criterion: nn.Module) -> nn.Module:
+    """*criterion* without label smoothing, for validation.
+
+    ``train.label_smoothing`` smooths the training loss only; the validation loss is plain
+    cross-entropy so val losses stay comparable between runs with and without smoothing.
+    Other criteria are returned unchanged.
+    """
+    if isinstance(criterion, nn.CrossEntropyLoss) and criterion.label_smoothing > 0:
+        return nn.CrossEntropyLoss(weight=criterion.weight, ignore_index=criterion.ignore_index,
+                                   reduction=criterion.reduction)
+    return criterion
 
 
 def validate(
@@ -196,8 +209,15 @@ def fit_epoch(
     scaler: torch.amp.GradScaler | None = None,
     emit_events: bool = True,
     frozen: list[nn.Module] | None = None,
+    val_criterion: nn.Module | None = None,
 ) -> dict[str, Any]:
-    """Train + validate one epoch (0-based *epoch*), log the summary and return its stats."""
+    """Train + validate one epoch (0-based *epoch*), log the summary and return its stats.
+
+    Validation uses *val_criterion*, by default :func:`plain_criterion` of *criterion* (no label
+    smoothing), so ``val_loss`` is comparable across runs.
+    """
+    if val_criterion is None:
+        val_criterion = plain_criterion(criterion)
     log.info(f"\nEpoch {epoch + 1}/{total_epochs}")
     if emit_events:
         emit("epoch_start", epoch=int(epoch + 1), epochs=int(total_epochs))
@@ -207,7 +227,7 @@ def fit_epoch(
         model, train_loader, criterion, optimizer, device, use_amp=use_amp, scaler=scaler, frozen=frozen
     )
     val_loss, val_metrics, val_seen = validate(
-        model, val_loader, criterion, device, class_names, critical_classes=critical_classes, use_amp=use_amp
+        model, val_loader, val_criterion, device, class_names, critical_classes=critical_classes, use_amp=use_amp
     )
     stats = {
         "epoch": int(epoch + 1),
@@ -352,6 +372,15 @@ def _resolve_device(device: str | torch.device, amp: bool) -> tuple[torch.device
     return dev, bool(amp and dev.type == "cuda")
 
 
+def set_torch_threads(threads: int | None) -> None:
+    """``torch.set_num_threads(threads)`` for a positive *threads* (``--threads``); ``None`` keeps torch's choice."""
+    if threads is None:
+        return
+    if int(threads) <= 0:
+        raise ValueError("--threads must be a positive integer")
+    torch.set_num_threads(int(threads))
+
+
 # ---------------------------------------------------------------------------
 # Defect classifier
 # ---------------------------------------------------------------------------
@@ -380,10 +409,7 @@ def train_model(
     output_path_arg = Path(out)
     resume_path_arg = Path(resume) if resume else None
     device, use_amp = _resolve_device(device, amp)
-    if threads is not None:
-        if int(threads) <= 0:
-            raise ValueError("--threads must be a positive integer")
-        torch.set_num_threads(int(threads))
+    set_torch_threads(threads)
 
     config, train_seed = _seed_and_config(data_dir)
 
@@ -456,7 +482,10 @@ def train_model(
     log.info(f"Val samples: {len(val_dataset)}")
     log.info(format_distribution("Train class distribution", train_dataset.get_class_distribution()))
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
+    # Shuffle order from its own seeded generator: independent of how much of the global torch RNG
+    # the model init / augmentation consumed, so a run is reproducible for a given train seed.
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                              generator=torch.Generator().manual_seed(train_seed), **loader_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
     model, criterion, optimizer, scaler, frozen = build_training(len(class_names), train_config, device, use_amp)
@@ -493,6 +522,11 @@ def train_model(
         except (KeyError, TypeError, ValueError, RuntimeError) as e:
             # Optimizer state may be missing or incompatible; continue with fresh optimizer state.
             log.warning(f"Could not restore optimizer state ({e}); using fresh optimizer state.")
+        # The optimizer state carries the (possibly decayed) lr / weight_decay of the old run;
+        # the dataset config is the source of truth, also as base lr of the LR schedule.
+        for group in optimizer.param_groups:
+            group['lr'] = group['initial_lr'] = float(train_config['lr'])
+            group['weight_decay'] = float(train_config['weight_decay'])
         start_epoch = int(checkpoint.get('epoch', 0))
         # Prefer the tracked best score; older checkpoints only carry the F1 of their own epoch.
         best_val_f1 = float(checkpoint.get('best_val_f1', checkpoint.get('val_f1', 0.0)) or 0.0)
@@ -553,15 +587,15 @@ def train_model(
             scheduler.step()
 
         # Decide "best" before building the checkpoint so it carries the best-so-far score.
-        if out_mode == "last":
-            is_best = True
-        else:
-            # Always write --out at least once, even if no epoch beats the resumed/initial score.
-            is_best = val_f1 > best_val_f1 or not output_path.exists()
+        # A fresh run (no resumed best) counts its first epoch as best even at F1 0; a resumed
+        # best is only replaced by a better epoch, whatever --out-mode is.
+        is_best = val_f1 > best_val_f1 or (best_epoch == 0 and not output_path.exists())
         if is_best:
             best_val_f1 = float(val_f1)
             best_val_acc = float(val_acc)
             best_epoch = int(epoch + 1)
+        # --out: the best epoch ('best'), every epoch ('last'); written at least once either way.
+        write_out = is_best or out_mode == "last" or not output_path.exists()
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         ckpt = make_checkpoint(
@@ -573,8 +607,8 @@ def train_model(
         # Always save "last" so resume runs are observable.
         torch.save(ckpt, last_path)
         if is_best:
-            if out_mode != "last":
-                log.info(f"  ✓ New best model (F1: {best_val_f1:.4f})")
+            log.info(f"  ✓ New best model (F1: {best_val_f1:.4f})")
+        if write_out:
             torch.save(ckpt, output_path)
 
         # Bundle bookkeeping: keep a lightweight index of which profiles exist.
@@ -607,12 +641,18 @@ def dataset_profile_names(data_dir: Path, manifest: dict[str, Any]) -> list[str]
 
 
 def train_profile_model(
-    data_dir: Path, out: Path, *, device: str | torch.device = "cpu", amp: bool = True
+    data_dir: Path, out: Path, *, device: str | torch.device = "cpu", amp: bool = True,
+    threads: int | None = None,
 ) -> dict[str, Any]:
-    """Train a profile classifier on a mixed-profile dataset; return a summary dict."""
+    """Train a profile classifier on a mixed-profile dataset; return a summary dict.
+
+    Uses the same ``train`` section as :func:`train_model` (including ``train.scheduler`` /
+    ``train.warmup_epochs`` / ``train.label_smoothing``); *threads* as there.
+    """
     data_dir = Path(data_dir)
     output_path = Path(out)
     device, use_amp = _resolve_device(device, amp)
+    set_torch_threads(threads)
 
     config, train_seed = _seed_and_config(data_dir)
 
@@ -647,7 +687,8 @@ def train_profile_model(
         if count == 0:
             raise ValueError(f"Profile '{name}' has 0 training samples. Check dataset generation.")
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                              generator=torch.Generator().manual_seed(train_seed), **loader_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
 
     model, criterion, optimizer, scaler, frozen = build_training(len(profile_names), train_config, device, use_amp)
@@ -656,6 +697,9 @@ def train_profile_model(
     best_val_acc: float | None = None
     best_epoch = 0
     last_path = last_checkpoint_path(output_path)
+    scheduler = build_scheduler(optimizer, train_config, epochs)
+    if scheduler is not None:
+        log.info(f"  Scheduler: {train_config.get('scheduler')} (warmup {int(train_config.get('warmup_epochs', 0) or 0)} epochs)")
 
     _banner("PROFILE CLASSIFIER TRAINING")
     emit("train_profile_start", dataset_dir=str(data_dir), out_model=str(output_path),
@@ -663,11 +707,14 @@ def train_profile_model(
 
     stats: dict[str, Any] = {}
     for epoch in range(epochs):
+        log.info(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
         stats = fit_epoch(
             model, train_loader, val_loader, criterion, optimizer, device, profile_names,
             epoch=epoch, total_epochs=epochs, use_amp=use_amp, scaler=scaler, emit_events=False, frozen=frozen,
         )
         val_f1 = stats['val_macro_f1']
+        if scheduler is not None:
+            scheduler.step()
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         ckpt = make_checkpoint(

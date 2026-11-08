@@ -368,7 +368,7 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
         a0 = -math.radians(float(body.get("lead_frame_deg", 0.0)))
         axis0 = Vector((math.cos(a0), math.sin(a0), 0.0))
         to_world = lambda v: Vector((cx, cy, 0.0)) + axis * v.x + Vector((-axis.y, axis.x, 0.0)) * v.y  # noqa: E731
-        for k, ((px, py, pw, ph), lead) in enumerate(zip(pads, p["leads"])):
+        for k, ((px, py, _pw, _ph), lead) in enumerate(zip(pads, p["leads"])):
             rel = Vector((px, py, 0.0))  # scene coordinates are relative to the nominal part centre
             loc = Vector((rel.dot(axis0), rel.x * -axis0.y + rel.y * axis0.x, 0.0))  # pad in body frame
             edge = Vector((max(-L / 2, min(L / 2, loc.x)), max(-W / 2, min(W / 2, loc.y)), 0.0))
@@ -411,7 +411,7 @@ def _build_tht(pads: list[PadMm], board: BoardScene, p: dict[str, Any], mats: di
     objs: list[bpy.types.Object] = [root]
     contacts: list[dict[str, Any] | None] = []
     pin_xy: list[tuple[float, float]] = []
-    for i, (px, py, pw, ph) in enumerate(pads):
+    for i, (px, py, _pw, _ph) in enumerate(pads):
         # pin position in the row's frame (pads are relative to the nominal centre), then into the world
         x = cx + px * math.cos(angle) - py * math.sin(angle)
         y = cy + px * math.sin(angle) + py * math.cos(angle)

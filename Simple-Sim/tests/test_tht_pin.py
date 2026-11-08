@@ -8,7 +8,6 @@ import yaml
 
 from simple_sim.board.footprints import (BLENDER_ONLY_FOOTPRINTS, BLENDER_THT, FAMILIES, family_of, footprint_pads, scene_part,
                                          tht_pins)
-from simple_sim.classes import DefectClass
 from simple_sim.defects import sample_defect_params
 from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal import render_board

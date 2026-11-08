@@ -150,7 +150,6 @@ def run_inference(
     probs_all: list[np.ndarray] = []
     meter = ThroughputMeter()
     total_loss = 0.0
-    num_batches = 0
     num_samples = 0
     last_img = None
 
@@ -174,8 +173,7 @@ def run_inference(
             postfix: dict[str, str] = {}
             fields: dict[str, Any] = {}
             if loss is not None:
-                total_loss += float(loss.item())
-                num_batches += 1
+                total_loss += float(loss.item()) * bs  # sample-weighted mean over the loader
                 postfix["loss"] = f"{loss.item():.4f}"
                 fields["loss"] = float(loss.item())
             postfix["img/s"] = f"{ips:.1f}"
@@ -199,7 +197,7 @@ def run_inference(
     return InferenceResult(
         y_true=cat(labels_all),
         y_pred=cat(preds),
-        avg_loss=(total_loss / max(1, num_batches)) if criterion is not None else None,
+        avg_loss=(total_loss / max(1, num_samples)) if criterion is not None else None,
         num_samples=num_samples,
         probs=(np.concatenate(probs_all) if probs_all else np.zeros((0, 0), dtype=np.float32)) if collect_probs else None,
     )
@@ -272,7 +270,7 @@ def eval_loader(dataset: Dataset, checkpoint: dict[str, Any]) -> DataLoader:
         dataset,
         batch_size=int(eval_cfg.get("batch_size", 64)),
         shuffle=False,
-        num_workers=eval_cfg.get("num_workers", 0),
+        num_workers=int(eval_cfg.get("num_workers", 0) or 0),
     )
 
 

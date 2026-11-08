@@ -32,6 +32,7 @@ from simple_sim.eval_utils import (
 )
 from simple_sim.io_utils import atomic_write_json, now_iso
 from simple_sim.manifest import check_checkpoint_profile
+from simple_sim.model_bundle import safe_profile_filename
 from simple_sim.metrics import (
     calibration_metrics,
     compute_metrics,
@@ -73,11 +74,17 @@ def evaluate(
     return metrics, res.num_samples
 
 
-def report_path_for(model_path: Path, *, profile_classifier: bool = False) -> Path:
-    """Where the eval report of *model_path* goes: ``report_[profile_classifier_]<stem>.json`` next to it."""
+def report_path_for(model_path: Path, *, profile_classifier: bool = False, profile_id: str | None = None) -> Path:
+    """Where the eval report of *model_path* goes: ``report_[profile_classifier_]<stem>.json`` next to it.
+
+    For a multi-model bundle dir evaluated for one profile, pass *profile_id*: the report is then
+    ``report_<stem>_<profile>.json``, so evaluations of the bundle on datasets of different
+    profiles do not overwrite each other.
+    """
     model_path = Path(model_path)
     prefix = "report_profile_classifier_" if profile_classifier else "report_"
-    return model_path.parent / f"{prefix}{model_path.stem}.json"
+    suffix = f"_{safe_profile_filename(profile_id)}" if profile_id else ""
+    return model_path.parent / f"{prefix}{model_path.stem}{suffix}.json"
 
 
 def write_report(path: Path, report: dict[str, Any]) -> Path:
@@ -183,7 +190,8 @@ def run_eval(
     }
     if tta:
         report['tta'] = True
-    report_path = write_report(report_path_for(requested_model_path), report)
+    bundle_profile = dataset_profile_id if model_path != requested_model_path else None
+    report_path = write_report(report_path_for(requested_model_path, profile_id=bundle_profile), report)
 
     success = evaluate_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="class")
     log.info(format_success_criteria(success))

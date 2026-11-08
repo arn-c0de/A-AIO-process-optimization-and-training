@@ -11,10 +11,8 @@ All notable changes to **Simple-Sim** are documented in this file.
 - `tools/dv_crops.py`: exports the reviewed app crops (`<side>.ndjson`, newest review per part, package via `pnp.csv`) into the class folders of `eval_real` / `look_montage`; `outputs/dv_real/<side>/summary.json` with counts and crop geometry.
 - Configs `configs/run_0402_c_dv_top.yaml`, `configs/run_0402_r_dv_bottom.yaml`; measurements (look_stats, sim_to_real NN distance ratio 1.90 / 2.03 vs quins 2.49 / 2.35, calibrate_camera) in `docs/guides/PHOTOREAL_RENDERING.md`, "DeepVision app looks". Tests: `tests/test_look.py`, `tests/test_dv_crops.py`.
 
-
 ### Added (real board backgrounds from the DeepVision stills, S2)
 - `tools/board_backgrounds.py`: cuts empty board areas out of the autopilot stills (`still.jpg` + `geometry.json` homography + `components.json` keep-outs, colour heuristic for mask-only windows) rectified to the profile scale for `render.texture_dir`; `--dry-run` summary; `data/board_textures/` is git-ignored. Configs `run_0402_c_dv_top_bg.yaml`, `run_0402_r_dv_bottom_bg.yaml`. A/B (eval_real on the real app crops, sim_to_real): no measurable gain over the procedural board, documented in `PHOTOREAL_RENDERING.md`. Tests: `tests/test_board_backgrounds.py`.
-
 
 ### Added (through-hole joints for the Blender backend, S5)
 - Family `tht_pin` (`board.footprints.FAMILIES`, footprint `tht_pin` / `tht_pin_<N>`: a row of round plated pads with a hole, pin in each, solder meniscus; `BlenderPart(BLENDER_THT, pin_diameter, pin_height, solder_height)` -> `scene_part()["pin"]`). Bake: `joints.draw_tht_pads` (rings + holes), `solder_defects.tht_layout` -> `board["tht"]` (`job_schema.ThtLayout`: MISSING = one pin absent, SOLDER_BRIDGE = bar between neighbouring pins, CORNER_LIFT = unwetted pins), body kept for MISSING. `render_batch.py`: `_build_tht` (pins, holes, bridge bar from `part` / `board["tht"]`), `_tht_joint` cone mesh; no family names in the script (D35).
@@ -28,6 +26,24 @@ All notable changes to **Simple-Sim** are documented in this file.
 ### Added (configs for the judge weaknesses, `render.missing_residue`, S4)
 - `render.missing_residue` (2D photoreal, default 1.0 = unchanged output): factor on the reflowed-paste domes of pads without a part (0 = bare pads, up to 4); `RenderContext.missing_residue`, `meniscus.render_joint(residue=)`, `skip_joint_draws`, validated by `config._validate_missing_residue`, part of the `--extend` look options. Tests: `tests/test_missing_residue.py`.
 - Configs `run_0402_r_dv_bottom_bridges.yaml`, `run_0603_r_dv_bottom.yaml`, `run_0402_r_dv_bottom_missing.yaml` (residue 1.5), `run_1210_c_dv_top.yaml`, `run_array_r_dv_top.yaml`; montages in `outputs/dv_look/s4_*.png`.
+
+### Fixed (code review 2026-11-08: training comparability)
+- `training.fit_epoch` validates with plain cross-entropy (`plain_criterion`) even when `train.label_smoothing` is set; the smoothed criterion had been used for `val_loss` too, so val-loss curves of runs with and without smoothing were not comparable (the docstring already promised the fix).
+- `train --resume`: `train.lr` and `train.weight_decay` of the dataset config now win over the values restored from the checkpoint's optimizer state (they also become the base lr of the cosine schedule). Before, a changed config lr was silently ignored and a resume without scheduler kept the already decayed lr.
+- `train --out-mode last` no longer rewrites `best_val_f1` / `best_epoch` every epoch; the best bookkeeping is independent of what `--out` receives. A resume into a new `--out` path also no longer replaces the resumed best with a worse first epoch.
+- `eval` on a multi-model bundle writes `report_<bundle>_<profile>.json` (`evaluation.report_path_for(..., profile_id=)`); evaluations of one bundle on datasets of different profiles used to overwrite each other's `report_<bundle>.json`. Arena and `batch-predict` history match reports by content (`model_path` / `model_stem`), so they pick the new files up unchanged.
+- `train-profile` uses `train.scheduler` / `train.warmup_epochs` like `train` and accepts `--threads` (`training.set_torch_threads`).
+- `models.build_resnet18(pretrained=True)` raises `RuntimeError` when the ImageNet weights cannot be loaded instead of silently training from random init under a config that says `pretrained: true` (hint: `train.pretrained: false`).
+- `batch-predict` accepts datasets in which a model class has no samples (support 0, warning); only labels the model was not trained on are an error. The error text still contains "do not match dataset classes" for the Weights tab.
+- Epoch and inference losses are sample-weighted means (`train_epoch`, `eval_utils.run_inference`); the last, smaller batch used to count like a full one.
+- `splits.stratified_splits` raises `ValueError` naming the sample instead of a bare `KeyError` for a meta row without label; `eval_utils.eval_loader` casts `eval.num_workers` to int; `gui.core.tasks.TaskHandle.progress` does its coalescing test-and-set under the lock.
+- `model_bundle.safe_profile_filename` is public (the private name stays as alias). Tests: `tests/test_training_options.py` (val loss under smoothing, sample-weighted losses, resume lr / best bookkeeping, pretrained failure).
+
+### Changed (code review 2026-11-08: modernisation)
+- `requires-python >= 3.11` (README said 3.11+ already; QUICKSTART updated).
+- `[tool.ruff]` in `pyproject.toml` (`F`, `E9`, `B`, `UP`, `PLE`, `PLW1510`; target py311). The mechanical findings are fixed: deprecated `typing` imports, quoted annotations, `datetime.timezone.utc` -> `datetime.UTC`, `typing.Union`, unused imports / loop variables, explicit `check=False` on every `subprocess.run`. `simple_sim.board.__all__` lists the whole eagerly imported surface.
+- `models.load_checkpoint` (and the bundle index scan) load with `weights_only=True` first and fall back to full unpickling only for legacy files; Simple-Sim checkpoints contain tensors and plain containers only.
+- `train` / `train-profile`: the training DataLoader shuffles from its own `torch.Generator` seeded with the train seed, so the sample order no longer depends on how much global RNG the model init and augmentation consumed. Shuffle order of existing runs is therefore not reproduced bit for bit.
 
 
 ### Changed (library plan N11 + S6: GUI without polling loops, no blocking file reads on the Tk thread)

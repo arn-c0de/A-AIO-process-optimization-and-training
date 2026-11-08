@@ -16,16 +16,19 @@ ENSEMBLE_FORMAT = "simple_sim_ensemble_v1"
 def build_resnet18(num_classes: int, pretrained: bool = False) -> nn.Module:
     """Create a ResNet18 with a ``num_classes``-way classification head.
 
-    With ``pretrained=True`` ImageNet weights are used; if they cannot be loaded
-    (e.g. no network on first run) a warning is logged and random init is used.
+    With ``pretrained=True`` the ImageNet weights are used. If they cannot be loaded (no network
+    and no torchvision cache) a ``RuntimeError`` is raised: silently training from random init
+    under a config that says ``pretrained: true`` would make runs incomparable.
     """
-    model = None
     if pretrained:
         try:
             model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
-        except Exception as e:
-            log.warning(f"Failed to load pretrained weights ({e}). Falling back to random init.")
-    if model is None:
+        except Exception as e:  # noqa: BLE001 - torchvision raises URL / OS / hash errors here
+            raise RuntimeError(
+                f"Could not load the pretrained ResNet18 weights ({e}). Download them once with "
+                "network access, or set train.pretrained: false to train from random init."
+            ) from e
+    else:
         model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     return model
@@ -85,8 +88,17 @@ class EnsembleModel(nn.Module):
 
 
 def load_checkpoint(model_path: Path, map_location: str | torch.device = "cpu") -> Any:
-    """Raw ``torch.load`` of a Simple-Sim checkpoint (trusted local file, full unpickling)."""
-    return torch.load(model_path, map_location=map_location, weights_only=False)
+    """``torch.load`` of a Simple-Sim checkpoint.
+
+    Checkpoints hold tensors and plain containers only, so the restricted unpickler
+    (``weights_only=True``) is tried first; a legacy file with other objects falls back to full
+    unpickling (trusted local file).
+    """
+    try:
+        return torch.load(model_path, map_location=map_location, weights_only=True)
+    except Exception as e:  # noqa: BLE001 - torch raises pickle / RuntimeError subclasses here
+        log.debug(f"weights_only load of {model_path} failed ({e}); falling back to full unpickling")
+        return torch.load(model_path, map_location=map_location, weights_only=False)
 
 
 def load_checkpoint_model(

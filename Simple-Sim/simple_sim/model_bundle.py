@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import warnings
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Literal
 
@@ -43,14 +43,19 @@ def is_bundle_dir(p: Path) -> bool:
     return p.name.endswith(".bundle")
 
 
-def _safe_profile_filename(profile_id: str) -> str:
-    # Keep common characters used in profile IDs; replace everything else.
-    # Example: "chip_0603_resistor@1" stays intact.
+def safe_profile_filename(profile_id: str) -> str:
+    """File-name stem for *profile_id*: common ID characters kept, everything else ``_``.
+
+    Example: ``"chip_0603_resistor@1"`` stays intact; empty gives ``"unknown_profile"``.
+    """
     s = (profile_id or "").strip()
     if not s:
         s = "unknown_profile"
     s = re.sub(r"[^A-Za-z0-9_.@-]+", "_", s)
     return s
+
+
+_safe_profile_filename = safe_profile_filename  # former private name
 
 
 CheckpointKind = Literal["best", "last"]
@@ -141,9 +146,11 @@ def _load_checkpoint_lazily(ckpt_path: Path) -> object:
     import torch
 
     try:
-        return torch.load(ckpt_path, map_location="cpu", weights_only=False, mmap=True)
-    except RuntimeError:
-        return torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        return torch.load(ckpt_path, map_location="cpu", weights_only=True, mmap=True)
+    except Exception:  # noqa: BLE001 - legacy format (no mmap) or objects outside the weights_only allow-list
+        from simple_sim.models import load_checkpoint
+
+        return load_checkpoint(ckpt_path)
 
 
 def _checkpoint_profile_id(ckpt_path: Path) -> str | None:
@@ -171,7 +178,7 @@ def scan_bundle_checkpoints(bundle_dir: Path) -> dict[str, str]:
 
 def _quarantine_corrupt_meta(meta_path: Path) -> Path | None:
     """Move an unreadable ``bundle.json`` aside so it is not silently overwritten."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     backup = meta_path.with_name(f"{meta_path.name}.corrupt-{stamp}")
     try:
         meta_path.replace(backup)
@@ -193,7 +200,7 @@ def upsert_bundle_meta(bundle_dir: Path, profile_id: str, ckpt_path: Path) -> No
     bundle_dir = Path(bundle_dir)
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     meta_path = bundle_dir / BUNDLE_META_NAME
     meta = read_bundle_meta(bundle_dir)
     checkpoints: dict[str, str]
