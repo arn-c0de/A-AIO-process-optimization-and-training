@@ -1,0 +1,89 @@
+# DeepVision BOTTOM round 2 (dv_bottom look, post_filters camera, calm domain). Crop factor set to the real BOTTOM app
+# crops of this family (tools/dv_crops.py summaries): CAPC1608 = 76 px at a 4.55 mm field (2.84 body lengths, 16.7 px/mm).
+# 0603 MLCC (profile chip_0603_capacitor@1 at its physical scale 0.02667): bridges + missing. Export with --px-per-mm 16.7.
+run:
+  run_id: run_0603_c_dv_bottom_r2
+  seed: 4303
+  schema_version: 2
+  component_profile: chip_0603_capacitor@1
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.02667
+classes:
+  OK: 300
+  SOLDER_BRIDGE: 350
+  EXCESS_SOLDER: 150
+  MISSING: 250
+  MISALIGNED: 50
+domains:
+  domain_A:
+    lighting_brightness:
+    - 0.95
+    - 1.05
+    blur_sigma:
+    - 0.0
+    - 0.3
+    noise_stddev:
+    - 0.0
+    - 2.0
+splits:
+  train_domains:
+  - domain_A
+  val_domains:
+  - domain_A
+  test_domains:
+  - domain_A
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+render:
+  backend: opencv_2d
+  substrate_color:
+  - 40
+  - 90
+  - 40
+  copper_color:
+  - 60
+  - 120
+  - 180
+  solder_mask_alpha: 0.3
+  look: dv_bottom
+  post_filters: camera
+  camera:
+    preset: dv_bottom
+    crop_part_lengths:
+    - 2.8
+    - 2.9
+augment:
+  rotation_deg_range:
+  - -5
+  - 5
+  brightness_factor_range:
+  - 0.85
+  - 1.15
+  contrast_factor_range:
+  - 0.9
+  - 1.1
+train:
+  model: resnet18
+  pretrained: true
+  epochs: 10
+  batch_size: 32
+  num_workers: 0
+  lr: 0.001
+  optimizer: adam
+  weight_decay: 0.0001
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - confusion_matrix
+  critical_classes:
+  - MISSING
+  - MISALIGNED
+  - TOMBSTONE

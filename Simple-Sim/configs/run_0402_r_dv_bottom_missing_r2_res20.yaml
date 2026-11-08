@@ -1,0 +1,90 @@
+# DeepVision BOTTOM round 2 (dv_bottom look, post_filters camera, calm domain). Crop factor set to the real BOTTOM app
+# crops of this family (tools/dv_crops.py summaries): 0402 = 50 px at 3.12 body lengths.
+# RESC1005 missing with solder residue: MISSING-heavy weights (600 : 180 bridge/excess); render.missing_residue 2.0
+# (one of three variants 1.0 / 1.5 / 2.0: the option is one number per config, so the 300 pairs are split over three runs).
+run:
+  run_id: run_0402_r_dv_bottom_missing_r2_res20
+  seed: 4220
+  schema_version: 2
+  component_profile: chip_0402_resistor@1
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.01613
+classes:
+  OK: 300
+  MISSING: 600
+  SOLDER_BRIDGE: 120
+  EXCESS_SOLDER: 60
+domains:
+  domain_A:
+    lighting_brightness:
+    - 0.95
+    - 1.05
+    blur_sigma:
+    - 0.0
+    - 0.3
+    noise_stddev:
+    - 0.0
+    - 2.0
+splits:
+  train_domains:
+  - domain_A
+  val_domains:
+  - domain_A
+  test_domains:
+  - domain_A
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+render:
+  backend: opencv_2d
+  substrate_color:
+  - 40
+  - 90
+  - 40
+  copper_color:
+  - 60
+  - 120
+  - 180
+  solder_mask_alpha: 0.3
+  look: dv_bottom
+  post_filters: camera
+  camera:
+    preset: dv_bottom
+    crop_part_lengths:
+    - 3.08
+    - 3.16
+  missing_residue: 2.0
+augment:
+  rotation_deg_range:
+  - -5
+  - 5
+  brightness_factor_range:
+  - 0.85
+  - 1.15
+  contrast_factor_range:
+  - 0.9
+  - 1.1
+train:
+  model: resnet18
+  pretrained: true
+  epochs: 10
+  batch_size: 32
+  num_workers: 0
+  lr: 0.001
+  optimizer: adam
+  weight_decay: 0.0001
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - confusion_matrix
+  critical_classes:
+  - MISSING
+  - MISALIGNED
+  - TOMBSTONE
