@@ -1,7 +1,8 @@
 # BOTTOM judge weakness: 0603 resistors (chip_0603_resistor@2, 100 px/mm) with solder bridges and missing parts in the
 # DeepVision BOTTOM look (dv_bottom). Same profile and seed as run_0001.yaml; the dv_bottom preset crops 3 body lengths
-# at 16 px/mm, so the 100 px/mm profile scale is only the render resolution.
-# roi.mm_per_px = 1 / 100 px/mm (the profile's pixel scale).
+# at 16 px/mm.
+# roi.mm_per_px = 0.02667 (37.5 px/mm): the @2 profile draws the 1.6 mm body as 55-65 px, so this is its
+# physical scale (run_0001.yaml keeps the nominal 0.01); the dv_bottom preset then crops 3 body lengths = ~4.9 mm at 16 px/mm (~79 px).
 run:
   run_id: run_0603_r_dv_bottom
   seed: 42
@@ -10,7 +11,7 @@ run:
 roi:
   width_px: 256
   height_px: 256
-  mm_per_px: 0.01
+  mm_per_px: 0.02667
 classes:
   OK: 300
   SOLDER_BRIDGE: 250

@@ -64,11 +64,13 @@ class RenderSpec:
 
 
 def render_sample(spec: RenderSpec, nominal: Mapping[str, float], defect: Mapping[str, Any], augment: Mapping[str, Any],
-                  rng: np.random.Generator, *, domain: str | None = None) -> np.ndarray:
-    """Render one ROI (BGR uint8, ``spec.roi_size``) of a sampled sample; see :func:`render_roi`."""
+                  rng: np.random.Generator, *, domain: str | None = None,
+                  camera_rng: np.random.Generator | None = None) -> np.ndarray:
+    """Render one ROI (BGR uint8, ``spec.roi_size``) of a sampled sample; see :func:`render_roi` (*camera_rng*:
+    separate generator for the sensor model, default *rng*)."""
     return render_roi(nominal=dict(nominal), defect_params=dict(defect), augment=dict(augment), roi_size=spec.roi_size,
                       config=spec.render_config(domain), tolerances=None if spec.tolerances is None else dict(spec.tolerances),
-                      rng=rng, footprint=spec.footprint)
+                      rng=rng, footprint=spec.footprint, camera_rng=camera_rng)
 
 
 def render_record(spec: RenderSpec, record: Mapping[str, Any], rng: np.random.Generator | None = None) -> np.ndarray:

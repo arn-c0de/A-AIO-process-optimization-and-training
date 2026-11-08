@@ -447,6 +447,76 @@ rework defaults yield to explicit `render` keys as for `quins`. Tests: `tests/te
 every footprint and class, determinism, presets, joint lights, materials, bottom mask colour),
 `tests/test_dv_crops.py`, golden variants `look_dv_top` / `look_dv_bottom`.
 
+## Export for DeepVision (`tools/export_deepvision.py`)
+
+The DeepVision `aoi-judge` is a Siamese network: it scores the crop of a part against a good reference crop
+of the same part. `tools/export_deepvision.py` therefore renders **pairs per seed** from a run config: a
+reference (OK render), an OK probe (the same board under another exposure) and one probe per defect class
+(the same board with the inspected part defective). It uses the 2D renderer's new `camera_rng` argument
+(`render_roi(..., camera_rng=)`, default `None` = bit-identical to before): the sensor model (lens blur draw,
+illumination gradient, noise, sharpening, JPEG quality) draws from that generator instead of the render's
+main stream.
+
+What is constant within a pair (code: the renderer draws the view pose, the board, the neighbours and the
+joint light from the main stream *before* any defect-dependent draw, see `scene._render_photoreal_base`):
+nominal footprint geometry, crop orientation, camera pose / field of view, the board (mask, copper,
+silkscreen, residue, neighbour parts), the joint lighting (meniscus side stream) and, for the reference and
+the defect probes, the sensor draws (shared `camera_rng`). What varies: the inspected part (placement /
+absence / tilt), its joints' micro-relief, solder balls and bulges; the OK probe additionally gets other
+sensor draws and brightness / contrast factors (another photo) and a fresh OK placement within tolerance.
+`tests/test_export_deepvision.py` checks it: reference and MISSING probe differ by < 1 grey level outside
+the part, the OK probe differs everywhere a little.
+
+```bash
+python tools/export_deepvision.py --config configs/run_0402_c_dv_top.yaml --out outputs/deepvision-export/run_0402_c_dv_top \
+    --pairs 120 --max-size 49 [--faults-per-pair 2 | all] [--px-per-mm 16.1] [--side top] [--seed N] [--workers 6]
+```
+
+Output `<out>/manifest.json` (`run, side, profile, look, renderer_version, classes: {name: renders}, pairs,
+created, config`, plus `form`, `board`, `class_weights`, `sizes`, `fault_mapping`, `constant_per_pair`),
+`records.ndjson` (one line per render) and `crops/<id>.png` (grey) / `crops/rgb/<id>.png` (colour):
+
+```json
+{"id": "<seed>-ref" | "<seed>-probe-<class>", "pairId": "<seed>", "role": "ref" | "probe",
+ "board": "sim-<profile>-<look>-<run>", "side": "top" | "bottom", "label": "ok" | "fault",
+ "fault": "fehlt" | "versetzt" | "verdreht" | "loetbruecke" | "fremdkoerper" | null, "form": "CAPC1005",
+ "size": 49, "fieldMm": 3.0576, "crop": "crops/<id>.png", "cropColor": "crops/rgb/<id>.png",
+ "sim": {"class": "MISSING", "seed": ..., "profile": "chip_0402_capacitor@1", "look": "dv_top",
+         "defect_params": {...}, "derived_class": "MISSING", "camera_seed": [seed, 1], "renderer_version": "2"}}
+```
+
+Mapping (spelling of the app's `top.ndjson`): MISSING -> `fehlt`, MISALIGNED -> `versetzt`, TOMBSTONE ->
+`verdreht`, SOLDER_BRIDGE and EXCESS_SOLDER -> `loetbruecke`, SOLDER_BALL -> `fremdkoerper`, CORNER_LIFT ->
+`verdreht`. Note: on the xpa boards the reviewers use `verdreht` for a *rotated* part and `grabstein` for a
+tombstone (5 TOP crops); the export follows the agreed contract. `form` is the package code of the profile
+(`component.package`, e.g. `CAPC1005`, `RESCAXS50P100X200-8`). The defect classes of a pair are drawn from
+the config's `classes` counts as weights (`--faults-per-pair 2` default; `all` renders every class), so an
+export has 1 OK probe per 2 defect probes.
+
+Crops: the ROI (256 px at the profile scale, 3.0-3.1 body lengths through the `dv_*` presets) is resampled
+(area) to `round(fieldMm x px/mm)` with `--px-per-mm 16.1`, `fieldMm` = the drawn field in mm (`crop_part_lengths`
+x body length x `roi.mm_per_px`, so the run config's `mm_per_px` must be the profile's physical scale:
+`run_0603_r_dv_bottom.yaml` sets 0.02667 for the `@2` profile, whose 55-65 px body is 1.6 mm). Sizes of the
+first export vs. the real app crops: 0402 48-51 px (real 48-50), 0603 BOTTOM 72-85 px (real 76 / 38),
+arrays 49 px with `--max-size 49` (real TOP 49 px at a 6.0 mm field, so `run_array_r_dv_top.yaml` crops
+6.0-6.2 x the 1.0 mm `component_length` = 3 x the 2.0 mm long side), 1210 49 px with `--max-size 49` (the real
+TOP 1210 crops are 30 px for a 9.2 mm field: the app does not keep 16 px/mm for large parts; without the
+cap the export gives ~150 px). The judge upscales every crop to 64 px.
+
+First export (2026-11-08, `outputs/deepvision-export/<run>/`, RTX 3080 host, 6 render threads, 9-20 s per run):
+
+| Run | Side | Pairs | Renders (OK / fault) | Classes (renders) | Crop sizes |
+|---|---|---|---|---|---|
+| `run_0402_c_dv_top` | TOP | 120 | 480 (240 / 240) | SOLDER_BALL 45, EXCESS_SOLDER 56, MISSING 49, MISALIGNED 46, TOMBSTONE 44 | 48-49 px |
+| `run_array_r_dv_top` | TOP | 120 | 480 (240 / 240) | MISSING 91, SOLDER_BRIDGE 94, MISALIGNED 30, EXCESS_SOLDER 25 | 49 px |
+| `run_1210_c_dv_top` | TOP | 120 | 480 (240 / 240) | SOLDER_BRIDGE 81, MISALIGNED 81, TOMBSTONE 40, EXCESS_SOLDER 38 | 49 px |
+| `run_0402_r_dv_bottom_bridges` | BOTTOM | 110 | 440 (220 / 220) | SOLDER_BRIDGE 77, EXCESS_SOLDER 65, MISALIGNED 28, MISSING 25, SOLDER_BALL 25 | 48-51 px |
+| `run_0402_r_dv_bottom_missing` | BOTTOM | 110 | 440 (220 / 220) | MISSING 92, MISALIGNED 41, TOMBSTONE 39, SOLDER_BALL 26, EXCESS_SOLDER 22 | 48-51 px |
+| `run_0603_r_dv_bottom` | BOTTOM | 110 | 440 (220 / 220) | SOLDER_BRIDGE 68, EXCESS_SOLDER 52, MISSING 35, MISALIGNED 30, SOLDER_BALL 20, TOMBSTONE 15 | 72-85 px |
+
+360 pairs / 1440 renders for TOP, 330 pairs / 1320 renders for BOTTOM (77 MB). Sample pairs:
+`outputs/dv_look/export_pairs_sample.png`. The exporter refuses Blender configs (2D only).
+
 ## Configs for the judge weaknesses (S4)
 
 One run config per weak spot of the DeepVision judge, class counts weighted towards the problem, `dv_*` look,

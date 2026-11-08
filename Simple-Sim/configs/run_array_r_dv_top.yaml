@@ -1,6 +1,8 @@
 # TOP judge weakness: 4-element resistor arrays (RESCAXS50P100X200-8): OK / missing / bridge between neighbouring
 # terminals (0.5 mm pitch) in the DeepVision TOP look (dv_top). The real TOP array crops are 49 px for a 6.0 mm field
-# (8.1 px/mm): pass --max-size 49 to tools/export_deepvision.py to match them.
+# (8.1 px/mm): pass --max-size 49 to tools/export_deepvision.py to match them. The renderer's component_length is the
+# 1.0 mm side across the pad columns, so render.camera.crop_part_lengths is raised to 6.0-6.2 (= 3 x the 2.0 mm long side,
+# the app's 6.0 mm field); the look's other preset values stay.
 # roi.mm_per_px = 1 / 45 px/mm (the profile's pixel scale).
 run:
   run_id: run_array_r_dv_top
@@ -51,6 +53,11 @@ render:
   solder_mask_alpha: 0.3
   look: dv_top
   post_filters: camera
+  camera:
+    preset: dv_top
+    crop_part_lengths:
+    - 6.0
+    - 6.2
 augment:
   rotation_deg_range:
   - -5

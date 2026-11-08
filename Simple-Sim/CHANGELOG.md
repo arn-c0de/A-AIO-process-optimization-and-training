@@ -16,6 +16,11 @@ All notable changes to **Simple-Sim** are documented in this file.
 - `tools/board_backgrounds.py`: cuts empty board areas out of the autopilot stills (`still.jpg` + `geometry.json` homography + `components.json` keep-outs, colour heuristic for mask-only windows) rectified to the profile scale for `render.texture_dir`; `--dry-run` summary; `data/board_textures/` is git-ignored. Configs `run_0402_c_dv_top_bg.yaml`, `run_0402_r_dv_bottom_bg.yaml`. A/B (eval_real on the real app crops, sim_to_real): no measurable gain over the procedural board, documented in `PHOTOREAL_RENDERING.md`. Tests: `tests/test_board_backgrounds.py`.
 
 
+### Added (export contract for the DeepVision judge, S3)
+- `tools/export_deepvision.py`: renders reference / OK-probe / defect-probe pairs per seed for the Siamese `aoi-judge` (`manifest.json`, `records.ndjson` in the DeepVision label schema with `sim` details, grey + colour crops at the app's 16 px/mm, class -> `fault` mapping MISSING fehlt, MISALIGNED versetzt, TOMBSTONE / CORNER_LIFT verdreht, SOLDER_BRIDGE / EXCESS_SOLDER loetbruecke, SOLDER_BALL fremdkoerper). First export: 360 TOP + 330 BOTTOM pairs in `outputs/deepvision-export/`.
+- `render_roi(..., camera_rng=)` / `render_photoreal_base(..., camera_rng=)` / `render_sample(..., camera_rng=)`: optional separate generator for the sensor model (default `None`: unchanged output), so a reference and its defect probes share one "photo" of the board. Tests: `tests/test_export_deepvision.py`.
+- `run_0603_r_dv_bottom.yaml` uses the physical scale of the `@2` profile (`mm_per_px` 0.02667), `run_array_r_dv_top.yaml` crops 6.0-6.2 body lengths (the app's 6 mm array field).
+
 ### Added (configs for the judge weaknesses, `render.missing_residue`, S4)
 - `render.missing_residue` (2D photoreal, default 1.0 = unchanged output): factor on the reflowed-paste domes of pads without a part (0 = bare pads, up to 4); `RenderContext.missing_residue`, `meniscus.render_joint(residue=)`, `skip_joint_draws`, validated by `config._validate_missing_residue`, part of the `--extend` look options. Tests: `tests/test_missing_residue.py`.
 - Configs `run_0402_r_dv_bottom_bridges.yaml`, `run_0603_r_dv_bottom.yaml`, `run_0402_r_dv_bottom_missing.yaml` (residue 1.5), `run_1210_c_dv_top.yaml`, `run_array_r_dv_top.yaml`; montages in `outputs/dv_look/s4_*.png`.

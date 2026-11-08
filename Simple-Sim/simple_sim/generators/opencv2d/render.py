@@ -61,18 +61,29 @@ def render_roi(
     tolerances: dict[str, Any] | None,
     rng: np.random.Generator,
     footprint: str = "chip_2pad",
+    *,
+    camera_rng: np.random.Generator | None = None,
 ) -> np.ndarray:
-    """Render complete ROI with defects and augmentation (see :data:`POST_FILTER_MODES`)."""
+    """Render complete ROI with defects and augmentation (see :data:`POST_FILTER_MODES`).
+
+    *camera_rng* (photoreal only): a separate generator for the sensor model (lens blur draw, illumination
+    gradient, noise, sharpening, JPEG quality). ``None`` (default) keeps the legacy behaviour of drawing them
+    from *rng*, bit-identical. ``tools/export_deepvision.py`` renders pairs with it: the same *rng* and
+    *camera_rng* for a reference and its defect probes gives one "photo" of the board (same board, pose,
+    joint light and sensor draws, only the inspected part differs, since the part's draws come after the
+    board's), another *camera_rng* for an OK probe gives the same board under another exposure.
+    """
     width, height = roi_size
     photoreal = str(config.get("style", "photoreal")) == "photoreal"
     in_camera = photoreal and post_filter_mode(config) == "camera"
     if in_camera:
         post = {k: float(augment.get(k, 0.0)) for k in _CAMERA_KEYS}
         augment = {**augment, "blur_sigma": 0.0, "noise_stddev": 0.0, "rotation_deg": 0.0}
-        img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size, post)
+        img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size, post,
+                                    camera_rng=camera_rng)
     elif photoreal:
         img = render_photoreal_base(nominal, defect_params, config, tolerances, rng, footprint, roi_size,
-                                    light_roll_deg=float(augment.get("rotation_deg", 0.0)))
+                                    light_roll_deg=float(augment.get("rotation_deg", 0.0)), camera_rng=camera_rng)
     else:
         img = np.zeros((height, width, 3), dtype=np.uint8)
         draw_substrate(img, config)

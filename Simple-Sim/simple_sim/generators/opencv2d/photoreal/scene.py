@@ -218,8 +218,10 @@ def _render_photoreal_base(ctx: RenderContext,
     footprint: str,
     roi_size: tuple[int, int],
     post: dict[str, float] | None = None,
+    camera_rng: np.random.Generator | None = None,
 ) -> np.ndarray:
-    """:func:`render_photoreal_base` with an explicit context (``ctx.post_roll_deg``: the caller's rotation)."""
+    """:func:`render_photoreal_base` with an explicit context (``ctx.post_roll_deg``: the caller's rotation).
+    *camera_rng*: generator of the sensor model's draws (default: *rng*, see :func:`render_photoreal_base`)."""
     post = post or {}
     camera = ctx.camera  # render.camera, or the preset of render.look
     cam = camera_settings(camera)
@@ -262,7 +264,8 @@ def _render_photoreal_base(ctx: RenderContext,
 
     view = apply_view(cv2.resize(img, canvas, interpolation=cv2.INTER_AREA), view_pose, roi_size)
     # sensor_px_per_mm: one output pixel covers mm_per_px x zoom of the board
-    return camera_model(view, rng, camera, view_pose, mm_per_px=ctx.mm_per_px * view_pose["zoom"], extra_blur=float(post.get("blur_sigma", 0.0)),
+    return camera_model(view, rng if camera_rng is None else camera_rng, camera, view_pose,
+                        mm_per_px=ctx.mm_per_px * view_pose["zoom"], extra_blur=float(post.get("blur_sigma", 0.0)),
                         extra_noise_var=float(post.get("noise_stddev", 0.0)) ** 2, axis_roll_deg=ctx.post_roll_deg)
 
 
@@ -284,7 +287,7 @@ def render_board(nominal: dict[str, float], defect_params: dict[str, Any], confi
 def render_photoreal_base(nominal: dict[str, float], defect_params: dict[str, Any], config: dict[str, Any],
                           tolerances: dict[str, Any] | None, rng: np.random.Generator, footprint: str,
                           roi_size: tuple[int, int], post: dict[str, float] | None = None,
-                          light_roll_deg: float | None = None) -> np.ndarray:
+                          light_roll_deg: float | None = None, *, camera_rng: np.random.Generator | None = None) -> np.ndarray:
     """Render substrate + pads + solder + component for *defect_params* at *roi_size* (BGR uint8).
 
     Rendered at ``render.supersampling`` x the camera resolution (default 2, up to 4) and downsampled.
@@ -293,10 +296,14 @@ def render_photoreal_base(nominal: dict[str, float], defect_params: dict[str, An
     *light_roll_deg*: rotation the caller applies to the finished image (``render.post_filters:
     legacy``), so a look with a fixed light direction (``quins``) and a fixed ``camera.channel_axis``
     can compensate; default: the roll in *post* (which is applied before shading, so nothing to compensate).
+    *camera_rng*: a separate generator for the sensor model (``None``: *rng*, bit-identical to before). The view
+    pose, the board, the neighbours and the joint light are drawn from *rng* before any defect-dependent
+    draw, so two renders with the same *rng* seed and *camera_rng* but different defects show one photo of
+    one board in which only the inspected part differs.
     """
     if light_roll_deg is None:
         roll, after = float((post or {}).get("rotation_deg", 0.0)), 0.0
     else:
         roll = after = float(light_roll_deg)
     ctx = RenderContext.for_render(config, rng, roll, post_roll_deg=after)
-    return _render_photoreal_base(ctx, nominal, defect_params, tolerances, rng, footprint, roi_size, post)
+    return _render_photoreal_base(ctx, nominal, defect_params, tolerances, rng, footprint, roi_size, post, camera_rng)
