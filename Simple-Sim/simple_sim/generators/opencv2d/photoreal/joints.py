@@ -65,8 +65,13 @@ def pads_and_solder(ctx: RenderContext, img: np.ndarray, base: np.ndarray, pads:
         amp = min(0.55 * min(pw, ph), 9.0 * ctx.ss)  # solder height; big (thermal) pads stay flat
         # Thermal pads are printed through a window-pane stencil (separate solder islands).
         cells = (max(2, round(3 * pw / min(pw, ph))), max(2, round(3 * ph / min(pw, ph)))) if i == thermal else (1, 1)
+        if not covered.any() and ctx.missing_residue <= 0.0:
+            if look is not None:
+                solder_model.skip_joint_draws(region.shape[:2], covered, look, joint_rng, ctx.ss)
+            continue  # render.missing_residue 0: bare pad finish, no reflowed paste (random stream kept in step)
         if look is not None:
-            solder_model.render_joint(region, base, covered, amp, look, joint_rng, ctx.ss, excess=i in excess, cells=cells)
+            solder_model.render_joint(region, base, covered, amp, look, joint_rng, ctx.ss, excess=i in excess, cells=cells,
+                                      residue=ctx.missing_residue)
             continue  # region is a view: already written
         yy, xx = grid(ph, pw)
         edge = np.minimum(np.minimum(xx, pw - 1 - xx), np.minimum(yy, ph - 1 - yy))
@@ -84,7 +89,7 @@ def pads_and_solder(ctx: RenderContext, img: np.ndarray, base: np.ndarray, pads:
             nx, ny = cells
             u, v = ((xx / pw * nx) % 1.0) * 2 - 1, ((yy / ph * ny) % 1.0) * 2 - 1
             dome = np.clip(1.0 - (np.abs(u) ** 3 + np.abs(v) ** 3) * (0.85 if nx * ny == 1 else 1.2), 0, 1)
-            hmap = dome * rim * min(amp * 0.35, 4.0 * ctx.ss)
+            hmap = dome * rim * min(amp * 0.35, 4.0 * ctx.ss) * ctx.missing_residue  # render.missing_residue (1 = as before)
             spec_power, spec_gain = 40.0, 0.5
         hmap = hmap * (1.0 + lumps[y0:y1, x0:x1])
         shaded = shade_solder(hmap, solder, env, spec_power, spec_gain)

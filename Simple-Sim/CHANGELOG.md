@@ -16,6 +16,11 @@ All notable changes to **Simple-Sim** are documented in this file.
 - `tools/board_backgrounds.py`: cuts empty board areas out of the autopilot stills (`still.jpg` + `geometry.json` homography + `components.json` keep-outs, colour heuristic for mask-only windows) rectified to the profile scale for `render.texture_dir`; `--dry-run` summary; `data/board_textures/` is git-ignored. Configs `run_0402_c_dv_top_bg.yaml`, `run_0402_r_dv_bottom_bg.yaml`. A/B (eval_real on the real app crops, sim_to_real): no measurable gain over the procedural board, documented in `PHOTOREAL_RENDERING.md`. Tests: `tests/test_board_backgrounds.py`.
 
 
+### Added (configs for the judge weaknesses, `render.missing_residue`, S4)
+- `render.missing_residue` (2D photoreal, default 1.0 = unchanged output): factor on the reflowed-paste domes of pads without a part (0 = bare pads, up to 4); `RenderContext.missing_residue`, `meniscus.render_joint(residue=)`, `skip_joint_draws`, validated by `config._validate_missing_residue`, part of the `--extend` look options. Tests: `tests/test_missing_residue.py`.
+- Configs `run_0402_r_dv_bottom_bridges.yaml`, `run_0603_r_dv_bottom.yaml`, `run_0402_r_dv_bottom_missing.yaml` (residue 1.5), `run_1210_c_dv_top.yaml`, `run_array_r_dv_top.yaml`; montages in `outputs/dv_look/s4_*.png`.
+
+
 ### Changed (library plan N11 + S6: GUI without polling loops, no blocking file reads on the Tk thread)
 - N11: `gui.core.tasks.DispatchQueue` - a `queue.Queue` that drains itself on the Tk thread through the `UiDispatcher` (one coalesced drain per burst of `put`s, batch cap, rest on the next tick via the new `UiDispatcher.post_next_tick`). The Pipeline, Weights, Predictions and Profile Preview tabs use it instead of their `after(100/120/150)` drain loops; the profile editor's HQ status goes through a `UiDispatcher`. Log lines, events, progress and their order are unchanged (Pipeline: up to 200 log lines joined + 120 events per drain, as before).
 - N11: `BaseTab.post` / `bind_queue` / `quiet_tasks` and `gui.core.tasks.dispatcher_for`; every `frame.after(0, ...)` that ran on a worker thread (pipeline, weights, predictions, board detection) now posts through the dispatcher.

@@ -14,7 +14,7 @@ from typing import Any
 
 __all__ = [
     "CAMERA_DEFAULTS", "CAMERA_PRESET_NAMES", "CAMERA_RANGE_LIMITS", "CHANNEL_AXES", "DEFAULT_CAMERA_PRESET",
-    "DEFAULT_LOOK", "DEFAULT_POST_FILTERS", "DEFAULT_SOLDER_STYLE", "DEFAULT_SUPERSAMPLING", "LOOKS",
+    "DEFAULT_LOOK", "DEFAULT_POST_FILTERS", "DEFAULT_SOLDER_STYLE", "DEFAULT_SUPERSAMPLING", "LOOKS", "MISSING_RESIDUE_MAX",
     "POST_FILTER_MODES", "SOLDER_STYLES", "SUPERSAMPLING_CHOICES", "validate_camera_config",
 ]
 
@@ -29,6 +29,10 @@ DEFAULT_SOLDER_STYLE = "legacy"
 #: ``render.look``: registered target looks, in registration order.
 LOOKS = ("legacy", "quins", "dv_top", "dv_bottom")
 DEFAULT_LOOK = "legacy"
+
+#: ``render.missing_residue`` (2D photoreal): factor on the reflowed-paste domes of pads without a part
+#: (1.0 = the look's default, 0 = bare pads); values above this are rejected.
+MISSING_RESIDUE_MAX = 4.0
 
 #: ``render.post_filters`` (2D photoreal): where the domain blur/noise and the rotation are applied.
 POST_FILTER_MODES = ("legacy", "camera")

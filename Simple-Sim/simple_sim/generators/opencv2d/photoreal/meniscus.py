@@ -265,13 +265,23 @@ def _relief(h: np.ndarray, amp: float, look: SolderLook, rng: np.random.Generato
     return np.maximum(h, 0.0)
 
 
+def skip_joint_draws(shape: tuple[int, int], covered: np.ndarray, look: SolderLook, rng: np.random.Generator, ss: int) -> None:
+    """Consume the draws :func:`render_joint` would make for a pad without a part (``render.missing_residue``
+    0 leaves the pad bare), so the joints of the other pads stay as they are."""
+    ph, pw = shape
+    wet = wetted_alpha(ph, pw, ss, look, rng)
+    if not covered.any():
+        paste_height(ph, pw, wet, 1.0, (1, 1), look, rng, ss)
+
+
 def render_joint(region: np.ndarray, board: np.ndarray, covered: np.ndarray, amp: float, look: SolderLook,
                  rng: np.random.Generator, ss: int, *, excess: bool = False,
-                 cells: tuple[int, int] = (1, 1)) -> None:
+                 cells: tuple[int, int] = (1, 1), residue: float = 1.0) -> None:
     """Draw one pad's solder into *region* (float BGR, the pad with its finish) in place.
 
     *covered*: pixels of the region under the part terminal / lead foot (none: reflowed paste,
-    *cells* stencil windows). *amp*: nominal joint height in pixels.
+    *cells* stencil windows, dome height x *residue*: ``render.missing_residue``). *amp*: nominal joint
+    height in pixels.
     """
     ph, pw = region.shape[:2]
     wet = wetted_alpha(ph, pw, ss, look, rng)
@@ -283,7 +293,7 @@ def render_joint(region: np.ndarray, board: np.ndarray, covered: np.ndarray, amp
         norm = np.maximum(np.hypot(gx, gy), 1e-6)
         toward = np.dstack([-gx / norm, -gy / norm])  # from the joint towards the terminal
     else:
-        hmap = paste_height(ph, pw, wet, min(amp * look.paste_scale, look.paste_cap * ss), cells, look, rng, ss)
+        hmap = paste_height(ph, pw, wet, min(amp * look.paste_scale, look.paste_cap * ss) * float(residue), cells, look, rng, ss)
     shaded = shade(hmap, board, look, toward_body=toward, body_height=np.radians(30.0))
     a = wet[..., None]
     region *= 1.0 - a

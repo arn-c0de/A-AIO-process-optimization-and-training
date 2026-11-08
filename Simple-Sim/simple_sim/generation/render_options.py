@@ -16,6 +16,7 @@ from simple_sim.board import board_options
 from simple_sim.config import defect_units, domain_camera, placement_sampling
 from simple_sim.generators.backends import backend_of
 from simple_sim.generators.opencv2d.photoreal import camera_settings, supersampling
+from simple_sim.generators.opencv2d.photoreal.context import missing_residue
 from simple_sim.generators.opencv2d.photoreal.look import camera_config, look_name, mask_gloss, rework_probability
 from simple_sim.generators.opencv2d.photoreal.meniscus import solder_style
 from simple_sim.generators.opencv2d.render import post_filter_mode
@@ -40,6 +41,7 @@ def look_options(config: Mapping[str, Any]) -> dict[str, Any]:
         "render.texture_dir": render.get("texture_dir") or None,
         "render.mask_gloss": mask_gloss(render),
         "render.rework_artifacts": rework_probability(render),
+        "render.missing_residue": missing_residue(render),
         "render.component_color": list(render.get("component_color") or []) or None,
         "render.camera": _camera(render),
         "defects.placement_sampling": placement_sampling(dict(config)),

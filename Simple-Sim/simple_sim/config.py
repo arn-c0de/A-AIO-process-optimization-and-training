@@ -9,7 +9,8 @@ from typing import Any
 
 from simple_sim.classes import VALID_CLASSES  # noqa: F401  (re-exported for existing importers)
 from simple_sim.generators.backends import Backend, backend_of, parse_backend, supporting
-from simple_sim.generators.options import LOOKS, POST_FILTER_MODES, SOLDER_STYLES, SUPERSAMPLING_CHOICES, validate_camera_config
+from simple_sim.generators.options import (LOOKS, MISSING_RESIDUE_MAX, POST_FILTER_MODES, SOLDER_STYLES, SUPERSAMPLING_CHOICES,
+                                           validate_camera_config)
 from simple_sim.io_utils import load_yaml
 
 log = logging.getLogger(__name__)
@@ -387,6 +388,7 @@ def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> 
     _validate_supersampling(render.get('supersampling'))
     _validate_solder(render.get('solder'))
     _validate_look(render.get('look'))
+    _validate_missing_residue(render.get('missing_residue'))
     _validate_post_filters(render)
     _validate_board(render.get('board'))
     _validate_board_look(render)
@@ -394,6 +396,14 @@ def _validate_render(render: dict[str, Any], schema_version: int, mode: str) -> 
 
 def _is_probability(value: Any) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and 0 <= value <= 1
+
+
+def _validate_missing_residue(value: Any) -> None:
+    """``render.missing_residue`` (2D photoreal): paste residue factor on pads without a part, 0..MISSING_RESIDUE_MAX."""
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= MISSING_RESIDUE_MAX:
+        raise ValueError(f"render.missing_residue must be a number in [0, {MISSING_RESIDUE_MAX}]")
 
 
 def _validate_board_look(render: dict[str, Any]) -> None:

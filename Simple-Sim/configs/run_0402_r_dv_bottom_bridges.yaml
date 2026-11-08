@@ -1,0 +1,87 @@
+# BOTTOM judge weakness: SMD solder bridges on 0402 resistors (RESC1005). Bridge-heavy class mix (SOLDER_BRIDGE +
+# EXCESS_SOLDER = 500 of 980) in the DeepVision BOTTOM look (dv_bottom: dark olive mask, black body, white terminals,
+# colour fringes). A chip_2pad bridge runs between the two terminals along the body edge (geometry.draw_solder_bridge).
+# Export pairs for the judge with tools/export_deepvision.py --config configs/run_0402_r_dv_bottom_bridges.yaml.
+# roi.mm_per_px = 1 / 62 px/mm (the profile's pixel scale).
+run:
+  run_id: run_0402_r_dv_bottom_bridges
+  seed: 42
+  schema_version: 2
+  component_profile: chip_0402_resistor@1
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.01613
+classes:
+  OK: 300
+  SOLDER_BRIDGE: 300
+  EXCESS_SOLDER: 200
+  MISSING: 60
+  MISALIGNED: 60
+  SOLDER_BALL: 60
+domains:
+  domain_A:
+    lighting_brightness:
+    - 0.95
+    - 1.05
+    blur_sigma:
+    - 0.0
+    - 0.3
+    noise_stddev:
+    - 0.0
+    - 2.0
+splits:
+  train_domains:
+  - domain_A
+  val_domains:
+  - domain_A
+  test_domains:
+  - domain_A
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+render:
+  backend: opencv_2d
+  substrate_color:
+  - 40
+  - 90
+  - 40
+  copper_color:
+  - 60
+  - 120
+  - 180
+  solder_mask_alpha: 0.3
+  look: dv_bottom
+  post_filters: camera
+augment:
+  rotation_deg_range:
+  - -5
+  - 5
+  brightness_factor_range:
+  - 0.85
+  - 1.15
+  contrast_factor_range:
+  - 0.9
+  - 1.1
+train:
+  model: resnet18
+  pretrained: true
+  epochs: 10
+  batch_size: 32
+  num_workers: 0
+  lr: 0.001
+  optimizer: adam
+  weight_decay: 0.0001
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - confusion_matrix
+  critical_classes:
+  - MISSING
+  - MISALIGNED
+  - TOMBSTONE

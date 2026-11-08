@@ -1,0 +1,87 @@
+# TOP judge weakness: 1210 MLCCs (CAPC3225, brown-tan body). OK-heavy mix (600 OK: gloss, body colour and rotation vary
+# per sample through the look's +-10 % body colour jitter, the flash lobe and the +-0.7 x ok_rotation_deg placement)
+# plus shifted parts and bridges, in the DeepVision TOP look (dv_top: phone photo, flash glare, 16 px/mm crops).
+# Note: the real TOP CAPC3225 app crops are only 30 px for a 9.2 mm field (3.2 px/mm); pass --max-size 30 to
+# tools/export_deepvision.py to match them, the default gives 16.1 px/mm crops (~150 px).
+# roi.mm_per_px = 1 / 22 px/mm (the profile's pixel scale).
+run:
+  run_id: run_1210_c_dv_top
+  seed: 42
+  schema_version: 2
+  component_profile: chip_1210_capacitor@1
+roi:
+  width_px: 256
+  height_px: 256
+  mm_per_px: 0.04545
+classes:
+  OK: 600
+  MISALIGNED: 150
+  SOLDER_BRIDGE: 150
+  TOMBSTONE: 50
+  EXCESS_SOLDER: 50
+domains:
+  domain_A:
+    lighting_brightness:
+    - 0.95
+    - 1.05
+    blur_sigma:
+    - 0.0
+    - 0.3
+    noise_stddev:
+    - 0.0
+    - 2.0
+splits:
+  train_domains:
+  - domain_A
+  val_domains:
+  - domain_A
+  test_domains:
+  - domain_A
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+render:
+  backend: opencv_2d
+  substrate_color:
+  - 40
+  - 90
+  - 40
+  copper_color:
+  - 60
+  - 120
+  - 180
+  solder_mask_alpha: 0.3
+  look: dv_top
+  post_filters: camera
+augment:
+  rotation_deg_range:
+  - -5
+  - 5
+  brightness_factor_range:
+  - 0.85
+  - 1.15
+  contrast_factor_range:
+  - 0.9
+  - 1.1
+train:
+  model: resnet18
+  pretrained: true
+  epochs: 10
+  batch_size: 32
+  num_workers: 0
+  lr: 0.001
+  optimizer: adam
+  weight_decay: 0.0001
+eval:
+  batch_size: 64
+  num_workers: 0
+  metrics:
+  - accuracy
+  - precision
+  - recall
+  - f1
+  - confusion_matrix
+  critical_classes:
+  - MISSING
+  - MISALIGNED
+  - TOMBSTONE

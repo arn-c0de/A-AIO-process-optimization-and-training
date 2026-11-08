@@ -447,6 +447,30 @@ rework defaults yield to explicit `render` keys as for `quins`. Tests: `tests/te
 every footprint and class, determinism, presets, joint lights, materials, bottom mask colour),
 `tests/test_dv_crops.py`, golden variants `look_dv_top` / `look_dv_bottom`.
 
+## Configs for the judge weaknesses (S4)
+
+One run config per weak spot of the DeepVision judge, class counts weighted towards the problem, `dv_*` look,
+`post_filters: camera`, calm domain. 16 example images each in `outputs/dv_look/s4_<run>.png`; render time
+of a 256 px image at one worker (wall time of 16 images incl. ~0.5 s start-up): 0402 / 0603 ~30 ms, arrays
+~25 ms, 1210 ~60 ms; the 1800-image A/B datasets above rendered in 8-9 s with 8 worker processes.
+
+| Config | Side / look | Classes (count) | Note |
+|---|---|---|---|
+| `run_0402_r_dv_bottom_bridges.yaml` | BOTTOM `dv_bottom` | OK 300, SOLDER_BRIDGE 300, EXCESS_SOLDER 200, MISSING / MISALIGNED / SOLDER_BALL 60 | 0402 resistor; a chip bridge runs between the two terminals along the body edge |
+| `run_0603_r_dv_bottom.yaml` | BOTTOM `dv_bottom` | OK 300, SOLDER_BRIDGE 250, EXCESS_SOLDER 150, MISSING 120, MISALIGNED 60, TOMBSTONE / SOLDER_BALL 40 | `chip_0603_resistor@2` (run_0001 profile) |
+| `run_0402_r_dv_bottom_missing.yaml` | BOTTOM `dv_bottom` | OK 300, MISSING 400, MISALIGNED 80, TOMBSTONE 60, SOLDER_BALL / EXCESS_SOLDER 40 | `render.missing_residue: 1.5` (see below) |
+| `run_1210_c_dv_top.yaml` | TOP `dv_top` | OK 600, MISALIGNED 150, SOLDER_BRIDGE 150, TOMBSTONE 50, EXCESS_SOLDER 50 | CAPC3225, brown-tan body; OK variants from the per-sample colour / gloss / placement jitter |
+| `run_array_r_dv_top.yaml` | TOP `dv_top` | OK 400, MISSING 250, SOLDER_BRIDGE 250, MISALIGNED 60, EXCESS_SOLDER 40 | RESCAXS50P100X200-8, bridge between neighbouring 0.5 mm terminals |
+
+`render.missing_residue` (new, 2D photoreal, default 1.0 = bit-identical to before) scales the reflowed-paste
+domes on pads without a part (MISSING, the raised end of a tombstone, a part shifted off its pad): 0 leaves
+the bare pad finish (the meniscus draws are still consumed, so the other joints do not change), 1 is the
+look's `paste_scale`, up to 4 for heavy residue. It encodes the DeepVision hypothesis that real missing parts
+leave solder on the pads instead of clean pads (hypothesis, not measured here: the 28 real BOTTOM "fehlt"
+crops do show grey solder domes with bright rims on both pads, see `outputs/dv_look/dv_bottom_0402r.png`).
+`generate --extend` treats it as a look option. Validated in `config._validate_missing_residue`; tests in
+`tests/test_missing_residue.py`.
+
 ## Real board backgrounds (`render.texture_dir`)
 
 Optional. Point `render.texture_dir` at a folder of photos of **empty board areas** taken with the

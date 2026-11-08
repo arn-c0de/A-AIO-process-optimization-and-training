@@ -20,7 +20,18 @@ from .look import LEGACY_LOOK, Look, camera_config, get_look, mask_gloss, rework
 DEFAULT_COMPONENT_COLOR = (20, 20, 20)  # render.component_color when the config has none
 
 # 4 = "ultra": 16 rendered sub-pixels per camera pixel (defined in the cv2-free generators.options, I7)
-from simple_sim.generators.options import DEFAULT_SUPERSAMPLING, SUPERSAMPLING_CHOICES  # noqa: E402
+from simple_sim.generators.options import DEFAULT_SUPERSAMPLING, MISSING_RESIDUE_MAX, SUPERSAMPLING_CHOICES  # noqa: E402
+
+
+def missing_residue(config: dict[str, Any] | None) -> float:
+    """``render.missing_residue`` (default 1.0: the look's paste domes; 0: bare pads; up to 4), validated."""
+    value = (config or {}).get("missing_residue")
+    if value is None:
+        return 1.0
+    f = float(value)
+    if not 0.0 <= f <= MISSING_RESIDUE_MAX:
+        raise ValueError(f"render.missing_residue must be a number in [0, {MISSING_RESIDUE_MAX}], got {value!r}")
+    return f
 
 
 def supersampling(config: dict[str, Any] | None) -> int:
@@ -45,7 +56,11 @@ class RenderContext:
     procedural), ``component_type``, ``component_color`` (profile body colour, BGR),
     ``marking_probability`` (``None`` = always marked), ``mm_per_px`` (ROI scale), ``camera``
     (``render.camera`` with the look's preset, :func:`.look.camera_config`), ``mask_gloss`` and
-    ``rework`` (probabilities, config else look) and ``board`` (validated ``render.board``)."""
+    ``rework`` (probabilities, config else look), ``board`` (validated ``render.board``) and
+    ``missing_residue`` (``render.missing_residue``: factor on the height of the reflowed-paste domes on pads
+    without a part - MISSING, the raised end of a tombstone, a part shifted off its pad; 1.0 = the look's
+    default, 0 = bare pad finish, > 1 heavier residue; the DeepVision hypothesis that real missing parts
+    leave solder residue on the pads)."""
 
     ss: int = DEFAULT_SUPERSAMPLING
     solder_look: solder_model.SolderLook | None = None
@@ -60,6 +75,7 @@ class RenderContext:
     mask_gloss: float = LEGACY_LOOK.mask_gloss
     rework: float = LEGACY_LOOK.rework
     board: BoardOptions = field(default_factory=BoardOptions)
+    missing_residue: float = 1.0
 
     @classmethod
     def for_render(cls, config: dict[str, Any] | None, rng: np.random.Generator, roll_deg: float = 0.0, *,
@@ -84,4 +100,5 @@ class RenderContext:
                    marking_probability=None if p_mark is None else float(p_mark),
                    mm_per_px=float(cfg.get("mm_per_px", DEFAULT_MM_PER_PX)),
                    camera=camera_config(config, look), mask_gloss=mask_gloss(config, look=look),
-                   rework=rework_probability(config, look=look), board=board_options(config))
+                   rework=rework_probability(config, look=look), board=board_options(config),
+                   missing_residue=missing_residue(config))
