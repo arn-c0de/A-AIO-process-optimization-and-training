@@ -33,11 +33,15 @@ Output (``<out>/``):
   49 px for a 0402 at 3.04 body lengths; ``--max-size`` caps it like the TOP app crops, which stay at 49 px
   for larger parts).
 
-Class mapping (Simple-Sim -> DeepVision ``fault``, the spelling of the app's ``top.ndjson``):
-MISSING -> fehlt, MISALIGNED -> versetzt, TOMBSTONE -> verdreht, SOLDER_BRIDGE / EXCESS_SOLDER -> loetbruecke,
-SOLDER_BALL -> fremdkoerper, CORNER_LIFT -> verdreht (:data:`FAULTS`). ``board`` is
+Class mapping (Simple-Sim -> DeepVision ``fault``, the spelling of the app's reviews): MISSING -> fehlt,
+TOMBSTONE -> grabstein, SOLDER_BRIDGE / EXCESS_SOLDER -> loetbruecke, SOLDER_BALL -> fremdkoerper,
+CORNER_LIFT -> loetfehler (a lifted corner is an open joint, a solder fault in the app's vocabulary), and
+MISALIGNED -> verdreht when the rotation dominates (|rotation_deg| above the profile's ``ok_rotation_deg``
+while the shift stays within ``ok_shift_px``), else versetzt (:data:`FAULTS`, :func:`fault_of`; the sampled
+``defect_params`` are written with every record, so the rule can be re-applied). ``board`` is
 ``sim-<profile>-<look>-<run>``, ``id`` is ``<seed>-<role>-<class>``, ``pairId`` the seed; ``form`` the
-package code of the profile (``component.package``, e.g. ``CAPC1005``).
+package code of the profile (``component.package``, e.g. ``CAPC1005``). ``manifest.json`` carries the table
+as ``faultMapping``.
 
 Which defect classes a pair gets: the run config's ``classes`` counts are weights; every pair renders
 ``--faults-per-pair`` classes drawn without replacement by those weights (default 2; ``all`` renders
@@ -78,17 +82,40 @@ from simple_sim.parallel import imap_ordered, render_workers  # noqa: E402
 from simple_sim.profile_hash import load_profile  # noqa: E402
 from simple_sim.rng import derive_sample_seed  # noqa: E402
 
-#: Simple-Sim class -> DeepVision ``fault`` (spelling of the app's labels; ``None`` = good part).
+#: Simple-Sim class -> DeepVision ``fault`` (spelling of the app's labels; ``None`` = good part). MISALIGNED is
+#: decided per sample by :func:`fault_of` (``versetzt`` = shifted, ``verdreht`` = rotated).
 FAULTS: dict[str, str | None] = {
     DefectClass.OK.value: None,
     DefectClass.MISSING.value: "fehlt",
     DefectClass.MISALIGNED.value: "versetzt",
-    DefectClass.TOMBSTONE.value: "verdreht",
+    DefectClass.TOMBSTONE.value: "grabstein",
     DefectClass.SOLDER_BRIDGE.value: "loetbruecke",
     DefectClass.EXCESS_SOLDER.value: "loetbruecke",
     DefectClass.SOLDER_BALL.value: "fremdkoerper",
-    DefectClass.CORNER_LIFT.value: "verdreht",
+    DefectClass.CORNER_LIFT.value: "loetfehler",
 }
+MISALIGNED_ROTATED = "verdreht"
+#: The mapping table written to ``manifest.json`` (``faultMapping``): class -> fault, MISALIGNED with its rule.
+FAULT_MAPPING: dict[str, str | None] = {
+    **FAULTS,
+    DefectClass.MISALIGNED.value: "verdreht if |rotation_deg| > ok_rotation_deg and shift <= ok_shift_px, else versetzt",
+}
+
+
+def fault_of(derived_class: str, defect: dict[str, Any], tolerances: dict[str, Any] | None) -> str | None:
+    """DeepVision ``fault`` of a render: :data:`FAULTS` by class; a MISALIGNED part is ``verdreht`` when its
+    rotation alone breaks the tolerance (|rotation_deg| > ``ok_rotation_deg`` and the shift magnitude is within
+    ``ok_shift_px``), otherwise ``versetzt`` (shift, or shift and rotation). Tolerances default as in
+    :func:`simple_sim.defects.classify_defect`."""
+    fault = FAULTS[derived_class]
+    if derived_class != DefectClass.MISALIGNED.value:
+        return fault
+    tol = tolerances or {}
+    ok_shift = float(tol.get("ok_shift_px", 2.0))
+    ok_rot = float(tol.get("ok_rotation_deg", 3.0))
+    shift = float(np.hypot(float(defect.get("shift_x", 0.0)), float(defect.get("shift_y", 0.0))))
+    rotated = abs(float(defect.get("rotation_deg", 0.0))) > ok_rot
+    return MISALIGNED_ROTATED if rotated and shift <= ok_shift else fault
 ROLE_REF, ROLE_PROBE = "ref", "probe"
 DEFAULT_PX_PER_MM = 16.1        # the app's crop scale (0402: 49 px for 3.037 mm)
 SIDES = ("top", "bottom")
@@ -204,7 +231,7 @@ class Exporter:
         rows: list[dict[str, Any]] = []
 
         def row(role: str, class_name: str, defect: dict[str, Any], derived: str, aug: dict[str, Any], camera_salt: int) -> dict[str, Any]:
-            fault = FAULTS[derived]
+            fault = fault_of(derived, defect, self.tolerances)
             rid = f"{pair_id}-{role}-{derived.lower()}" if role == ROLE_PROBE else f"{pair_id}-{role}"
             return {"id": rid, "pairId": pair_id, "role": role, "seed": seed, "nominal": nominal, "defect": defect,
                     "augment": aug, "class": class_name, "derived": derived, "label": "ok" if fault is None else "fault",
@@ -282,7 +309,8 @@ def export(config_path: Path, out: Path, *, pairs: int, side: str | None, px_per
         "created": now_iso(), "config": config, "config_path": str(config_path), "form": exporter.form,
         "board": exporter.board, "px_per_mm": px_per_mm, "max_size": max_size,
         "faults_per_pair": "all" if faults_per_pair is None else faults_per_pair, "class_weights": exporter.weights,
-        "seed": exporter.run_seed, "fault_mapping": FAULTS, "sizes": dict(Counter(r["size"] for r in records)),
+        "seed": exporter.run_seed, "faultMapping": FAULT_MAPPING, "faults": dict(Counter(r["fault"] or "ok" for r in records)),
+        "sizes": dict(Counter(r["size"] for r in records)),
         "roles": dict(Counter(r["role"] for r in records)), "labels": dict(Counter(r["label"] for r in records)),
         "constant_per_pair": ["nominal geometry", "crop orientation", "camera pose / field of view", "board (mask, copper, "
                               "silkscreen, residue, neighbours)", "joint lighting", "sensor draws of ref and defect probes"],

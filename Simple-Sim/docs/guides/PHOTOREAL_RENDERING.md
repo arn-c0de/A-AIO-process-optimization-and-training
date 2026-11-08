@@ -473,22 +473,26 @@ python tools/export_deepvision.py --config configs/run_0402_c_dv_top.yaml --out 
 ```
 
 Output `<out>/manifest.json` (`run, side, profile, look, renderer_version, classes: {name: renders}, pairs,
-created, config`, plus `form`, `board`, `class_weights`, `sizes`, `fault_mapping`, `constant_per_pair`),
+created, config`, plus `form`, `board`, `class_weights`, `sizes`, `faultMapping`, `faults` (renders per fault),
+`constant_per_pair`),
 `records.ndjson` (one line per render) and `crops/<id>.png` (grey) / `crops/rgb/<id>.png` (colour):
 
 ```json
 {"id": "<seed>-ref" | "<seed>-probe-<class>", "pairId": "<seed>", "role": "ref" | "probe",
  "board": "sim-<profile>-<look>-<run>", "side": "top" | "bottom", "label": "ok" | "fault",
- "fault": "fehlt" | "versetzt" | "verdreht" | "loetbruecke" | "fremdkoerper" | null, "form": "CAPC1005",
+ "fault": "fehlt" | "versetzt" | "verdreht" | "grabstein" | "loetbruecke" | "loetfehler" | "fremdkoerper" | null, "form": "CAPC1005",
  "size": 49, "fieldMm": 3.0576, "crop": "crops/<id>.png", "cropColor": "crops/rgb/<id>.png",
  "sim": {"class": "MISSING", "seed": ..., "profile": "chip_0402_capacitor@1", "look": "dv_top",
          "defect_params": {...}, "derived_class": "MISSING", "camera_seed": [seed, 1], "renderer_version": "2"}}
 ```
 
-Mapping (spelling of the app's `top.ndjson`): MISSING -> `fehlt`, MISALIGNED -> `versetzt`, TOMBSTONE ->
-`verdreht`, SOLDER_BRIDGE and EXCESS_SOLDER -> `loetbruecke`, SOLDER_BALL -> `fremdkoerper`, CORNER_LIFT ->
-`verdreht`. Note: on the xpa boards the reviewers use `verdreht` for a *rotated* part and `grabstein` for a
-tombstone (5 TOP crops); the export follows the agreed contract. `form` is the package code of the profile
+Mapping (spelling of the app's reviews; `manifest.json` carries it as `faultMapping`): MISSING -> `fehlt`,
+TOMBSTONE -> `grabstein` (the reviewers' word for a tombstone, 5 TOP crops), SOLDER_BRIDGE and EXCESS_SOLDER ->
+`loetbruecke`, SOLDER_BALL -> `fremdkoerper`, CORNER_LIFT -> `loetfehler` (a lifted corner is an open joint, a
+solder fault in the app's vocabulary), MISALIGNED -> `verdreht` when the rotation dominates (|`rotation_deg`| >
+the profile's `ok_rotation_deg` while the shift magnitude stays within `ok_shift_px`), else `versetzt`
+(`export_deepvision.fault_of`; the sampled `defect_params` are in every record, so the rule can be re-applied).
+`form` is the package code of the profile
 (`component.package`, e.g. `CAPC1005`, `RESCAXS50P100X200-8`). The defect classes of a pair are drawn from
 the config's `classes` counts as weights (`--faults-per-pair 2` default; `all` renders every class), so an
 export has 1 OK probe per 2 defect probes.

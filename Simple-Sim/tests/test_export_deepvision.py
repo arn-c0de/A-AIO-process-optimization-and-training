@@ -9,11 +9,11 @@ import pytest
 import yaml
 
 from simple_sim.classes import VALID_CLASSES
-from tools.export_deepvision import (FAULTS, Exporter, choose_classes, export, fault_classes, field_mm, main, package_code,
-                                     side_of)
+from tools.export_deepvision import (FAULT_MAPPING, FAULTS, Exporter, choose_classes, export, fault_classes, fault_of, field_mm,
+                                     main, package_code, side_of)
 
 ROOT = Path(__file__).resolve().parents[1]
-DEEPVISION_FAULTS = {"fehlt", "versetzt", "verdreht", "loetbruecke", "fremdkoerper"}  # spelling of the app's labels
+DEEPVISION_FAULTS = {"fehlt", "versetzt", "verdreht", "grabstein", "loetbruecke", "loetfehler", "fremdkoerper"}  # app spelling
 
 
 def _small_config(tmp_path: Path, src: str = "run_0402_c_dv_top.yaml", **classes) -> Path:
@@ -27,9 +27,17 @@ def _small_config(tmp_path: Path, src: str = "run_0402_c_dv_top.yaml", **classes
 
 def test_fault_mapping_covers_every_class_with_the_app_spelling():
     assert set(FAULTS) == VALID_CLASSES
-    assert FAULTS["OK"] is None and set(v for v in FAULTS.values() if v) == DEEPVISION_FAULTS
+    assert FAULTS["OK"] is None and set(v for v in FAULTS.values() if v) | {"verdreht"} == DEEPVISION_FAULTS
     assert FAULTS["SOLDER_BRIDGE"] == FAULTS["EXCESS_SOLDER"] == "loetbruecke"
-    assert FAULTS["TOMBSTONE"] == FAULTS["CORNER_LIFT"] == "verdreht" and FAULTS["SOLDER_BALL"] == "fremdkoerper"
+    assert FAULTS["TOMBSTONE"] == "grabstein" and FAULTS["CORNER_LIFT"] == "loetfehler" and FAULTS["SOLDER_BALL"] == "fremdkoerper"
+    assert FAULTS["MISSING"] == "fehlt" and set(FAULT_MAPPING) == VALID_CLASSES and "verdreht" in FAULT_MAPPING["MISALIGNED"]
+    # MISALIGNED: rotation alone over tolerance -> verdreht, otherwise versetzt
+    tol = {"ok_shift_px": 3.0, "ok_rotation_deg": 5.0}
+    assert fault_of("MISALIGNED", {"shift_x": 0.5, "shift_y": 0.5, "rotation_deg": 12.0}, tol) == "verdreht"
+    assert fault_of("MISALIGNED", {"shift_x": 6.0, "shift_y": 0.0, "rotation_deg": 1.0}, tol) == "versetzt"
+    assert fault_of("MISALIGNED", {"shift_x": 6.0, "shift_y": 0.0, "rotation_deg": 12.0}, tol) == "versetzt"
+    assert fault_of("MISALIGNED", {"shift_x": 0.0, "shift_y": 0.0, "rotation_deg": -4.0}, None) == "verdreht"  # default tol 3 deg
+    assert fault_of("TOMBSTONE", {"rotation_deg": 80.0}, tol) == "grabstein" and fault_of("OK", {}, tol) is None
 
 
 def test_helpers():
@@ -63,6 +71,8 @@ def test_export_writes_pairs_records_and_crops(tmp_path):
     assert manifest["form"] == "CAPC1005" and manifest["board"] == "sim-chip_0402_capacitor@1-dv_top-run_0402_c_dv_top"
     assert manifest["renderer_version"] and manifest["created"] and manifest["config"]["roi"]["width_px"] == 96
     assert manifest["classes"]["OK"] == 6 and sum(manifest["classes"].values()) == 12
+    assert manifest["faultMapping"] == FAULT_MAPPING and sum(manifest["faults"].values()) == 12 and manifest["faults"]["ok"] == 6
+    profile_tol = manifest["config"] and yaml.safe_load((ROOT / "configs" / "profiles" / "chip_0402_capacitor@1.yaml").read_text())["tolerances"]
     assert set(manifest["classes"]) <= {"OK", "MISSING", "MISALIGNED", "TOMBSTONE"}
     by_pair: dict[str, list[dict]] = {}
     for r in records:
@@ -70,7 +80,11 @@ def test_export_writes_pairs_records_and_crops(tmp_path):
                           "cropColor", "sim"}
         assert r["role"] in ("ref", "probe") and r["label"] in ("ok", "fault") and r["side"] == "top"
         assert (r["fault"] is None) == (r["label"] == "ok") and (r["fault"] in DEEPVISION_FAULTS or r["fault"] is None)
-        assert r["fault"] == FAULTS[r["sim"]["derived_class"]] and r["sim"]["look"] == "dv_top"
+        assert r["fault"] == fault_of(r["sim"]["derived_class"], r["sim"]["defect_params"], profile_tol) and r["sim"]["look"] == "dv_top"
+        if r["sim"]["derived_class"] == "MISALIGNED":
+            dp = r["sim"]["defect_params"]
+            rotated = abs(dp["rotation_deg"]) > profile_tol["ok_rotation_deg"] and np.hypot(dp["shift_x"], dp["shift_y"]) <= profile_tol["ok_shift_px"]
+            assert r["fault"] == ("verdreht" if rotated else "versetzt")
         assert r["crop"] == f"crops/{r['id']}.png" and r["cropColor"] == f"crops/rgb/{r['id']}.png"
         assert r["id"].startswith(r["pairId"]) and str(r["sim"]["seed"]).zfill(19) == r["pairId"]
         color, grey = cv2.imread(str(out / r["cropColor"]), cv2.IMREAD_UNCHANGED), cv2.imread(str(out / r["crop"]), cv2.IMREAD_UNCHANGED)
