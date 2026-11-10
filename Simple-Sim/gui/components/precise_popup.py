@@ -6,6 +6,7 @@ from tkinter import ttk
 from typing import Any
 from collections.abc import Callable
 from gui.theme.style import font
+import contextlib
 
 
 def open_precise_popup(
@@ -291,31 +292,23 @@ class PrecisePopup:
 
     def _flush_widget_values(self) -> None:
         """Write current Entry/Var values back into _s before any rebuild."""
-        try:
+        with contextlib.suppress(Exception):
             self._s["total"] = int(self._var_total.get())
-        except Exception:
-            pass
         self._s["per_class"] = self._var_per_class.get()
 
         # Single per-class
         for cls, var in self._class_vars.items():
-            try:
+            with contextlib.suppress(Exception):
                 self._s["classes"][cls] = int(var.get())
-            except Exception:
-                pass
 
         # Multi totals
         for pid, var in self._multi_total_vars.items():
-            try:
+            with contextlib.suppress(Exception):
                 self._s["multi_totals"][pid] = int(var.get())
-            except Exception:
-                pass
 
         # Multi per-class
         for pid, cls_dict in self._multi_class_vars.items():
             entry = self._s["multi_classes"].setdefault(pid, {})
             for cls, var in cls_dict.items():
-                try:
+                with contextlib.suppress(Exception):
                     entry[cls] = int(var.get())
-                except Exception:
-                    pass

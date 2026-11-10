@@ -42,7 +42,7 @@ def test_round_trip_keeps_unknown_keys_and_other_settings(tmp_path: Path) -> Non
     assert data["other.setting"] == 1
     assert data["pipeline.filter_profile_active"] == "B"
     assert data["pipeline.filter.enable_grain"] is False
-    assert set(k[len("pipeline.filter."):] for k in data if k.startswith("pipeline.filter.")) == set(flat_filter_setting_keys())
+    assert {k[len("pipeline.filter."):] for k in data if k.startswith("pipeline.filter.")} == set(flat_filter_setting_keys())
     profiles2, active2, current2 = load_shared_filter_profiles(p)
     assert active2 == "B" and current2["my_custom_key"] == "x" and current2["enable_blur"] is False
 

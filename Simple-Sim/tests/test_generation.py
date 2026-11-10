@@ -50,7 +50,7 @@ def test_read_existing_max_index() -> None:
 
 def test_generate_cli_json_and_extend(tmp_path: Path) -> None:
     cfg = yaml.safe_load((SIM_ROOT / "configs" / "run_0001.yaml").read_text(encoding="utf-8"))
-    cfg["classes"] = {k: 2 for k in cfg["classes"]}
+    cfg["classes"] = dict.fromkeys(cfg["classes"], 2)
     cfg["roi"].update(width_px=64, height_px=64)
     cfg_path = tmp_path / "c.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
@@ -70,7 +70,7 @@ def test_generate_cli_json_and_extend(tmp_path: Path) -> None:
 
 def test_generate_profile_dataset_cli_json(tmp_path: Path) -> None:
     cfg = yaml.safe_load((SIM_ROOT / "configs" / "run_profile_cls.yaml").read_text(encoding="utf-8"))
-    cfg["classes"] = {k: 2 for k in cfg["classes"]}
+    cfg["classes"] = dict.fromkeys(cfg["classes"], 2)
     cfg["roi"].update(width_px=64, height_px=64)
     cfg_path = tmp_path / "c.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")

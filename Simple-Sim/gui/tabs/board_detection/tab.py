@@ -14,6 +14,7 @@ from gui.tabs.core.base import BaseTab
 from .ui import BoardDetectionUI
 from .logic import BoardDetectionLogic
 from simple_sim.two_stage import TwoStageResult
+import contextlib
 
 
 class BoardDetectionTab(BaseTab):
@@ -100,7 +101,5 @@ class BoardDetectionTab(BaseTab):
         self.ui.show_result(result)
         ctx = getattr(self.state, "ctx", None)
         if ctx is not None:
-            try:
+            with contextlib.suppress(Exception):
                 ctx.status(f"Board detection: {result.profile_id} / {result.defect_class}", "success")
-            except Exception:
-                pass

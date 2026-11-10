@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from collections.abc import Callable
+import contextlib
 
 _WRAP_PX = 360
 _hint_sink: Callable[[str], None] | None = None
@@ -29,10 +30,8 @@ def set_hover_hint_sink(sink: Callable[[str], None] | None) -> None:
 
 def _emit_hint(text: str) -> None:
     if _hint_sink is not None:
-        try:
+        with contextlib.suppress(Exception):
             _hint_sink(text)
-        except Exception:
-            pass
 
 
 class ToolTip:
@@ -117,10 +116,8 @@ class ToolTip:
     def _cancel(self) -> None:
         if not self._after_id:
             return
-        try:
+        with contextlib.suppress(Exception):
             self.widget.after_cancel(self._after_id)
-        except Exception:
-            pass
         self._after_id = None
 
     def _show(self) -> None:
@@ -134,10 +131,8 @@ class ToolTip:
         if self._tip is None or not self._tip.winfo_exists():
             self._tip = tk.Toplevel(self.widget)
             self._tip.wm_overrideredirect(True)
-            try:
+            with contextlib.suppress(Exception):
                 self._tip.attributes("-topmost", True)
-            except Exception:
-                pass
             self._label = tk.Label(self._tip, justify="left", wraplength=_WRAP_PX, borderwidth=0)
             self._label.pack(ipadx=8, ipady=5)
         assert self._label is not None
@@ -153,10 +148,8 @@ class ToolTip:
     def _hide(self) -> None:
         if self._tip is None:
             return
-        try:
+        with contextlib.suppress(Exception):
             self._tip.withdraw()
-        except Exception:
-            pass
 
 
 def tooltip(widget: tk.Widget, text: str | Callable[[], str] | None = None, *, help_key: str | None = None) -> ToolTip:

@@ -25,6 +25,7 @@ from gui.utils.pipeline_helpers import (
 
 from simple_sim.io_utils import now_tag
 from simple_sim.model_bundle import bundle_checkpoint_path
+import contextlib
 
 
 _LOG = logging.getLogger(__name__)
@@ -65,10 +66,8 @@ class PipelineDatasetActionsMixin:
             if label := self._dataset_label_for_path(ds):
                 self.ui.var_dataset.set(label)
             self._on_dataset_selected()
-            try:
+            with contextlib.suppress(Exception):
                 self.parent.event_generate("<<DatasetChanged>>", when="tail")
-            except Exception:
-                pass
         except Exception as exc:
             self.ui.show_messagebox("error", "Delete images failed", str(exc))
 
@@ -104,10 +103,8 @@ class PipelineDatasetActionsMixin:
             if label := self._dataset_label_for_path(src_ds):
                 self.ui.var_dataset.set(label)
             self._on_dataset_selected()
-            try:
+            with contextlib.suppress(Exception):
                 self.parent.event_generate("<<DatasetChanged>>", when="tail")
-            except Exception:
-                pass
         except Exception as exc:
             self.ui.show_messagebox("error", "Move images failed", str(exc))
 
@@ -254,8 +251,7 @@ class PipelineDatasetActionsMixin:
 
         self._rename_models_for_dataset(old_name, new_name)
         self._append_log(f"[rename dataset] {rp} -> {dst}\n")
-        try: self.parent.event_generate("<<DatasetChanged>>", when="tail")
-        except Exception: pass
+        with contextlib.suppress(Exception): self.parent.event_generate("<<DatasetChanged>>", when="tail")
 
     def _rename_models_for_dataset(self, old_name: str, new_name: str) -> None:
         models_root = self.sim_root / "outputs" / "models"

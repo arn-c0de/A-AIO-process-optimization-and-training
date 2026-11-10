@@ -27,7 +27,7 @@ def _small_config(tmp_path: Path, src: str = "run_0402_c_dv_top.yaml", **classes
 
 def test_fault_mapping_covers_every_class_with_the_app_spelling():
     assert set(FAULTS) == VALID_CLASSES
-    assert FAULTS["OK"] is None and set(v for v in FAULTS.values() if v) | {"verdreht"} == DEEPVISION_FAULTS
+    assert FAULTS["OK"] is None and {v for v in FAULTS.values() if v} | {"verdreht"} == DEEPVISION_FAULTS
     assert FAULTS["SOLDER_BRIDGE"] == FAULTS["EXCESS_SOLDER"] == "loetbruecke"
     assert FAULTS["TOMBSTONE"] == "grabstein" and FAULTS["CORNER_LIFT"] == "loetfehler" and FAULTS["SOLDER_BALL"] == "fremdkoerper"
     assert FAULTS["MISSING"] == "fehlt" and set(FAULT_MAPPING) == VALID_CLASSES and "verdreht" in FAULT_MAPPING["MISALIGNED"]

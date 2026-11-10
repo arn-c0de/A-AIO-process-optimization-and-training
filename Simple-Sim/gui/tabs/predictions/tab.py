@@ -17,6 +17,7 @@ from simple_sim.cli_utils import parse_result_line
 
 from .ui import PredictionsUI
 from .logic import PredictionsLogic
+import contextlib
 
 
 class PredictionsTab(BaseTab):
@@ -47,10 +48,8 @@ class PredictionsTab(BaseTab):
         self._refresh_models()
         self._refresh_profile_models()
         self._load_persisted_settings()
-        try:
+        with contextlib.suppress(Exception):
             self._on_dataset_selected()
-        except Exception:
-            pass
         self._wire_settings_autosave()
         self._update_multi_sel_label()
         self._apply_multi_mode_ui()
@@ -124,10 +123,8 @@ class PredictionsTab(BaseTab):
 
     def _update_multi_sel_label(self) -> None:
         n = len([p for p in self._multi_dataset_paths if str(p).strip()])
-        try:
+        with contextlib.suppress(Exception):
             self.ui.var_multi_sel.set(f"selected: {n}")
-        except Exception:
-            pass
 
     def _on_multi_toggle(self) -> None:
         self._apply_multi_mode_ui()
@@ -339,10 +336,8 @@ class PredictionsTab(BaseTab):
         if not ds: return
         self.state.dataset_dir = ds
         self._active_dataset_dir = ds
-        try:
+        with contextlib.suppress(Exception):
             self.parent.event_generate("<<DatasetChanged>>", when="tail")
-        except Exception:
-            pass
         self._refresh_models()
 
     def _refresh_models(self) -> None:

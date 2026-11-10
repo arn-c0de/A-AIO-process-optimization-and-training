@@ -66,10 +66,10 @@ def test_legacy_constants_equal_the_derived_ones():
     legacy_refdes = {"resistor": "R", "capacitor": "C", "sot": "Q", "soic": "U", "qfn": "U", "sot6": "U",
                      "array_r": "RN", "array_c": "CN", "inductor": "L", "power_inductor": "L", "led": "D",
                      "tht_pin": "J"}  # tht_pin: the Blender-only through-hole row added after the legacy set
-    assert placement.REFDES_PREFIX == legacy_refdes
+    assert legacy_refdes == placement.REFDES_PREFIX
     assert list(placement.REFDES_PREFIX) == list(legacy_refdes)
     assert palette.REFDES_PREFIX is placement.REFDES_PREFIX
-    assert copper.RULE_CHIP_FAMILIES == (*fp.CHIP_FAMILIES, "array_r", "array_c")
+    assert (*fp.CHIP_FAMILIES, "array_r", "array_c") == copper.RULE_CHIP_FAMILIES
     # The former inline dicts of parts.draw_body.
     insets = {"qfn": 0.012, "soic": 0.035, "sot": 0.05, "sot6": 0.05, "array_r": 0.05, "array_c": 0.05, "tht_pin": 0.0}
     grains = {"resistor": 0.025, "capacitor": 0.025, "led": 0.015, "inductor": 0.05, "power_inductor": 0.07}

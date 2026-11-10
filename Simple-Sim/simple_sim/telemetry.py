@@ -20,6 +20,7 @@ import threading
 import time
 from pathlib import Path
 from typing import IO, Any
+import contextlib
 
 EVENT_LOG_ENV = "SIMPLE_SIM_EVENT_LOG"
 
@@ -32,10 +33,8 @@ _fh: IO[str] | None = None
 def _close() -> None:
     global _fh
     if _fh is not None:
-        try:
+        with contextlib.suppress(OSError):
             _fh.close()
-        except OSError:
-            pass
         _fh = None
 
 

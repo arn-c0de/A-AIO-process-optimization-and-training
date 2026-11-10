@@ -240,6 +240,129 @@ def generate_slug(text: str) -> str:
     return re.sub(r'\s', '-', s)
 
 
+GalleryEntry = tuple[str, str, str, str, str]  # (profile_id, profile_id, class_name, rel_path, render_backend)
+BlenderGroupKey = tuple[str, int, str, str]    # (executable, samples, device, engine)
+
+
+def _parse_roi(spec: str | None) -> tuple[int, int, float] | None:
+    """``WIDTHxHEIGHT@MM_PER_PX`` -> ``(width, height, mm_per_px)``; ``None`` without ``--roi``."""
+    if not spec:
+        return None
+    m = re.match(r"^\s*(\d+)x(\d+)@([0-9]*\.?[0-9]+)\s*$", str(spec))
+    if not m:
+        raise SystemExit(f"Invalid --roi format: {spec!r} (expected WIDTHxHEIGHT@MM_PER_PX)")
+    return int(m.group(1)), int(m.group(2)), float(m.group(3))
+
+
+def _check_gallery_dir(gallery_dir: Path, project_root: Path, given: str) -> None:
+    """The gallery dir is wiped on a run: it must be a dedicated dir at least two levels inside the
+    checkout (images/samples), never the checkout, a top-level dir like images/ or a path outside."""
+    try:
+        gallery_rel = gallery_dir.relative_to(project_root.resolve())
+    except ValueError:
+        raise SystemExit(f"--out-images-dir must be inside {project_root}: {gallery_dir}") from None
+    if len(gallery_rel.parts) < 2:
+        raise SystemExit(
+            f"--out-images-dir {given!r} is not a dedicated gallery directory "
+            "(it is cleared on every run); use a sub-directory such as images/samples"
+        )
+
+
+def _default_gallery_cfg(render_backend: str) -> dict[str, Any]:
+    """Reasonable defaults for gallery generation; explicit per-profile run configs are preferred."""
+    if render_backend == "opencv_2d":
+        render: dict[str, Any] = {
+            "backend": "opencv_2d",
+            "substrate_color": [40, 90, 40],
+            "copper_color": [60, 120, 180],
+            "solder_mask_alpha": 0.3,
+        }
+    else:
+        render = {
+            "backend": "blender_3d",
+            "blender": {"executable": "blender", "engine": "CYCLES", "samples": 64, "device": "CPU"},
+        }
+    return {"roi": {"width_px": 256, "height_px": 256, "mm_per_px": 0.01}, "render": render}
+
+
+def _render_staged_3d(staged_3d_groups: dict[BlenderGroupKey, dict[str, Any]], project_root: Path) -> None:
+    """Render all staged 3D jobs via Blender (one batch per settings group), then apply the overlays."""
+    out_jobs_dir = (project_root / "outputs").resolve()
+    out_jobs_dir.mkdir(parents=True, exist_ok=True)
+
+    for gi, (group_key, group) in enumerate(sorted(staged_3d_groups.items(), key=lambda kv: kv[0]), 1):
+        exe, samples, device, engine = group_key
+        jobs: list[dict[str, Any]] = group["jobs"]
+        overlays: list[tuple[Path, dict[str, Any], dict[str, Any]]] = group["overlays"]
+        if not jobs:
+            continue
+
+        jobs_path = (out_jobs_dir / f"sample_gallery_jobs_{gi:02d}.jsonl").resolve()
+        write_jobs_jsonl(jobs_path, jobs)
+
+        print(f"\nRendering {len(jobs)} 3D sample(s) via Blender (exe={exe!r} samples={samples} device={device!r} engine={engine})...")
+        try:
+            render_blender_batch(
+                jobs_path=jobs_path,
+                output_root=project_root,
+                blender_executable=str(exe),
+                cycles_samples=int(samples),
+                device=str(device),
+                engine=str(engine),
+            )
+        except Exception as e:
+            raise SystemExit(
+                "Blender batch render failed.\n"
+                f"- blender executable: {exe!r}\n"
+                f"- samples: {samples}\n"
+                f"- device: {device!r}\n"
+                f"- jobs: {jobs_path}\n"
+                f"- error: {e}"
+            ) from e
+
+        print("Applying overlays to 3D renders...")
+        for path, defect, nominal in overlays:
+            _overlay_in_place(path, defect, nominal)
+
+
+def _gallery_markdown(entries: list[GalleryEntry]) -> str:
+    """``SAMPLE_GALLERY.md``: header, table of contents and one sample table per profile (2D, then 3D)."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    header_lines = [
+        "# Sample Gallery",
+        "",
+        f"Auto-generated reference images for all component profiles (2D and 3D). Last updated: {now}",
+        "",
+        "Re-generate by running:",
+        "```bash",
+        ".venv/bin/python tools/update_sample_gallery.py",
+        "```",
+        "",
+    ]
+
+    # Group entries by render backend and then by profile_id
+    profiles_by_backend: dict[str, dict[str, list[tuple[str, str]]]] = defaultdict(lambda: defaultdict(list))
+    for profile_id, _, class_name, rel_path, render_backend in entries:
+        profiles_by_backend[render_backend][profile_id].append((class_name, rel_path))
+
+    toc_lines: list[str] = []
+    content_lines: list[str] = []
+    for backend, title in (("opencv_2d", "2D Profiles"), ("blender_3d", "3D Profiles")):
+        if backend not in profiles_by_backend:
+            continue
+        toc_lines.append(f"- [{title}](#{generate_slug(title)})")
+        content_lines += [f"## {title}", ""]
+        for profile_id in sorted(profiles_by_backend[backend].keys()):
+            toc_lines.append(f"  - [{profile_id}](#{generate_slug(profile_id)})")
+            content_lines += [f"### {profile_id}", "", "| Class | Sample |", "|-------|--------|"]
+            for class_name, rel_path in sorted(profiles_by_backend[backend][profile_id], key=lambda x: x[0]):
+                content_lines.append(f"| {class_name} | ![{class_name}]({rel_path}) |")
+            content_lines.append("")
+
+    final_lines = [*header_lines, "## Table of Contents", "", *toc_lines, "", *content_lines]
+    return "\n".join(final_lines) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate SAMPLE_GALLERY.md images from real 2D/3D renderers.")
     parser.add_argument("--profiles-dir", default="configs/profiles", help="Directory with component profile YAMLs")
@@ -290,23 +413,8 @@ def _run(args: argparse.Namespace) -> None:
     print(f"Found {len(profiles)} profile(s)")
 
     # Everything that can be rejected is checked before the old gallery is deleted.
-    roi_override: tuple[int, int, float] | None = None
-    if args.roi:
-        m = re.match(r"^\s*(\d+)x(\d+)@([0-9]*\.?[0-9]+)\s*$", str(args.roi))
-        if not m:
-            raise SystemExit(f"Invalid --roi format: {args.roi!r} (expected WIDTHxHEIGHT@MM_PER_PX)")
-        roi_override = (int(m.group(1)), int(m.group(2)), float(m.group(3)))
-    # The gallery dir is wiped below: it must be a dedicated dir at least two levels inside the
-    # checkout (images/samples), never the checkout, a top-level dir like images/ or a path outside.
-    try:
-        gallery_rel = gallery_dir.relative_to(project_root.resolve())
-    except ValueError:
-        raise SystemExit(f"--out-images-dir must be inside {project_root}: {gallery_dir}") from None
-    if len(gallery_rel.parts) < 2:
-        raise SystemExit(
-            f"--out-images-dir {args.out_images_dir!r} is not a dedicated gallery directory "
-            "(it is cleared on every run); use a sub-directory such as images/samples"
-        )
+    roi_override = _parse_roi(args.roi)
+    _check_gallery_dir(gallery_dir, project_root, args.out_images_dir)
 
     # Clean previous gallery (never on --dry-run, which must not touch existing images).
     # With --skip-2d/--skip-3d only the profile dirs that are regenerated are cleared
@@ -317,12 +425,12 @@ def _run(args: argparse.Namespace) -> None:
     gallery_dir.mkdir(parents=True, exist_ok=True)
 
     # Collect gallery entries
-    entries: list[tuple[str, str, str, str, str]] = []
+    entries: list[GalleryEntry] = []
 
     # Stage 3D jobs and run Blender in batches grouped by (exe, samples, device, engine).
     # We can't mix these in a single Blender invocation because render_batch.py
     # takes them via single CLI flags.
-    staged_3d_groups: dict[tuple[str, int, str, str], dict[str, Any]] = {}
+    staged_3d_groups: dict[BlenderGroupKey, dict[str, Any]] = {}
 
     for profile_path in profiles:
         profile_data = read_profile(profile_path)
@@ -352,23 +460,7 @@ def _run(args: argparse.Namespace) -> None:
         # Resolve render settings from a matching run_*.yaml if available.
         cfg, cfg_path = _find_matching_run_cfg(configs_dir=configs_dir, profile_id=profile_id, backend=render_backend)
         if cfg is None:
-            # Reasonable defaults for gallery generation; explicit per-profile run configs are preferred.
-            cfg = {
-                "roi": {"width_px": 256, "height_px": 256, "mm_per_px": 0.01},
-                "render": {},
-            }
-            if render_backend == "opencv_2d":
-                cfg["render"] = {
-                    "backend": "opencv_2d",
-                    "substrate_color": [40, 90, 40],
-                    "copper_color": [60, 120, 180],
-                    "solder_mask_alpha": 0.3,
-                }
-            else:
-                cfg["render"] = {
-                    "backend": "blender_3d",
-                    "blender": {"executable": "blender", "engine": "CYCLES", "samples": 64, "device": "CPU"},
-                }
+            cfg = _default_gallery_cfg(render_backend)
 
         # Apply ROI override if requested.
         if roi_override is not None:
@@ -425,98 +517,10 @@ def _run(args: argparse.Namespace) -> None:
             print(f"  [skip] Unsupported render backend: {render_backend}")
             continue
 
-    # Render all 3D jobs (grouped) via Blender, then apply overlays.
     if staged_3d_groups and not args.dry_run:
-        out_jobs_dir = (project_root / "outputs").resolve()
-        out_jobs_dir.mkdir(parents=True, exist_ok=True)
+        _render_staged_3d(staged_3d_groups, project_root)
 
-        for gi, (group_key, group) in enumerate(sorted(staged_3d_groups.items(), key=lambda kv: kv[0]), 1):
-            exe, samples, device, engine = group_key
-            jobs: list[dict[str, Any]] = group["jobs"]
-            overlays: list[tuple[Path, dict[str, Any], dict[str, Any]]] = group["overlays"]
-            if not jobs:
-                continue
-
-            jobs_path = (out_jobs_dir / f"sample_gallery_jobs_{gi:02d}.jsonl").resolve()
-            write_jobs_jsonl(jobs_path, jobs)
-
-            print(f"\nRendering {len(jobs)} 3D sample(s) via Blender (exe={exe!r} samples={samples} device={device!r} engine={engine})...")
-            try:
-                render_blender_batch(
-                    jobs_path=jobs_path,
-                    output_root=project_root,
-                    blender_executable=str(exe),
-                    cycles_samples=int(samples),
-                    device=str(device),
-                    engine=str(engine),
-                )
-            except Exception as e:
-                raise SystemExit(
-                    "Blender batch render failed.\n"
-                    f"- blender executable: {exe!r}\n"
-                    f"- samples: {samples}\n"
-                    f"- device: {device!r}\n"
-                    f"- jobs: {jobs_path}\n"
-                    f"- error: {e}"
-                ) from e
-
-            print("Applying overlays to 3D renders...")
-            for path, defect, nominal in overlays:
-                _overlay_in_place(path, defect, nominal)
-
-    # Write SAMPLE_GALLERY.md
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    header_lines: list[str] = []
-    header_lines.append("# Sample Gallery")
-    header_lines.append("")
-    header_lines.append(f"Auto-generated reference images for all component profiles (2D and 3D). Last updated: {now}")
-    header_lines.append("")
-    header_lines.append("Re-generate by running:")
-    header_lines.append("```bash")
-    header_lines.append(".venv/bin/python tools/update_sample_gallery.py")
-    header_lines.append("```")
-    header_lines.append("")
-
-    # Group entries by render backend and then by profile_id
-    profiles_by_backend: dict[str, dict[str, list[tuple[str, str]]]] = defaultdict(lambda: defaultdict(list))
-    for profile_id, _, class_name, rel_path, render_backend in entries:
-        profiles_by_backend[render_backend][profile_id].append((class_name, rel_path))
-
-    toc_lines: list[str] = []
-    content_lines: list[str] = []
-
-    # Generate 2D Profiles Section
-    if "opencv_2d" in profiles_by_backend:
-        toc_lines.append(f"- [2D Profiles](#{generate_slug('2D Profiles')})")
-        content_lines.append("## 2D Profiles")
-        content_lines.append("")
-        for profile_id in sorted(profiles_by_backend["opencv_2d"].keys()):
-            toc_lines.append(f"  - [{profile_id}](#{generate_slug(profile_id)})")
-            content_lines.append(f"### {profile_id}")
-            content_lines.append("")
-            content_lines.append("| Class | Sample |")
-            content_lines.append("|-------|--------|")
-            for class_name, rel_path in sorted(profiles_by_backend["opencv_2d"][profile_id], key=lambda x: x[0]):
-                content_lines.append(f"| {class_name} | ![{class_name}]({rel_path}) |")
-            content_lines.append("")
-
-    # Generate 3D Profiles Section
-    if "blender_3d" in profiles_by_backend:
-        toc_lines.append(f"- [3D Profiles](#{generate_slug('3D Profiles')})")
-        content_lines.append("## 3D Profiles")
-        content_lines.append("")
-        for profile_id in sorted(profiles_by_backend["blender_3d"].keys()):
-            toc_lines.append(f"  - [{profile_id}](#{generate_slug(profile_id)})")
-            content_lines.append(f"### {profile_id}")
-            content_lines.append("")
-            content_lines.append("| Class | Sample |")
-            content_lines.append("|-------|--------|")
-            for class_name, rel_path in sorted(profiles_by_backend["blender_3d"][profile_id], key=lambda x: x[0]):
-                content_lines.append(f"| {class_name} | ![{class_name}]({rel_path}) |")
-            content_lines.append("")
-
-    final_lines = header_lines + ["## Table of Contents", ""] + toc_lines + [""] + content_lines
-    atomic_write_text(gallery_md, "\n".join(final_lines) + "\n")
+    atomic_write_text(gallery_md, _gallery_markdown(entries))
     print(f"\n✓ Gallery written to {gallery_md}")
     print(f"✓ Images in {gallery_dir}")
     print(f"✓ Total samples: {len(entries)}")

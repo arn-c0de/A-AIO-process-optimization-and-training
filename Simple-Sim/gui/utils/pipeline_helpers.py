@@ -218,7 +218,7 @@ def apply_precise_counts(cfg_data: dict[str, Any], counts: dict[str, Any]) -> di
     existing_classes: dict[str, int] = {str(k): int(v) for k, v in (cfg_data.get("classes") or {}).items()}
     if "_total" in counts:
         total = int(counts["_total"])
-        cfg_data["classes"] = {cls: total for cls in existing_classes}
+        cfg_data["classes"] = dict.fromkeys(existing_classes, total)
     else:
         cfg_data["classes"] = {str(k): int(v) for k, v in counts.items()}
     return cfg_data

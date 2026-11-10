@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from gui.theme.tokens import SPACE
+import contextlib
 
 
 def _toplevel(parent: tk.Misc | None) -> tk.Misc | None:
@@ -39,10 +40,8 @@ class _Dialog(tk.Toplevel):
         self.title(title)
         self.result: Any = None
         if master is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.transient(master)
-            except Exception:
-                pass
         self.bind("<Escape>", lambda _e: self.cancel())
         self.protocol("WM_DELETE_WINDOW", self.cancel)
         self.body = ttk.Frame(self, padding=SPACE.XL)
@@ -59,10 +58,8 @@ class _Dialog(tk.Toplevel):
             self.geometry(f"{w}x{h}+{x}+{y}")
         except Exception:
             self.geometry(f"{w}x{h}")
-        try:
+        with contextlib.suppress(Exception):
             self.grab_set()
-        except Exception:
-            pass
         self.focus_set()
         self.wait_window()
         return self.result

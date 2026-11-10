@@ -11,6 +11,7 @@ from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_d
 from gui.core.tasks import runner_for
 from .ui import ValidationUI
 from .logic import ValidationLogic
+import contextlib
 
 
 class ValidationTab(BaseTab):
@@ -59,9 +60,8 @@ class ValidationTab(BaseTab):
         ds = self._dataset_by_label.get(label)
         if not ds: return
         self.state.dataset_dir = ds
-        try:
+        with contextlib.suppress(Exception):
             self.parent.event_generate("<<DatasetChanged>>", when="tail")
-        except Exception: pass
 
     def _run_validation(self) -> None:
         if not dialogs.require(self.state.dataset_dir, self.frame,

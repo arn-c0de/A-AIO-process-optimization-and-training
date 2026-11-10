@@ -33,16 +33,16 @@ from simple_sim.models import load_checkpoint_model
 from simple_sim.reports import is_profile_classifier_report, load_reports, metric_value, report_path
 
 __all__ = [
-    "BatchPredictOptions",
     "HISTORY_METRICS",
     "HISTORY_SCOPES",
+    "SPLITS",
+    "BatchPredictOptions",
+    "PredictContext",
     "PredictResult",
     "RunInfo",
-    "SPLITS",
     "build_dataset",
     "dataset_info",
     "history_rows",
-    "PredictContext",
     "predict_once",
     "resolve_model_path",
     "run_batch_predict",

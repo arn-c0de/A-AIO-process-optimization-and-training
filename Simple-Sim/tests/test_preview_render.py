@@ -37,10 +37,10 @@ def test_parse_helpers() -> None:
 
 
 def test_render_2d_previews_deterministic(tmp_path: Path) -> None:
-    entries = [e for e in discover_profiles(SIM_ROOT / "configs" / "profiles", backend_mode="opencv_2d")][:1]
+    entries = list(discover_profiles(SIM_ROOT / "configs" / "profiles", backend_mode="opencv_2d"))[:1]
     assert entries
     opts = PreviewOptions(backend_mode="opencv_2d", roi_override=(64, 64, 0.04), states="OK,MISSING")
-    kwargs = dict(opts=opts, sim_root=SIM_ROOT, configs_dir=SIM_ROOT / "configs", image_filters=None)
+    kwargs = {"opts": opts, "sim_root": SIM_ROOT, "configs_dir": SIM_ROOT / "configs", "image_filters": None}
     run_a = render_previews(entries, out_root=tmp_path / "a", **kwargs)
     render_previews(entries, out_root=tmp_path / "b", **kwargs)
     assert [r[2] for r in run_a.previews] == ["OK", "MISSING"]

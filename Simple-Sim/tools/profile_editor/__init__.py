@@ -8,8 +8,8 @@ __all__ = [
     "preview_3d",
     "profile_registry",
     "state_store",
-    "system_monitor",
     "sync_controller",
+    "system_monitor",
     "yaml_editor",
     "yaml_io",
 ]

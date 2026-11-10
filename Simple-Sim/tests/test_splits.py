@@ -101,7 +101,7 @@ def test_generate_splits_stratification():
 
     # Check each split has all classes
     for split_name, sample_ids in splits.items():
-        split_classes = set(id_to_label[sid] for sid in sample_ids)
+        split_classes = {id_to_label[sid] for sid in sample_ids}
         assert len(split_classes) == 4, f"{split_name} missing some classes"
 
 

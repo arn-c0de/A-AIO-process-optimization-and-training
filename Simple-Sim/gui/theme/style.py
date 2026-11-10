@@ -29,6 +29,7 @@ from collections.abc import Callable
 from typing import Any
 
 from gui.theme.tokens import FONT_ROLES, SPACE, Palette, font_name, palette_for
+import contextlib
 
 _ATTR_PALETTE = "_simsim_palette"
 _ATTR_LISTENERS = "_simsim_theme_listeners"
@@ -85,10 +86,8 @@ def apply_scaling(root: tk.Misc, factor: float | None) -> None:
     """Scale Tk points->pixels by ``factor`` (1.0 = 96 dpi). ``None`` keeps Tk's default."""
     if factor is None:
         return
-    try:
+    with contextlib.suppress(Exception):
         root.tk.call("tk", "scaling", 96.0 / 72.0 * float(factor))
-    except Exception:
-        pass
 
 
 def _ensure_fonts(root: tk.Misc) -> None:
@@ -135,10 +134,8 @@ def ensure_basic_styles(widget: tk.Misc) -> None:
         if name in existing:
             continue
         family = mono["family"] if fam == "mono" else base["family"]
-        try:
+        with contextlib.suppress(Exception):
             tkfont.Font(root=root, name=name, family=family, size=size, weight=weight, slant=slant)
-        except Exception:
-            pass
     p = palette_for("light")
     style = ttk.Style(root)
     for name, opts in (
@@ -382,10 +379,8 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
     _ensure_fonts(root)
 
     style = ttk.Style(root)
-    try:
+    with contextlib.suppress(Exception):
         style.theme_use("clam")
-    except Exception:
-        pass
 
     body, small, heading, title = font("Body"), font("Small"), font("Heading"), font("Title")
     bold = font("BodyBold")
@@ -446,8 +441,6 @@ def _notify(root: tk.Misc, pal: Palette) -> None:
         except Exception:
             continue
         alive.append((widget, cb))
-        try:
+        with contextlib.suppress(Exception):
             cb(pal)
-        except Exception:
-            pass
     setattr(root, _ATTR_LISTENERS, alive)

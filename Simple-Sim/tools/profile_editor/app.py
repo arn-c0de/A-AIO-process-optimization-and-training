@@ -7,6 +7,7 @@ from pathlib import Path
 
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
+import contextlib
 
 if __package__ in {None, ""}:
     import sys
@@ -517,10 +518,8 @@ class ProfileEditorApp:
     def _apply_session_settings_to_ui(self) -> None:
         geom = str(self._session_settings.get("window_geometry") or "").strip()
         if geom:
-            try:
+            with contextlib.suppress(Exception):
                 self.root.geometry(geom)
-            except Exception:
-                pass
         preview_settings = self._session_settings.get("preview3d")
         if isinstance(preview_settings, dict):
             self.preview.apply_user_settings(preview_settings)

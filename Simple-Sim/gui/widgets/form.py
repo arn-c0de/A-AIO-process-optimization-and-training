@@ -10,6 +10,7 @@ from typing import Any
 
 from gui.theme.tokens import SPACE
 from gui.utils.tooltip import ToolTip
+import contextlib
 
 
 def set_invalid(widget: ttk.Widget, invalid: bool) -> None:
@@ -145,10 +146,8 @@ class PathPicker(ttk.Frame):
             return
         p = Path(chosen)
         if self.relative_to is not None:
-            try:
+            with contextlib.suppress(ValueError):
                 p = p.resolve().relative_to(self.relative_to.resolve())
-            except ValueError:
-                pass
         self.var.set(str(p))
         if self.on_change is not None:
             self.on_change(str(p))

@@ -36,7 +36,7 @@ class PredictionsLogic(StreamingProcessLogic):
         root = model_root(self.sim_root)
         cand = sorted(root.glob("**/profile_classifier_*.pt")) if root.exists() else []
         seen: dict[str, Path] = {str(p.resolve()): p for p in cand}
-        return sorted(list(seen.values()), key=lambda p: p.stat().st_mtime, reverse=True)
+        return sorted(seen.values(), key=lambda p: p.stat().st_mtime, reverse=True)
 
     def run_predictions(
         self,

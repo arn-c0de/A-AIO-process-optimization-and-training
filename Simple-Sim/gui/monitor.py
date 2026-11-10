@@ -45,6 +45,7 @@ from gui.utils.settings_store import SettingsStore
 from gui.utils.system_stats import SystemStatsSampler
 from gui.utils.tooltip import set_hover_hint_sink
 from gui.widgets.status import StatusBar
+import contextlib
 
 APP_TITLE = "Simple-Sim Monitor"
 APP_VERSION = "1.0"
@@ -342,15 +343,11 @@ class MonitorAppTabbed:
                 self.ctx.dispatcher.detach()
             except Exception:
                 pass
-            try:
+            with contextlib.suppress(Exception):
                 self._stats.stop()
-            except Exception:
-                pass
             if self._perf_tick_id is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self.root.after_cancel(self._perf_tick_id)
-                except Exception:
-                    pass
                 self._perf_tick_id = None
             if self.state.settings_store is not None:
                 try:
@@ -361,10 +358,8 @@ class MonitorAppTabbed:
                 self.state.settings_store.save()
         finally:
             set_hover_hint_sink(None)
-            try:
+            with contextlib.suppress(Exception):
                 self.root.destroy()
-            except Exception:
-                pass
 
     def _close_tabs(self) -> None:
         """Give every instantiated tab a chance to stop its background work.
@@ -375,10 +370,8 @@ class MonitorAppTabbed:
         don't outlive the window.
         """
         for tab in self.tabs.values():
-            try:
+            with contextlib.suppress(Exception):
                 tab.on_close()
-            except Exception:
-                pass
             if type(tab).on_close is not BaseTab.on_close:
                 continue
             logic = getattr(tab, "logic", None)
@@ -387,10 +380,8 @@ class MonitorAppTabbed:
             for name in ("stop_pipeline", "stop"):
                 stop = getattr(logic, name, None)
                 if callable(stop):
-                    try:
+                    with contextlib.suppress(Exception):
                         stop()
-                    except Exception:
-                        pass
                     break
 
     def _tick_global_performance(self) -> None:
@@ -427,20 +418,16 @@ class MonitorAppTabbed:
         """Notify all tabs (and bus subscribers) that the dataset has changed."""
         for tab in self.tabs.values():
             if tab.initialized:
-                try:
+                with contextlib.suppress(Exception):
                     tab.on_dataset_changed()
-                except Exception:
-                    pass
         self.ctx.bus.publish(Topics.DATASET_CHANGED, path=self.state.dataset_dir)
 
     def _notify_dataset_catalog_changed(self) -> None:
         """Notify initialized tabs that dataset catalog metadata changed."""
         for tab in self.tabs.values():
             if tab.initialized:
-                try:
+                with contextlib.suppress(Exception):
                     tab.refresh()
-                except Exception:
-                    pass
         self.ctx.bus.publish(Topics.DATASET_CATALOG_CHANGED)
 
 

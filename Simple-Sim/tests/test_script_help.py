@@ -21,7 +21,7 @@ SCRIPTS = sorted(p.stem for p in GOLDEN.glob("*.txt"))
 
 
 def test_every_script_has_a_golden_help() -> None:
-    assert SCRIPTS == sorted(p.stem for p in (SIM_ROOT / "scripts").glob("*.py"))
+    assert sorted(p.stem for p in (SIM_ROOT / "scripts").glob("*.py")) == SCRIPTS
 
 
 @pytest.mark.parametrize("name", SCRIPTS)

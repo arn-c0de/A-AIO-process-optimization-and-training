@@ -90,8 +90,8 @@ def test_placement_sampling_is_validated():
 
 def test_sample_record_uses_the_config_placement():
     cfg = _base_config()
-    kw = dict(config=cfg, run_seed=1, geometry_ranges=None, tolerances=TOL, image_filters={},
-              enable_cardinal_rotation_90=True, footprint="chip_2pad")
+    kw = {"config": cfg, "run_seed": 1, "geometry_ranges": None, "tolerances": TOL, "image_filters": {},
+              "enable_cardinal_rotation_90": True, "footprint": "chip_2pad"}
     legacy = [sample_record(i, "MISALIGNED", **kw)[0]["defect"] for i in range(40)]
     cfg["defects"] = {"placement_sampling": "continuous"}
     cont = [sample_record(i, "MISALIGNED", **kw)[0]["defect"] for i in range(40)]
@@ -148,8 +148,8 @@ def test_units_are_validated_and_reach_sample_record():
     with pytest.raises(ValueError, match="defects.units"):
         validate_config(cfg)
     cfg = _base_config()  # roi.mm_per_px 0.01
-    kw = dict(config=cfg, run_seed=1, geometry_ranges=None, tolerances=TOL, image_filters={},
-              enable_cardinal_rotation_90=True, footprint="chip_2pad")
+    kw = {"config": cfg, "run_seed": 1, "geometry_ranges": None, "tolerances": TOL, "image_filters": {},
+              "enable_cardinal_rotation_90": True, "footprint": "chip_2pad"}
     px = [sample_record(i, "TOMBSTONE", **kw)[0] for i in range(20)]
     cfg["defects"] = {"units": "mm"}
     mm = [sample_record(i, "TOMBSTONE", **kw)[0] for i in range(20)]

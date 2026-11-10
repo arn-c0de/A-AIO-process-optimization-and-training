@@ -48,7 +48,7 @@ def render_hashes(tmp_dir: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for run, classes in CASES.items():
         cfg = yaml.safe_load((ROOT / "configs" / run).read_text(encoding="utf-8"))
-        cfg["classes"] = {name: 1 for name in classes}
+        cfg["classes"] = dict.fromkeys(classes, 1)
         cfg_path = tmp_dir / f"cfg_{Path(run).stem}.yaml"
         cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
         data = tmp_dir / f"ds_{Path(run).stem}"

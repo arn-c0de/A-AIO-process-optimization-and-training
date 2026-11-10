@@ -375,8 +375,8 @@ def test_render_overrides_and_application() -> None:
     from simple_sim.board.rules import PRESETS
     from simple_sim.generators.opencv2d.photoreal.look import LOOKS, look_name
 
-    assert LOOK_CHOICES == (FROM_CONFIG, *LOOKS) and BOARD_ROUTING_CHOICES == (FROM_CONFIG, *BOARD_ROUTERS)
-    assert BOARD_DRC_CHOICES == (FROM_CONFIG, *DRC_MODES) and BOARD_RULES_CHOICES == (FROM_CONFIG, *PRESETS)
+    assert (FROM_CONFIG, *LOOKS) == LOOK_CHOICES and (FROM_CONFIG, *BOARD_ROUTERS) == BOARD_ROUTING_CHOICES
+    assert (FROM_CONFIG, *DRC_MODES) == BOARD_DRC_CHOICES and (FROM_CONFIG, *PRESETS) == BOARD_RULES_CHOICES
     assert render_overrides() == {} and render_overrides(look=FROM_CONFIG, routing="", drc=FROM_CONFIG) == {}
     ov = render_overrides(look="quins", routing="escape", drc="warn", design_rules="hdi")
     assert ov == {"look": "quins", "board": {"routing": "escape", "drc": "warn", "design_rules": "hdi"}}

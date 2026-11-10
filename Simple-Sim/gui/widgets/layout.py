@@ -9,6 +9,7 @@ from typing import Any
 
 from gui.theme.tokens import SPACE
 from gui.utils.tooltip import ToolTip
+import contextlib
 
 # Unicode glyphs used for icon buttons. One place, consistent everywhere.
 ICONS = {
@@ -128,10 +129,8 @@ class CollapsibleSection(ttk.Frame):
             self.body.pack_forget()
         if save and self._store is not None and self._key:
             self._store.set(self._key, bool(self._open.get()))
-            try:
+            with contextlib.suppress(Exception):
                 self._store.schedule_save(self)
-            except Exception:
-                pass
 
     def set_open(self, opened: bool) -> None:
         self._open.set(bool(opened))

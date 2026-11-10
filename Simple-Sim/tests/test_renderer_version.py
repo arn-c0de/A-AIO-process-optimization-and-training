@@ -16,7 +16,7 @@ ROOT = Path(__file__).parent.parent
 
 def _tiny_config(tmp_path: Path) -> Path:
     cfg = yaml.safe_load((ROOT / "configs" / "run_0001.yaml").read_text(encoding="utf-8"))
-    cfg["classes"] = {name: 1 for name in list(cfg["classes"])[:2]}
+    cfg["classes"] = dict.fromkeys(list(cfg["classes"])[:2], 1)
     cfg["roi"].update(width_px=64, height_px=64)
     path = tmp_path / "cfg.yaml"
     path.write_text(yaml.safe_dump(cfg), encoding="utf-8")

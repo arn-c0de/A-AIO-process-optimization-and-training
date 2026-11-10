@@ -32,6 +32,7 @@ from simple_sim.dataset_files import CONFIG_YAML, DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.io_utils import load_yaml, now_tag, rel_to
 from simple_sim.dataset_index import DatasetIndex
 from simple_sim.model_bundle import bundle_checkpoint_path
+import contextlib
 
 
 _LOG = logging.getLogger(__name__)
@@ -252,8 +253,7 @@ class PipelineSelectionMixin:
                     if gen != self._model_meta_gen: return
                     self._model_profile_cache.update(res)
                     self._update_model_dropdown_for_dataset(); self._schedule_profile_compat_check()
-                try: self.post(apply)
-                except Exception: pass
+                with contextlib.suppress(Exception): self.post(apply)
             threading.Thread(target=worker, daemon=True).start()
 
         root_resolved = self.sim_root.resolve()
@@ -351,8 +351,7 @@ class PipelineSelectionMixin:
 
     def _set_profiles_multi(self, pids: list[str]) -> None:
         pids = [str(x).strip() for x in (pids or []) if str(x).strip()]
-        try: self.ui.var_profiles_multi_json.set(json.dumps(pids, ensure_ascii=True))
-        except Exception: pass
+        with contextlib.suppress(Exception): self.ui.var_profiles_multi_json.set(json.dumps(pids, ensure_ascii=True))
         self.ui.var_profiles_multi_summary.set(summarize_profile_ids(pids))
 
     def _on_profiles_multi_toggle(self) -> None:
@@ -363,8 +362,7 @@ class PipelineSelectionMixin:
             cur = self._profiles_multi_list(available=self._profiles_multi_available_values())
             if not cur and (pid := self.ui.var_profile.get().strip()): cur = [pid]
             self._set_profiles_multi(cur)
-        try: self._refresh_precise_classes()
-        except Exception: pass
+        with contextlib.suppress(Exception): self._refresh_precise_classes()
 
     def _pick_profiles_multi(self) -> None:
         values = self._profiles_multi_available_values()
@@ -381,10 +379,8 @@ class PipelineSelectionMixin:
         self._set_profiles_multi(sel)
         if sel:
             self.ui.var_profile.set(sel[0])
-        try:
+        with contextlib.suppress(Exception):
             self._refresh_precise_classes()
-        except Exception:
-            pass
 
     def _on_render_backend_changed(self, _event: object | None = None) -> None:
         try:
@@ -395,8 +391,7 @@ class PipelineSelectionMixin:
     def _on_profile_selected(self, _event: object | None = None) -> None:
         if not (profile_id := self.ui.var_profile.get().strip()): return
 
-        try: self._autoselect_config_for_profile(profile_id, prefer_quiet=True)
-        except Exception: pass
+        with contextlib.suppress(Exception): self._autoselect_config_for_profile(profile_id, prefer_quiet=True)
 
         # Do not open profile-switch/create popups automatically.
         # Keep profile selection passive and only update state.
@@ -435,10 +430,8 @@ class PipelineSelectionMixin:
             except Exception: return
 
         self.ui.var_config.set(rel)
-        try:
+        with contextlib.suppress(Exception):
             self._refresh_precise_classes()
-        except Exception:
-            pass
 
     def _show_profile_info(self) -> None:
         profile_id = self.ui.var_profile.get()
@@ -458,8 +451,7 @@ class PipelineSelectionMixin:
     def _schedule_profile_compat_check(self, delay_ms: int = 300) -> None:
         # Debounce: var_model is written repeatedly while typing/refreshing; check only after edits settle.
         if self._compat_after_id is not None:
-            try: self.frame.after_cancel(self._compat_after_id)
-            except Exception: pass
+            with contextlib.suppress(Exception): self.frame.after_cancel(self._compat_after_id)
         self._compat_after_id = self.frame.after(delay_ms, self._run_scheduled_profile_compat_check)
 
     def _run_scheduled_profile_compat_check(self) -> None:
@@ -497,8 +489,7 @@ class PipelineSelectionMixin:
                         try: self.logic.read_checkpoint_meta(model_path)
                         finally:
                             def done() -> None: self._compat_loading.discard(key); self._schedule_profile_compat_check(0)
-                            try: self.post(done)
-                            except Exception: pass
+                            with contextlib.suppress(Exception): self.post(done)
                     threading.Thread(target=worker, daemon=True).start()
                 return
             if meta.get("error"): self.ui.var_profile_compat.set(""); return
@@ -579,11 +570,9 @@ class PipelineSelectionMixin:
 
         self._schedule_profile_compat_check(); self._apply_dataset_settings(ds)
 
-        try: self.parent.event_generate("<<DatasetChanged>>", when="tail")
-        except Exception: pass
+        with contextlib.suppress(Exception): self.parent.event_generate("<<DatasetChanged>>", when="tail")
         
-        try: self._refresh_models()
-        except Exception: pass
+        with contextlib.suppress(Exception): self._refresh_models()
 
     def _start_dataset_index_load(self, ds: Path) -> None:
         self._ds_load_gen += 1

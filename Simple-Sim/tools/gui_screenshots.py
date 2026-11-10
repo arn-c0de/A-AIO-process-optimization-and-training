@@ -30,7 +30,7 @@ def _make_demo_dataset(sim_root: Path) -> Path | None:
     import yaml
 
     cfg = load_yaml(ROOT / "configs" / "run_0001.yaml")
-    cfg["classes"] = {k: 4 for k in cfg.get("classes", {"OK": 4})}
+    cfg["classes"] = dict.fromkeys(cfg.get("classes", {"OK": 4}), 4)
     cfg.setdefault("run", {})["run_id"] = "demo"
     cfg_path = sim_root / "outputs" / "demo_config.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")

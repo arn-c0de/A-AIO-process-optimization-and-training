@@ -72,9 +72,9 @@ class AnalysisLogic:
 
     def _find_model_by_manifest_hash(self, manifest_hash: str) -> Path | None:
         models_root = self.sim_root / "outputs" / "models"
-        candidates = [p for p in models_root.glob("*.pt")]
-        candidates.extend([p for p in (models_root / "imports").glob("*.pt")])
-        candidates.extend([p for p in (models_root / "versions").glob("**/*.pt")])
+        candidates = list(models_root.glob("*.pt"))
+        candidates.extend(list((models_root / "imports").glob("*.pt")))
+        candidates.extend(list((models_root / "versions").glob("**/*.pt")))
         
         seen = {str(p.resolve()): p for p in candidates if p.is_file()}
         ordered = sorted(seen.values(), key=lambda p: p.stat().st_mtime if p.exists() else 0.0, reverse=True)

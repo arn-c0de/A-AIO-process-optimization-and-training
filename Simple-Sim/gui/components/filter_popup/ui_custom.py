@@ -8,6 +8,7 @@ from typing import Any
 
 from .ui_realism import build_realism_controls
 from gui.theme.style import font
+import contextlib
 
 
 def build_filter_controls(popup: Any, parent: ttk.Frame) -> None:
@@ -102,10 +103,8 @@ def build_filter_controls(popup: Any, parent: ttk.Frame) -> None:
     def _live_sync(*_args: Any) -> None:
         if bool(getattr(popup, "_suspend_live_sync", False)):
             return
-        try:
+        with contextlib.suppress(Exception):
             popup._sync_to_external_vars()
-        except Exception:
-            pass
 
     notebook.bind("<<NotebookTabChanged>>", _sync_mode_from_tab)
     popup.var_filter_mode.trace_add("write", _select_mode_tab)

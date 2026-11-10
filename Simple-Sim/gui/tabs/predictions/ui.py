@@ -15,6 +15,7 @@ from gui.widgets import FormGrid, LogView, ScrolledTree, Section, Toolbar, icon_
 import numpy as np
 from PIL import Image, ImageTk
 import cv2
+import contextlib
 
 
 if TYPE_CHECKING:
@@ -266,10 +267,8 @@ class PredictionsUI:
 
     def clear_confusion_matrix(self) -> None:
         for w in list(self._cm_parent.winfo_children()):
-            try:
+            with contextlib.suppress(Exception):
                 w.destroy()
-            except Exception:
-                pass
         self._cm_canvas = None
         self._schedule_enforce_log_pane_min_height()
 

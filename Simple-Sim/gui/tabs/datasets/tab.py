@@ -19,6 +19,7 @@ from gui.utils.dataset_catalog import (
 
 from .logic import dataset_created_display, dataset_details_text
 from .ui import DatasetsUI
+import contextlib
 
 _NEW_CATEGORY = "\x00new-category"  # sentinel item in the category picker
 
@@ -219,10 +220,8 @@ class DatasetsTab(BaseTab):
         self._status(f"{'Archived' if archived else 'Unarchived'} {len(paths)} dataset(s).")
 
     def _notify_catalog_changed(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.parent.event_generate("<<DatasetCatalogChanged>>", when="tail")
-        except Exception:
-            pass
 
     def _on_right_click(self, event) -> None:
         row = self.tree.identify_row(event.y)

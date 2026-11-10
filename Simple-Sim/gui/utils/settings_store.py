@@ -9,6 +9,7 @@ from typing import Any
 from collections.abc import Iterable, Sequence
 
 from simple_sim.io_utils import atomic_write_json
+import contextlib
 
 
 @dataclass
@@ -44,10 +45,8 @@ class SettingsStore:
         """Debounced save using a Tk widget's after()."""
         try:
             if self._after_id is not None and self._after_widget is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._after_widget.after_cancel(self._after_id)
-                except Exception:
-                    pass
             self._after_widget = widget
             self._after_id = widget.after(int(delay_ms), self.save)
         except Exception:
@@ -98,10 +97,8 @@ def restore_persisted_vars(
             continue
         if skip_empty_strings and value == "":
             continue
-        try:
+        with contextlib.suppress(Exception):
             var.set(value)
-        except Exception:
-            pass
 
 
 def wire_vars_autosave(store: SettingsStore | None, bindings: Iterable[VarBinding], widget: Any) -> None:

@@ -34,7 +34,7 @@ def test_for_render_resolves_the_config_once():
 
 
 def test_look_registry_and_immutability():
-    assert LOOKS == tuple(_LOOKS)
+    assert tuple(_LOOKS) == LOOKS
     for look in (LEGACY_LOOK, QUINS_LOOK):
         for arr in (look.copper_under_mask, look.cap_body, look.end_cap, look.lead, *look.bodies.values()):
             assert not arr.flags.writeable

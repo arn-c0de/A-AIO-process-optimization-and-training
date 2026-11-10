@@ -24,6 +24,7 @@ from gui.widgets.layout import (
 from gui.widgets.status import StatusBar
 
 __all__ = [
+    "ICONS",
     "ButtonBar",
     "CollapsibleSection",
     "EmptyState",
@@ -36,8 +37,7 @@ __all__ = [
     "StatusBar",
     "Toolbar",
     "icon_button",
-    "menu_button",
     "keep_pane_visible",
-    "ICONS",
+    "menu_button",
     "set_invalid",
 ]

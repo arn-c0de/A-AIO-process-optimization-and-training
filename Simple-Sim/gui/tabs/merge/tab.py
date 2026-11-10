@@ -20,6 +20,7 @@ from simple_sim.io_utils import now_tag
 
 from .ui import MergeUI
 from .logic import MergeLogic
+import contextlib
 
 
 class MergeTab(BaseTab):
@@ -339,10 +340,8 @@ class MergeTab(BaseTab):
                 exists = "exists" if cp.exists() else "MISSING"
                 size = ""
                 if cp.exists():
-                    try:
+                    with contextlib.suppress(Exception):
                         size = f" ({self.ui.fmt_bytes(int(cp.stat().st_size))})"
-                    except Exception:
-                        pass
                 info += f"  {pid} -> {fname} [{exists}]{size}\n"
 
             if details and isinstance(details.get("models"), dict):

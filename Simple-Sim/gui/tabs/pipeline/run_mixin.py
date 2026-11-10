@@ -5,7 +5,6 @@ Mixin of :class:`gui.tabs.pipeline.tab.PipelineControlTab`; it relies on the att
 """
 
 from __future__ import annotations
-import json
 import os
 import time
 import tkinter as tk
@@ -30,6 +29,9 @@ from gui.utils.pipeline_helpers import (
 
 from simple_sim.io_utils import load_yaml, now_tag, rel_to
 
+from .start_summary import start_summary
+import contextlib
+
 
 class PipelineRunMixin:
     def _confirm_pipeline_start(
@@ -45,53 +47,11 @@ class PipelineRunMixin:
         multi_mode: str,
         image_filters: dict[str, Any],
     ) -> bool:
-        task_label = {
-            "full": "Full Pipeline",
-            "generate_only": "Generate Only",
-            "generate_mixed": "Generate Mixed",
-        }.get(task, task)
-        run_label = "continuous" if run_count == -1 else str(run_count)
-        profile_label = ", ".join(profile_ids[:5]) if profile_ids else "-"
-        if len(profile_ids) > 5:
-            profile_label += f" (+{len(profile_ids) - 5})"
-        mode_raw = str(image_filters.get("filter_mode", "custom") or "custom").strip().lower()
-        filter_mode = mode_raw if mode_raw in {"custom", "realism"} else "custom"
-        realism_enabled = bool(image_filters.get("realism_enabled", False))
-        realism_constraints = bool(image_filters.get("realism_constraints_enabled", True))
-        realism_profile = str(image_filters.get("realism_profile_id", "profile_industrial_cam"))
-
-        filter_toggles = [k for k, v in image_filters.items() if isinstance(k, str) and k.startswith("enable_") and k != "enable" and bool(v)]
-        filter_details = (
-            f"filter_mode={filter_mode}\n"
-            f"enable={bool(image_filters.get('enable', True))}\n"
-            f"realism_enabled={realism_enabled}\n"
-            f"realism_constraints_enabled={realism_constraints}\n"
-            f"realism_profile_id={realism_profile}\n"
-            f"cardinal_rotation_90={bool(image_filters.get('cardinal_rotation_90', True))}\n"
-            f"enabled_filter_keys={', '.join(sorted(filter_toggles)) if filter_toggles else '-'}"
-        )
-
-        precise_summary = "off"
-        precise_details = "Precise mode is not active."
-        if run_mode == "precise":
-            s = self._precise_settings
-            per_class = bool(s.get("per_class", False))
-            multi_profiles = list(s.get("multi_profiles") or [])
-            if multi_profiles:
-                precise_summary = f"on | multi={len(multi_profiles)} | per_class={'yes' if per_class else 'no'}"
-            else:
-                precise_summary = f"on | single profile | per_class={'yes' if per_class else 'no'}"
-            precise_details = (
-                f"total={s.get('total', 100)}\n"
-                f"per_class={per_class}\n"
-                f"class_names={', '.join(s.get('class_names') or []) or '-'}\n"
-                f"classes={json.dumps(s.get('classes') or {}, ensure_ascii=True)}\n"
-                f"multi_profiles={json.dumps(multi_profiles, ensure_ascii=True)}\n"
-                f"multi_totals={json.dumps(s.get('multi_totals') or {}, ensure_ascii=True)}\n"
-                f"multi_classes={json.dumps(s.get('multi_classes') or {}, ensure_ascii=True)}"
-            )
-
-        model_target = self.ui.var_model.get().strip() if task != "generate_only" else "(n/a for generate only)"
+        model_path = self.ui.var_model.get().strip()
+        header, filter_details, precise_details = start_summary(
+            task=task, out_dir=out_dir, run_mode=run_mode, run_count=run_count, dataset_mode=dataset_mode,
+            profile_ids=profile_ids, multi_enabled=multi_enabled, multi_mode=multi_mode, image_filters=image_filters,
+            precise_settings=self._precise_settings, model_path=model_path)
 
         top = tk.Toplevel(self.frame.winfo_toplevel())
         top.title("Start pipeline")
@@ -105,17 +65,6 @@ class PipelineRunMixin:
         outer = ttk.Frame(top, padding=10)
         outer.pack(fill="both", expand=True)
 
-        header = (
-            f"Task: {task_label}\n"
-            f"Run mode: {run_mode} ({run_label})\n"
-            f"Dataset mode: {dataset_mode}\n"
-            f"Output: {out_dir}\n"
-            f"Profiles: {profile_label}\n"
-            f"Multi-profile: {'on' if multi_enabled else 'off'} ({multi_mode})\n"
-            f"Model target: {model_target}\n"
-            f"Filter mode: {filter_mode} (realism_enabled={realism_enabled})\n"
-            f"Precise: {precise_summary}"
-        )
         ttk.Label(outer, text=header, justify="left", anchor="w").pack(fill="x", pady=(0, 10))
 
         sep = ttk.Separator(outer, orient="horizontal")
@@ -153,7 +102,7 @@ class PipelineRunMixin:
         _add_collapsible(details_wrap, "Filter Details", filter_details)
         _add_collapsible(details_wrap, "Precise Details", precise_details)
         if task != "generate_only":
-            _add_collapsible(details_wrap, "Model Details", f"model_path={self.ui.var_model.get().strip()}")
+            _add_collapsible(details_wrap, "Model Details", f"model_path={model_path}")
 
         btns = ttk.Frame(outer)
         btns.pack(fill="x", pady=(8, 0))
@@ -568,8 +517,7 @@ class PipelineRunMixin:
 
     def _reset_ui_on_pipeline_end(self) -> None:
         for p in self._temp_cfg_paths:
-            try: p.unlink(missing_ok=True)
-            except Exception: pass
+            with contextlib.suppress(Exception): p.unlink(missing_ok=True)
         self._temp_cfg_paths.clear()
         self.ui.set_run_buttons_state(False)
         self.ui.var_phase.set("phase: idle")

@@ -55,7 +55,7 @@ def test_free_windows_avoid_parts_and_the_margin():
     assert wins, "the band between the two part rows must be free"
     boxes = part_boxes(parts, 0.4)
     for x, y in wins:
-        assert 7.0 - 1e-9 <= x and x + 4.0 <= 23.0 + 1e-9 and 7.0 - 1e-9 <= y and y + 4.0 <= 23.0 + 1e-9
+        assert x >= 7.0 - 1e-9 and x + 4.0 <= 23.0 + 1e-9 and y >= 7.0 - 1e-9 and y + 4.0 <= 23.0 + 1e-9
         hit = (boxes[:, 0] < x + 4.0) & (boxes[:, 2] > x) & (boxes[:, 1] < y + 4.0) & (boxes[:, 3] > y)
         assert not hit.any()
     assert free_windows(parts, window_mm=30.0, margin_mm=2.0, keepout_mm=0.4) == []

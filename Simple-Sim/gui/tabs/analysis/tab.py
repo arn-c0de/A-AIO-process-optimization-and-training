@@ -155,8 +155,8 @@ class AnalysisTab(BaseTab):
             domains = {"All"} | {sid.split('/')[1] for sid in self.sample_ids if len(sid.split('/')) > 1}
             classes = {"All"} | {c for c in self.effective_label_dict.values() if c and c != "?"}
             
-            self.ui.combo_run.configure(values=sorted(list(run_ids)))
-            self.ui.combo_domain.configure(values=sorted(list(domains)))
+            self.ui.combo_run.configure(values=sorted(run_ids))
+            self.ui.combo_domain.configure(values=sorted(domains))
             self.ui.combo_class.configure(values=["All"] + self._sorted_class_values(classes - {"All"}))
             # A filter value of the previous dataset that does not exist here would hide every sample.
             for var, valid in ((self.ui.var_run, run_ids), (self.ui.var_domain, domains), (self.ui.var_filter, classes)):

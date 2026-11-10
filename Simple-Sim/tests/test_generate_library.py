@@ -55,7 +55,7 @@ def test_image_filters_parameter_wins_over_the_environment(tmp_path, monkeypatch
 def test_plan_records_is_pure_and_deterministic():
     run = resolve_run(_small_config(), profiles_dir=ROOT / "configs" / "profiles", root=ROOT)
     seen = []
-    kw = dict(image_filters=normalize_image_filters(None), start_index=5)
+    kw = {"image_filters": normalize_image_filters(None), "start_index": 5}
     a = plan_records(run, progress=lambda cls, i, n, rec: seen.append((cls, i, n, rec["index"])), **kw)
     b = plan_records(run, **kw)
     assert [r["index"] for r in a] == [5, 6, 7, 8]

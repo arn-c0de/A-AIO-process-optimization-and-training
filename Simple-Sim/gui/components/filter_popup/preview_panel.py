@@ -11,6 +11,7 @@ from tkinter import ttk
 from pathlib import Path
 from typing import Any
 from simple_sim.io_utils import load_yaml
+import contextlib
 
 
 def _open_zoom_image_popup(popup: Any, pil_img: Any, title: str) -> None:
@@ -175,10 +176,8 @@ def get_preview_filter_values(popup: Any) -> dict[str, Any]:
         if isinstance(var, tk.BooleanVar):
             result[key] = bool(var.get())
         elif isinstance(var, tk.DoubleVar):
-            try:
+            with contextlib.suppress(Exception):
                 result[key] = float(var.get())
-            except Exception:
-                pass
         elif isinstance(var, tk.StringVar):
             result[key] = var.get()
     return result

@@ -6,6 +6,7 @@ import threading
 from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
+import contextlib
 
 
 class Topics:
@@ -44,10 +45,8 @@ class EventBus:
 
         def unsubscribe() -> None:
             with self._lock:
-                try:
+                with contextlib.suppress(ValueError):
                     self._subs[topic].remove(handler)
-                except ValueError:
-                    pass
 
         return unsubscribe
 

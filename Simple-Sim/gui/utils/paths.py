@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import contextlib
 
 
 def model_root(sim_root: Path) -> Path:
@@ -29,10 +30,8 @@ def list_model_paths(model_root: Path, *, include_bundles: bool = True) -> list[
     ``bundles/*``) next to each of those. Creates ``model_root`` if missing.
     """
     root = Path(model_root)
-    try:
+    with contextlib.suppress(Exception):
         root.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
     cand: list[Path] = []
     for search in (root, root / "versions", root / "imports"):
         if not search.is_dir():

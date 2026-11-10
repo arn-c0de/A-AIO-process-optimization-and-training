@@ -513,7 +513,7 @@ def test_router_names_match_the_routers():
     from simple_sim.board.routing import ROUTERS
 
     assert tuple(ROUTERS) == ROUTER_NAMES
-    assert BOARD_ROUTERS == ("legacy", "none", *ROUTERS)
+    assert ("legacy", "none", *ROUTERS) == BOARD_ROUTERS
 
 
 def test_package_exports_resolve():

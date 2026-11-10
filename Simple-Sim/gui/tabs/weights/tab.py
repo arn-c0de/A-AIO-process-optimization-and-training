@@ -24,6 +24,7 @@ from simple_sim.reports import metric_value, report_timestamp
 from .ui import WeightsUI
 from .logic import WeightsLogic
 from datetime import datetime
+import contextlib
 
 
 class WeightsTab(BaseTab):
@@ -173,8 +174,7 @@ class WeightsTab(BaseTab):
                 return
 
     def _select_all_datasets_for_compare(self) -> None:
-        try: self.ui.list_cmp_datasets.selection_set(0, "end")
-        except Exception: pass
+        with contextlib.suppress(Exception): self.ui.list_cmp_datasets.selection_set(0, "end")
 
     def _selected_compare_datasets(self) -> list[Path]:
         ds: list[Path] = []
@@ -462,10 +462,8 @@ class WeightsTab(BaseTab):
         finally: self.ui._models_menu.grab_release()
 
     def _hide_models_menu(self, _event: tk.Event | None = None) -> None:
-        try: self.ui._models_menu.unpost()
-        except Exception: pass
-        try: self.ui._reports_menu.unpost()
-        except Exception: pass
+        with contextlib.suppress(Exception): self.ui._models_menu.unpost()
+        with contextlib.suppress(Exception): self.ui._reports_menu.unpost()
 
     def _on_reports_right_click(self, event: tk.Event) -> None:
         if not self.ui._reports_menu: return
@@ -475,7 +473,7 @@ class WeightsTab(BaseTab):
         finally: self.ui._reports_menu.grab_release()
 
     def _delete_selected_report(self) -> None:
-        if not dialogs.require(sel := self.ui.tree_reports.selection(), self.frame, "Select a report first."): return
+        if not dialogs.require(sel := self.ui.tree_reports.selection(), self.frame, "Select a report first."): return None
         if not (r := self._report_by_iid.get(sel[0])) or not (p := r.get("_path")): return dialogs.show_error(self.frame, "Delete Report", "Report path missing.")
         rp = Path(str(p))
         if not rp.exists(): return dialogs.show_warning(self.frame, "Report Not Found", f"Report file not found:\n{rp}")
@@ -483,7 +481,7 @@ class WeightsTab(BaseTab):
         try: rp.resolve().relative_to(self.logic.sim_root.resolve())  # Check if rp is within sim_root
         except ValueError: return dialogs.show_error(self.frame, "Delete Blocked", f"Refusing to delete file outside repo:\n{rp}")
 
-        if not dialogs.confirm(self.frame, "Delete Report", f"Delete report file {rp.name}?\n\n{rp}", danger=True): return
+        if not dialogs.confirm(self.frame, "Delete Report", f"Delete report file {rp.name}?\n\n{rp}", danger=True): return None
         try: rp.unlink()
         except Exception as e:
             dialogs.show_error(self.frame, "Delete Failed", f"Failed to delete:\n{rp}\n\n{e}")
@@ -597,13 +595,13 @@ class WeightsTab(BaseTab):
 
     def _rename_selected(self) -> None:
         paths = self._selected_model_paths()
-        if not dialogs.require(len(paths) == 1, self.frame, "Select exactly one checkpoint to rename."): return
+        if not dialogs.require(len(paths) == 1, self.frame, "Select exactly one checkpoint to rename."): return None
         src = paths[0]
         if not self.logic.is_deletable_checkpoint(src): return dialogs.show_warning(self.frame, "Rename Not Allowed", "Only snapshots/imports can be renamed from here.")
 
         old_rel, old_name = self.logic.rel_path(src), src.stem
         new_stem = dialogs.ask_string(self.frame, "Rename Checkpoint", "New name (no path, no extension):", initial=old_name)
-        if new_stem is None: return  # cancelled
+        if new_stem is None: return None  # cancelled
         if not (new_stem := new_stem.strip()) or "/" in new_stem or "\\" in new_stem: return dialogs.show_error(self.frame, "Invalid Name", "Name must be non-empty and not contain path separators.")
 
         dst = src.with_name(new_stem + src.suffix)
@@ -649,8 +647,8 @@ class WeightsTab(BaseTab):
         return None
 
     def _run_selected(self) -> None:
-        if not dialogs.require(p := self._selected_model_path(), self.frame, "Select a model first."): return
-        if not dialogs.require(self.state.dataset_dir, self.frame, "No dataset selected. Choose one in the Pipeline tab first."): return
+        if not dialogs.require(p := self._selected_model_path(), self.frame, "Select a model first."): return None
+        if not dialogs.require(self.state.dataset_dir, self.frame, "No dataset selected. Choose one in the Pipeline tab first."): return None
         if self._run_in_progress(): return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
 
         try:
@@ -687,13 +685,13 @@ class WeightsTab(BaseTab):
     def _run_compare(self) -> None:
         a = self._path_from_combo(self.ui.var_cmp_a.get().strip())
         b = self._path_from_combo(self.ui.var_cmp_b.get().strip())
-        if not dialogs.require(a and b, self.frame, "Choose two models to compare (Model A and Model B)."): return
+        if not dialogs.require(a and b, self.frame, "Choose two models to compare (Model A and Model B)."): return None
         if self._run_in_progress(): return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
 
         # Read Tk state on the main thread; the worker must not touch widgets/variables.
         ds_dirs = self._selected_compare_datasets()
         if not dialogs.require(ds_dirs, self.frame, "Select at least one dataset to compare the models on."):
-            return
+            return None
         split = self.ui.var_split.get().strip()
         device = self.ui.var_device.get().strip()
         max_samples_s = self.ui.var_max_samples.get().strip()

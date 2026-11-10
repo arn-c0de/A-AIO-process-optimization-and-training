@@ -24,6 +24,7 @@ from .run_mixin import PipelineRunMixin
 from .monitor_mixin import PipelineMonitorMixin
 from .selection_mixin import PipelineSelectionMixin, load_dataset_view
 from .dataset_actions_mixin import PipelineDatasetActionsMixin
+import contextlib
 
 __all__ = ["PipelineControlTab", "load_dataset_view"]  # load_dataset_view: re-exported for callers of this module
 
@@ -165,7 +166,5 @@ class PipelineControlTab(PipelineSettingsMixin, PipelineRunMixin, PipelineMonito
         if threading.current_thread() is not threading.main_thread():
             self.log_q.put(text)
             return
-        try:
+        with contextlib.suppress(Exception):
             self.ui.append_log(text)
-        except Exception:
-            pass

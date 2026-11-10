@@ -26,6 +26,7 @@ from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
 from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
 from simple_sim.model_store import snapshot_checkpoint
+import contextlib
 
 
 class PipelineLogic:
@@ -328,10 +329,8 @@ class PipelineLogic:
 
         rc = proc.poll()
         if rc is None:
-            try:
+            with contextlib.suppress(Exception):
                 rc = proc.wait(timeout=0.2 if self.stop_evt.is_set() else None)
-            except Exception:
-                pass
         self.log_q.put(f"\n[process exited rc={rc}]\n")
 
     def _ui_set_var(self, tk_var: Any, value: str) -> None:
@@ -362,8 +361,7 @@ class PipelineLogic:
                     partial = lines.pop()  # keep an incomplete trailing line for the next read
                     for line in lines:
                         if not (line := line.strip()): continue
-                        try: event_callback(json.loads(line))
-                        except Exception: pass
+                        with contextlib.suppress(Exception): event_callback(json.loads(line))
             except Exception: pass
             if finished: return
             done.wait(0.1)
@@ -510,8 +508,7 @@ class PipelineLogic:
         for split in ["train", "val", "test"]: (out_dir / SPLITS_DIR / f"{split}.txt").write_text("", encoding="utf-8")
         Path(out_dir / META_JSONL).write_text("", encoding="utf-8")
         Path(out_dir / LABELS_JSONL).write_text("", encoding="utf-8")
-        try: shutil.copy2(config_path, out_dir / CONFIG_YAML)
-        except Exception: pass
+        with contextlib.suppress(Exception): shutil.copy2(config_path, out_dir / CONFIG_YAML)
 
         cfg_data, run_block = (load_yaml(config_path) or {}), {}
         if isinstance(cfg_data, dict): run_block = cfg_data.get("run") or {}

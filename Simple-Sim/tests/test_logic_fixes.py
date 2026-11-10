@@ -78,7 +78,7 @@ def test_generate_extend_on_a_new_directory_writes_a_fresh_manifest(tmp_path):
     from simple_sim.generation.dataset import generate_dataset
 
     cfg = load_config(Path(__file__).resolve().parent.parent / "configs" / "run_0001.yaml")
-    cfg["classes"] = {name: 4 for name in list(cfg["classes"])[:2]}
+    cfg["classes"] = dict.fromkeys(list(cfg["classes"])[:2], 4)
     out = tmp_path / "fresh"
     result = generate_dataset(cfg, out, extend=True)
     assert (out / DATASET_MANIFEST).is_file() and result["extend"] is False

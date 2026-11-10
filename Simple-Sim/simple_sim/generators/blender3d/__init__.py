@@ -4,4 +4,4 @@ from .bake import profile_job_fields
 from .io import write_jobs_jsonl
 from .runner import render_blender_batch
 
-__all__ = ["write_jobs_jsonl", "render_blender_batch", "profile_job_fields"]
+__all__ = ["profile_job_fields", "render_blender_batch", "write_jobs_jsonl"]

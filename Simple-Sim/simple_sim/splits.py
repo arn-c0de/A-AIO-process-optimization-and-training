@@ -222,7 +222,7 @@ def check_class_coverage(splits: dict[str, list[str]], label_rows: list[LabelRow
         List of warning messages (empty if all checks pass)
     """
     id_to_label = {row.id: row.class_name for row in label_rows}
-    all_classes = set(row.class_name for row in label_rows)
+    all_classes = {row.class_name for row in label_rows}
 
     warnings = []
     for split_name, sample_ids in splits.items():

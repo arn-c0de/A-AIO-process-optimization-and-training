@@ -36,6 +36,7 @@ from gui.widgets import (
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE
 from simple_sim.schema import MetaRow
 from gui.utils.formatting import fmt_bytes
+import contextlib
 
 
 # Legacy colour names returned by gui.utils.pipeline_helpers -> themed label styles.
@@ -594,10 +595,8 @@ class PipelineUI:
 
     def show_messagebox(self, type: str, title: str, message: str) -> None:
         if type == "error":
-            try:
+            with contextlib.suppress(Exception):
                 self.tab._append_log(f"[popup error] {title}\n{message}\n")
-            except Exception:
-                pass
             dialogs.show_error(self.frame, title, str(message))
         elif type == "warning":
             dialogs.show_warning(self.frame, title, message)
@@ -660,8 +659,7 @@ def prepare_thumbnail_cells(n_slots: int, recent_imgs: list[str], dataset_dir: P
                 except ValueError: pass
 
             if meta_row is not None:
-                try: img_bgr = draw_defect_overlay_func(img_bgr, meta_row.defect, meta_row.nominal)
-                except Exception: pass
+                with contextlib.suppress(Exception): img_bgr = draw_defect_overlay_func(img_bgr, meta_row.defect, meta_row.nominal)
 
             img_pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
             img_pil.thumbnail((120, 90))

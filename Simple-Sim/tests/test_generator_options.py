@@ -26,7 +26,7 @@ def test_option_constants_match_renderer() -> None:
 def test_camera_constants_match_renderer() -> None:
     assert options.CAMERA_DEFAULTS == camera.CAMERA_DEFAULTS
     assert list(options.CAMERA_DEFAULTS) == list(camera.CAMERA_DEFAULTS)
-    assert options.CAMERA_PRESET_NAMES == tuple(camera.CAMERA_PRESETS)
+    assert tuple(camera.CAMERA_PRESETS) == options.CAMERA_PRESET_NAMES
     assert options.DEFAULT_CAMERA_PRESET in camera.CAMERA_PRESETS
     assert options.CHANNEL_AXES == camera.CHANNEL_AXES
     assert options.CAMERA_RANGE_LIMITS == camera._RANGE_LIMITS

@@ -87,7 +87,7 @@ def test_generate_dataset_parallel_matches_sequential(tmp_path, monkeypatch):
 
     root = Path(__file__).parent.parent
     cfg = yaml.safe_load((root / "configs" / "run_0001.yaml").read_text(encoding="utf-8"))
-    cfg["classes"] = {name: 3 for name in list(cfg["classes"])[:4]}
+    cfg["classes"] = dict.fromkeys(list(cfg["classes"])[:4], 3)
     cfg["roi"].update(width_px=96, height_px=96)
     cfg_path = tmp_path / "cfg.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
@@ -137,7 +137,7 @@ def test_generate_profile_dataset_parallel_matches_sequential(tmp_path, monkeypa
     root = Path(__file__).parent.parent
     cfg = yaml.safe_load((root / "configs" / "run_profile_cls_quick.yaml").read_text(encoding="utf-8"))
     cfg["run"]["component_profiles"] = cfg["run"]["component_profiles"][:2]
-    cfg["classes"] = {name: 2 for name in list(cfg["classes"])[:3]}
+    cfg["classes"] = dict.fromkeys(list(cfg["classes"])[:3], 2)
     cfg["roi"].update(width_px=96, height_px=96)
     cfg_path = tmp_path / "cfg.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
