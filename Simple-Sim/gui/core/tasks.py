@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 class UiDispatcher:
@@ -84,7 +84,7 @@ class UiDispatcher:
 
     def detach(self) -> None:
         if self._widget is not None and self._after_id is not None:
-            with contextlib.suppress(Exception):
+            with quiet():
                 self._widget.after_cancel(self._after_id)
         self._widget = None
         self._after_id = None
@@ -348,7 +348,7 @@ class TaskRunner:
                 on_done(result)
         finally:
             if on_finally is not None:
-                with contextlib.suppress(Exception):
+                with quiet():
                     on_finally()
             self._publish("task.finished", handle)
 
@@ -379,7 +379,7 @@ def dispatcher_for(state: Any, widget: Any) -> UiDispatcher:
     if disp is None:
         disp = UiDispatcher()
         disp.attach(widget)
-        with contextlib.suppress(Exception):
+        with quiet():
             widget._simple_sim_dispatcher = disp
     return disp
 
@@ -397,6 +397,6 @@ def runner_for(state: Any, widget: Any) -> TaskRunner:
     runner = getattr(widget, "_simple_sim_task_runner", None)
     if runner is None:
         runner = TaskRunner(dispatcher_for(state, widget).post)
-        with contextlib.suppress(Exception):
+        with quiet():
             widget._simple_sim_task_runner = runner
     return runner

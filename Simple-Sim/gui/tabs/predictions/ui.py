@@ -11,18 +11,18 @@ from gui.components.overlay_renderer import draw_prediction_overlay, draw_two_st
 from gui.theme.style import on_theme_changed, palette
 from gui.theme.tokens import SPACE
 from gui.utils.tooltip import ToolTip
-from gui.widgets import FormGrid, LogView, ScrolledTree, Section, Toolbar, icon_button
+from gui.widgets import FormGrid, LogView, LogViewHost, ScrolledTree, Section, Toolbar, icon_button
 import numpy as np
 from PIL import Image, ImageTk
 import cv2
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 if TYPE_CHECKING:
     from .tab import PredictionsTab
 
 
-class PredictionsUI:
+class PredictionsUI(LogViewHost):
     def __init__(self, tab: PredictionsTab, parent: ttk.Frame):
         self.tab = tab
         self.frame = ttk.Frame(parent, padding=SPACE.L)
@@ -262,12 +262,9 @@ class PredictionsUI:
         self.txt_metrics.insert("1.0", s)
         self.txt_metrics.configure(state="disabled")
 
-    def append_log(self, s: str) -> None:
-        self.log_view.append(s)
-
     def clear_confusion_matrix(self) -> None:
         for w in list(self._cm_parent.winfo_children()):
-            with contextlib.suppress(Exception):
+            with quiet():
                 w.destroy()
         self._cm_canvas = None
         self._schedule_enforce_log_pane_min_height()

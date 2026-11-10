@@ -217,7 +217,7 @@ def test_progress_is_coalesced() -> None:
         for i in range(1000):
             task.progress((i + 1) / 1000, f"{i + 1}")
         go.wait(2)
-        return None
+        return
 
     h = ctx.tasks.run(work, name="p")
     # Worker posted 1000 updates without a drain in between: only one is queued.

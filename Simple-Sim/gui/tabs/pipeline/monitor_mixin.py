@@ -39,20 +39,31 @@ class PipelineMonitorMixin:
             self.event_q.put(evt)
             return
         et = evt.get("event")
+        # The dataset of the running process is kept in _monitor_dir (thumbnails, size display).
+        # It used to be written to the shared state.dataset_dir without a <<DatasetChanged>>: the
+        # other tabs kept showing dataset A while their actions (analyze, delete images, predict,
+        # validate) went to the dataset being generated.
         if et == "gen_start":
             self.ui.var_phase.set("phase: generating")
-            if out_dir := evt.get("output_dir"): self.state.dataset_dir = Path(out_dir)
+            if out_dir := evt.get("output_dir"): self._monitor_dir = Path(out_dir)
         elif et == "gen_progress":
             self.ui.var_phase.set("phase: generating")
-            self.ui.var_ips.set(f"img/s: {evt.get('samp_per_s', '-')}")
-            if last_img := evt.get("last_image_path"): self._push_image(last_img)
+            rate = evt.get("samp_per_s")
+            self.ui.var_ips.set(f"img/s: {rate:.1f}" if isinstance(rate, (int, float)) else "img/s: -")
+            # A new dataset is rendered into <out>.tmp and moved in at the end: image_root says where.
+            if root := evt.get("image_root"): self._monitor_image_root = Path(root)
+            if last_img := evt.get("last_image_path"): self._push_image(last_img, root=self._monitor_image_root)
         elif et == "gen_done":
             self.ui.var_phase.set("phase: generated")
-            if out_dir := evt.get("output_dir"): self.state.dataset_dir = Path(out_dir)
+            if out_dir := evt.get("output_dir"):
+                self._monitor_dir = Path(out_dir)
+                if (tmp_root := self._monitor_image_root) is not None and tmp_root != self._monitor_dir:
+                    self._recent_imgs = [n.replace(str(tmp_root), str(self._monitor_dir), 1) for n in self._recent_imgs]
+            self._monitor_image_root = None
             if last_img := evt.get("last_image_path"): self._push_image(last_img)
         elif et == "train_start":
             self.ui.var_phase.set("phase: training")
-            if ds := evt.get("dataset_dir"): self.state.dataset_dir = Path(ds)
+            if ds := evt.get("dataset_dir"): self._monitor_dir = Path(ds)
         elif et == "epoch_start":
             self.ui.var_phase.set("phase: training")
             self.ui.var_epoch.set(f"epoch: {evt.get('epoch', '-')}/{evt.get('epochs', '-')}")
@@ -63,7 +74,7 @@ class PipelineMonitorMixin:
             if limg := evt.get("last_image_path"): self._push_image(limg)
         elif et == "eval_start":
             self.ui.var_phase.set("phase: evaluating")
-            if ds := evt.get("dataset_dir"): self.state.dataset_dir = Path(ds)
+            if ds := evt.get("dataset_dir"): self._monitor_dir = Path(ds)
         elif et == "eval_batch":
             self.ui.var_phase.set("phase: evaluating")
             if ips := evt.get("img_per_s"): self.ui.var_ips.set(f"img/s: {ips:.1f}")
@@ -76,9 +87,17 @@ class PipelineMonitorMixin:
             ok = evt.get("ok")
             self.ui.var_phase.set("phase: validated_ok" if ok else "phase: validated_fail")
 
-    def _push_image(self, rel_path: str) -> None:
-        if not self.state.dataset_dir: return
-        img_path = self.state.dataset_dir / rel_path
+    _monitor_dir: Path | None = None         # dataset of the running process (telemetry events)
+    _monitor_image_root: Path | None = None  # where its new images are written right now
+
+    def _run_dataset_dir(self) -> Path | None:
+        """Dataset the monitor shows: the running process's, else the selected one."""
+        return self._monitor_dir or self.state.dataset_dir
+
+    def _push_image(self, rel_path: str, root: Path | None = None) -> None:
+        base = root or self._run_dataset_dir()
+        if not base: return
+        img_path = base / rel_path
         if not img_path.exists(): return
         name = str(img_path)
         if self._recent_imgs and self._recent_imgs[-1] == name: return
@@ -119,7 +138,7 @@ class PipelineMonitorMixin:
         self._thumb_busy, self._thumb_rerun = True, False
         self._thumb_gen += 1
         gen = self._thumb_gen
-        args = (list(self._recent_imgs), self.state.dataset_dir, self._label_dict,
+        args = (list(self._recent_imgs), self._run_dataset_dir(), self._label_dict,
                 self._image_to_sample, self._meta_by_sample, self._meta_by_image_rel, draw_defect_overlay)
         prepare = self.ui.prepare_thumbnails
 
@@ -157,12 +176,13 @@ class PipelineMonitorMixin:
 
         proc_running = self.logic.is_process_running()
         if self._prev_proc_running and not proc_running:
-            if self.state.dataset_dir: self._start_dataset_size_calc(self.state.dataset_dir)
+            if ds := self._run_dataset_dir(): self._start_dataset_size_calc(ds)
             self._last_ds_size_ts = now
+            self._monitor_dir = self._monitor_image_root = None  # run over: back to the selected dataset
         self._prev_proc_running = proc_running
 
         if proc_running and (now - self._last_ds_size_ts) >= 5.0:
-            if self.state.dataset_dir: self._start_dataset_size_calc(self.state.dataset_dir)
+            if ds := self._run_dataset_dir(): self._start_dataset_size_calc(ds)
             self._last_ds_size_ts = now
 
     def _snap_every_n(self) -> int:

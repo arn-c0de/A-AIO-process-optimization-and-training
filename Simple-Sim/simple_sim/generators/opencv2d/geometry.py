@@ -122,8 +122,11 @@ def lifted_corner_geometry(
     comp_width: int,
     tilt_deg: float,
     selector: int,
+    scale: float = 1.0,
 ) -> dict[str, Any]:
-    """Geometry of a body with one corner raised (shared by flat and photoreal styles)."""
+    """Geometry of a body with one corner raised (shared by flat and photoreal styles).
+
+    *scale*: pixels of *box* per camera pixel (the supersampling), for the cap of the lift."""
     pts = box.astype(np.float32)
     k = selector % 4
     corner = pts[k]
@@ -132,7 +135,8 @@ def lifted_corner_geometry(
 
     # Raised corner appears displaced outward (closer to camera) proportional to tilt.
     # Capped so large bodies (QFN/SOIC) do not get implausibly long lifts.
-    lift = min(comp_width * 0.35, 18.0) * float(np.sin(np.radians(min(90.0, tilt_deg))))
+    # The cap is 18 camera px: unscaled it halved the lift at supersampling 2, a third at 3, ...
+    lift = min(comp_width * 0.35, 18.0 * float(scale)) * float(np.sin(np.radians(min(90.0, tilt_deg))))
     lifted = pts.copy()
     lifted[k] = corner + diag * lift * 0.6
 
@@ -161,12 +165,16 @@ def body_geometry(
     # round() (not int()) so shifts just past tolerance do not truncate back inside it.
     cx = w // 2 + int(round(defect_params["shift_x"]))
     cy = h // 2 + int(round(defect_params["shift_y"]))
+    # The label is derived from the float shift: center_f keeps it for drawing at this resolution
+    # (rounding both axes moved up to 0.7 px, across the tolerance with continuous placement sampling).
+    center_f = (w // 2 + float(defect_params["shift_x"]), h // 2 + float(defect_params["shift_y"]))
     tilt_deg = abs(defect_params["tilt_deg"])
     thresh = float(tolerances.get("tombstone_tilt_deg", 75.0)) if tolerances is not None else 75.0
     # SOLDER_BRIDGE / CORNER_LIFT carry tilt but are never tombstones.
     is_tombstone = tilt_deg >= thresh and defect_params["type"] not in NEVER_TOMBSTONE
     return {
         "center": (cx, cy),
+        "center_f": center_f,
         "length": int(nominal["component_length"]),
         "width": int(nominal["component_width"]),
         "rotation_deg": float(defect_params["rotation_deg"]),

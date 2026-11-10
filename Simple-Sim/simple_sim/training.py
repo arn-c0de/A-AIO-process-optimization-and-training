@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,8 @@ from simple_sim.telemetry import emit
 __all__ = [
     "LR_FLOOR",
     "PROFILE_CLASSIFIER",
+    "CheckpointMeta",
+    "EpochRun",
     "build_scheduler",
     "build_training",
     "dataset_profile_names",
@@ -193,41 +196,49 @@ def validate(
     return float(res.avg_loss or 0.0), metrics, res.num_samples
 
 
-def fit_epoch(
-    model: nn.Module,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    criterion: nn.Module,
-    optimizer: optim.Optimizer,
-    device: torch.device,
-    class_names: list[str],
-    *,
-    epoch: int,
-    total_epochs: int,
-    critical_classes: list[str] | None = None,
-    use_amp: bool = False,
-    scaler: torch.amp.GradScaler | None = None,
-    emit_events: bool = True,
-    frozen: list[nn.Module] | None = None,
-    val_criterion: nn.Module | None = None,
-) -> dict[str, Any]:
-    """Train + validate one epoch (0-based *epoch*), log the summary and return its stats.
+@dataclass
+class EpochRun:
+    """What stays the same for every epoch of one training run: the input of :func:`fit_epoch`.
 
     Validation uses *val_criterion*, by default :func:`plain_criterion` of *criterion* (no label
     smoothing), so ``val_loss`` is comparable across runs.
     """
-    if val_criterion is None:
-        val_criterion = plain_criterion(criterion)
+
+    model: nn.Module
+    train_loader: DataLoader
+    val_loader: DataLoader
+    criterion: nn.Module
+    optimizer: optim.Optimizer
+    device: torch.device
+    class_names: list[str]
+    total_epochs: int
+    critical_classes: list[str] | None = None
+    use_amp: bool = False
+    scaler: torch.amp.GradScaler | None = None
+    emit_events: bool = True
+    frozen: list[nn.Module] | None = None
+    val_criterion: nn.Module | None = None
+
+    def __post_init__(self) -> None:
+        if self.val_criterion is None:
+            self.val_criterion = plain_criterion(self.criterion)
+
+
+def fit_epoch(run: EpochRun, epoch: int) -> dict[str, Any]:
+    """Train + validate one epoch (0-based *epoch*) of *run*, log the summary and return its stats."""
+    total_epochs, emit_events = run.total_epochs, run.emit_events
     log.info(f"\nEpoch {epoch + 1}/{total_epochs}")
     if emit_events:
         emit("epoch_start", epoch=int(epoch + 1), epochs=int(total_epochs))
 
     t_epoch = time.perf_counter()
     train_loss, train_seen = train_epoch(
-        model, train_loader, criterion, optimizer, device, use_amp=use_amp, scaler=scaler, frozen=frozen
+        run.model, run.train_loader, run.criterion, run.optimizer, run.device,
+        use_amp=run.use_amp, scaler=run.scaler, frozen=run.frozen,
     )
     val_loss, val_metrics, val_seen = validate(
-        model, val_loader, val_criterion, device, class_names, critical_classes=critical_classes, use_amp=use_amp
+        run.model, run.val_loader, run.val_criterion, run.device, run.class_names,
+        critical_classes=run.critical_classes, use_amp=run.use_amp,
     )
     stats = {
         "epoch": int(epoch + 1),
@@ -319,26 +330,36 @@ def last_checkpoint_path(output_path: Path) -> Path:
     return output_path.with_name(output_path.stem + "_last.pt")
 
 
+@dataclass(frozen=True)
+class CheckpointMeta:
+    """Per-run metadata every checkpoint of a training run carries (see :func:`make_checkpoint`).
+
+    *profile* is the dataset's ``(profile_id, profile_hash)``
+    (:func:`simple_sim.manifest.resolve_dataset_profile`; ``"multi"`` for multi-profile datasets).
+    Profile classifiers pass *checkpoint_type* :data:`PROFILE_CLASSIFIER`.
+    """
+
+    class_names: list[str]
+    config: dict[str, Any]
+    profile: tuple[str, str]
+    manifest_path: Path
+    data_dir: Path
+    checkpoint_type: str | None = None
+
+
 def make_checkpoint(
+    meta: CheckpointMeta,
     *,
     epoch: int,
     model: nn.Module,
     optimizer: optim.Optimizer,
     stats: dict[str, Any],
-    class_names: list[str],
-    config: dict[str, Any],
-    profile: tuple[str, str],
-    manifest_path: Path,
-    data_dir: Path,
     best: tuple[float, int] | None = None,
-    checkpoint_type: str | None = None,
 ) -> dict[str, Any]:
     """The checkpoint dict saved after 1-based *epoch*.
 
-    *stats* is the :func:`fit_epoch` result, *profile* the dataset's ``(profile_id, profile_hash)``
-    (:func:`simple_sim.manifest.resolve_dataset_profile`; ``"multi"`` for multi-profile datasets),
-    *best* the best-so-far ``(val_f1, epoch)`` that resume continues from. Profile classifiers
-    pass *checkpoint_type* :data:`PROFILE_CLASSIFIER`.
+    *stats* is the :func:`fit_epoch` result, *best* the best-so-far ``(val_f1, epoch)`` that
+    resume continues from.
     """
     ckpt: dict[str, Any] = {
         'epoch': int(epoch),
@@ -349,13 +370,13 @@ def make_checkpoint(
     }
     if best is not None:
         ckpt['best_val_f1'], ckpt['best_epoch'] = best
-    ckpt['class_names'] = list(class_names)
-    ckpt['config'] = config
-    if checkpoint_type is not None:
-        ckpt['checkpoint_type'] = checkpoint_type
-    ckpt['component_profile'] = {'profile_id': profile[0], 'profile_hash': profile[1]}
-    ckpt['dataset_manifest_hash'] = hash_file(manifest_path)
-    ckpt['trained_on_dataset'] = str(data_dir)
+    ckpt['class_names'] = list(meta.class_names)
+    ckpt['config'] = meta.config
+    if meta.checkpoint_type is not None:
+        ckpt['checkpoint_type'] = meta.checkpoint_type
+    ckpt['component_profile'] = {'profile_id': meta.profile[0], 'profile_hash': meta.profile[1]}
+    ckpt['dataset_manifest_hash'] = hash_file(meta.manifest_path)
+    ckpt['trained_on_dataset'] = str(meta.data_dir)
     return ckpt
 
 
@@ -426,6 +447,7 @@ def _defect_loaders(data_dir: Path, class_names: list[str], train_config: dict[s
     val_dataset = ROIDataset(data_dir, 'val', class_names, return_id=True, cache_images=cache_images)
     log.info(f"Train samples: {len(train_dataset)}")
     log.info(f"Val samples: {len(val_dataset)}")
+    _require_samples(data_dir, train=len(train_dataset), val=len(val_dataset))
     log.info(format_distribution("Train class distribution", train_dataset.get_class_distribution()))
 
     # Shuffle order from its own seeded generator: independent of how much of the global torch RNG
@@ -436,12 +458,24 @@ def _defect_loaders(data_dir: Path, class_names: list[str], train_config: dict[s
     return train_loader, val_loader
 
 
+def _require_samples(data_dir: Path, **split_sizes: int) -> None:
+    """Refuse to train with an empty split: without val samples every epoch scores F1 0, so
+    ``--out`` silently kept the first epoch."""
+    empty = [name for name, n in split_sizes.items() if n == 0]
+    if empty:
+        raise ValueError(f"Dataset {data_dir} has no usable samples in split(s): {', '.join(empty)}. "
+                         "Check splits/*.txt and that the labels match the classes in config.yaml.")
+
+
 def _restore_resume_state(resume_path: Path, model: nn.Module, optimizer: optim.Optimizer, *, device: torch.device,
                           class_names: list[str], train_config: dict[str, Any], profile: tuple[str, str | None],
-                          allow_profile_mismatch: bool) -> tuple[int, float, int]:
+                          allow_profile_mismatch: bool, data_dir: Path | None = None,
+                          manifest_path: Path | None = None) -> tuple[int, float, int]:
     """Load *resume_path* into *model* / *optimizer* after the class and profile guards.
 
-    Returns ``(start_epoch, best_val_f1, best_epoch)`` of the resumed run.
+    Returns ``(start_epoch, best_val_f1, best_epoch)`` of the resumed run. The best score is only
+    carried over when the checkpoint was trained on this dataset (*data_dir*, same manifest): a val
+    F1 measured on another val split would keep every epoch on the new data from becoming "best".
     """
     dataset_profile_id, dataset_profile_hash = profile
     if not resume_path.exists():
@@ -480,8 +514,37 @@ def _restore_resume_state(resume_path: Path, model: nn.Module, optimizer: optim.
     best_val_f1 = float(checkpoint.get('best_val_f1', checkpoint.get('val_f1', 0.0)) or 0.0)
     best_epoch = int(checkpoint.get('best_epoch', checkpoint.get('epoch', 0)))
     log.info(f"  Resumed from epoch: {start_epoch}")
+    if _other_dataset(checkpoint, data_dir, manifest_path):
+        log.info(f"  Checkpoint was trained on other data ({checkpoint.get('trained_on_dataset')}); "
+                 f"its best val F1 {best_val_f1:.4f} does not count for this dataset.")
+        return start_epoch, 0.0, 0
     log.info(f"  Resumed best val F1: {best_val_f1:.4f}")
     return start_epoch, best_val_f1, best_epoch
+
+
+def _same_file(path: Path, *others: Path) -> bool:
+    """True when *path* is one of *others* (resolved)."""
+    try:
+        target = Path(path).resolve()
+        return any(Path(o).resolve() == target for o in others)
+    except OSError:
+        return False
+
+
+def _other_dataset(checkpoint: dict[str, Any], data_dir: Path | None, manifest_path: Path | None) -> bool:
+    """True when *checkpoint* records another dataset (path or manifest hash) than the one being trained on.
+    A checkpoint without those entries counts as the same dataset."""
+    trained_on = checkpoint.get('trained_on_dataset')
+    if data_dir is not None and trained_on:
+        try:
+            if Path(str(trained_on)).resolve() != Path(data_dir).resolve():
+                return True
+        except OSError:
+            return True
+    stored_hash = checkpoint.get('dataset_manifest_hash')
+    if manifest_path is not None and stored_hash and Path(manifest_path).exists():
+        return str(stored_hash) != str(hash_file(manifest_path))
+    return False
 
 
 def _total_epochs(epochs: int, start_epoch: int, extra_epochs: int | None) -> int:
@@ -570,12 +633,18 @@ def train_model(
     if resume_path:
         start_epoch, best_val_f1, best_epoch = _restore_resume_state(
             resume_path, model, optimizer, device=device, class_names=class_names, train_config=train_config,
-            profile=(dataset_profile_id, dataset_profile_hash), allow_profile_mismatch=allow_profile_mismatch)
+            profile=(dataset_profile_id, dataset_profile_hash), allow_profile_mismatch=allow_profile_mismatch,
+            data_dir=data_dir, manifest_path=manifest_path)
 
     total_epochs = _total_epochs(int(epochs), start_epoch, extra_epochs)
 
     # Where to save a "last checkpoint" so resume runs always write something.
     last_path = last_checkpoint_path(output_path)
+    # Val F1 of what --out holds: the resumed best when --out is that run's own file, else nothing
+    # yet (a new --out, or a best score that was reset for another dataset).
+    out_f1: float | None = None
+    if resume_path and best_epoch > 0 and output_path.exists() and _same_file(resume_path, output_path, last_path):
+        out_f1 = best_val_f1
 
     # LR schedule over the whole run (resume continues it at start_epoch).
     scheduler = build_scheduler(optimizer, train_config, total_epochs)
@@ -604,14 +673,18 @@ def train_model(
                 "best_val_accuracy": best_val_acc, "last_epoch": None}
 
     critical_classes = config.get('eval', {}).get('critical_classes')
+    run = EpochRun(
+        model, train_loader, val_loader, criterion, optimizer, device, class_names,
+        total_epochs=total_epochs, critical_classes=critical_classes, use_amp=use_amp, scaler=scaler, frozen=frozen,
+    )
+    ckpt_meta = CheckpointMeta(
+        class_names=class_names, config=config, profile=(dataset_profile_id, dataset_profile_hash),
+        manifest_path=manifest_path, data_dir=data_dir,
+    )
     stats: dict[str, Any] = {}
     for epoch in range(start_epoch, total_epochs):
         log.info(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
-        stats = fit_epoch(
-            model, train_loader, val_loader, criterion, optimizer, device, class_names,
-            epoch=epoch, total_epochs=total_epochs, critical_classes=critical_classes,
-            use_amp=use_amp, scaler=scaler, frozen=frozen,
-        )
+        stats = fit_epoch(run, epoch)
         val_acc = stats['val_accuracy']
         val_f1 = stats['val_macro_f1']
         if scheduler is not None:
@@ -626,13 +699,15 @@ def train_model(
             best_val_acc = float(val_acc)
             best_epoch = int(epoch + 1)
         # --out: the best epoch ('best'), every epoch ('last'); written at least once either way.
-        write_out = is_best or out_mode == "last" or not output_path.exists()
+        # 'best' compares with what --out holds, so a resume into a new --out keeps the best epoch
+        # of this run there instead of the first one.
+        write_out = is_best or out_mode == "last" or out_f1 is None or val_f1 > out_f1 or not output_path.exists()
+        if write_out:
+            out_f1 = float(val_f1)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         ckpt = make_checkpoint(
-            epoch=epoch + 1, model=model, optimizer=optimizer, stats=stats, class_names=class_names,
-            config=config, profile=(dataset_profile_id, dataset_profile_hash),
-            manifest_path=manifest_path, data_dir=data_dir, best=(best_val_f1, best_epoch),
+            ckpt_meta, epoch=epoch + 1, model=model, optimizer=optimizer, stats=stats, best=(best_val_f1, best_epoch),
         )
 
         # Always save "last" so resume runs are observable.
@@ -709,6 +784,7 @@ def train_profile_model(
     log.info("\nLoading datasets...")
     train_dataset = ProfileDataset(data_dir, 'train', profile_names, return_id=True)
     val_dataset = ProfileDataset(data_dir, 'val', profile_names, return_id=True)
+    _require_samples(data_dir, train=len(train_dataset), val=len(val_dataset))
     log.info(f"Train samples: {len(train_dataset)}")
     log.info(f"Val samples: {len(val_dataset)}")
 
@@ -736,23 +812,24 @@ def train_profile_model(
     emit("train_profile_start", dataset_dir=str(data_dir), out_model=str(output_path),
          epochs=epochs, profiles=profile_names)
 
+    run = EpochRun(
+        model, train_loader, val_loader, criterion, optimizer, device, profile_names,
+        total_epochs=epochs, use_amp=use_amp, scaler=scaler, emit_events=False, frozen=frozen,
+    )
+    ckpt_meta = CheckpointMeta(
+        class_names=profile_names, config=config, profile=dataset_profile, manifest_path=manifest_path,
+        data_dir=data_dir, checkpoint_type=PROFILE_CLASSIFIER,
+    )
     stats: dict[str, Any] = {}
     for epoch in range(epochs):
         log.info(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
-        stats = fit_epoch(
-            model, train_loader, val_loader, criterion, optimizer, device, profile_names,
-            epoch=epoch, total_epochs=epochs, use_amp=use_amp, scaler=scaler, emit_events=False, frozen=frozen,
-        )
+        stats = fit_epoch(run, epoch)
         val_f1 = stats['val_macro_f1']
         if scheduler is not None:
             scheduler.step()
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        ckpt = make_checkpoint(
-            epoch=epoch + 1, model=model, optimizer=optimizer, stats=stats, class_names=profile_names,
-            config=config, profile=dataset_profile, manifest_path=manifest_path, data_dir=data_dir,
-            checkpoint_type=PROFILE_CLASSIFIER,
-        )
+        ckpt = make_checkpoint(ckpt_meta, epoch=epoch + 1, model=model, optimizer=optimizer, stats=stats)
         torch.save(ckpt, last_path)
 
         # Always write --out at least once, even if val F1 never rises above 0.

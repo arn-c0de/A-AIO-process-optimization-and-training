@@ -18,6 +18,7 @@ from simple_sim.blender.job_schema import (BOARD_SCALE, DEFAULT_COMPONENT_HEIGHT
                                            PreparedJob)
 from simple_sim.board.footprints import DEFAULT_FOOTPRINT
 from simple_sim.parallel import imap_ordered
+from simple_sim.rng import STREAM_BAKE, render_seed
 from simple_sim.generators.opencv2d.photoreal.look import LEGACY_LOOK
 from simple_sim.generators.opencv2d.photoreal import (DEFAULT_SUPERSAMPLING, camera_config, camera_model, camera_settings, mask_gloss, render_board,
                                                      rework_probability, sample_camera_pose)
@@ -93,7 +94,7 @@ def prepare_job(job: BlenderJob, work_dir: Path, index: int) -> PreparedJob:
     scale = max(float(BOARD_SCALE), 1.5 * pose["zoom"] / max(np.cos(np.radians(pose["tilt"])), 0.5))
     config["supersampling"] = bake_supersampling(config["supersampling"], int(np.ceil(max(w, h) * scale)))
     texture, scene = render_board(job["nominal"], job["defect"], config, job.get("tolerances"),
-                                  np.random.default_rng(seed), str(job.get("footprint", DEFAULT_FOOTPRINT)),
+                                  np.random.default_rng(render_seed(seed, STREAM_BAKE)), str(job.get("footprint", DEFAULT_FOOTPRINT)),
                                   (int(np.ceil(w * scale)), int(np.ceil(h * scale))), crowd=scale * scale)
     work_dir.mkdir(parents=True, exist_ok=True)
     path = (work_dir / f"board_{index:06d}.png").resolve()

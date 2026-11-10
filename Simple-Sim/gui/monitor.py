@@ -45,7 +45,7 @@ from gui.utils.settings_store import SettingsStore
 from gui.utils.system_stats import SystemStatsSampler
 from gui.utils.tooltip import set_hover_hint_sink
 from gui.widgets.status import StatusBar
-import contextlib
+from gui.utils.tk_safe import quiet
 
 APP_TITLE = "Simple-Sim Monitor"
 APP_VERSION = "1.0"
@@ -109,9 +109,9 @@ class MonitorAppTabbed:
         set_hover_hint_sink(self.statusbar.hint)
         bus = self.ctx.bus
         bus.subscribe(Topics.STATUS, lambda text, level="info": self.statusbar.show(text, level))
-        bus.subscribe(Topics.TASK_STARTED, lambda task: self.statusbar.task_started(task))
-        bus.subscribe(Topics.TASK_PROGRESS, lambda task: self.statusbar.task_progress(task))
-        bus.subscribe(Topics.TASK_FINISHED, lambda task: self.statusbar.task_finished(task))
+        bus.subscribe(Topics.TASK_STARTED, self.statusbar.task_started)
+        bus.subscribe(Topics.TASK_PROGRESS, self.statusbar.task_progress)
+        bus.subscribe(Topics.TASK_FINISHED, self.statusbar.task_finished)
 
         body = ttk.Frame(self.root)
         body.pack(fill="both", expand=True)
@@ -343,10 +343,10 @@ class MonitorAppTabbed:
                 self.ctx.dispatcher.detach()
             except Exception:
                 pass
-            with contextlib.suppress(Exception):
+            with quiet():
                 self._stats.stop()
             if self._perf_tick_id is not None:
-                with contextlib.suppress(Exception):
+                with quiet():
                     self.root.after_cancel(self._perf_tick_id)
                 self._perf_tick_id = None
             if self.state.settings_store is not None:
@@ -358,7 +358,7 @@ class MonitorAppTabbed:
                 self.state.settings_store.save()
         finally:
             set_hover_hint_sink(None)
-            with contextlib.suppress(Exception):
+            with quiet():
                 self.root.destroy()
 
     def _close_tabs(self) -> None:
@@ -370,7 +370,7 @@ class MonitorAppTabbed:
         don't outlive the window.
         """
         for tab in self.tabs.values():
-            with contextlib.suppress(Exception):
+            with quiet():
                 tab.on_close()
             if type(tab).on_close is not BaseTab.on_close:
                 continue
@@ -380,7 +380,7 @@ class MonitorAppTabbed:
             for name in ("stop_pipeline", "stop"):
                 stop = getattr(logic, name, None)
                 if callable(stop):
-                    with contextlib.suppress(Exception):
+                    with quiet():
                         stop()
                     break
 
@@ -418,7 +418,7 @@ class MonitorAppTabbed:
         """Notify all tabs (and bus subscribers) that the dataset has changed."""
         for tab in self.tabs.values():
             if tab.initialized:
-                with contextlib.suppress(Exception):
+                with quiet():
                     tab.on_dataset_changed()
         self.ctx.bus.publish(Topics.DATASET_CHANGED, path=self.state.dataset_dir)
 
@@ -426,7 +426,7 @@ class MonitorAppTabbed:
         """Notify initialized tabs that dataset catalog metadata changed."""
         for tab in self.tabs.values():
             if tab.initialized:
-                with contextlib.suppress(Exception):
+                with quiet():
                     tab.refresh()
         self.ctx.bus.publish(Topics.DATASET_CATALOG_CHANGED)
 

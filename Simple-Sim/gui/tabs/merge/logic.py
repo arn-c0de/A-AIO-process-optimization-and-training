@@ -96,7 +96,7 @@ class MergeLogic:
             root = self._model_root()
             
         cur = rp if rp.is_dir() else rp.parent
-        while cur != root and cur.parent != cur:
+        while cur not in (root, cur.parent):
             if is_bundle_dir(cur):
                 return cur
             cur = cur.parent

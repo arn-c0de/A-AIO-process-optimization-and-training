@@ -44,9 +44,8 @@ class EventBus:
             self._subs[topic].append(handler)
 
         def unsubscribe() -> None:
-            with self._lock:
-                with contextlib.suppress(ValueError):
-                    self._subs[topic].remove(handler)
+            with self._lock, contextlib.suppress(ValueError):
+                self._subs[topic].remove(handler)
 
         return unsubscribe
 

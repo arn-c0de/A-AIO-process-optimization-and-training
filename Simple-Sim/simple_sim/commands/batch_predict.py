@@ -51,7 +51,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
                     help="Compare only same split as current or any split")
     ap.add_argument("--history-limit", type=int, default=10, help="How many history rows to print")
     ap.add_argument("--history-dirs", default=None,
-                    help="Comma-separated list of dirs to search for reports (default: outputs/models and outputs/models/history)")
+                    help="Comma-separated list of dirs to search for reports (default: the model's directory, its history/ and the report's output dir)")
     ap.add_argument("--profile-model", default=None,
                     help="Optional path to profile classifier checkpoint (.pt) for two-stage evaluation")
     add_json_flag(ap)

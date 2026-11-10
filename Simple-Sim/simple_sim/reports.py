@@ -120,7 +120,13 @@ def report_path(report: Mapping[str, Any]) -> str | None:
 def report_search_dirs(sim_root: Path) -> list[Path]:
     """All directories where eval/batch reports are written, de-duplicated, in stable order."""
     sim_root = Path(sim_root)
-    dirs: list[Path] = [sim_root / "outputs" / "models", sim_root / "outputs" / "models" / "history"]
+    models = sim_root / "outputs" / "models"
+    dirs: list[Path] = [models, models / "history"]
+    # eval writes its report next to the checkpoint, batch-predict into <model dir>/history: models
+    # in sub-folders (versions/<name>/, imports/, bundle dirs) have their reports there.
+    if models.is_dir():
+        for sub in sorted(d for d in models.rglob("*") if d.is_dir() and d.name != "history"):
+            dirs.extend((sub, sub / "history"))
     sim_data = sim_root / "outputs" / "sim_data"
     datasets: list[Path] = []
     runs = sim_data / "runs"

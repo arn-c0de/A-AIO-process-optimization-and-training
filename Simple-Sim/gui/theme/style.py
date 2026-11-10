@@ -29,7 +29,7 @@ from collections.abc import Callable
 from typing import Any
 
 from gui.theme.tokens import FONT_ROLES, SPACE, Palette, font_name, palette_for
-import contextlib
+from gui.utils.tk_safe import quiet
 
 _ATTR_PALETTE = "_simsim_palette"
 _ATTR_LISTENERS = "_simsim_theme_listeners"
@@ -86,7 +86,7 @@ def apply_scaling(root: tk.Misc, factor: float | None) -> None:
     """Scale Tk points->pixels by ``factor`` (1.0 = 96 dpi). ``None`` keeps Tk's default."""
     if factor is None:
         return
-    with contextlib.suppress(Exception):
+    with quiet():
         root.tk.call("tk", "scaling", 96.0 / 72.0 * float(factor))
 
 
@@ -134,7 +134,7 @@ def ensure_basic_styles(widget: tk.Misc) -> None:
         if name in existing:
             continue
         family = mono["family"] if fam == "mono" else base["family"]
-        with contextlib.suppress(Exception):
+        with quiet():
             tkfont.Font(root=root, name=name, family=family, size=size, weight=weight, slant=slant)
     p = palette_for("light")
     style = ttk.Style(root)
@@ -379,7 +379,7 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
     _ensure_fonts(root)
 
     style = ttk.Style(root)
-    with contextlib.suppress(Exception):
+    with quiet():
         style.theme_use("clam")
 
     body, small, heading, title = font("Body"), font("Small"), font("Heading"), font("Title")
@@ -441,6 +441,6 @@ def _notify(root: tk.Misc, pal: Palette) -> None:
         except Exception:
             continue
         alive.append((widget, cb))
-        with contextlib.suppress(Exception):
+        with quiet():
             cb(pal)
     setattr(root, _ATTR_LISTENERS, alive)

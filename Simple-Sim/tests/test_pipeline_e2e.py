@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.generation.dataset import generate_dataset
-from tools.validate_dataset import validate_dataset
+from simple_sim.dataset_validation import validate_dataset
 
 
 def test_pipeline_e2e():

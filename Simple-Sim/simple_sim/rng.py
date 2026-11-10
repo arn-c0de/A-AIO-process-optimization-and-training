@@ -33,9 +33,8 @@ def derive_sample_seed(run_seed: int, domain: str, index: int) -> int:
     seed = int.from_bytes(hash_bytes[:8], byteorder='big')
 
     # Ensure non-negative (NumPy accepts 0; avoid negative for other libs).
-    seed = seed & 0x7FFFFFFFFFFFFFFF  # Mask to 63 bits
+    return seed & 0x7FFFFFFFFFFFFFFF  # Mask to 63 bits
 
-    return seed
 
 
 def make_sample_id(run_id: str, domain: str, split: str, index: int) -> str:
@@ -94,3 +93,15 @@ def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed % (2**32))
     torch.manual_seed(seed)
+
+
+#: Keys of the per-sample random streams derived from a sample seed (``default_rng([seed, key])``).
+#: The plain ``default_rng(seed)`` stream samples geometry, defect and augmentation; anything that
+#: renders must not start it again, or its first draws repeat those numbers (view angle = pad
+#: width, mask colour = shift, ...).
+STREAM_RENDER, STREAM_POSE, STREAM_BAKE, STREAM_POST = 1, 2, 3, 4
+
+
+def render_seed(seed: int, stream: int = STREAM_RENDER) -> list[int]:
+    """Seed sequence of the *stream* of sample *seed*, for ``np.random.default_rng``."""
+    return [int(seed), int(stream)]

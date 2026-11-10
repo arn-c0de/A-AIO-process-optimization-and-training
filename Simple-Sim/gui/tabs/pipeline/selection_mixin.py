@@ -32,7 +32,7 @@ from simple_sim.dataset_files import CONFIG_YAML, DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.io_utils import load_yaml, now_tag, rel_to
 from simple_sim.dataset_index import DatasetIndex
 from simple_sim.model_bundle import bundle_checkpoint_path
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 _LOG = logging.getLogger(__name__)
@@ -155,9 +155,8 @@ class PipelineSelectionMixin:
         self.ui.toggle_dataset_multi_widgets(enabled)
         self._sync_multi_summary()
         
-        if enabled:
-            if ds0 := self._selected_dataset_dir():
-                if label0 := self._dataset_label_for_path(ds0): self.ui.var_dataset.set(label0)
+        if enabled and (ds0 := self._selected_dataset_dir()):
+            if label0 := self._dataset_label_for_path(ds0): self.ui.var_dataset.set(label0)
         self._on_dataset_selected()
 
     def _open_dataset_multi_picker(self) -> None:
@@ -184,9 +183,8 @@ class PipelineSelectionMixin:
 
         self.ui.var_dataset_multi_paths.set(self._encode_dataset_paths_json(paths))
         self._sync_multi_summary()
-        if paths:
-            if label0 := self._dataset_label_for_path(paths[0]):
-                self.ui.var_dataset.set(label0)
+        if paths and (label0 := self._dataset_label_for_path(paths[0])):
+            self.ui.var_dataset.set(label0)
         self._on_dataset_selected()
 
     def _decode_dataset_paths_json(self, s: str) -> list[Path]:
@@ -253,7 +251,7 @@ class PipelineSelectionMixin:
                     if gen != self._model_meta_gen: return
                     self._model_profile_cache.update(res)
                     self._update_model_dropdown_for_dataset(); self._schedule_profile_compat_check()
-                with contextlib.suppress(Exception): self.post(apply)
+                with quiet(): self.post(apply)
             threading.Thread(target=worker, daemon=True).start()
 
         root_resolved = self.sim_root.resolve()
@@ -351,7 +349,7 @@ class PipelineSelectionMixin:
 
     def _set_profiles_multi(self, pids: list[str]) -> None:
         pids = [str(x).strip() for x in (pids or []) if str(x).strip()]
-        with contextlib.suppress(Exception): self.ui.var_profiles_multi_json.set(json.dumps(pids, ensure_ascii=True))
+        with quiet(): self.ui.var_profiles_multi_json.set(json.dumps(pids, ensure_ascii=True))
         self.ui.var_profiles_multi_summary.set(summarize_profile_ids(pids))
 
     def _on_profiles_multi_toggle(self) -> None:
@@ -362,7 +360,7 @@ class PipelineSelectionMixin:
             cur = self._profiles_multi_list(available=self._profiles_multi_available_values())
             if not cur and (pid := self.ui.var_profile.get().strip()): cur = [pid]
             self._set_profiles_multi(cur)
-        with contextlib.suppress(Exception): self._refresh_precise_classes()
+        with quiet(): self._refresh_precise_classes()
 
     def _pick_profiles_multi(self) -> None:
         values = self._profiles_multi_available_values()
@@ -379,7 +377,7 @@ class PipelineSelectionMixin:
         self._set_profiles_multi(sel)
         if sel:
             self.ui.var_profile.set(sel[0])
-        with contextlib.suppress(Exception):
+        with quiet():
             self._refresh_precise_classes()
 
     def _on_render_backend_changed(self, _event: object | None = None) -> None:
@@ -391,7 +389,7 @@ class PipelineSelectionMixin:
     def _on_profile_selected(self, _event: object | None = None) -> None:
         if not (profile_id := self.ui.var_profile.get().strip()): return
 
-        with contextlib.suppress(Exception): self._autoselect_config_for_profile(profile_id, prefer_quiet=True)
+        with quiet(): self._autoselect_config_for_profile(profile_id, prefer_quiet=True)
 
         # Do not open profile-switch/create popups automatically.
         # Keep profile selection passive and only update state.
@@ -419,18 +417,11 @@ class PipelineSelectionMixin:
 
         if (cur := self.ui.var_config.get().strip()) == rel: return
 
-        if prefer_quiet and cur and want_backend:
-            try:
-                cur_path = (self.sim_root / cur) if not Path(cur).is_absolute() else Path(cur)
-                if cur_path.exists():
-                    data = load_yaml(cur_path)
-                    cur_backend = ((data.get("render") or {}).get("backend") or "").strip()
-                    cur_profile = ((data.get("run") or {}).get("component_profile") or "")
-                    if cur_backend == want_backend and str(cur_profile).strip() == str(profile_id).strip(): return
-            except Exception: return
+        # prefer_quiet: a Config field that already is a config of this profile (and backend) stays.
+        if prefer_quiet and cur and self.logic.chosen_config_for_profile(cur, profile_id, want_backend): return
 
         self.ui.var_config.set(rel)
-        with contextlib.suppress(Exception):
+        with quiet():
             self._refresh_precise_classes()
 
     def _show_profile_info(self) -> None:
@@ -446,12 +437,12 @@ class PipelineSelectionMixin:
             info_text = f"Profile ID: {profile_id}\nPath: {profile_path}\n\n" + "="*60 + "\n\n" + yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
             dialogs.show_text(self.frame, f"Profile Info: {profile_id}", info_text, size=(640, 520))
 
-        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load profile:\n{str(e)}")
+        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load profile:\n{e!s}")
 
     def _schedule_profile_compat_check(self, delay_ms: int = 300) -> None:
         # Debounce: var_model is written repeatedly while typing/refreshing; check only after edits settle.
         if self._compat_after_id is not None:
-            with contextlib.suppress(Exception): self.frame.after_cancel(self._compat_after_id)
+            with quiet(): self.frame.after_cancel(self._compat_after_id)
         self._compat_after_id = self.frame.after(delay_ms, self._run_scheduled_profile_compat_check)
 
     def _run_scheduled_profile_compat_check(self) -> None:
@@ -489,7 +480,7 @@ class PipelineSelectionMixin:
                         try: self.logic.read_checkpoint_meta(model_path)
                         finally:
                             def done() -> None: self._compat_loading.discard(key); self._schedule_profile_compat_check(0)
-                            with contextlib.suppress(Exception): self.post(done)
+                            with quiet(): self.post(done)
                     threading.Thread(target=worker, daemon=True).start()
                 return
             if meta.get("error"): self.ui.var_profile_compat.set(""); return
@@ -514,7 +505,7 @@ class PipelineSelectionMixin:
             else: info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
             dialogs.show_text(self.frame, f"Dataset Profile: {ds.name}", info_text, size=(680, 560))
 
-        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load dataset profile info:\n{str(e)}")
+        except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load dataset profile info:\n{e!s}")
 
     def _apply_name_to_out_and_model(self) -> None:
         base = self.logic.slugify_name(self.ui.var_name.get())
@@ -570,9 +561,9 @@ class PipelineSelectionMixin:
 
         self._schedule_profile_compat_check(); self._apply_dataset_settings(ds)
 
-        with contextlib.suppress(Exception): self.parent.event_generate("<<DatasetChanged>>", when="tail")
+        with quiet(): self.parent.event_generate("<<DatasetChanged>>", when="tail")
         
-        with contextlib.suppress(Exception): self._refresh_models()
+        with quiet(): self._refresh_models()
 
     def _start_dataset_index_load(self, ds: Path) -> None:
         self._ds_load_gen += 1

@@ -71,7 +71,7 @@ def get_render_backend(profile: dict) -> str:
     backends = profile.get("profile", {}).get("supported_render_backends", [])
     if "blender_3d" in backends:
         return "blender_3d"
-    elif "opencv_2d" in backends:
+    if "opencv_2d" in backends:
         return "opencv_2d"
     # Fallback: check profile name for hints
     profile_id = get_profile_id(profile)
@@ -384,7 +384,7 @@ def main() -> None:
     args = parser.parse_args()
     configure_cli_logging()
     try:
-        _run(args)
+        _run_keeping_gallery(args)
     except SystemExit as exc:
         if args.json and isinstance(exc.code, str):
             print(exc.code, file=sys.stderr)
@@ -397,6 +397,21 @@ def main() -> None:
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         emit_result("update-sample-gallery", ok=False, error=f"{type(exc).__name__}: {exc}")
         raise SystemExit(1) from exc
+
+
+def _run_keeping_gallery(args: argparse.Namespace) -> None:
+    """:func:`_run`; a failed run restores the gallery it had moved aside, a finished one drops it."""
+    try:
+        _run(args)
+    except BaseException:
+        if moved := getattr(args, "gallery_backup", None):
+            gallery_dir, backup = moved
+            shutil.rmtree(gallery_dir, ignore_errors=True)
+            backup.rename(gallery_dir)
+            print(f"Run failed: previous gallery restored in {gallery_dir}", file=sys.stderr)
+        raise
+    if moved := getattr(args, "gallery_backup", None):
+        shutil.rmtree(moved[1], ignore_errors=True)
 
 
 def _run(args: argparse.Namespace) -> None:
@@ -421,7 +436,13 @@ def _run(args: argparse.Namespace) -> None:
     # (per profile below), so images of the skipped backend survive.
     partial_run = bool(args.skip_2d or args.skip_3d)
     if gallery_dir.exists() and not args.dry_run and not partial_run:
-        shutil.rmtree(gallery_dir)
+        # Moved aside, not deleted: main() puts it back when the run fails (the 3D batch runs last, so
+        # a missing / failing Blender used to leave SAMPLE_GALLERY.md pointing at deleted images).
+        backup = gallery_dir.with_name(gallery_dir.name + ".old")
+        if backup.exists():
+            shutil.rmtree(backup)
+        gallery_dir.rename(backup)
+        args.gallery_backup = (gallery_dir, backup)
     gallery_dir.mkdir(parents=True, exist_ok=True)
 
     # Collect gallery entries

@@ -16,6 +16,7 @@ from simple_sim.filter_settings import NEUTRAL_AUGMENT
 from simple_sim.generators.opencv2d import apply_post_filters
 from simple_sim.generators.blender3d.bake import bake_fields
 from simple_sim.parallel import imap_ordered
+from simple_sim.rng import STREAM_POST, render_seed
 
 # Augment keys that do not by themselves require the post-filter chain:
 # rotation_deg is already applied by render_batch.py (global_rotation_root), and the
@@ -99,7 +100,7 @@ def postprocess_blender_images(records: Iterable[dict[str, Any]], output_root: P
         img = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if img is None:
             raise OSError(f"Failed to read Blender output image for filter postprocess: {path}")
-        img = apply_post_filters(img, aug, np.random.default_rng(int(r["seed"])))
+        img = apply_post_filters(img, aug, np.random.default_rng(render_seed(r["seed"], STREAM_POST)))
         if not cv2.imwrite(str(path), img):
             raise OSError(f"Failed to write filtered Blender image: {path}")
 

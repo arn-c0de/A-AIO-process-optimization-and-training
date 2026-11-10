@@ -51,8 +51,7 @@ def safe_profile_filename(profile_id: str) -> str:
     s = (profile_id or "").strip()
     if not s:
         s = "unknown_profile"
-    s = re.sub(r"[^A-Za-z0-9_.@-]+", "_", s)
-    return s
+    return re.sub(r"[^A-Za-z0-9_.@-]+", "_", s)
 
 
 _safe_profile_filename = safe_profile_filename  # former private name

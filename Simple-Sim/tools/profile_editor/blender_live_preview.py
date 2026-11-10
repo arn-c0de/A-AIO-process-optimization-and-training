@@ -11,6 +11,7 @@ from collections.abc import Callable
 
 from simple_sim.generators.blender3d.bake import bake_fields
 from simple_sim.generators.blender3d import profile_job_fields, render_blender_batch, write_jobs_jsonl
+from simple_sim.generators.blender3d.runner import BlenderCancelled
 
 
 StatusCallback = Callable[[str, Path | None], None]
@@ -66,6 +67,8 @@ class BlenderLivePreviewWorker:
                 self.on_status("rendering", None)
                 img_path = self._render(req)
                 self.on_status("ready", img_path)
+            except BlenderCancelled:
+                continue  # editor closed or a newer request is waiting: not an error
             except Exception as exc:
                 self.on_status(f"error: {exc}", None)
 
@@ -140,6 +143,9 @@ class BlenderLivePreviewWorker:
             cycles_samples=cycles_samples,
             device=device,
             engine=engine,
+            # Terminates Blender when the editor closes (it kept rendering as an orphan) or when a
+            # newer edit is waiting (the outdated render only delayed it).
+            should_stop=lambda: not self._running or self._pending is not None,
         )
         img_path = out_root / image_rel
         if not img_path.exists():

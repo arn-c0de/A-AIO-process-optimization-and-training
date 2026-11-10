@@ -31,7 +31,13 @@ def look_options(config: Mapping[str, Any]) -> dict[str, Any]:
     render = dict(config.get("render") or {})
     info = backend_of(render)
     backend = info.backend.value
+    roi = dict(config.get("roi") or {})
     out: dict[str, Any] = {
+        # Image size and physical scale: another size breaks batching in training, another scale
+        # mixes two magnifications under one config.yaml.
+        "roi.width_px": roi.get("width_px"),
+        "roi.height_px": roi.get("height_px"),
+        "roi.mm_per_px": roi.get("mm_per_px"),
         "render.backend": backend,
         "render.style": str(render.get("style", "photoreal")),
         "render.supersampling": supersampling(render),

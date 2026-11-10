@@ -137,17 +137,24 @@ def _show(
     elif view == "tk":
         from simple_sim.preview.viewer_tk import open_tk_viewer
 
-        open_tk_viewer(
-            out_root,
-            previews,
-            sim_root=SIM_ROOT,
-            profiles_dir=profiles_dir,
-            configs_dir=configs_dir,
-            all_profiles=all_profiles,
-            options=opts,
-            settings_file=settings_file,
-            selected_profile_ids=selected_ids,
-        )
+        try:
+            open_tk_viewer(
+                out_root,
+                previews,
+                sim_root=SIM_ROOT,
+                profiles_dir=profiles_dir,
+                configs_dir=configs_dir,
+                all_profiles=all_profiles,
+                options=opts,
+                settings_file=settings_file,
+                selected_profile_ids=selected_ids,
+            )
+        except Exception as exc:
+            # No display (headless run, ssh) or no tkinter: the previews are rendered, so this is
+            # not a failure of the command (it used to exit 1 with a TclError traceback).
+            if type(exc).__name__ not in ("TclError", "ImportError", "ModuleNotFoundError"):
+                raise
+            print(f"Viewer not opened ({exc}). Previews: {(out_root / 'index.html').resolve()}")
 
 
 def _resolve_backend_mode(args: argparse.Namespace, forced_backend: str | None) -> str:

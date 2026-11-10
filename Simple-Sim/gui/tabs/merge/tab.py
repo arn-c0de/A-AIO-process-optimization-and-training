@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import queue
 import shutil
 import tkinter as tk
@@ -12,6 +11,7 @@ from tkinter import ttk
 from typing import Any
 
 from gui import dialogs
+from gui.utils.model_groups import available_groups, group_for_model
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.core.tasks import as_task_fn, runner_for
@@ -20,7 +20,7 @@ from simple_sim.io_utils import now_tag
 
 from .ui import MergeUI
 from .logic import MergeLogic
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 class MergeTab(BaseTab):
@@ -100,37 +100,13 @@ class MergeTab(BaseTab):
             pass
 
     def _available_groups(self) -> list[str]:
-        names: list[str] = ["Favorites", "Snapshots", "Imports", "Bundles"]
-        for custom in self._custom_groups:
-            if custom and custom not in names:
-                names.append(custom)
-        for val in sorted(set(self._group_assignments.values())):
-            if val and val not in names:
-                names.append(val)
-        if "Uncategorized" not in names:
-            names.append("Uncategorized")
-        return names
+        return available_groups(self._custom_groups, self._group_assignments, bundles=True)
 
     def _group_for_path(self, p: Path) -> str:
         rel = self.logic._rel(p)
-        if rel in self._group_assignments:
-            candidate = self._group_assignments[rel]
-            if candidate in self._available_groups():
-                return candidate
-        if rel in self._favorites:
-            return "Favorites"
-        if self.logic._bundle_root_for_path(p) is not None:
-            return "Bundles"
-        rp = p.resolve()
-        root = self.logic._model_root().resolve()
-        versions = (root / "versions").resolve()
-        imports = (root / "imports").resolve()
-        rp_str = str(rp)
-        if rp_str.startswith(str(versions) + os.sep):
-            return "Snapshots"
-        if rp_str.startswith(str(imports) + os.sep):
-            return "Imports"
-        return "Uncategorized"
+        return group_for_model(p, rel, model_root=self.logic._model_root(), assignments=self._group_assignments,
+                               groups=self._available_groups(), favorite=rel in self._favorites,
+                               bundled=self.logic._bundle_root_for_path(p) is not None)
 
     def _scan_models(self) -> None:
         self._load_group_data()
@@ -185,15 +161,14 @@ class MergeTab(BaseTab):
         if not dialogs.require(self._selected_weights, self.frame, "Select at least one weight per profile first."):
             return
 
-        if len(self._selected_weights) < 2:
-            if not dialogs.confirm(
-                self.frame,
-                "Only One Profile",
-                f"Only {len(self._selected_weights)} profile selected.\n"
-                "A merged bundle is more useful with multiple profiles.\n\n"
-                "Create anyway?",
-            ):
-                return
+        if len(self._selected_weights) < 2 and not dialogs.confirm(
+            self.frame,
+            "Only One Profile",
+            f"Only {len(self._selected_weights)} profile selected.\n"
+            "A merged bundle is more useful with multiple profiles.\n\n"
+            "Create anyway?",
+        ):
+            return
 
         name = self.ui.var_bundle_name.get().strip()
         if not name:
@@ -340,7 +315,7 @@ class MergeTab(BaseTab):
                 exists = "exists" if cp.exists() else "MISSING"
                 size = ""
                 if cp.exists():
-                    with contextlib.suppress(Exception):
+                    with quiet():
                         size = f" ({self.ui.fmt_bytes(int(cp.stat().st_size))})"
                 info += f"  {pid} -> {fname} [{exists}]{size}\n"
 

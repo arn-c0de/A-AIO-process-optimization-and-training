@@ -67,8 +67,7 @@ def atomic_write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     tmp = _tmp_sibling(path)
     try:
         with open(tmp, "w", encoding="utf-8") as f:
-            for row in rows:
-                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+            f.writelines(json.dumps(row, ensure_ascii=True) + "\n" for row in rows)
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -112,8 +111,7 @@ def read_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
 def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     """Append dict rows to a JSONL file (one JSON object per line)."""
     with open(path, "a", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row, ensure_ascii=True) + "\n")
+        f.writelines(json.dumps(row, ensure_ascii=True) + "\n" for row in rows)
 
 
 #: Prefix of the content hashes stored in manifests and checkpoints (``sha256:<hex>``).

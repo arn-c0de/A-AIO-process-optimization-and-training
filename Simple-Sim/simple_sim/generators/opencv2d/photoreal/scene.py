@@ -53,7 +53,7 @@ def draw_board(ctx: RenderContext, nom: dict[str, float], footprint: str, family
     *ctx* (:meth:`RenderContext.for_render`).
     """
     h, w = shape
-    specs = footprint_pads(footprint, nom, (h, w))
+    specs = footprint_pads(footprint, nom, (h, w), scale=ctx.ss)
     pads = [p.as_dict() for p in specs]
     body_angle = nominal_body_angle(family)
     hl, hw = body_half_extent(nom["component_length"] / 2.0, nom["component_width"] / 2.0, body_angle)
@@ -173,7 +173,7 @@ def _render_board(ctx: RenderContext,
         geo = body_geometry(nominal, defect_params, tolerances, (height, width))
         # rotation_deg: of the body's length axis (SOT-23: vertical, see nominal_body_angle);
         # lead_frame_deg: that axis for the nominal placement, so leads can stay rigid with the body.
-        body = {"center": [geo["center"][0] - width // 2, geo["center"][1] - height // 2], "length": geo["length"],
+        body = {"center": [geo["center_f"][0] - width // 2, geo["center_f"][1] - height // 2], "length": geo["length"],
                 "width": geo["width"], "rotation_deg": geo["rotation_deg"] + nominal_body_angle(family),
                 "lead_frame_deg": nominal_body_angle(family), "tilt_deg": geo["tilt_deg"],
                 "is_tombstone": bool(geo["is_tombstone"])}
@@ -205,7 +205,7 @@ def _draw_part(ctx: RenderContext, img: np.ndarray, sg: SceneGeometry, footprint
         draw_body_local(ctx, img, family, (float(cx), float(cy)), length, width_px, geo["rotation_deg"], base_color, rng,
                          marks=marks)
         if defect_type == DefectClass.CORNER_LIFT:
-            lift = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector)
+            lift = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector, scale=ctx.ss)
             extra = np.zeros((h, w), dtype=np.uint8)
             cv2.fillPoly(extra, [np.round(lift["lifted"]).astype(np.int32)], 255)
             cv2.fillPoly(extra, [np.round(rect).astype(np.int32)], 0)
@@ -263,7 +263,7 @@ def _render_photoreal_base(ctx: RenderContext,
     elif defect_type != DefectClass.MISSING:
         pts = rect
         if defect_type == DefectClass.CORNER_LIFT:
-            pts = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector)["lifted"]
+            pts = lifted_corner_geometry(rect, geo["center"], int(width_px), geo["tilt_deg"], selector, scale=ctx.ss)["lifted"]
         cv2.fillPoly(body_mask, [np.round(pts).astype(np.int32)], 255)
     leads = []
     if defect_type != DefectClass.MISSING and pose is None:

@@ -30,7 +30,7 @@ from simple_sim.io_utils import atomic_write_jsonl, now_iso, now_tag, unique_pat
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.model_bundle import resolve_bundle_checkpoint
 from simple_sim.models import load_checkpoint_model
-from simple_sim.reports import is_profile_classifier_report, load_reports, metric_value, report_path
+from simple_sim.reports import is_partial_report, is_profile_classifier_report, load_reports, metric_value, report_path
 
 __all__ = [
     "HISTORY_METRICS",
@@ -374,7 +374,9 @@ def history_rows(
 ) -> list[tuple[float, dict[str, Any]]]:
     """Previous reports matching the filters as ``(value, report)``, best first (FN rate: lowest first)."""
     # Profile-classifier reports (report_profile_classifier_*.json) score another task.
-    reports = [r for r in load_reports(compare_dirs) if not is_profile_classifier_report(r)]
+    # Partial reports (--max-samples quick checks, excluded samples) do not rank against full runs.
+    reports = [r for r in load_reports(compare_dirs)
+               if not is_profile_classifier_report(r) and not is_partial_report(r)]
     if scope == "model":
         reports = [
             r for r in reports
@@ -441,6 +443,73 @@ def _check_model_covers_dataset(class_names: list[str], dataset_classes: list[st
         log.warning(f"Model classes without samples in this dataset: {absent}")
 
 
+def _log_report(opts: BatchPredictOptions, requested_model_path: Path, effective_model_path: Path, data_dir: Path,
+                info: RunInfo, pr: Any, metrics: dict[str, Any], class_names: list[str]) -> None:
+    """Report header (model, dataset, speed) followed by the metrics table."""
+    seen, elapsed = pr.seen, pr.elapsed
+    log.info("\n" + _RULE)
+    log.info("BATCH PREDICT REPORT")
+    log.info(_RULE)
+    log.info(f"Model:       {requested_model_path}")
+    if effective_model_path.resolve() != requested_model_path.resolve():
+        log.info(f"Resolved:    {effective_model_path}")
+    log.info(f"Dataset:     {data_dir}")
+    log.info(f"Split:       {opts.split}")
+    log.info(f"Seen:        {seen}")
+    log.info(f"Speed:       {seen / elapsed:.1f} images/s  (time: {elapsed:.1f}s)")
+    log.info(f"Dataset size: total={info.total_samples} splits={info.split_sizes}")
+    log.info("")
+    log.info(format_metrics(metrics, class_names))
+
+
+def _profile_mismatch(ckpt_profile_id: str, data_dir: Path) -> dict[str, str] | None:
+    """``{"model": ..., "dataset": ...}`` when the checkpoint was trained for another component
+    profile than the (single-profile) dataset, else ``None``.
+
+    Unlike ``eval`` / ``predict`` this is no error: cross-dataset comparisons (Weights tab, Arena)
+    run on purpose. The mismatch is logged and stored in the report so such a score is recognisable.
+    """
+    if not ckpt_profile_id or ckpt_profile_id == "multi":
+        return None
+    try:
+        from simple_sim.manifest import read_dataset_manifest, resolve_dataset_profile
+        from simple_sim.dataset_files import DATASET_MANIFEST
+
+        dataset_profile_id = resolve_dataset_profile(read_dataset_manifest(Path(data_dir) / DATASET_MANIFEST))[0]
+    except (OSError, KeyError, ValueError):
+        return None
+    if dataset_profile_id in ("", "multi", ckpt_profile_id):
+        return None
+    log.warning(f"Component profile mismatch: the model was trained on {ckpt_profile_id}, "
+                f"the dataset is {dataset_profile_id}. The scores are a cross-profile comparison.")
+    return {"model": ckpt_profile_id, "dataset": dataset_profile_id}
+
+
+def _compare_with_history(opts: BatchPredictOptions, requested_model_path: Path, data_dir: Path,
+                          out_report: Path) -> list[Any]:
+    """Earlier reports ranked by ``opts.history_metric`` (best first); logged as the history table."""
+    # Compare to previous rounds (reports)
+    # The directory this report goes to is part of the default: with --out-dir (the GUI Weights tab)
+    # the earlier reports are there, not next to the model.
+    compare_dirs = [Path(p) for p in opts.history_dirs] or list(dict.fromkeys(
+        [requested_model_path.parent, requested_model_path.parent / "history", out_report.parent]))
+    crit = opts.history_critical_class if opts.history_metric == "critical_fn_rate" else None
+    hist = history_rows(
+        compare_dirs,
+        scope=opts.history_scope,
+        split_mode=opts.history_split,
+        metric=opts.history_metric,
+        critical_class=crit,
+        model_path=requested_model_path,
+        data_dir=data_dir,
+        split=opts.split,
+        exclude_path=out_report,
+    )
+    log.info(format_history(hist, scope=opts.history_scope, split_mode=opts.history_split,
+                            metric=opts.history_metric, crit=crit, limit=opts.history_limit))
+    return hist
+
+
 def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
     """Predict *opts.split* of *opts.data* with *opts.model*; write the report and compare history.
 
@@ -472,6 +541,7 @@ def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
     info.split = opts.split
 
     _check_model_covers_dataset(class_names, info.class_list)
+    profile_mismatch = _profile_mismatch(ckpt_profile_id, data_dir)
 
     ds = build_dataset(data_dir, opts.split, class_names, return_id=True)
     truncated = opts.max_samples is not None and int(opts.max_samples) < len(ds)
@@ -496,19 +566,7 @@ def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
 
     metrics = compute_metrics(np.array(pr.y_true), np.array(pr.y_pred), class_names, critical_classes=critical_classes)
 
-    log.info("\n" + _RULE)
-    log.info("BATCH PREDICT REPORT")
-    log.info(_RULE)
-    log.info(f"Model:       {requested_model_path}")
-    if effective_model_path.resolve() != requested_model_path.resolve():
-        log.info(f"Resolved:    {effective_model_path}")
-    log.info(f"Dataset:     {data_dir}")
-    log.info(f"Split:       {opts.split}")
-    log.info(f"Seen:        {seen}")
-    log.info(f"Speed:       {seen / elapsed:.1f} images/s  (time: {elapsed:.1f}s)")
-    log.info(f"Dataset size: total={info.total_samples} splits={info.split_sizes}")
-    log.info("")
-    log.info(format_metrics(metrics, class_names))
+    _log_report(opts, requested_model_path, effective_model_path, data_dir, info, pr, metrics, class_names)
 
     # Profile metrics (when profile preds and GT labels were available)
     profile_metrics: dict[str, Any] | None = None
@@ -549,6 +607,8 @@ def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
         "checkpoint_val_f1": float(checkpoint.get("val_f1", 0.0)),
         "metrics": metrics,
     }
+    if profile_mismatch is not None:
+        report["profile_mismatch"] = profile_mismatch
     if profile_metrics is not None:
         report["profile_accuracy"] = profile_metrics["accuracy"]
         report["profile_metrics"] = profile_metrics
@@ -558,22 +618,7 @@ def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
         atomic_write_jsonl(preds_path, pr.rows)
         log.info(f"Predictions saved to: {preds_path}")
 
-    # Compare to previous rounds (reports)
-    compare_dirs = [Path(p) for p in opts.history_dirs] or [requested_model_path.parent, requested_model_path.parent / "history"]
-    crit = opts.history_critical_class if opts.history_metric == "critical_fn_rate" else None
-    hist = history_rows(
-        compare_dirs,
-        scope=opts.history_scope,
-        split_mode=opts.history_split,
-        metric=opts.history_metric,
-        critical_class=crit,
-        model_path=requested_model_path,
-        data_dir=data_dir,
-        split=opts.split,
-        exclude_path=out_report,
-    )
-    log.info(format_history(hist, scope=opts.history_scope, split_mode=opts.history_split,
-                            metric=opts.history_metric, crit=crit, limit=opts.history_limit))
+    hist = _compare_with_history(opts, requested_model_path, data_dir, out_report)
 
     n_mismatch = int(sum(1 for t, p in zip(pr.y_true, pr.y_pred, strict=True) if t != p))
     return {

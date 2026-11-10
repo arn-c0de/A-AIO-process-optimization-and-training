@@ -32,12 +32,15 @@ if not __package__:  # run as a script (python tools/x.py): make the checkout im
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import preprocess_bgr  # noqa: E402
-from simple_sim.images import list_images  # noqa: E402
+from simple_sim.images import list_images, list_synthetic_images  # noqa: E402
 from simple_sim.models import build_resnet18, load_checkpoint_model  # noqa: E402
 
 
-def load_images(folder: Path, limit: int, size: int, rng: np.random.Generator) -> list[np.ndarray]:
-    files = list_images(folder)
+def load_images(folder: Path, limit: int, size: int, rng: np.random.Generator, *,
+                synthetic: bool = False) -> list[np.ndarray]:
+    """Up to *limit* images of *folder* (random subset), resized. *synthetic*: a dataset's rendered
+    images only, without the real crops of ``mix-real`` in ``images/real/``."""
+    files = list_synthetic_images(folder) if synthetic else list_images(folder)
     if not files:
         raise SystemExit(f"No images found in {folder}")
     if len(files) > limit:
@@ -75,8 +78,11 @@ def _dist(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def one_nn_accuracy(real: np.ndarray, syn: np.ndarray) -> float:
+    # Balanced sets; the larger one is thinned evenly, not cut: files are sorted and a dataset
+    # numbers its images class by class, so a prefix would be the first class(es) only.
     n = min(len(real), len(syn))
-    pooled = np.concatenate([real[:n], syn[:n]])
+    real, syn = (x[np.linspace(0, len(x) - 1, num=n).round().astype(int)] for x in (real, syn))
+    pooled = np.concatenate([real, syn])
     labels = np.r_[np.zeros(n), np.ones(n)]
     d = _dist(pooled, pooled)
     np.fill_diagonal(d, np.inf)
@@ -106,7 +112,7 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     model = build_embedder(args.weights)
     real = embed(model, load_images(args.real, args.max_images, args.size, rng))
-    syn = embed(model, load_images(args.synthetic, args.max_images, args.size, rng))
+    syn = embed(model, load_images(args.synthetic, args.max_images, args.size, rng, synthetic=True))
     if len(real) < 2:
         raise SystemExit("Need at least 2 real images")
 

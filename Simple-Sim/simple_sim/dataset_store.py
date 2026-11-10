@@ -34,6 +34,27 @@ def validate_dataset_files(data_dir: Path) -> None:
         raise ValueError("Missing images directory")
 
 
+#: Entries that mark a directory as a (possibly incomplete) dataset.
+_DATASET_MARKERS = (META_JSONL, LABELS_JSONL, CONFIG_YAML, "dataset_manifest.json", "images")
+
+
+def check_replaceable(output_dir: Path) -> None:
+    """Raise ``ValueError`` when *output_dir* exists, is not empty and does not look like a dataset.
+
+    Writing a dataset replaces the whole directory; a mistyped ``--out`` (e.g. the folder that holds
+    all runs) would otherwise be deleted with everything in it.
+    """
+    output_dir = Path(output_dir)
+    if not output_dir.exists():
+        return
+    if not output_dir.is_dir():
+        raise ValueError(f"Output path exists and is not a directory: {output_dir}")
+    if any(output_dir.iterdir()) and not any((output_dir / name).exists() for name in _DATASET_MARKERS):
+        raise ValueError(
+            f"Refusing to replace {output_dir}: the directory is not empty and is not a dataset "
+            f"(none of {', '.join(_DATASET_MARKERS)}). Choose another output directory or remove it first.")
+
+
 @contextmanager
 def atomic_dataset_dir(output_dir: Path) -> Iterator[Path]:
     """Yield a fresh ``<output_dir>.tmp`` dir (with ``images/``); on success it replaces *output_dir*.
@@ -43,6 +64,7 @@ def atomic_dataset_dir(output_dir: Path) -> Iterator[Path]:
     delete can no longer cost the freshly written dataset.
     """
     output_dir = Path(output_dir)
+    check_replaceable(output_dir)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = output_dir.with_name(output_dir.name + ".tmp")
     if temp_dir.exists():

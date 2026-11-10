@@ -11,6 +11,7 @@ from simple_sim.board.geometry import BBox, Vec, add, box, clip, perp, polyline4
 from simple_sim.board.model import Board, Port, Track, Via
 from simple_sim.board.netlist import net_class
 from simple_sim.board.occupancy import CopperMap
+import itertools
 
 
 @dataclass(slots=True)
@@ -58,7 +59,7 @@ def axial_room(bbox: BBox, direction: Vec, start: Vec) -> float:
 def runs_along_border(bbox: BBox, points: list[Vec], margin: float) -> bool:
     """True if a segment of *points* runs (within *margin*) along a window edge instead of into it."""
     x0, y0, x1, y1 = bbox
-    for a, b in zip(points, points[1:]):
+    for a, b in itertools.pairwise(points):
         for lo, hi, i in ((x0, x1, 0), (y0, y1, 1)):
             if a[i] == b[i] and (abs(a[i] - lo) <= margin or abs(a[i] - hi) <= margin):
                 return True

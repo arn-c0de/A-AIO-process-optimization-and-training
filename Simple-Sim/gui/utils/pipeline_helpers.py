@@ -28,32 +28,7 @@ from simple_sim.io_utils import load_yaml
 PYTHON = sys.executable
 
 # (SettingsStore key, PipelineUI variable attribute) pairs persisted by the Pipeline tab.
-PERSISTED_FIELD_MAP: tuple[tuple[str, str], ...] = (
-    ("pipeline.run_mode", "var_run_mode"),
-    ("pipeline.run_count", "var_run_count"),
-    ("pipeline.dataset_mode", "var_dataset_mode"),
-    ("pipeline.config", "var_config"),
-    ("pipeline.out", "var_out"),
-    ("pipeline.model", "var_model"),
-    ("pipeline.autosnap", "var_autosnap"),
-    ("pipeline.snap_every", "var_snap_every"),
-    ("pipeline.snap_keep", "var_snap_keep"),
-    ("pipeline.continue_epochs", "var_continue_epochs"),
-    ("pipeline.continue_out_mode", "var_continue_out_mode"),
-    ("pipeline.name", "var_name"),
-    ("pipeline.name_ts", "var_name_ts"),
-    ("pipeline.dataset_selection", "var_dataset"),
-    ("pipeline.dataset_multi_enabled", "var_dataset_multi"),
-    ("pipeline.dataset_multi_paths", "var_dataset_multi_paths"),
-    ("pipeline.profile_model", "var_profile_model"),
-    ("pipeline.profile_model_locked", "var_profile_model_lock"),
-    ("pipeline.profile_build_preset", "var_profile_build_preset"),
-    ("pipeline.render_backend", "var_render_backend"),
-    ("pipeline.look", "var_look"),
-    ("pipeline.board_routing", "var_board_routing"),
-    ("pipeline.board_drc", "var_board_drc"),
-    ("pipeline.board_rules", "var_board_rules"),
-) + tuple((f"pipeline.filter.{key}", f"var_filter_{key}") for key, _kind, _default in FILTER_SETTING_SPECS)
+PERSISTED_FIELD_MAP: tuple[tuple[str, str], ...] = (("pipeline.run_mode", "var_run_mode"), ("pipeline.run_count", "var_run_count"), ("pipeline.dataset_mode", "var_dataset_mode"), ("pipeline.config", "var_config"), ("pipeline.out", "var_out"), ("pipeline.model", "var_model"), ("pipeline.autosnap", "var_autosnap"), ("pipeline.snap_every", "var_snap_every"), ("pipeline.snap_keep", "var_snap_keep"), ("pipeline.continue_epochs", "var_continue_epochs"), ("pipeline.continue_out_mode", "var_continue_out_mode"), ("pipeline.name", "var_name"), ("pipeline.name_ts", "var_name_ts"), ("pipeline.dataset_selection", "var_dataset"), ("pipeline.dataset_multi_enabled", "var_dataset_multi"), ("pipeline.dataset_multi_paths", "var_dataset_multi_paths"), ("pipeline.profile_model", "var_profile_model"), ("pipeline.profile_model_locked", "var_profile_model_lock"), ("pipeline.profile_build_preset", "var_profile_build_preset"), ("pipeline.render_backend", "var_render_backend"), ("pipeline.look", "var_look"), ("pipeline.board_routing", "var_board_routing"), ("pipeline.board_drc", "var_board_drc"), ("pipeline.board_rules", "var_board_rules"), *tuple((f"pipeline.filter.{key}", f"var_filter_{key}") for key, _kind, _default in FILTER_SETTING_SPECS))
 
 # Render options the GUI can override on top of a run config (``render.look``, ``render.board.*``).
 # Every selector starts at FROM_CONFIG: the config's value (or the renderer default) is kept.
@@ -441,10 +416,10 @@ def eval_argv(ds: Path, model_in: Path, *, allow_profile_mismatch: bool = False)
 
 
 def continue_train_argv(ds: Path, model: Path, *, extra_epochs: int, out_mode: str, allow_profile_mismatch: bool = False) -> list[str]:
-    argv = train_argv(ds, model) + ["--resume", str(model)]
+    argv = [*train_argv(ds, model), "--resume", str(model)]
     if allow_profile_mismatch:
         argv.append("--allow-profile-mismatch")
-    return argv + ["--extra-epochs", str(extra_epochs), "--out-mode", out_mode]
+    return [*argv, "--extra-epochs", str(extra_epochs), "--out-mode", out_mode]
 
 
 def multi_train_argvs(

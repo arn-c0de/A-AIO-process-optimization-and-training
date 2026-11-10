@@ -157,7 +157,7 @@ class AnalysisTab(BaseTab):
             
             self.ui.combo_run.configure(values=sorted(run_ids))
             self.ui.combo_domain.configure(values=sorted(domains))
-            self.ui.combo_class.configure(values=["All"] + self._sorted_class_values(classes - {"All"}))
+            self.ui.combo_class.configure(values=["All", *self._sorted_class_values(classes - {"All"})])
             # A filter value of the previous dataset that does not exist here would hide every sample.
             for var, valid in ((self.ui.var_run, run_ids), (self.ui.var_domain, domains), (self.ui.var_filter, classes)):
                 if var.get().strip() not in valid:
@@ -165,7 +165,7 @@ class AnalysisTab(BaseTab):
             self.ui.set_feedback_class_values(self._sorted_class_values(set(VALID_CLASSES) | (classes - {"All"})))
             profiles = sorted({str(v).strip() for v in self.profile_dict.values() if str(v).strip()})
             self._profile_options = profiles
-            self.ui.combo_profile.configure(values=["All"] + profiles)
+            self.ui.combo_profile.configure(values=["All", *profiles])
             if self.ui.var_profile.get().strip() not in ({"All"} | set(profiles)):
                 self.ui.var_profile.set("All")
             self.ui.combo_sort.configure(values=["Default", "Newest first", "Oldest first", "ID A-Z", "ID Z-A"])

@@ -51,7 +51,7 @@ extend-exclude = ["outputs", "images", "docs"]
 [tool.ruff.lint]
 # Correctness and modernisation only; formatting / style rules are deliberately off (the code
 # base keeps its own layout). `ruff check .` must stay clean; run it before committing.
-select = ["F", "E9", "B", "UP", "PLE", "PLW1510"]
+select = ["F", "E9", "B", "UP", "PLE", "PLW1510", "C4", "SIM300", "RET502", "RUF022"]
 ignore = [
     "B023",  # closures over loop variables that are called inside the same iteration (arena, batch_predict)
     "B905",  # zip() strictness is decided per call site, not globally

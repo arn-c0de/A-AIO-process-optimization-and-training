@@ -62,7 +62,7 @@ class AnalysisUI:
         self.dataset_combo = ttk.Combobox(top, textvariable=self.var_dataset, state="readonly", width=32)
         top.add(self.dataset_combo)
         self.dataset_combo.bind("<<ComboboxSelected>>", self.tab._on_dataset_selected)
-        ToolTip(self.dataset_combo, help_key="common.dataset", text_func=lambda: self.var_dataset.get())
+        ToolTip(self.dataset_combo, help_key="common.dataset", text_func=self.var_dataset.get)
         top.icon("refresh", self.tab._refresh_datasets, help_key="common.refresh")
         top.separator()
         top.icon("prev", self.tab._prev_image, help_key="common.prev")

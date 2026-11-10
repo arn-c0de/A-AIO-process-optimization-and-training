@@ -102,7 +102,7 @@ def load_shared_filter_profiles(settings_path: Path) -> tuple[dict[str, dict[str
         profiles = {DEFAULT_PROFILE: to_profile_store(legacy)}
         active = DEFAULT_PROFILE
     if active not in profiles:
-        active = sorted(profiles.keys(), key=lambda s: s.lower())[0]
+        active = min(profiles.keys(), key=lambda s: s.lower())
     return profiles, active, normalized_with_extras(profiles.get(active, {}))
 
 

@@ -41,7 +41,7 @@ from .logic import (
     ProfilePreviewLogic,
     read_sidecar,
 )
-import contextlib
+from gui.utils.tk_safe import quiet
 
 if TYPE_CHECKING:
     from gui.state import UiState
@@ -473,7 +473,7 @@ class ProfilePreviewTab(BaseTab):
 
     def _finish(self, kind: str, payload: Any) -> None:
         if self._poll_id is not None:
-            with contextlib.suppress(Exception):
+            with quiet():
                 self.frame.after_cancel(self._poll_id)
         self._poll_id = None
         self.btn_render.configure(state="normal")
@@ -654,5 +654,5 @@ class ProfilePreviewTab(BaseTab):
         if self._worker is not None and self._worker.is_alive():
             self._worker.join(timeout=2.0)
         if self._poll_id is not None:
-            with contextlib.suppress(Exception):
+            with quiet():
                 self.frame.after_cancel(self._poll_id)

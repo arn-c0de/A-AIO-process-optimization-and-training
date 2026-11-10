@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .state_store import flatten_leaf_paths, to_form_text
-import contextlib
+from gui.utils.tk_safe import quiet
 
 # Returns False if the text was rejected (keeps the entry marked as pending).
 FieldCallback = Callable[[str, tuple[str, ...], str], bool | None]
@@ -98,5 +98,5 @@ class FormRenderer(ttk.Frame):
         self.canvas.configure(bg=bg)
         entry_style = "Dark.TEntry" if dark else "Light.TEntry"
         for entry in self._entries.values():
-            with contextlib.suppress(Exception):
+            with quiet():
                 entry.configure(style=entry_style)

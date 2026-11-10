@@ -9,13 +9,13 @@ from gui.theme.style import font
 from gui.theme.tokens import SPACE
 from gui.utils.formatting import fmt_bytes
 from gui.utils.tooltip import ToolTip
-from gui.widgets import FormGrid, LogView, ScrolledTree, Section, Toolbar
+from gui.widgets import FormGrid, LogView, LogViewHost, ScrolledTree, Section, Toolbar
 
 if TYPE_CHECKING:
     from .tab import WeightsTab
 
 
-class WeightsUI:
+class WeightsUI(LogViewHost):
     def __init__(self, tab: WeightsTab, parent: ttk.Frame):
         self.tab = tab
         self.frame = ttk.Frame(parent, padding=0)
@@ -325,9 +325,6 @@ class WeightsUI:
         ToolTip(b_copy, help_key="common.copy_log")
 
     fmt_bytes = staticmethod(fmt_bytes)
-
-    def append_log(self, s: str) -> None:
-        self.log_view.append(s)
 
     def set_compare_combobox_values(self, values: list[str]) -> None:
         self.combo_a.configure(values=values)

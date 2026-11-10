@@ -12,13 +12,13 @@ from gui.theme.style import font
 from gui.theme.tokens import SPACE
 from gui.utils.formatting import fmt_bytes
 from gui.utils.tooltip import ToolTip
-from gui.widgets import FormGrid, LogView, ScrolledTree, Section, Toolbar
+from gui.widgets import FormGrid, LogView, LogViewHost, ScrolledTree, Section, Toolbar
 
 if TYPE_CHECKING:
     from .tab import MergeTab
 
 
-class MergeUI:
+class MergeUI(LogViewHost):
     def __init__(self, tab: MergeTab, parent: ttk.Frame):
         self.tab = tab
         self.frame = ttk.Frame(parent, padding=0)
@@ -163,9 +163,6 @@ class MergeUI:
             label.pack_forget()
         elif not label.winfo_manager():
             label.pack(anchor="w", pady=(0, SPACE.S), before=view)
-
-    def append_log(self, s: str) -> None:
-        self.log_view.append(s)
 
     def rebuild_tree(self, profile_models: dict[str, list[tuple[str, Path]]], iid_to_model: dict[str, tuple[str, Path]],
                      model_meta_cache: dict, selected_weights: dict[str, Path], favorites: dict[str, Any],

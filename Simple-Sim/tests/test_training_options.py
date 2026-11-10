@@ -421,7 +421,7 @@ def test_freeze_stages_stops_gradients_and_keeps_bn_stats():
 def test_val_loss_is_plain_cross_entropy_under_label_smoothing():
     """fit_epoch validates with plain CE even when the training criterion smooths labels."""
     from simple_sim.models import build_resnet18
-    from simple_sim.training import fit_epoch, plain_criterion
+    from simple_sim.training import EpochRun, fit_epoch, plain_criterion
 
     torch.manual_seed(0)
     model = build_resnet18(3)
@@ -432,8 +432,9 @@ def test_val_loss_is_plain_cross_entropy_under_label_smoothing():
     assert plain_criterion(plain) is plain
 
     opt = torch.optim.SGD(model.parameters(), lr=0.0)
-    stats = fit_epoch(model, [], [(x, y)], smoothed, opt, torch.device("cpu"), ["a", "b", "c"],  # type: ignore[arg-type]
-                      epoch=0, total_epochs=1, emit_events=False)
+    run = EpochRun(model, [], [(x, y)], smoothed, opt, torch.device("cpu"), ["a", "b", "c"],  # type: ignore[arg-type]
+                   total_epochs=1, emit_events=False)
+    stats = fit_epoch(run, 0)
     model.eval()
     with torch.no_grad():
         expected = float(torch.nn.functional.cross_entropy(model(x), y))

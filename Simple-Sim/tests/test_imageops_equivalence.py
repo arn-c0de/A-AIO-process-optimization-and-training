@@ -113,7 +113,7 @@ def test_contact_shadow_full_and_empty_masks(frame):
 @pytest.mark.parametrize("n", (1, 2, 5, 17))
 def test_rolled_spans_match_np_roll(n):
     idx = np.arange(n)
-    for shift in range(0, 2 * n + 2):
+    for shift in range(2 * n + 2):
         rolled = np.roll(idx, shift)
         for a0 in range(n):
             for a1 in range(a0 + 1, n + 1):

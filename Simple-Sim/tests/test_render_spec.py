@@ -62,7 +62,12 @@ def test_render_sample_equals_the_hand_merged_render_roi(run):
         got = render_sample(spec, rec["nominal"], rec["defect"], rec["augment"], np.random.default_rng(rec["seed"]),
                             domain=rec["domain"])
         assert np.array_equal(got, expected)
-        assert np.array_equal(render_record(spec, rec), expected)
+        # render_record draws from the render stream of the seed (renderer version 4), not from the
+        # stream that sampled the record.
+        own_stream = render_sample(spec, rec["nominal"], rec["defect"], rec["augment"],
+                                   np.random.default_rng([int(rec["seed"]), 1]), domain=rec["domain"])
+        assert np.array_equal(render_record(spec, rec), own_stream)
+        assert not np.array_equal(own_stream, expected)
 
 
 def test_process_and_thread_rendering_write_the_same_images(tmp_path, monkeypatch):

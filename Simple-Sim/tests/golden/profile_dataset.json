@@ -2,7 +2,7 @@
   "datasets": {
     "domain_camera": {
       "config.yaml": "aa3b1c7d3ecfd0f93103d9adfd813980",
-      "dataset_manifest.json": "27cb23bb21d0fbc422aa43ce8a663571",
+      "dataset_manifest.json": "06c3e5503dba2981eac9443ee5cc0f5b",
       "images/000000.png": "bde8b3d29d2d16e1fa9b8849f953bff2",
       "images/000001.png": "0372b1794d97f6d939ba95ffbc6240cb",
       "images/000002.png": "6e6059be6a922a33cbdcff64ff3c7412",
@@ -29,7 +29,7 @@
     },
     "filters": {
       "config.yaml": "e28da09079e40485b77d749d0f5234a5",
-      "dataset_manifest.json": "27cb23bb21d0fbc422aa43ce8a663571",
+      "dataset_manifest.json": "06c3e5503dba2981eac9443ee5cc0f5b",
       "images/000000.png": "06f92246bdf395a3a5b82a0f4bdf14ea",
       "images/000001.png": "c2cf0be9d40bdefa8af8f1ffeb2ca46e",
       "images/000002.png": "12518d0eb0318c57ea268bff66a533b6",
@@ -56,7 +56,7 @@
     },
     "plain": {
       "config.yaml": "e28da09079e40485b77d749d0f5234a5",
-      "dataset_manifest.json": "27cb23bb21d0fbc422aa43ce8a663571",
+      "dataset_manifest.json": "06c3e5503dba2981eac9443ee5cc0f5b",
       "images/000000.png": "bde8b3d29d2d16e1fa9b8849f953bff2",
       "images/000001.png": "0372b1794d97f6d939ba95ffbc6240cb",
       "images/000002.png": "6e6059be6a922a33cbdcff64ff3c7412",
@@ -83,7 +83,7 @@
     },
     "quins_board": {
       "config.yaml": "0662a50a6baac438d6cae8fbfa89a839",
-      "dataset_manifest.json": "27cb23bb21d0fbc422aa43ce8a663571",
+      "dataset_manifest.json": "06c3e5503dba2981eac9443ee5cc0f5b",
       "images/000000.png": "390a0d412b229d12ce48cd2b0ec4d487",
       "images/000001.png": "60c25f7cdb1448ed7143828c6a143f4d",
       "images/000002.png": "2f0ccf5864c2c441c6a9f06c89a9e3f9",
@@ -110,7 +110,7 @@
     },
     "v1": {
       "config.yaml": "8e60496e1ba828b2fa3e36d212e38722",
-      "dataset_manifest.json": "27cb23bb21d0fbc422aa43ce8a663571",
+      "dataset_manifest.json": "06c3e5503dba2981eac9443ee5cc0f5b",
       "images/000000.png": "bde8b3d29d2d16e1fa9b8849f953bff2",
       "images/000001.png": "0372b1794d97f6d939ba95ffbc6240cb",
       "images/000002.png": "6e6059be6a922a33cbdcff64ff3c7412",
@@ -136,7 +136,7 @@
       "splits/val.txt": "d41d8cd98f00b204e9800998ecf8427e"
     }
   },
-  "renderer_version": "3",
+  "renderer_version": "4",
   "versions": {
     "numpy": "2.5.2",
     "opencv": "5.0.0"

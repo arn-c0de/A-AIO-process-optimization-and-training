@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 from simple_sim.classes import Backend
-from simple_sim.config import load_config, merge_profile_render, validate_config
+from simple_sim.config import defect_units, load_config, merge_profile_render, placement_sampling, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
 from simple_sim.generators.backends import backend_info
@@ -383,7 +383,10 @@ def render_2d_previews(
         augment = sample_preview_augment(rng, rotation_range=rot_range, enable_cardinal_rotation_90=bool(enable_cardinal_rotation_90))
         augment = apply_filter_overrides_to_augment(augment, image_filters, rng)
         nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
-        defect = sample_defect_params(defect_type, rng, tolerances=tolerances)
+        # Same sampler options as generate (generation.common.sample_record), so the preview of a
+        # `units: mm` / `placement_sampling: continuous` config shows the offsets of its dataset.
+        defect = sample_defect_params(defect_type, rng, tolerances=tolerances, placement=placement_sampling(cfg),
+                                      units=defect_units(cfg), mm_per_px=mpp)
         img = render_sample(spec, nominal, defect, augment, rng)
         rel_path = preview_rel_path(profile_id, BACKEND_2D, defect_type)
         write_image((Path(out_root) / rel_path).resolve(), img)

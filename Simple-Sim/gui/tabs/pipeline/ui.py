@@ -22,6 +22,7 @@ from gui.utils.pipeline_helpers import (
 )
 from gui.utils.tooltip import ToolTip
 from gui.widgets import (
+    LogViewHost,
     CollapsibleSection,
     FormGrid,
     LogView,
@@ -36,7 +37,7 @@ from gui.widgets import (
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE
 from simple_sim.schema import MetaRow
 from gui.utils.formatting import fmt_bytes
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 # Legacy colour names returned by gui.utils.pipeline_helpers -> themed label styles.
@@ -52,7 +53,7 @@ _COLOR_TO_STYLE = {
 }
 
 
-class PipelineUI:
+class PipelineUI(LogViewHost):
     def __init__(self, tab: Any, parent: ttk.Frame):
         self.tab = tab
         self.frame = ttk.Frame(parent, padding=0)
@@ -530,9 +531,6 @@ class PipelineUI:
         bb.pack(side="left", padx=(SPACE.M, 0))
         ToolTip(bb, help_key="pipeline.build_profile_model")
 
-    def append_log(self, s: str) -> None:
-        self.log_view.append(s)
-
     def set_compat_color(self, color: str) -> None:
         """Map legacy colour names from the helpers to theme styles."""
         self.lbl_profile_compat.configure(style=_COLOR_TO_STYLE.get(str(color).lower(), "CardMuted.TLabel"))
@@ -595,7 +593,7 @@ class PipelineUI:
 
     def show_messagebox(self, type: str, title: str, message: str) -> None:
         if type == "error":
-            with contextlib.suppress(Exception):
+            with quiet():
                 self.tab._append_log(f"[popup error] {title}\n{message}\n")
             dialogs.show_error(self.frame, title, str(message))
         elif type == "warning":
@@ -659,7 +657,7 @@ def prepare_thumbnail_cells(n_slots: int, recent_imgs: list[str], dataset_dir: P
                 except ValueError: pass
 
             if meta_row is not None:
-                with contextlib.suppress(Exception): img_bgr = draw_defect_overlay_func(img_bgr, meta_row.defect, meta_row.nominal)
+                with quiet(): img_bgr = draw_defect_overlay_func(img_bgr, meta_row.defect, meta_row.nominal)
 
             img_pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
             img_pil.thumbnail((120, 90))

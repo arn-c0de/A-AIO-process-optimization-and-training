@@ -160,12 +160,11 @@ class WeightsLogic(StreamingProcessLogic):
                 if tmp.exists():
                     shutil.rmtree(tmp)
             return dst
-        else:
-            dst_dir = self._model_root() / "imports"
-            dst_dir.mkdir(parents=True, exist_ok=True)
-            dst = dst_dir / f"{tag}_{src_p.name}"
-            shutil.copy2(src_p, dst)
-            return dst
+        dst_dir = self._model_root() / "imports"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / f"{tag}_{src_p.name}"
+        shutil.copy2(src_p, dst)
+        return dst
 
     def export_model(self, src_p: Path, dst: Path) -> None:
         if src_p.is_dir():
@@ -181,10 +180,16 @@ class WeightsLogic(StreamingProcessLogic):
         shutil.copy2(src, dst)
 
     def is_deletable_checkpoint(self, p: Path) -> bool:
+        """True for checkpoints in a sub-folder of ``outputs/models`` (``versions/``, ``imports/``, ...).
+
+        The models directly in ``outputs/models`` are the active ``<dataset>.pt`` files the Pipeline /
+        Predictions / Analysis tabs look up by name: they are not deleted or renamed from here (the
+        guard used to accept everything below ``outputs/models``, against its own dialog texts).
+        """
         try:
             rp = p.resolve()
             root = (self.sim_root / "outputs" / "models").resolve()
-            return str(rp).startswith(str(root) + os.sep)
+            return str(rp).startswith(str(root) + os.sep) and rp.parent != root
         except Exception:
             return False
 

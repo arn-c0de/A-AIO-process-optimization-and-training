@@ -258,8 +258,11 @@ def qfn_pins(footprint: str) -> int:
         return 32
 
 
-def footprint_pads(footprint: str, nominal: dict[str, float], img_shape: tuple[int, int]) -> list[PadSpec]:
-    """Pads of *footprint* centred in an image of *img_shape* (pixels, same rounding as always)."""
+def footprint_pads(footprint: str, nominal: dict[str, float], img_shape: tuple[int, int], *,
+                   scale: float = 1.0) -> list[PadSpec]:
+    """Pads of *footprint* centred in an image of *img_shape* (pixels, same rounding as always).
+
+    *scale*: pixels of *nominal* per camera pixel (the supersampling), for fixed pixel minimums."""
     h, w = img_shape
     center_x, center_y = w // 2, h // 2
     pad_width = int(nominal["pad_width"])
@@ -269,7 +272,7 @@ def footprint_pads(footprint: str, nominal: dict[str, float], img_shape: tuple[i
     if footprint == "sot23":
         pad_spacing_y = int(nominal["pad_spacing_y"])
         small_h = int(pad_height * 0.8)
-        min_gap_px = 10
+        min_gap_px = int(round(10 * float(scale)))  # 10 camera px between pins 1 and 2
         effective_spacing_y = max(pad_spacing_y, small_h + min_gap_px)
         left_x = center_x - pad_spacing // 2 - pad_width // 2
         return [

@@ -105,6 +105,8 @@ def generate_profile_dataset(
     log.info(f"Total samples: {total_per_class * len(profile_ids)}")
     log.info(f"Image filters: {json.dumps(image_filters, ensure_ascii=True)}")
 
+    # Every sample is in one domain: DOMAIN when the config has it, else the config's first one.
+    domain = DOMAIN if DOMAIN in config["domains"] else next(iter(config["domains"]))
     t_total0 = time.perf_counter()
     groups: list[tuple[RunInputs, list[dict[str, Any]]]] = []
     next_index = 0
@@ -114,7 +116,7 @@ def generate_profile_dataset(
         # its own rng, so rendering them later in parallel gives the same images.
         recs = plan_records(run, start_index=next_index, image_filters=image_filters,
                             enable_cardinal_rotation_90=enable_cardinal_rotation_90, labels_profile_id=run.profile_id,
-                            progress=_profile_progress(run.profile_id), domain=DOMAIN, continue_rng=True)
+                            progress=_profile_progress(run.profile_id), domain=domain, continue_rng=True)
         groups.append((run, recs))
         next_index += len(recs)
     records = [r for _run, recs in groups for r in recs]

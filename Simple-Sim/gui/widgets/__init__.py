@@ -7,7 +7,7 @@ callbacks. Import from here::
         ScrolledTree, LogView, StatusBar, EmptyState, ScrollableFrame, icon_button
 """
 
-from gui.widgets.data_views import LogView, ScrolledTree
+from gui.widgets.data_views import LogView, LogViewHost, ScrolledTree
 from gui.widgets.form import FormGrid, PathPicker, set_invalid
 from gui.widgets.layout import (
     ICONS,
@@ -30,6 +30,7 @@ __all__ = [
     "EmptyState",
     "FormGrid",
     "LogView",
+    "LogViewHost",
     "PathPicker",
     "ScrollableFrame",
     "ScrolledTree",

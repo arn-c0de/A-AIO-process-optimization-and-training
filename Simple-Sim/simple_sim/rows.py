@@ -11,6 +11,8 @@ Schema notes:
 
 import dataclasses
 import json
+import os
+import shutil
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from collections.abc import Callable, Iterator
@@ -127,6 +129,37 @@ def append_jsonl_rows(path: Path, rows: list[Any]) -> None:
     append_jsonl(path, (asdict(row) for row in rows))
 
 
+def extend_jsonl_pair(meta_path: Path, meta_rows: list[Any], labels_path: Path, label_rows: list[Any]) -> None:
+    """Append *meta_rows* / *label_rows* to an existing ``meta.jsonl`` / ``labels.jsonl`` pair.
+
+    Both new files (old content plus the new rows) are written next to the old ones first and moved
+    in last, so a failing write (disk full, kill) leaves the pair as it was instead of a meta file
+    with rows that have no label ("Row count mismatch" on every later extend).
+    """
+    pairs = [(Path(meta_path), meta_rows), (Path(labels_path), label_rows)]
+    temps: list[Path] = []
+    try:
+        for path, rows in pairs:
+            tmp = path.with_name(f"{path.name}.extend.tmp")
+            temps.append(tmp)
+            with open(tmp, "wb") as out:
+                if path.exists():
+                    with open(path, "rb") as src:
+                        shutil.copyfileobj(src, out)
+                        if src.tell() > 0:
+                            src.seek(-1, os.SEEK_END)
+                            if src.read(1) != b"\n":
+                                out.write(b"\n")
+                out.writelines((json.dumps(asdict(row), ensure_ascii=True) + "\n").encode("utf-8") for row in rows)
+                out.flush()
+                os.fsync(out.fileno())
+        for (path, _rows), tmp in zip(pairs, temps):
+            tmp.replace(path)
+    finally:
+        for tmp in temps:
+            tmp.unlink(missing_ok=True)
+
+
 def read_jsonl(path: Path, schema_cls: type[T]) -> list[T]:
     """Read and validate JSONL file.
 
@@ -227,6 +260,10 @@ def validate_jsonl_pair(
         n_labels += 1
         if on_label is not None:
             on_label(lrow)
+
+    for name, ids, n in (("meta", meta_ids, n_meta), ("labels", label_ids, n_labels)):
+        if len(ids) != n:
+            raise ValueError(f"Duplicate sample ids in {name}: {n} rows, {len(ids)} distinct ids")
 
     # Check counts match
     if n_meta != n_labels:

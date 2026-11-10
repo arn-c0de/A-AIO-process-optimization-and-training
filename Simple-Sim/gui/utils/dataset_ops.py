@@ -6,7 +6,7 @@ views can edit datasets with consistent behavior.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import shutil
@@ -159,31 +159,13 @@ def move_samples(
             shutil.move(str(src_file), str(dst_file))
             moved_pairs.append((src_file, dst_file))
 
-            new_dst_meta.append(
-                MetaRow(
-                    schema_version=src_meta_row.schema_version,
-                    id=new_id,
-                    run_id=src_meta_row.run_id,
-                    domain=src_meta_row.domain,
-                    split=src_meta_row.split,
-                    seed=src_meta_row.seed,
-                    image_path=dst_image_rel,
-                    render_backend=src_meta_row.render_backend,
-                    footprint=src_meta_row.footprint,
-                    nominal=dict(src_meta_row.nominal),
-                    defect=dict(src_meta_row.defect),
-                    augment=dict(src_meta_row.augment),
-                    render_meta=dict(src_meta_row.render_meta),
-                )
-            )
-            new_dst_labels.append(
-                LabelRow(
-                    schema_version=src_label_row.schema_version,
-                    id=new_id,
-                    class_name=src_label_row.class_name,
-                    profile_id=src_label_row.profile_id,
-                )
-            )
+            # replace() keeps every other field (also ones added to the row types later); the dicts are copied.
+            new_dst_meta.append(replace(
+                src_meta_row, id=new_id, image_path=dst_image_rel, nominal=dict(src_meta_row.nominal),
+                defect=dict(src_meta_row.defect), augment=dict(src_meta_row.augment),
+                render_meta=dict(src_meta_row.render_meta),
+            ))
+            new_dst_labels.append(replace(src_label_row, id=new_id))
 
         write_jsonl(src_dataset_dir / META_JSONL, new_src_meta)
         write_jsonl(src_dataset_dir / LABELS_JSONL, new_src_labels)

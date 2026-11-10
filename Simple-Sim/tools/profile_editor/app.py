@@ -7,7 +7,7 @@ from pathlib import Path
 
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
-import contextlib
+from gui.utils.tk_safe import quiet
 
 if __package__ in {None, ""}:
     import sys
@@ -481,7 +481,7 @@ class ProfileEditorApp:
             current_run = self.run_var.get().strip()
 
             self.profile_combo["values"] = updated.profile_ids
-            if current_profile not in updated.profile_ids and updated.profile_ids or not current_profile and updated.profile_ids:
+            if (current_profile not in updated.profile_ids and updated.profile_ids) or (not current_profile and updated.profile_ids):
                 self.profile_var.set(updated.profile_ids[0])
                 self._on_profile_selected()
 
@@ -518,7 +518,7 @@ class ProfileEditorApp:
     def _apply_session_settings_to_ui(self) -> None:
         geom = str(self._session_settings.get("window_geometry") or "").strip()
         if geom:
-            with contextlib.suppress(Exception):
+            with quiet():
                 self.root.geometry(geom)
         preview_settings = self._session_settings.get("preview3d")
         if isinstance(preview_settings, dict):

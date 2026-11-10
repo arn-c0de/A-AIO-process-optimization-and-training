@@ -252,3 +252,12 @@ class LogView(ttk.Frame):
             m.tk_popup(event.x_root, event.y_root)
         finally:
             m.grab_release()
+class LogViewHost:
+    """Mixin for tab UIs that own a ``log_view`` (:class:`LogView`): the tab's ``append_log`` entry point."""
+
+    log_view: LogView
+
+    def append_log(self, s: str) -> None:
+        self.log_view.append(s)
+
+

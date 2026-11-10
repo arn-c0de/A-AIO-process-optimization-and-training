@@ -14,8 +14,13 @@ History:
              light side (were inverted), SOT-23 solder bridge routed against the upright body, motion
              blur kernel normalised and centred, sub-pixel chromatic aberration, perspective / motion
              blur angles from the filter settings applied.
+  4          the render pass draws from its own random stream (``render_seed``; it used to replay the
+             stream that sampled geometry and defect, so view angle / board brightness were functions
+             of the geometry), corner-lift cap and SOT-23 pad gap scale with the supersampling, the
+             realism sampler's tail is two-sided for signed ranges, flat style and Blender body keep
+             the sub-pixel placement of the label.
 """
 
 from __future__ import annotations
 
-RENDERER_VERSION = "3"
+RENDERER_VERSION = "4"

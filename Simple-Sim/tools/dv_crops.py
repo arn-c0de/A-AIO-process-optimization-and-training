@@ -181,6 +181,32 @@ def summarize(selected: dict[str, list[dict[str, Any]]], skipped: Counter, side:
             "packages": dict(packages.most_common()), "per_package": per_package}
 
 
+def crop_stem(row: dict[str, Any]) -> str:
+    """File stem of a review's crop: ``<board>_<id>`` (``run`` when the row has no ``board``, as in :func:`latest_reviews`)."""
+    return f"{row.get('board') or row.get('run') or ''}_{row.get('id') or ''}"
+
+
+def remove_stale(out: Path, stems: set[str], keep: set[Path]) -> int:
+    """Delete crops of an earlier export that this one no longer writes; returns their number.
+
+    Only files named after a review of the label file (*stems*) in the class folders of *out* are
+    touched. Without this a crop whose review changed (ok -> fault, another fault, retracted) or
+    whose folder was renamed stayed in its old folder too, i.e. under two labels for
+    ``eval-real`` / ``mix-real``. Folders that end up empty are removed.
+    """
+    removed = 0
+    if not out.is_dir():
+        return removed
+    for folder in sorted(p for p in out.iterdir() if p.is_dir()):
+        for path in sorted(p for p in folder.iterdir() if p.is_file()):
+            if path.stem in stems and path not in keep:
+                path.unlink()
+                removed += 1
+        if removed and not any(folder.iterdir()):
+            folder.rmdir()
+    return removed
+
+
 def export(labels_dir: Path, side: str, out: Path, *, pnp: Path | None, packages: set[str] | None, limit_ok: int,
            limit: int, seed: int, match_mm: float, dry_run: bool) -> dict[str, Any]:
     """Copy the selected crops into ``out/<folder>/<board>_<id>.png`` and write ``out/summary.json``."""
@@ -198,12 +224,15 @@ def export(labels_dir: Path, side: str, out: Path, *, pnp: Path | None, packages
     summary["available"] = {k: len(v) for k, v in sorted(selected.items())}
     summary["dry_run"] = bool(dry_run)
     if not dry_run:
+        targets: dict[Path, Path] = {}
         for folder, folder_rows in chosen.items():
-            dest = out / folder
-            dest.mkdir(parents=True, exist_ok=True)
             for row in folder_rows:
                 src = labels_dir / str(row["cropColor"])
-                shutil.copyfile(src, dest / f"{row['board']}_{row['id']}{src.suffix.lower()}")
+                targets[out / folder / f"{crop_stem(row)}{src.suffix.lower()}"] = src
+        summary["removed_stale"] = remove_stale(out, {crop_stem(r) for r in rows}, set(targets))
+        for dest, src in targets.items():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
         out.mkdir(parents=True, exist_ok=True)
         (out / "summary.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     return summary

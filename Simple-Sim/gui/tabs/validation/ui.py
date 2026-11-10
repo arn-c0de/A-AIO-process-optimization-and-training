@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from gui.theme.tokens import SPACE
 from gui.utils.tooltip import ToolTip
 from gui.widgets import LogView, ScrolledTree, Section, Toolbar
-import contextlib
+from gui.utils.tk_safe import quiet
 
 if TYPE_CHECKING:
     from .tab import ValidationTab
@@ -112,7 +112,7 @@ class ValidationUI:
         self.results_view.append(text)
 
     def set_running(self, running: bool) -> None:
-        with contextlib.suppress(Exception):
+        with quiet():
             self.btn_run.configure(state="disabled" if running else "normal")
 
     def refresh_flag_tree(self, flagged_samples: list) -> None:

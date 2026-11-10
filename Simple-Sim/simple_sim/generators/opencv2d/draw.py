@@ -103,7 +103,8 @@ def draw_component(
         comp_width, comp_height = geo["width"], geo["length"]
 
     rect_size = (comp_height, comp_width)
-    box = cv2.boxPoints((center, rect_size, geo["rotation_deg"]))
+    # Float centre and rounded corners (astype truncated them): the drawn body follows the label's shift.
+    box = np.round(cv2.boxPoints((geo["center_f"], rect_size, geo["rotation_deg"])))
 
     if defect_type == DefectClass.CORNER_LIFT:
         _draw_corner_lift(img, box, center, comp_width, color, geo["tilt_deg"], param_selector(defect_params))

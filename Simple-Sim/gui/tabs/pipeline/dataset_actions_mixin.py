@@ -25,7 +25,7 @@ from gui.utils.pipeline_helpers import (
 
 from simple_sim.io_utils import now_tag
 from simple_sim.model_bundle import bundle_checkpoint_path
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 _LOG = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class PipelineDatasetActionsMixin:
             if label := self._dataset_label_for_path(ds):
                 self.ui.var_dataset.set(label)
             self._on_dataset_selected()
-            with contextlib.suppress(Exception):
+            with quiet():
                 self.parent.event_generate("<<DatasetChanged>>", when="tail")
         except Exception as exc:
             self.ui.show_messagebox("error", "Delete images failed", str(exc))
@@ -103,7 +103,7 @@ class PipelineDatasetActionsMixin:
             if label := self._dataset_label_for_path(src_ds):
                 self.ui.var_dataset.set(label)
             self._on_dataset_selected()
-            with contextlib.suppress(Exception):
+            with quiet():
                 self.parent.event_generate("<<DatasetChanged>>", when="tail")
         except Exception as exc:
             self.ui.show_messagebox("error", "Move images failed", str(exc))
@@ -185,16 +185,22 @@ class PipelineDatasetActionsMixin:
         if not self.ui.ask_yes_no("Snapshot dataset", f"Create snapshot?\n\nFrom:\n{ds}\n\nTo:\n{dst}"): return
         self._append_log(f"\n[snapshot dataset] {ds} -> {dst}\n")
 
-        def link_or_copy_file(src: Path, dstp: Path) -> None:
+        def link_or_copy_file(src: Path, dstp: Path, *, link: bool) -> None:
             dstp.parent.mkdir(parents=True, exist_ok=True)
-            try: os.link(src, dstp)
-            except Exception: shutil.copy2(src, dstp)
+            if link:
+                try: os.link(src, dstp); return
+                except Exception: pass
+            shutil.copy2(src, dstp)
 
         def worker() -> None:
             try:
                 for dirpath, _dirnames, filenames in os.walk(ds):
                     rel = Path(dirpath).relative_to(ds)
-                    for fn in filenames: link_or_copy_file(Path(dirpath) / fn, dst / rel / fn)
+                    # Only images are hardlinked (written once, never changed). Row files, splits, manifest,
+                    # feedback and flags are appended to / rewritten in place by extend, mix-real and the
+                    # GUI; as hardlinks those changes showed up in the "frozen" snapshot as well.
+                    is_images = bool(rel.parts) and rel.parts[0] == "images"
+                    for fn in filenames: link_or_copy_file(Path(dirpath) / fn, dst / rel / fn, link=is_images)
                 self.log_q.put(f"[snapshot dataset] done: {dst}\n")
             except Exception as e: self.log_q.put(f"[snapshot dataset] failed: {e}\n"); shutil.rmtree(dst, ignore_errors=True)
             finally: self.post(self._refresh_datasets)
@@ -249,25 +255,32 @@ class PipelineDatasetActionsMixin:
             if cur_resolved_out_path == old_out_path: self.ui.var_out.set(str(self.sim_root / "outputs" / "sim_data" / "runs" / new_name))
         except Exception: pass
 
-        self._rename_models_for_dataset(old_name, new_name)
+        # Models are named after run datasets only; a snapshot folder name (e.g. "v1") is not a model name.
+        if kind == "run": self._rename_models_for_dataset(old_name, new_name)
         self._append_log(f"[rename dataset] {rp} -> {dst}\n")
-        with contextlib.suppress(Exception): self.parent.event_generate("<<DatasetChanged>>", when="tail")
+        with quiet(): self.parent.event_generate("<<DatasetChanged>>", when="tail")
 
     def _rename_models_for_dataset(self, old_name: str, new_name: str) -> None:
         models_root = self.sim_root / "outputs" / "models"
         for suffix in ["", "_last"]:
             old, new = models_root / f"{old_name}{suffix}.pt", models_root / f"{new_name}{suffix}.pt"
+            old_meta, new_meta = models_root / f"{old_name}{suffix}.pt.meta.json", models_root / f"{new_name}{suffix}.pt.meta.json"
+            if old.exists() and new.exists():
+                # Path.rename replaces an existing file without asking: keep the other model.
+                self._append_log(f"[rename dataset] model not renamed, target exists: {new}\n")
+                continue
             if old.exists():
                 try: old.rename(new)
                 except Exception as e: _LOG.warning("Failed to rename model %s -> %s: %s", old, new, e)
-            old_meta, new_meta = models_root / f"{old_name}{suffix}.pt.meta.json", models_root / f"{new_name}{suffix}.pt.meta.json"
-            if old_meta.exists():
+            if old_meta.exists() and not new_meta.exists():
                 try: old_meta.rename(new_meta)
                 except Exception as e: _LOG.warning("Failed to rename meta %s -> %s: %s", old_meta, new_meta, e)
 
         versions_root = models_root / "versions"
         old_dir, new_dir = versions_root / old_name, versions_root / new_name
-        if old_dir.exists():
+        if old_dir.exists() and new_dir.exists():
+            self._append_log(f"[rename dataset] versioned models not renamed, target exists: {new_dir}\n")
+        elif old_dir.exists():
             try: old_dir.rename(new_dir)
             except Exception as e: _LOG.warning("Failed to rename versioned models %s -> %s: %s", old_dir, new_dir, e)
 
@@ -280,69 +293,78 @@ class PipelineDatasetActionsMixin:
         self._run_simple_cmd([chain_commands([validate_argv(ds) for ds in dss])])
 
     def _train_selected(self) -> None:
-        dss = self._selected_dataset_dirs();
+        dss = self._selected_dataset_dirs()
         if not dss: return
         if len(dss) > 1:
             if not (strat := self._ask_multi_dataset_train_strategy(dss)): return
             if strat in ("merge_keep", "merge_temp"):
-                if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first."); return
-                
-                ts = now_tag(micro=False)
-                name = ""
-                if strat == "merge_keep":
-                    default = f"{dss[0].name}_merged_{len(dss)}"
-                    if not (name := self.ui.ask_string("Merge datasets", "Output dataset folder name (will be created under outputs/sim_data/runs):", initialvalue=default)): return
-                    if not (name := name.strip()) or "/" in name or "\\" in name: self.ui.show_messagebox("error", "Error", "Invalid dataset name."); return
-                else: name = f"__tmp_merge_{ts}"
-                
-                out_ds = (self.sim_root / "outputs" / "sim_data" / "runs" / name).resolve()
-                if out_ds.exists(): self.ui.show_messagebox("error", "Error", f"Merge output already exists:\n{out_ds}"); return
-
-                model_s = self.ui.var_model.get().strip()
-                model_out = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{name}.pt").resolve()
-                delete_after = (strat == "merge_temp")
-
-                self._append_log(f"\n=== Merge {len(dss)} datasets -> {out_ds.name} ===\n")
-                for ds in dss: self._append_log(f"  - {ds}\n")
-                self._append_log("\n")
-
-                self.logic.loop_running = True; self.logic.stop_evt.clear()  # keep Busy guards closed until training starts
-                def worker() -> None:
-                    try:
-                        self.log_q.put(f"[merge] building merged dataset: {out_ds}\n")
-                        self.logic.merge_datasets_for_training(dss, out_ds, self.log_q.put, self.log_q.put)
-                        self.log_q.put(f"[merge] done: {out_ds}\n")
-
-                        def kick_off_train() -> None:
-                            self.logic.loop_running = False
-                            if self.logic.stop_evt.is_set():
-                                self._append_log("[merge] stopped by user; training not started\n")
-                                if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
-                                self._refresh_datasets(); return
-                            try:
-                                if strat == "merge_keep": self._select_dataset(out_ds)
-                                else: self._refresh_datasets()
-                            except Exception: pass
-
-                            cmd = chain_commands([train_argv(out_ds, model_out)])
-                            self._run_simple_cmd([cmd], cleanup_dir=out_ds if delete_after else None)
-
-                        self.post(kick_off_train)
-                    except Exception as e:
-                        self.log_q.put(f"[merge] failed: {e}\n")
-                        if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
-                        def _merge_failed_ui() -> None: self.logic.loop_running = False
-                        self.post(_merge_failed_ui)
-                self.ui.set_run_buttons_state(True)
-                try: threading.Thread(target=worker, daemon=True).start()
-                except Exception: self.logic.loop_running = False; raise
+                self._train_merged(dss, strat)
                 return
 
-        model_s = self.ui.var_model.get().strip()
-        model_out = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
-
+        model_out = self._train_model_target(dss[0].name)
         if len(dss) == 1: self._run_simple_cmd(train_argv(dss[0], model_out)); return
+        self._train_sequential(dss, model_out)
 
+    def _train_model_target(self, default_stem: str) -> Path:
+        """Model path from the UI, else ``outputs/models/<default_stem>.pt``."""
+        model_s = self.ui.var_model.get().strip()
+        return self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{default_stem}.pt").resolve()
+
+    def _train_merged(self, dss: list[Path], strat: str) -> None:
+        """Merge *dss* in a worker thread, then train on the result (``merge_temp``: removed afterwards)."""
+        if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "A process is already running. Stop it first."); return
+        
+        ts = now_tag(micro=False)
+        name = ""
+        if strat == "merge_keep":
+            default = f"{dss[0].name}_merged_{len(dss)}"
+            if not (name := self.ui.ask_string("Merge datasets", "Output dataset folder name (will be created under outputs/sim_data/runs):", initialvalue=default)): return
+            if not (name := name.strip()) or "/" in name or "\\" in name: self.ui.show_messagebox("error", "Error", "Invalid dataset name."); return
+        else: name = f"__tmp_merge_{ts}"
+        
+        out_ds = (self.sim_root / "outputs" / "sim_data" / "runs" / name).resolve()
+        if out_ds.exists(): self.ui.show_messagebox("error", "Error", f"Merge output already exists:\n{out_ds}"); return
+
+        model_out = self._train_model_target(name)
+        delete_after = (strat == "merge_temp")
+
+        self._append_log(f"\n=== Merge {len(dss)} datasets -> {out_ds.name} ===\n")
+        for ds in dss: self._append_log(f"  - {ds}\n")
+        self._append_log("\n")
+
+        self.logic.loop_running = True; self.logic.stop_evt.clear()  # keep Busy guards closed until training starts
+        def worker() -> None:
+            try:
+                self.log_q.put(f"[merge] building merged dataset: {out_ds}\n")
+                self.logic.merge_datasets_for_training(dss, out_ds, self.log_q.put, self.log_q.put)
+                self.log_q.put(f"[merge] done: {out_ds}\n")
+
+                def kick_off_train() -> None:
+                    self.logic.loop_running = False
+                    if self.logic.stop_evt.is_set():
+                        self._append_log("[merge] stopped by user; training not started\n")
+                        if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
+                        self._refresh_datasets(); return
+                    try:
+                        if strat == "merge_keep": self._select_dataset(out_ds)
+                        else: self._refresh_datasets()
+                    except Exception: pass
+
+                    cmd = chain_commands([train_argv(out_ds, model_out)])
+                    self._run_simple_cmd([cmd], cleanup_dir=out_ds if delete_after else None)
+
+                self.post(kick_off_train)
+            except Exception as e:
+                self.log_q.put(f"[merge] failed: {e}\n")
+                if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
+                def _merge_failed_ui() -> None: self.logic.loop_running = False
+                self.post(_merge_failed_ui)
+        self.ui.set_run_buttons_state(True)
+        try: threading.Thread(target=worker, daemon=True).start()
+        except Exception: self.logic.loop_running = False; raise
+
+    def _train_sequential(self, dss: list[Path], model_out: Path) -> None:
+        """Train on *dss* one after the other into *model_out* (resume with +epochs per further dataset)."""
         allow_mixed_profiles = False
         if self.logic._datasets_require_bundle(dss, self.logic.get_dataset_profile_id) and not self.logic._is_model_bundle_target(model_out):
             if not self.ui.ask_yes_no("Allow mixed-profile training into a single model?", "You selected datasets with different component profiles.\n\nRecommended: train into a multi-model bundle (.bundle) so each profile gets its own checkpoint.\n\nIf you continue anyway, the training will resume across different profiles by passing --allow-profile-mismatch (warm-start). This is not guaranteed to work and can degrade accuracy.\n\nContinue?"): return

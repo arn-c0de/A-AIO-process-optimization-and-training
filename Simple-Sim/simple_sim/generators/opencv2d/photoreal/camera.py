@@ -228,8 +228,8 @@ def apply_view(img: np.ndarray, pose: dict[str, float], size: tuple[int, int]) -
     if jitter != 0.0:
         j = np.radians(jitter)
         proj = proj @ np.array([[np.cos(j), -np.sin(j)], [np.sin(j), np.cos(j)]])  # image-CCW for positive jitter
-    dst = (proj + [width / 2.0, height / 2.0]).astype(np.float32)
-    m = cv2.getPerspectiveTransform((corners + [sw / 2.0, sh / 2.0]).astype(np.float32), dst)
+    dst = (proj + np.array([width / 2.0, height / 2.0])).astype(np.float32)
+    m = cv2.getPerspectiveTransform((corners + np.array([sw / 2.0, sh / 2.0])).astype(np.float32), dst)
     return cv2.warpPerspective(small, m, (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
 
 

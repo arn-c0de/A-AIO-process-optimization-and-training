@@ -20,6 +20,7 @@ import numpy as np
 from simple_sim.board import collect_drc
 from simple_sim.board.footprints import DEFAULT_FOOTPRINT
 from simple_sim.config import domain_camera, merge_profile_render
+from simple_sim.rng import render_seed
 
 from .render import render_roi
 
@@ -75,9 +76,10 @@ def render_sample(spec: RenderSpec, nominal: Mapping[str, float], defect: Mappin
 
 def render_record(spec: RenderSpec, record: Mapping[str, Any], rng: np.random.Generator | None = None) -> np.ndarray:
     """Render a dataset record (``generation.common.sample_record``). Without *rng* the image is drawn
-    from a fresh generator seeded with ``record['seed']`` (the contract of ``generate``)."""
+    from the render stream of ``record['seed']`` (:func:`simple_sim.rng.render_seed`; the contract of
+    ``generate``), which is independent of the stream that sampled the record."""
     if rng is None:
-        rng = np.random.default_rng(int(record["seed"]))
+        rng = np.random.default_rng(render_seed(record["seed"]))
     return render_sample(spec, record["nominal"], record["defect"], record["augment"], rng, domain=record.get("domain"))
 
 

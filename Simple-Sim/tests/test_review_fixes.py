@@ -261,7 +261,7 @@ def _empty_dataset(root: Path) -> Path:
 
 
 def test_validate_fails_an_empty_dataset_and_foreign_split_ids(tmp_path, capsys):
-    from tools.validate_dataset import run_validation
+    from simple_sim.dataset_validation import run_validation
 
     ds = _empty_dataset(tmp_path / "ds")
     ok, checks = run_validation(ds)

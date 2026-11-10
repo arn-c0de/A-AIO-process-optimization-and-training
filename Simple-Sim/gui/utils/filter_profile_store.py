@@ -30,7 +30,7 @@ def load_filter_popup_extras_from_profiles_json(raw_profiles: str, raw_active: s
             return extras
         active_profile = obj.get(raw_active)
         if not isinstance(active_profile, dict) and obj:
-            first_key = sorted(obj.keys())[0]
+            first_key = min(obj.keys())
             active_profile = obj.get(first_key)
         if isinstance(active_profile, dict):
             extras = extract_filter_popup_extras(active_profile)

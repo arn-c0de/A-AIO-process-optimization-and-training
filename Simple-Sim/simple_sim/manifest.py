@@ -322,6 +322,45 @@ class DatasetManifest:
         return resolve_dataset_profile(self)
 
 
+def _extend_manifest(
+    manifest: dict[str, Any],
+    *,
+    profile_id: str,
+    profile_hash: str,
+    meta_rows: list[Any],
+    label_rows: list[Any],
+    splits: dict[str, list[str]],
+    renderer_version: str | None,
+    git_commit: str | None,
+) -> None:
+    """Record added samples in an existing single-profile *manifest* (in place).
+
+    Raises:
+        ValueError: on a profile id / hash mismatch (should have been caught earlier; double-check).
+    """
+    for label, existing, current in (
+        ("ID", manifest['component_profile']['profile_id'], profile_id),
+        ("hash", manifest['component_profile']['profile_hash'], profile_hash),
+    ):
+        if existing != current:
+            raise ValueError(
+                f"Profile {label} mismatch during manifest update:\n"
+                f"  Existing: {existing}\n"
+                f"  Current:  {current}"
+            )
+
+    if renderer_version is not None:
+        manifest.setdefault('generator', {})['renderer_version'] = renderer_version
+    manifest['extend_history'].append(_history_entry(len(meta_rows), git_commit, renderer_version))
+
+    stats = manifest['dataset_stats']
+    stats['total_samples'] += len(meta_rows)
+    # `splits` is the complete (already merged) split map, so overwrite instead of adding.
+    stats['splits'] = {k: len(v) for k, v in splits.items()}
+    for class_name, count in _compute_class_counts(label_rows).items():
+        stats['classes'][class_name] = stats['classes'].get(class_name, 0) + count
+
+
 @_legacy_positional(2, ("profile_id", "profile_hash", "profile_path", "meta_rows", "label_rows", "splits",
                             "extend", "script_name", "renderer_version", "git_commit"))
 def write_dataset_manifest(
@@ -370,65 +409,26 @@ def write_dataset_manifest(
 
     git_commit = git_commit if git_commit is not None else _get_git_commit()
     if extend and manifest_path.exists():
-        # Update existing manifest
         manifest = load_json(manifest_path)
-
-        # Validate profile match (should have been caught earlier, but double-check)
-        existing_profile_id = manifest['component_profile']['profile_id']
-        existing_profile_hash = manifest['component_profile']['profile_hash']
-
-        if existing_profile_id != profile_id:
-            raise ValueError(
-                f"Profile ID mismatch during manifest update:\n"
-                f"  Existing: {existing_profile_id}\n"
-                f"  Current:  {profile_id}"
-            )
-
-        if existing_profile_hash != profile_hash:
-            raise ValueError(
-                f"Profile hash mismatch during manifest update:\n"
-                f"  Existing: {existing_profile_hash}\n"
-                f"  Current:  {profile_hash}"
-            )
-
-        # Update extend history
-        if renderer_version is not None:
-            manifest.setdefault('generator', {})['renderer_version'] = renderer_version
-        manifest['extend_history'].append(_history_entry(len(meta_rows), git_commit, renderer_version))
-
-        # Update stats (add to existing counts)
-        manifest['dataset_stats']['total_samples'] += len(meta_rows)
-
-        # `splits` is the complete (already merged) split map, so overwrite instead of adding.
-        manifest['dataset_stats']['splits'] = {k: len(v) for k, v in splits.items()}
-
-        for class_name, count in _compute_class_counts(label_rows).items():
-            manifest['dataset_stats']['classes'][class_name] = \
-                manifest['dataset_stats']['classes'].get(class_name, 0) + count
-
+        _extend_manifest(manifest, profile_id=profile_id, profile_hash=profile_hash, meta_rows=meta_rows,
+                         label_rows=label_rows, splits=splits, renderer_version=renderer_version, git_commit=git_commit)
     else:
-        # Create new manifest
         if extend:
             raise ValueError(
                 f"Cannot extend: manifest not found at {manifest_path}\n"
                 f"Remove --extend flag to create new dataset"
             )
-
         manifest = {
             'manifest_version': 1,
             'created_at': now_iso(),
             'run_id': run_id,
-
             'component_profile': {
                 'profile_id': profile_id,
                 'profile_hash': profile_hash,
                 'profile_path': profile_path
             },
-
             'generator': _generator_block(script_name, git_commit, renderer_version),
-
             'dataset_stats': dataset_stats(meta_rows, label_rows, splits),
-
             'extend_history': [_history_entry(len(meta_rows), git_commit, renderer_version)]
         }
 
@@ -664,6 +664,8 @@ def write_multi_profile_manifest(
     generator = _generator_block(script_name, git_commit, renderer_version)
 
     manifest = {
+        # Keys this writer does not own (e.g. the ``real_crops`` log of mix-real) survive an extend.
+        **(dict(existing) if existing else {}),
         'manifest_version': 2,
         'created_at': created_at,
         'run_id': run_id,

@@ -480,7 +480,7 @@ class PreviewViewer:
         """Existing image files of the current preview list, limited to the backend filter."""
         items: list[tuple[str, str, str, Path]] = []
         for pid, backend, defect, rel in self.previews:
-            if self.backend_filter != "both" and backend != self.backend_filter:
+            if self.backend_filter not in ("both", backend):
                 continue
             p = (self.out_root / rel).resolve()
             if p.exists():

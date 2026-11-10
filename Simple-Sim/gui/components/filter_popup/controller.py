@@ -151,7 +151,7 @@ def delete_profile(popup: Any) -> None:
         return
     popup.profiles.pop(name, None)
     if popup.active_profile == name:
-        popup.active_profile = sorted(popup.profiles.keys(), key=lambda s: s.lower())[0]
+        popup.active_profile = min(popup.profiles.keys(), key=lambda s: s.lower())
         data = popup.profiles.get(popup.active_profile, {})
         popup.set_current_values(data)
         update_internal_vars(popup, data)

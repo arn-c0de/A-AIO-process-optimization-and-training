@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 def model_root(sim_root: Path) -> Path:
@@ -19,6 +19,7 @@ def newest_file(directory: Path, pattern: str, *, min_mtime: float | None = None
         return None
     if min_mtime is not None:
         cand = [t for t in cand if t[0] >= min_mtime]
+    # sorted()[-1], not max(): on equal mtimes the last match in glob order wins.
     return sorted(cand, key=lambda t: t[0])[-1][1] if cand else None
 
 
@@ -30,7 +31,7 @@ def list_model_paths(model_root: Path, *, include_bundles: bool = True) -> list[
     ``bundles/*``) next to each of those. Creates ``model_root`` if missing.
     """
     root = Path(model_root)
-    with contextlib.suppress(Exception):
+    with quiet():
         root.mkdir(parents=True, exist_ok=True)
     cand: list[Path] = []
     for search in (root, root / "versions", root / "imports"):

@@ -111,7 +111,7 @@ def _critical_fn_summary(report: Mapping[str, Any]) -> str:
     if not isinstance(d, dict) or not d:
         return "-"
     parts = []
-    for k in sorted(str(k) for k in d.keys())[:3]:
+    for k in sorted(str(k) for k in d)[:3]:
         try:
             parts.append(f"{k}:{float(d.get(k)):.4f}")
         except (TypeError, ValueError):
@@ -310,7 +310,7 @@ def _top_with_other(items: list[tuple[str, int]]) -> list[tuple[str, int]]:
     """Sort by size desc; keep the chart readable with top 8 + "Other" when more than 9."""
     items = sorted(((str(n), int(v)) for n, v in items if v is not None and int(v) > 0), key=lambda t: -t[1])
     if len(items) > 9:
-        items = items[:8] + [("Other", sum(v for _n, v in items[8:]))]
+        items = [*items[:8], ("Other", sum(v for _n, v in items[8:]))]
     return items
 
 

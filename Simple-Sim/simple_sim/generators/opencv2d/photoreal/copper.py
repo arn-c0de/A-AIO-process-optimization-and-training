@@ -199,7 +199,7 @@ CopperSource = Callable[[RenderContext, np.ndarray, np.ndarray, CopperJob, np.ra
 def legacy_copper(ctx: RenderContext, img: np.ndarray, base: np.ndarray, job: CopperJob,
                   rng: np.random.Generator) -> None:
     draw_legacy_copper(ctx, img, base, job.pads, job.keepout, rng)
-    return None
+    return
 
 
 def no_copper(ctx: RenderContext, img: np.ndarray, base: np.ndarray, job: CopperJob, rng: np.random.Generator) -> None:

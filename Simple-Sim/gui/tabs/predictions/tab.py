@@ -17,7 +17,7 @@ from simple_sim.cli_utils import parse_result_line
 
 from .ui import PredictionsUI
 from .logic import PredictionsLogic
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 class PredictionsTab(BaseTab):
@@ -48,7 +48,7 @@ class PredictionsTab(BaseTab):
         self._refresh_models()
         self._refresh_profile_models()
         self._load_persisted_settings()
-        with contextlib.suppress(Exception):
+        with quiet():
             self._on_dataset_selected()
         self._wire_settings_autosave()
         self._update_multi_sel_label()
@@ -123,7 +123,7 @@ class PredictionsTab(BaseTab):
 
     def _update_multi_sel_label(self) -> None:
         n = len([p for p in self._multi_dataset_paths if str(p).strip()])
-        with contextlib.suppress(Exception):
+        with quiet():
             self.ui.var_multi_sel.set(f"selected: {n}")
 
     def _on_multi_toggle(self) -> None:
@@ -335,8 +335,9 @@ class PredictionsTab(BaseTab):
         ds = self._selected_dataset_dir()
         if not ds: return
         self.state.dataset_dir = ds
-        self._active_dataset_dir = ds
-        with contextlib.suppress(Exception):
+        # _active_dataset_dir stays: it is the dataset of the results in the table (set when they are
+        # loaded). Changing it here showed the new dataset's images under the old rows' labels.
+        with quiet():
             self.parent.event_generate("<<DatasetChanged>>", when="tail")
         self._refresh_models()
 

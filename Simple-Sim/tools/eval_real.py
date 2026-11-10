@@ -42,7 +42,12 @@ from simple_sim.models import load_checkpoint_model  # noqa: E402
 
 def roi_size(checkpoint: dict[str, Any], default: int) -> tuple[int, int]:
     """(width, height) of the training ROIs from the checkpoint's config, else ``default``."""
-    roi = ((checkpoint or {}).get("config") or {}).get("roi") or {}
+    checkpoint = checkpoint or {}
+    config = checkpoint.get("config")
+    if not config:  # ensembles keep the config with their sub-models
+        first = next(iter(checkpoint.get("models") or []), None) or {}
+        config = (first.get("checkpoint") or {}).get("config") if isinstance(first, dict) else None
+    roi = (config or {}).get("roi") or {}
     return int(roi.get("width_px", default)), int(roi.get("height_px", default))
 
 
@@ -88,7 +93,7 @@ def evaluate(model: torch.nn.Module, class_names: list[str], root: Path, size: t
     cal_probs: list[np.ndarray] = []
     cal_true: list[int] = []
     for group, cls, files in class_folders(root):
-        if len(files) > limit:
+        if 0 < limit < len(files):  # 0 = all, as in mix-real / dv-crops
             files = [files[i] for i in sorted(rng.choice(len(files), limit, replace=False))]
         probs = predict_probs(model, files, size, tta=tta)
         names = [class_names[i] for i in probs.argmax(1)]

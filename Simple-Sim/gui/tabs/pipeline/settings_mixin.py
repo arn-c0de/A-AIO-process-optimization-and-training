@@ -32,7 +32,7 @@ from gui.utils.pipeline_helpers import (
 )
 
 from simple_sim.io_utils import load_yaml
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 class PipelineSettingsMixin:
@@ -60,7 +60,7 @@ class PipelineSettingsMixin:
         # _on_dataset_selected() -> _apply_dataset_settings() derives these from the dataset;
         # put the persisted values back on top.
         restore_persisted_vars(st, [b for b in bindings if b[0] in DATASET_DERIVED_KEYS], skip_empty_strings=True)
-        with contextlib.suppress(Exception): self._refresh_models()
+        with quiet(): self._refresh_models()
         try: self._load_filter_popup_extras_from_profiles(st)
         except Exception: self._filter_popup_extras = {}
 
@@ -116,7 +116,7 @@ class PipelineSettingsMixin:
             profiles = {"Default": current_live or self._current_filter_settings_dict()}
             active = "Default"
         if active not in profiles:
-            active = sorted(profiles.keys())[0]
+            active = min(profiles.keys())
         return profiles, active
 
     def _save_filter_profiles(self, profiles: dict[str, dict[str, Any]], active: str) -> None:
@@ -183,7 +183,7 @@ class PipelineSettingsMixin:
 
         # Live-update the popup if it is currently open
         if self._precise_popup_ref is not None and self._precise_popup_ref.is_open():
-            with contextlib.suppress(Exception):
+            with quiet():
                 self._precise_popup_ref.refresh(self._precise_settings)
 
     def _save_precise_settings(self) -> None:

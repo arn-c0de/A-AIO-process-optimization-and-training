@@ -46,7 +46,8 @@ options:
                         How many history rows to print
   --history-dirs HISTORY_DIRS
                         Comma-separated list of dirs to search for reports
-                        (default: outputs/models and outputs/models/history)
+                        (default: the model's directory, its history/ and the
+                        report's output dir)
   --profile-model PROFILE_MODEL
                         Optional path to profile classifier checkpoint (.pt)
                         for two-stage evaluation

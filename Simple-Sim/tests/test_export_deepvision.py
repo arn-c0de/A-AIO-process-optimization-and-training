@@ -92,7 +92,7 @@ def test_export_writes_pairs_records_and_crops(tmp_path):
         # 3.0-3.1 body lengths of a 1.0 mm 0402 at 16.1 px/mm: the app's 48-50 px crops
         assert 2.9 < r["fieldMm"] < 3.3 and 46 <= r["size"] <= 53
         by_pair.setdefault(r["pairId"], []).append(r)
-    for _pid, rows in by_pair.items():
+    for rows in by_pair.values():
         roles = [(r["role"], r["sim"]["class"]) for r in rows]
         assert roles[0] == ("ref", "OK") and roles[1] == ("probe", "OK") and len(roles) == 4
         assert all(role == "probe" and cls != "OK" for role, cls in roles[2:])

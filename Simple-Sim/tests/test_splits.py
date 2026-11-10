@@ -142,7 +142,7 @@ def test_split_counts_largest_remainder():
     assert _split_counts(3, (0.7, 0.15, 0.15)) == [1, 1, 1]
     assert _split_counts(2, (0.7, 0.15, 0.15)) == [2, 0, 0]
     assert _split_counts(7, (0.8, 0.2, 0.0)) == [6, 1, 0]
-    for n in range(0, 40):
+    for n in range(40):
         assert sum(_split_counts(n, (0.7, 0.15, 0.15))) == n
 
 

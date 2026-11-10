@@ -35,9 +35,8 @@ def test_single_threaded_torch_sets_one_thread_and_restores(four_threads):
 
 
 def test_single_threaded_torch_restores_on_error(four_threads):
-    with pytest.raises(RuntimeError):
-        with single_threaded_torch():
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), single_threaded_torch():
+        raise RuntimeError("boom")
     assert torch.get_num_threads() == four_threads
 
 

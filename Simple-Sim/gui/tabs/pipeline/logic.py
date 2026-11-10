@@ -26,7 +26,35 @@ from simple_sim.profile_hash import hash_profile
 from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
 from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
 from simple_sim.model_store import snapshot_checkpoint
-import contextlib
+from gui.utils.tk_safe import quiet
+
+
+def _config_classes_and_roi(cfg: dict) -> tuple[tuple[str, ...], int, int]:
+    """Sorted class names and ROI ``(width_px, height_px)`` of a dataset config (0 where unset)."""
+    classes = cfg.get("classes") or {}
+    roi = cfg.get("roi") or {}
+    return (tuple(sorted(classes.keys() if isinstance(classes, dict) else [])),
+            int(roi.get("width_px") or 0), int(roi.get("height_px") or 0))
+
+
+def _manifest_profiles(ds: Path, manifest: dict) -> list[dict[str, str]]:
+    """Component profiles of a dataset manifest: the single one of a v1 manifest, all named ones of v2."""
+    mver = int(manifest.get("manifest_version", 1) or 1)
+    if mver == 1:
+        comp = manifest.get("component_profile") or {}
+        pid = str(comp.get("profile_id") or "")
+        if not pid:
+            raise ValueError(f"Invalid manifest in {ds}: missing profile_id")
+        return [{"profile_id": pid, "profile_hash": str(comp.get("profile_hash") or ""),
+                 "profile_path": str(comp.get("profile_path") or "")}]
+    if mver == 2:
+        profs = manifest.get("component_profiles") or []
+        if not isinstance(profs, list) or not profs:
+            raise ValueError(f"Invalid manifest in {ds}: component_profiles missing/empty")
+        return [{"profile_id": pid, "profile_hash": str(p.get("profile_hash") or ""),
+                 "profile_path": str(p.get("profile_path") or "")}
+                for p in profs if isinstance(p, dict) and (pid := str(p.get("profile_id") or "").strip())]
+    raise ValueError(f"Unsupported manifest_version in {ds}: {mver}")
 
 
 class PipelineLogic:
@@ -329,7 +357,7 @@ class PipelineLogic:
 
         rc = proc.poll()
         if rc is None:
-            with contextlib.suppress(Exception):
+            with quiet():
                 rc = proc.wait(timeout=0.2 if self.stop_evt.is_set() else None)
         self.log_q.put(f"\n[process exited rc={rc}]\n")
 
@@ -361,7 +389,7 @@ class PipelineLogic:
                     partial = lines.pop()  # keep an incomplete trailing line for the next read
                     for line in lines:
                         if not (line := line.strip()): continue
-                        with contextlib.suppress(Exception): event_callback(json.loads(line))
+                        with quiet(): event_callback(json.loads(line))
             except Exception: pass
             if finished: return
             done.wait(0.1)
@@ -508,7 +536,7 @@ class PipelineLogic:
         for split in ["train", "val", "test"]: (out_dir / SPLITS_DIR / f"{split}.txt").write_text("", encoding="utf-8")
         Path(out_dir / META_JSONL).write_text("", encoding="utf-8")
         Path(out_dir / LABELS_JSONL).write_text("", encoding="utf-8")
-        with contextlib.suppress(Exception): shutil.copy2(config_path, out_dir / CONFIG_YAML)
+        with quiet(): shutil.copy2(config_path, out_dir / CONFIG_YAML)
 
         cfg_data, run_block = (load_yaml(config_path) or {}), {}
         if isinstance(cfg_data, dict): run_block = cfg_data.get("run") or {}
@@ -522,12 +550,37 @@ class PipelineLogic:
             "manifest_version": 1, "created_at": now_iso(utc=True), "run_id": run_id,
             "component_profile": {"profile_id": profile_id, "profile_hash": profile_hash, "profile_path": str(profile_path) if profile_path.exists() else ""},
             "generator": {"version": "1.0.1", "git_commit": None, "script": "gui.profile_placeholder"},
-            "dataset_stats": {"total_samples": 0, "splits": {"train": 0, "val": 0, "test": 0}, "classes": {str(k): 0 for k in classes.keys()}},
+            "dataset_stats": {"total_samples": 0, "splits": {"train": 0, "val": 0, "test": 0}, "classes": {str(k): 0 for k in classes}},
             "extend_history": [],
         }
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         log_callback(f"[profile] created placeholder dataset manifest for {out_dir.name}\n")
         return True
+
+    def chosen_config_for_profile(self, config_str: str, profile_id: str, want_backend: str | None = None) -> dict[str, Any] | None:
+        """The config of the Config field (*config_str*) as ``{"path", "run_id"}`` when it is a config
+        of *profile_id* (and of *want_backend*, if given and the config names one), else ``None``.
+
+        Several configs share a profile (looks, cross-domain, phone, ...): the one the user picked
+        wins over :meth:`config_for_profile`, which returns the alphabetically first.
+        """
+        if not config_str.strip():
+            return None
+        path = Path(config_str.strip())
+        path = path if path.is_absolute() else self.sim_root / path
+        try:
+            data = load_yaml(path)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        run_block = data.get("run") or {}
+        if str(run_block.get("component_profile") or "").strip() != str(profile_id).strip():
+            return None
+        backend = str((data.get("render") or {}).get("backend") or "").strip()
+        if want_backend and backend and backend != want_backend:
+            return None
+        return {"path": path, "run_id": str(run_block.get("run_id") or path.stem)}
 
     def config_for_profile(self, profile_id: str, want_backend: str | None = None) -> dict[str, Any] | None:
         cache_key = f"{profile_id}|{want_backend or ''}"
@@ -576,7 +629,7 @@ class PipelineLogic:
         return len(pids) > 1
 
     def _is_model_bundle_target(self, model_path: Path) -> bool:
-        try: return model_path.exists() and model_path.is_dir() or str(model_path).endswith(".bundle")
+        try: return (model_path.exists() and model_path.is_dir()) or str(model_path).endswith(".bundle")
         except Exception: return False
 
     def _prepare_merge_sources(
@@ -591,10 +644,7 @@ class PipelineLogic:
             cfg0 = yaml.safe_load(cfg0_text) or {}
         except Exception:
             cfg0 = {}
-        classes0 = cfg0.get("classes") or {}
-        class_keys0 = tuple(sorted(classes0.keys() if isinstance(classes0, dict) else []))
-        roi0 = cfg0.get("roi") or {}
-        roi0_w, roi0_h = int(roi0.get("width_px") or 0), int(roi0.get("height_px") or 0)
+        class_keys0, roi0_w, roi0_h = _config_classes_and_roi(cfg0)
 
         src_default_profiles: dict[str, dict[str, str]] = {}
         all_profiles: dict[str, dict[str, str]] = {}
@@ -604,36 +654,12 @@ class PipelineLogic:
             if not manifest_path.exists():
                 raise FileNotFoundError(f"Missing dataset_manifest.json in {ds}")
             manifest = read_dataset_manifest(manifest_path)
-            mver = int(manifest.get("manifest_version", 1) or 1)
             if ds is sources[0]:
                 run_id = str(manifest.get("run_id") or run_id)
-            if mver == 1:
-                comp = manifest.get("component_profile") or {}
-                pid = str(comp.get("profile_id") or "")
-                phash = str(comp.get("profile_hash") or "")
-                ppath = str(comp.get("profile_path") or "")
-                if not pid:
-                    raise ValueError(f"Invalid manifest in {ds}: missing profile_id")
-                default_prof = {"profile_id": pid, "profile_hash": phash, "profile_path": ppath}
-                src_default_profiles[str(ds.resolve())] = default_prof
-                all_profiles[pid] = default_prof
-            elif mver == 2:
-                profs = manifest.get("component_profiles") or []
-                if not isinstance(profs, list) or not profs:
-                    raise ValueError(f"Invalid manifest in {ds}: component_profiles missing/empty")
-                for p in profs:
-                    if not isinstance(p, dict):
-                        continue
-                    pid = str(p.get("profile_id") or "").strip()
-                    if not pid:
-                        continue
-                    all_profiles[pid] = {
-                        "profile_id": pid,
-                        "profile_hash": str(p.get("profile_hash") or ""),
-                        "profile_path": str(p.get("profile_path") or ""),
-                    }
-            else:
-                raise ValueError(f"Unsupported manifest_version in {ds}: {mver}")
+            profiles = _manifest_profiles(ds, manifest)
+            if int(manifest.get("manifest_version", 1) or 1) == 1:
+                src_default_profiles[str(ds.resolve())] = profiles[0]
+            all_profiles.update({prof["profile_id"]: prof for prof in profiles})
 
         target_w, target_h = (roi0_w if roi0_w > 0 else None), (roi0_h if roi0_h > 0 else None)
         for ds in sources[1:]:
@@ -644,12 +670,9 @@ class PipelineLogic:
                 cfg = load_yaml(cfg_path) or {}
             except Exception:
                 cfg = {}
-            classes = cfg.get("classes") or {}
-            class_keys = tuple(sorted(classes.keys() if isinstance(classes, dict) else []))
+            class_keys, w, h = _config_classes_and_roi(cfg)
             if class_keys != class_keys0:
                 raise ValueError(f"Cannot merge datasets with different class sets.\n  first: {class_keys0}\n  {ds.name}: {class_keys}")
-            roi = cfg.get("roi") or {}
-            w, h = int(roi.get("width_px") or 0), int(roi.get("height_px") or 0)
             if w > 0:
                 target_w = w if target_w is None else min(target_w, w)
             if h > 0:

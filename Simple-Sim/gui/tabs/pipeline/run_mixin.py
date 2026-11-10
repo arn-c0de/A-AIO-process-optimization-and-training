@@ -30,7 +30,7 @@ from gui.utils.pipeline_helpers import (
 from simple_sim.io_utils import load_yaml, now_tag, rel_to
 
 from .start_summary import start_summary
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 class PipelineRunMixin:
@@ -173,169 +173,205 @@ class PipelineRunMixin:
         render_backend: str,
         out_dir: str,
     ) -> tuple[list[dict[str, str]], str, Any, str] | None:
+        """``(run_specs, effective_task, run_complete_callback, out_dir)``; ``None`` after an error box."""
+        if not (multi_enabled and multi_mode == "mixed"):
+            if dataset_mode == "extend" and len(profile_ids) > 1:
+                # Each profile gets its own runs/<run_id> dataset and models/<run_id>.pt: "extend" would
+                # append to (and retrain the models of) datasets the user neither selected nor confirmed.
+                self.ui.show_messagebox("error", "Error", "Extend Existing works on the one selected dataset.\n\nWith several profiles in 'separate' mode every profile has its own dataset, so there is nothing to extend. Select a single profile, or use 'Create New'.")
+                return None
+            run_specs = self._separate_run_specs(profile_ids, render_backend, out_dir)
+            return None if run_specs is None else (run_specs, task, None, out_dir)
+
+        if task != "generate_only":
+            self.ui.show_messagebox("error", "Error", "Multi-profile mode 'mixed' is supported only for Generate Only.")
+            return None
+        if len(profile_ids) < 2:
+            self.ui.show_messagebox("error", "Error", "Mixed dataset mode requires at least 2 selected profiles.")
+            return None
+        if run_count != 1:
+            self.ui.show_messagebox("error", "Error", "Mixed dataset generation currently supports only a single run.")
+            return None
+
+        resolved_configs = self._resolve_mixed_configs(profile_ids, render_backend)
+        if resolved_configs is None:
+            return None
+        if {backend for *_rest, backend in resolved_configs} == {"opencv_2d"}:
+            run_specs = self._mixed_2d_run_specs(profile_ids, dataset_mode, out_dir)
+            return None if run_specs is None else (run_specs, "generate_mixed", None, out_dir)
+        return self._mixed_cross_backend_run_specs(resolved_configs, dataset_mode, out_dir)
+
+    def _no_config_for_profile(self, pid: str) -> None:
+        self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\n{pid}\n\nPick or create a config with run.component_profile={pid}.")
+
+    def _separate_run_specs(self, profile_ids: list[str], render_backend: str, out_dir: str) -> list[dict[str, str]] | None:
+        """One spec per profile, each with its own dataset / model target when several are selected."""
         run_specs: list[dict[str, str]] = []
-        effective_task = task
-        run_complete_callback = None
-
-        if multi_enabled and multi_mode == "mixed":
-            if task != "generate_only":
-                self.ui.show_messagebox("error", "Error", "Multi-profile mode 'mixed' is supported only for Generate Only.")
+        base_out = Path(out_dir)
+        base_model = Path(self.ui.var_model.get().strip())
+        for pid in profile_ids:
+            # One profile: the config in the Config field when it is one of this profile (it used to be
+            # ignored, so only the alphabetically first config of a profile could be run from the GUI).
+            cfg_info = None
+            if len(profile_ids) == 1:
+                cfg_info = self.logic.chosen_config_for_profile(self.ui.var_config.get(), pid, render_backend or None)
+            cfg_info = cfg_info or self.logic.config_for_profile(pid, want_backend=render_backend or None)
+            if not cfg_info:
+                self._no_config_for_profile(pid)
                 return None
-            if len(profile_ids) < 2:
-                self.ui.show_messagebox("error", "Error", "Mixed dataset mode requires at least 2 selected profiles.")
+            cfg_path = Path(cfg_info["path"])
+            self._append_log(f"[config] {pid}: {cfg_path}\n")
+            cfg_rel = self._rel_to_sim_root(cfg_path)
+            run_id = str(cfg_info.get("run_id") or pid)
+            out_i, model_i = profile_run_targets(
+                base_out, base_model, run_id, multi=len(profile_ids) > 1, models_root=self.sim_root / "outputs" / "models"
+            )
+
+            run_specs.append({
+                "profile_id": pid, "config": cfg_rel, "out_dir": str(out_i), "model_path": str(model_i),
+            })
+        return run_specs
+
+    def _resolve_mixed_configs(self, profile_ids: list[str], render_backend: str) -> list[tuple[str, Path, str, str]] | None:
+        """``(profile_id, config_path, run_id, backend)`` per profile (preferred backend first, then any)."""
+        resolved_configs: list[tuple[str, Path, str, str]] = []
+        for pid in profile_ids:
+            cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
+            if not cfg_info:
+                cfg_info = self.logic.config_for_profile(pid, want_backend=None)
+            if not cfg_info:
+                self._no_config_for_profile(pid)
                 return None
-            if run_count != 1:
-                self.ui.show_messagebox("error", "Error", "Mixed dataset generation currently supports only a single run.")
-                return None
+            cfg_path = Path(cfg_info["path"])
+            run_id = str(cfg_info.get("run_id") or pid)
+            try:
+                cfg_data = load_yaml(cfg_path) or {}
+            except Exception:
+                cfg_data = {}
+            backend = str((cfg_data.get("render") or {}).get("backend") or "opencv_2d").strip() or "opencv_2d"
+            resolved_configs.append((pid, cfg_path, run_id, backend))
+        return resolved_configs
 
-            resolved_configs: list[tuple[str, Path, str, str]] = []
-            backends_used: set[str] = set()
-            for pid in profile_ids:
-                cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
-                if not cfg_info:
-                    cfg_info = self.logic.config_for_profile(pid, want_backend=None)
-                if not cfg_info:
-                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\n{pid}\n\nPick or create a config with run.component_profile={pid}.")
-                    return None
-                cfg_path = Path(cfg_info["path"])
-                run_id = str(cfg_info.get("run_id") or pid)
-                try:
-                    cfg_data = load_yaml(cfg_path) or {}
-                except Exception:
-                    cfg_data = {}
-                backend = str((cfg_data.get("render") or {}).get("backend") or "opencv_2d").strip() or "opencv_2d"
-                resolved_configs.append((pid, cfg_path, run_id, backend))
-                backends_used.add(backend)
+    def _mixed_2d_run_specs(self, profile_ids: list[str], dataset_mode: str, out_dir: str) -> list[dict[str, str]] | None:
+        """All profiles render in 2D: one ``generate_mixed`` run from a temp config listing the profiles."""
+        cfg_str = self.ui.var_config.get().strip()
+        cfg_path = resolve_under(self.sim_root, cfg_str) if cfg_str else None
+        if not cfg_path or not cfg_path.exists():
+            self.ui.show_messagebox("error", "Error", f"Config file not found:\n{cfg_str}")
+            return None
+        try:
+            base_cfg = load_yaml(cfg_path) or {}
+        except Exception as e:
+            self.ui.show_messagebox("error", "Error", f"Failed to read config:\n{cfg_path}\n\n{e}")
+            return None
 
-            if backends_used == {"opencv_2d"}:
-                cfg_str = self.ui.var_config.get().strip()
-                cfg_path = resolve_under(self.sim_root, cfg_str) if cfg_str else None
-                if not cfg_path or not cfg_path.exists():
-                    self.ui.show_messagebox("error", "Error", f"Config file not found:\n{cfg_str}")
-                    return None
-                try:
-                    base_cfg = load_yaml(cfg_path) or {}
-                except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to read config:\n{cfg_path}\n\n{e}")
-                    return None
+        try:
+            tmp_cfg_path = self._write_temp_cfg(mixed_profile_config(base_cfg, profile_ids), prefix="run_profile_cls_selected_")
+        except Exception as e:
+            self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\n\n{e}")
+            return None
 
-                try:
-                    tmp_cfg_path = self._write_temp_cfg(mixed_profile_config(base_cfg, profile_ids), prefix="run_profile_cls_selected_")
-                except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to write temporary config under outputs/live:\n\n{e}")
-                    return None
+        if dataset_mode == "extend":
+            # generate-profile-dataset has no extend mode: it would replace the selected dataset.
+            self.ui.show_messagebox("error", "Error", "Extend Existing is not supported for a mixed multi-profile dataset (2D only).\n\nUse 'Create New', or extend with a single profile.")
+            return None
+        return [{
+            "profile_id": "multi", "config": self._rel_to_sim_root(tmp_cfg_path), "out_dir": out_dir,
+            "model_path": self.ui.var_model.get().strip(),
+        }]
 
-                if dataset_mode == "extend":
-                    # generate-profile-dataset has no extend mode: it would replace the selected dataset.
-                    self.ui.show_messagebox("error", "Error", "Extend Existing is not supported for a mixed multi-profile dataset (2D only).\n\nUse 'Create New', or extend with a single profile.")
-                    return None
-                run_specs.append({
-                    "profile_id": "multi", "config": self._rel_to_sim_root(tmp_cfg_path), "out_dir": out_dir,
-                    "model_path": self.ui.var_model.get().strip(),
-                })
-                effective_task = "generate_mixed"
-            else:
-                final_out = self.logic._resolve_out_dir(out_dir)
-                replace_existing_final_out = False
-                if final_out.exists() and dataset_mode == "extend":
-                    replace_existing_final_out = True
-                    self._append_log(f"[mixed] reusing selected output path: {final_out}\n")
-                elif final_out.exists():
-                    final_out = unique_timestamped_dir(final_out, now_tag(micro=False))
-                    out_dir = str(final_out)
-                    self.ui.var_out.set(rel_to(self.sim_root, final_out))
-                    self._append_log(f"[mixed] output exists, using new dataset path: {final_out}\n")
+    def _mixed_cross_backend_run_specs(
+        self, resolved_configs: list[tuple[str, Path, str, str]], dataset_mode: str, out_dir: str,
+    ) -> tuple[list[dict[str, str]], str, Any, str] | None:
+        """Profiles of several backends: one generate-only run per profile into temp dirs, merged afterwards."""
+        final_out = self.logic._resolve_out_dir(out_dir)
+        replace_existing_final_out = False
+        if final_out.exists() and dataset_mode == "extend":
+            replace_existing_final_out = True
+            self._append_log(f"[mixed] reusing selected output path: {final_out}\n")
+        elif final_out.exists():
+            final_out = unique_timestamped_dir(final_out, now_tag(micro=False))
+            out_dir = str(final_out)
+            self.ui.var_out.set(rel_to(self.sim_root, final_out))
+            self._append_log(f"[mixed] output exists, using new dataset path: {final_out}\n")
 
-                live_dir = (self.sim_root / "outputs" / "live")
-                live_dir.mkdir(parents=True, exist_ok=True)
-                tmp_root = live_dir / f"mixed_profile_gen_{int(time.time())}_{os.getpid()}"
-                try:
-                    tmp_root.mkdir(parents=True, exist_ok=False)
-                except Exception as e:
-                    self.ui.show_messagebox("error", "Error", f"Failed to create temporary mixed-generation directory:\n{tmp_root}\n\n{e}")
-                    return None
+        live_dir = (self.sim_root / "outputs" / "live")
+        live_dir.mkdir(parents=True, exist_ok=True)
+        tmp_root = live_dir / f"mixed_profile_gen_{int(time.time())}_{os.getpid()}"
+        try:
+            tmp_root.mkdir(parents=True, exist_ok=False)
+        except Exception as e:
+            self.ui.show_messagebox("error", "Error", f"Failed to create temporary mixed-generation directory:\n{tmp_root}\n\n{e}")
+            return None
 
-                self._append_log(f"[mixed] Cross-backend profiles detected ({', '.join(sorted(backends_used))}). Generating per profile and auto-merging.\n")
-                for idx, (pid, cfg_path, _run_id, backend) in enumerate(resolved_configs):
-                    tmp_out = tmp_root / f"{idx:02d}_{self.logic.slugify_name(pid)}"
-                    run_specs.append({
-                        "profile_id": pid,
-                        "config": self._rel_to_sim_root(cfg_path),
-                        "out_dir": str(tmp_out),
-                        "model_path": self.ui.var_model.get().strip(),
-                    })
-                    self._append_log(f"[mixed] {pid} -> backend={backend} tmp={tmp_out}\n")
-                effective_task = "generate_only"
+        backends_used = {backend for *_rest, backend in resolved_configs}
+        self._append_log(f"[mixed] Cross-backend profiles detected ({', '.join(sorted(backends_used))}). Generating per profile and auto-merging.\n")
+        run_specs: list[dict[str, str]] = []
+        for idx, (pid, cfg_path, _run_id, backend) in enumerate(resolved_configs):
+            tmp_out = tmp_root / f"{idx:02d}_{self.logic.slugify_name(pid)}"
+            run_specs.append({
+                "profile_id": pid,
+                "config": self._rel_to_sim_root(cfg_path),
+                "out_dir": str(tmp_out),
+                "model_path": self.ui.var_model.get().strip(),
+            })
+            self._append_log(f"[mixed] {pid} -> backend={backend} tmp={tmp_out}\n")
 
-                def _merge_after_run(_run_i: int, specs: list[dict[str, str]], log_callback) -> bool:
-                    ok = True
-                    src_dirs: list[Path] = []
-                    try:
-                        src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
-                        merge_sources = list(src_dirs)
-                        merge_target = final_out
-                        tmp_target: Path | None = None
+        def _merge_after_run(_run_i: int, specs: list[dict[str, str]], log_callback) -> bool:
+            return self._merge_mixed_outputs(specs, log_callback, final_out=final_out, tmp_root=tmp_root,
+                                             extend=replace_existing_final_out and dataset_mode == "extend",
+                                             replace=replace_existing_final_out)
 
-                        if replace_existing_final_out and final_out.exists():
-                            if dataset_mode == "extend":
-                                merge_sources = [final_out] + merge_sources
-                                tmp_target = final_out.parent / f"{final_out.name}.__merge_tmp_{int(time.time())}_{os.getpid()}"
-                                if tmp_target.exists():
-                                    shutil.rmtree(tmp_target, ignore_errors=True)
-                                merge_target = tmp_target
-                                log_callback(f"[mixed] extend mode: including existing dataset as merge source: {final_out}\n")
-                            else:
-                                shutil.rmtree(final_out, ignore_errors=True)
-                                log_callback(f"[mixed] removed previous dataset at target: {final_out}\n")
+        return run_specs, "generate_only", _merge_after_run, out_dir
 
-                        log_callback(f"[mixed] merging {len(merge_sources)} source datasets into: {merge_target}\n")
-                        self.logic.merge_datasets_for_training(merge_sources, merge_target, log_callback, log_callback)
-                        if tmp_target is not None and merge_target == tmp_target:
-                            if final_out.exists():
-                                shutil.rmtree(final_out, ignore_errors=True)
-                            tmp_target.rename(final_out)
-                            merge_target = final_out
-                            log_callback(f"[mixed] extend mode: replaced target dataset with merged result: {final_out}\n")
-                        log_callback(f"[mixed] merged dataset ready: {final_out}\n")
-                    except Exception as e:
-                        log_callback(f"[mixed] merge failed: {e}\n")
-                        ok = False
-                    if not ok:
-                        # Keep freshly generated samples so a failed merge can be retried manually.
-                        log_callback(f"[mixed] temp generation data kept after failed merge: {tmp_root}\n")
-                    else:
-                        try:
-                            for p in src_dirs:
-                                if p.exists():
-                                    shutil.rmtree(p, ignore_errors=True)
-                            if tmp_root.exists():
-                                shutil.rmtree(tmp_root, ignore_errors=True)
-                            log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
-                        except Exception as e:
-                            log_callback(f"[mixed] temp cleanup warning: {e}\n")
-                    return ok
+    def _merge_mixed_outputs(self, specs: list[dict[str, str]], log_callback: Any, *, final_out: Path, tmp_root: Path,
+                             extend: bool, replace: bool) -> bool:
+        """Merge the per-profile temp datasets into *final_out* (worker thread); temp data is kept on failure."""
+        ok = True
+        src_dirs: list[Path] = []
+        try:
+            src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
+            merge_sources = list(src_dirs)
+            merge_target = final_out
+            tmp_target: Path | None = None
 
-                run_complete_callback = _merge_after_run
+            if replace and final_out.exists():
+                if extend:
+                    merge_sources = [final_out, *merge_sources]
+                    tmp_target = final_out.parent / f"{final_out.name}.__merge_tmp_{int(time.time())}_{os.getpid()}"
+                    if tmp_target.exists():
+                        shutil.rmtree(tmp_target, ignore_errors=True)
+                    merge_target = tmp_target
+                    log_callback(f"[mixed] extend mode: including existing dataset as merge source: {final_out}\n")
+                else:
+                    shutil.rmtree(final_out, ignore_errors=True)
+                    log_callback(f"[mixed] removed previous dataset at target: {final_out}\n")
+
+            log_callback(f"[mixed] merging {len(merge_sources)} source datasets into: {merge_target}\n")
+            self.logic.merge_datasets_for_training(merge_sources, merge_target, log_callback, log_callback)
+            if tmp_target is not None and merge_target == tmp_target:
+                if final_out.exists():
+                    shutil.rmtree(final_out, ignore_errors=True)
+                tmp_target.rename(final_out)
+                log_callback(f"[mixed] extend mode: replaced target dataset with merged result: {final_out}\n")
+            log_callback(f"[mixed] merged dataset ready: {final_out}\n")
+        except Exception as e:
+            log_callback(f"[mixed] merge failed: {e}\n")
+            ok = False
+        if not ok:
+            # Keep freshly generated samples so a failed merge can be retried manually.
+            log_callback(f"[mixed] temp generation data kept after failed merge: {tmp_root}\n")
         else:
-            base_out = Path(out_dir)
-            base_model = Path(self.ui.var_model.get().strip())
-            for pid in profile_ids:
-                cfg_info = self.logic.config_for_profile(pid, want_backend=render_backend or None)
-                if not cfg_info:
-                    self.ui.show_messagebox("error", "Error", f"No matching config found for profile:\n{pid}\n\nPick or create a config with run.component_profile={pid}.")
-                    return None
-                cfg_path = Path(cfg_info["path"])
-                cfg_rel = self._rel_to_sim_root(cfg_path)
-                run_id = str(cfg_info.get("run_id") or pid)
-                out_i, model_i = profile_run_targets(
-                    base_out, base_model, run_id, multi=len(profile_ids) > 1, models_root=self.sim_root / "outputs" / "models"
-                )
-
-                run_specs.append({
-                    "profile_id": pid, "config": cfg_rel, "out_dir": str(out_i), "model_path": str(model_i),
-                })
-
-        return run_specs, effective_task, run_complete_callback, out_dir
+            try:
+                for p in src_dirs:
+                    if p.exists():
+                        shutil.rmtree(p, ignore_errors=True)
+                if tmp_root.exists():
+                    shutil.rmtree(tmp_root, ignore_errors=True)
+                log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
+            except Exception as e:
+                log_callback(f"[mixed] temp cleanup warning: {e}\n")
+        return ok
 
     def _apply_precise_counts_to_run_specs(self, run_specs: list[dict[str, str]]) -> list[dict[str, str]] | None:
         counts = self._get_precise_counts()
@@ -374,26 +410,42 @@ class PipelineRunMixin:
                 return None
         return patched_specs
 
-    def _start_pipeline(self, *, task: str) -> None:
-        if self.logic.is_busy(): return
-        
-        run_mode, dataset_mode = self.ui.var_run_mode.get(), self.ui.var_dataset_mode.get()
-        out_dir = ""
+    def _run_output_dir(self, dataset_mode: str) -> str | None:
+        """Dataset dir of the run: the selected dataset when extending (confirmed), else the Output field."""
         if dataset_mode == "extend":
             if not (selected_ds := self._selected_dataset_dir()):
                 self.ui.show_messagebox("error", "Error", "No dataset selected to extend.\n\nSelect a dataset or use 'Create New' mode.")
-                return
+                return None
             try:
                 if str(selected_ds.resolve()).startswith(str((self.sim_root / "outputs" / "sim_data" / "versions").resolve()) + os.sep):
                     self.ui.show_messagebox("error", "Error", "Cannot extend/overwrite a dataset snapshot under outputs/sim_data/versions.\n\nSelect a dataset under outputs/sim_data/runs instead.")
-                    return
+                    return None
             except Exception: pass
-            if not self.ui.ask_yes_no("Extend dataset?", f"Extend Existing will APPEND new samples into the selected dataset folder.\n\nDataset:\n{selected_ds}\n\nContinue?"): return
+            if not self.ui.ask_yes_no("Extend dataset?", f"Extend Existing will APPEND new samples into the selected dataset folder.\n\nDataset:\n{selected_ds}\n\nContinue?"): return None
             out_dir = str(selected_ds)
             self._append_log(f"\n=== Extending selected dataset: {out_dir} ===\n")
         else:
             out_dir = self.ui.var_out.get().strip()
             self._append_log(f"\n=== Creating new dataset: {out_dir} ===\n")
+        return out_dir
+
+    def _run_profile_ids(self, multi_enabled: bool) -> list[str] | None:
+        """Profiles of the run (may be empty in single mode); ``None`` when multi mode has no selection."""
+        profile_ids = []
+        if multi_enabled:
+            profile_ids = self._profiles_multi_list(available=self._profiles_multi_available_values())
+            if not profile_ids:
+                self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\n\nClick Pick and select at least 1 profile.")
+                return None
+        elif p := self.ui.var_profile.get().strip(): profile_ids = [p]
+        return profile_ids
+
+    def _start_pipeline(self, *, task: str) -> None:
+        if self.logic.is_busy(): return
+        
+        run_mode, dataset_mode = self.ui.var_run_mode.get(), self.ui.var_dataset_mode.get()
+        out_dir = self._run_output_dir(dataset_mode)
+        if out_dir is None: return
 
         try: run_count = parse_run_count(run_mode, self.ui.var_run_count.get())
         except ValueError:
@@ -407,17 +459,11 @@ class PipelineRunMixin:
         multi_enabled = bool(self.ui.var_profiles_multi.get())
         multi_mode = self.ui.var_profiles_multi_mode.get().strip() or "separate"
         
-        profile_ids = []
-        if multi_enabled:
-            profile_ids = self._profiles_multi_list(available=self._profiles_multi_available_values())
-            if not profile_ids:
-                self.ui.show_messagebox("error", "Error", "Multi-profile mode is enabled but no profiles are selected.\n\nClick Pick and select at least 1 profile.")
-                return
-        else:
-            if p := self.ui.var_profile.get().strip(): profile_ids = [p]
+        profile_ids = self._run_profile_ids(multi_enabled)
+        if profile_ids is None: return
 
         try:
-            if profile_ids: self._autoselect_config_for_profile(profile_ids[0], prefer_quiet=False)
+            if profile_ids: self._autoselect_config_for_profile(profile_ids[0], prefer_quiet=True)  # keeps a matching Config field
         except Exception: pass
 
         built_specs = self._build_run_specs(
@@ -512,12 +558,11 @@ class PipelineRunMixin:
                 self.ui.var_dataset.set(self._dataset_label_for_path(out_path) or out_path.name)
                 self._on_dataset_selected()
             except Exception: pass
-        else:
-            if self.state.dataset_dir: self._start_dataset_size_calc(self.state.dataset_dir)
+        elif self.state.dataset_dir: self._start_dataset_size_calc(self.state.dataset_dir)
 
     def _reset_ui_on_pipeline_end(self) -> None:
         for p in self._temp_cfg_paths:
-            with contextlib.suppress(Exception): p.unlink(missing_ok=True)
+            with quiet(): p.unlink(missing_ok=True)
         self._temp_cfg_paths.clear()
         self.ui.set_run_buttons_state(False)
         self.ui.var_phase.set("phase: idle")

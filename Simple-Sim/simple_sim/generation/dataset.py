@@ -36,7 +36,7 @@ from simple_sim.generation.render_options import look_differences
 from simple_sim.manifest import (DatasetManifest, RendererMismatchError, check_renderer_version, read_dataset_manifest,
                                  write_dataset_manifest, write_multi_profile_manifest)
 from simple_sim.profile_hash import hash_profile_dict, load_profile
-from simple_sim.rows import LabelRow, MetaRow, append_jsonl_rows, validate_jsonl_pair
+from simple_sim.rows import LabelRow, MetaRow, extend_jsonl_pair, validate_jsonl_pair
 from simple_sim.splits import assert_no_overlap, read_split, write_splits
 from simple_sim.telemetry import emit
 
@@ -388,7 +388,8 @@ def plan_records(run: RunInputs, *, start_index: int = 0, image_filters: dict[st
 
 
 def _sampling_progress() -> SampleProgress:
-    """tqdm bar per class plus ``gen_progress`` telemetry every 10 samples (the CLI's progress output)."""
+    """tqdm bar per class while the samples are planned. ``gen_progress`` telemetry comes from the
+    render pass (:func:`simple_sim.generation.render_backends.render_opencv_2d`), which writes the images."""
     state: dict[str, Any] = {}
 
     def progress(class_name: str, i: int, count: int, rec: dict[str, Any]) -> None:
@@ -400,14 +401,31 @@ def _sampling_progress() -> SampleProgress:
         bar = state["bar"]
         bar.update(1)
         bar.set_postfix({"idx": rec["index"], "samp/s": f"{rate:.1f}"})
-        if i % 10 == 0 or i == count:
-            emit("gen_progress", class_name=class_name, class_i=int(i), class_total=int(count),
-                 global_idx=int(rec["index"]), samp_per_s=float(rate), last_image_path=rec["image_path"])
         if i == count:
             bar.close()
             state["bar"] = None
 
     return progress
+
+
+def _add_config_classes(config_path: Path, classes: Mapping[str, Any]) -> None:
+    """Add the classes an extend brought in to the dataset's ``config.yaml``.
+
+    Training and eval take their class list from that file; without the entry the samples of a new
+    class were dropped as "unknown label". Existing entries (the counts of the first run) stay.
+    """
+    import yaml
+
+    from simple_sim.io_utils import atomic_write_text
+
+    stored = load_config(config_path)
+    stored_classes = dict(stored.get("classes") or {})
+    added = {name: count for name, count in classes.items() if name not in stored_classes and int(count) > 0}
+    if not added:
+        return
+    stored["classes"] = {**stored_classes, **added}
+    atomic_write_text(config_path, yaml.dump(stored, default_flow_style=False, sort_keys=False))
+    log.info(f"New classes added to {config_path.name}: {sorted(added)}")
 
 
 def _blender_render_meta(run: Any) -> dict[str, Any]:
@@ -532,7 +550,8 @@ def generate_dataset(
     log.info(f"Profile Hash: {profile_hash_str[:72]}...")
 
     ext: ExtendState | None = None
-    if extend and output_dir.exists():
+    # An empty directory is a fresh dataset, like a missing one.
+    if extend and output_dir.is_dir() and any(output_dir.iterdir()):
         ext = load_extend_state(
             output_dir,
             profile_id=profile_id,
@@ -599,8 +618,8 @@ def generate_dataset(
         # Append mode: keep existing dataset, add new images + rows + update split files.
         (output_dir / "images").mkdir(parents=True, exist_ok=True)
         render(output_dir, "blender_jobs_extend.jsonl", True)
-        append_jsonl_rows(output_dir / "meta.jsonl", meta_rows)
-        append_jsonl_rows(output_dir / "labels.jsonl", label_rows)
+        extend_jsonl_pair(output_dir / "meta.jsonl", meta_rows, output_dir / "labels.jsonl", label_rows)
+        _add_config_classes(output_dir / "config.yaml", classes)
 
         final_splits = {k: sorted(set(ext.splits.get(k, [])) | set(new_splits[k])) for k in SPLIT_NAMES}
         assert_no_overlap(final_splits)

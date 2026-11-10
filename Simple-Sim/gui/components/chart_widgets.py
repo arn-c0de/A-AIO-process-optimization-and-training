@@ -9,7 +9,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 
 from gui.theme.tokens import Palette, class_color
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 def _palette(parent: tk.Widget) -> Palette:
@@ -33,7 +33,7 @@ def _style_axes(fig: Figure, ax, pal: Palette) -> None:
 def _embed(fig: Figure, parent: tk.Widget, pal: Palette) -> FigureCanvasTkAgg:
     canvas = FigureCanvasTkAgg(fig, master=parent)
     canvas.draw()
-    with contextlib.suppress(Exception):
+    with quiet():
         canvas.get_tk_widget().configure(background=pal.surface, highlightthickness=0)
     return canvas
 

@@ -6,6 +6,7 @@ import pytest
 from simple_sim.defects import sample_defect_params
 from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.geometry import pad_positions
+import itertools
 
 TOL = {"ok_shift_px": 3.0, "ok_rotation_deg": 5.0, "tombstone_tilt_deg": 75.0}
 CFG = {"component_color": [20, 20, 20], "substrate_color": [40, 90, 40], "copper_color": [60, 120, 180]}
@@ -288,7 +289,7 @@ def test_dual_row_footprints(footprint, n):
     left = [p for p in pads if p.x < 128]
     assert len(left) == n // 2 and [p.pin for p in left] == [str(i + 1) for i in range(n // 2)]
     ys = sorted(p.y for p in left)
-    assert all(b - a >= 12 for a, b in zip(ys, ys[1:]))  # pads of a column never overlap (rounding: 1 px)
+    assert all(b - a >= 12 for a, b in itertools.pairwise(ys))  # pads of a column never overlap (rounding: 1 px)
 
 
 def test_new_families():

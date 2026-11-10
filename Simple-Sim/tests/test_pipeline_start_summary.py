@@ -9,9 +9,9 @@ _PRECISE = {"total": 40, "per_class": True, "class_names": ["OK", "MISSING"], "c
 
 
 def _summary(**overrides):
-    args = dict(task="full", out_dir="outputs/sim_data/runs/r1", run_mode="single", run_count=1, dataset_mode="new",
-                profile_ids=["0603@1"], multi_enabled=False, multi_mode="separate", image_filters={},
-                precise_settings=_PRECISE, model_path="outputs/models/r1.pt")
+    args = {"task": "full", "out_dir": "outputs/sim_data/runs/r1", "run_mode": "single", "run_count": 1, "dataset_mode": "new",
+                "profile_ids": ["0603@1"], "multi_enabled": False, "multi_mode": "separate", "image_filters": {},
+                "precise_settings": _PRECISE, "model_path": "outputs/models/r1.pt"}
     args.update(overrides)
     return start_summary(**args)
 

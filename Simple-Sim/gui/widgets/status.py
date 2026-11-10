@@ -7,7 +7,7 @@ from tkinter import ttk
 from typing import Any
 
 from gui.theme.tokens import SPACE
-import contextlib
+from gui.utils.tk_safe import quiet
 
 _LEVEL_STYLE = {"info": "Status.TLabel", "success": "StatusSuccess.TLabel",
                 "warning": "StatusWarning.TLabel", "error": "StatusDanger.TLabel"}
@@ -53,7 +53,7 @@ class StatusBar(ttk.Frame):
         self._msg.configure(style=_LEVEL_STYLE.get(level, "Status.TLabel"))
         self._last_msg = (text, level)
         if self._clear_id is not None:
-            with contextlib.suppress(Exception):
+            with quiet():
                 self.after_cancel(self._clear_id)
             self._clear_id = None
         if timeout_ms is None:

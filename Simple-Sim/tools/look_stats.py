@@ -31,7 +31,7 @@ import numpy as np
 if not __package__:  # run as a script (python tools/x.py): make the checkout importable
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.images import list_images  # noqa: E402
+from simple_sim.images import list_synthetic_images  # noqa: E402
 
 METRICS = ("mask_h", "mask_s", "mask_v", "p1", "p99", "white", "spec", "sharp")
 
@@ -51,7 +51,7 @@ def image_stats(img: np.ndarray, size: int) -> dict[str, float]:
 
 
 def folder_stats(folder: Path, limit: int, size: int, seed: int = 0) -> dict[str, list[float] | int]:
-    files = list_images(folder)
+    files = list_synthetic_images(folder)  # a dataset's images/ without the mixed-in real crops
     if not files:
         raise SystemExit(f"No images found in {folder}")
     if len(files) > limit:

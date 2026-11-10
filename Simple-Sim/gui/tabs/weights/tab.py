@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from gui import dialogs
+from gui.utils.model_groups import available_groups, group_for_model
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.checkpoint_meta import profile_label_suffix
@@ -21,10 +22,11 @@ from simple_sim.file_cache import FileCache
 from simple_sim.io_utils import now_iso, path_size_bytes
 from simple_sim.models import load_checkpoint
 from simple_sim.reports import metric_value, report_timestamp
+from gui.utils.report_rows import report_cells, report_matches_model
 from .ui import WeightsUI
 from .logic import WeightsLogic
 from datetime import datetime
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 class WeightsTab(BaseTab):
@@ -174,7 +176,7 @@ class WeightsTab(BaseTab):
                 return
 
     def _select_all_datasets_for_compare(self) -> None:
-        with contextlib.suppress(Exception): self.ui.list_cmp_datasets.selection_set(0, "end")
+        with quiet(): self.ui.list_cmp_datasets.selection_set(0, "end")
 
     def _selected_compare_datasets(self) -> list[Path]:
         ds: list[Path] = []
@@ -293,22 +295,12 @@ class WeightsTab(BaseTab):
         self._refresh_groups_menu()
 
     def _available_groups(self) -> list[str]:
-        names: list[str] = ["Favorites", "Snapshots", "Imports"]
-        names.extend([g for g in self._custom_groups if g and g not in names])
-        names.extend([v for v in sorted(set(self._group_assignments.values())) if v and v not in names])
-        if "Uncategorized" not in names: names.append("Uncategorized")
-        return names
+        return available_groups(self._custom_groups, self._group_assignments)
 
     def _group_for_path(self, p: Path) -> str:
-        rel = self.logic.rel_path(p)
-        if rel in self._group_assignments and self._group_assignments[rel] in self._available_groups(): return self._group_assignments[rel]
-        if self._is_favorited(p): return "Favorites"
-        rp = p.resolve()
-        root = self.logic._model_root().resolve()
-        versions, imports = (root / "versions").resolve(), (root / "imports").resolve()
-        if str(rp).startswith(str(versions) + os.sep): return "Snapshots"
-        if str(rp).startswith(str(imports) + os.sep): return "Imports"
-        return "Uncategorized"
+        return group_for_model(p, self.logic.rel_path(p), model_root=self.logic._model_root(),
+                               assignments=self._group_assignments, groups=self._available_groups(),
+                               favorite=self._is_favorited(p))
 
     def _is_group_header(self, iid: str) -> bool: return bool(iid and iid.startswith("group::"))
 
@@ -331,10 +323,9 @@ class WeightsTab(BaseTab):
                 if rel not in self._favorites:
                     self._favorites[rel] = {"path": rel, "added": now_iso(timespec="seconds")}
                     fav_changed = True
-            else:
-                if rel in self._favorites:
-                    self._favorites.pop(rel, None)
-                    fav_changed = True
+            elif rel in self._favorites:
+                self._favorites.pop(rel, None)
+                fav_changed = True
             self._group_assignments[rel] = group
         if fav_changed: self.logic.save_favorites(self._favorites)
         self._save_group_state()
@@ -462,8 +453,8 @@ class WeightsTab(BaseTab):
         finally: self.ui._models_menu.grab_release()
 
     def _hide_models_menu(self, _event: tk.Event | None = None) -> None:
-        with contextlib.suppress(Exception): self.ui._models_menu.unpost()
-        with contextlib.suppress(Exception): self.ui._reports_menu.unpost()
+        with quiet(): self.ui._models_menu.unpost()
+        with quiet(): self.ui._reports_menu.unpost()
 
     def _on_reports_right_click(self, event: tk.Event) -> None:
         if not self.ui._reports_menu: return
@@ -757,20 +748,10 @@ class WeightsTab(BaseTab):
         filtered: list[dict[str, Any]] = []
         for r in self._reports:
             r_split = str(r.get("split") or "-")
-            if split_filter != "any" and r_split != split_filter: continue
+            if split_filter not in ("any", r_split): continue
             
             if scope == "selected_model":
-                if not selected_model: continue
-                rp = str(r.get("model_path") or "")
-                matched = False
-                if Path(rp).name == selected_model.name: matched = True
-                elif str(r.get("model_stem") or "") == selected_model.stem: matched = True
-                elif selected_model.is_dir():
-                    try:
-                        report_model, bundle_dir = Path(rp).resolve(), selected_model.resolve()
-                        if report_model.parent == bundle_dir: matched = True
-                    except Exception: pass
-                if not matched: continue
+                if not selected_model or not report_matches_model(r, selected_model): continue
             elif scope == "dataset":
                 # Resolved: reports store the path as given (relative from the CLI, absolute from the GUI).
                 if not ds_dir or not r.get("dataset_path") or self._resolved(r["dataset_path"]) != self._resolved(ds_dir): continue
@@ -783,17 +764,7 @@ class WeightsTab(BaseTab):
         self._report_by_iid.clear()
         for i, r in enumerate(filtered):
             iid = f"r{i}"
-            when = (r.get("timestamp") or "-").replace("T", " ")[:19]
-            split = str(r.get("split") or "-")
-            seen_v = r.get("seen_samples") or r.get("test_size")
-            seen = str(int(seen_v)) if seen_v is not None else "-"
-            acc, f1 = r.get("metrics", {}).get("accuracy"), r.get("metrics", {}).get("macro_f1")
-            acc_s = f"{float(acc):.4f}" if acc is not None else "-"
-            f1_s = f"{float(f1):.4f}" if f1 is not None else "-"
-            model_name = Path(str(r.get("model_path") or "-")).name
-            dataset_name = Path(str(r.get("dataset_path") or "-")).name
-            path_disp = self.logic.rel_path(Path(str(r.get("_path") or "-"))) if r.get("_path") != "-" else "-"
-            reports_data.append((iid, when, split, seen, acc_s, f1_s, model_name, dataset_name, path_disp))
+            reports_data.append((iid, *report_cells(r, self.logic.rel_path)))
             self._report_by_iid[iid] = r
         self.ui.populate_reports_tree(reports_data)
 

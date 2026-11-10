@@ -120,7 +120,7 @@ ROLE_REF, ROLE_PROBE = "ref", "probe"
 DEFAULT_PX_PER_MM = 16.1        # the app's crop scale (0402: 49 px for 3.037 mm)
 SIDES = ("top", "bottom")
 # salts of the per-pair generators (all derived from the pair seed)
-_SALT_DEFECT, _SALT_CAMERA_REF, _SALT_CAMERA_PROBE, _SALT_PROBE_AUGMENT, _SALT_CLASSES = 11, 1, 2, 3, 4
+_SALT_DEFECT, _SALT_CAMERA_REF, _SALT_CAMERA_PROBE, _SALT_PROBE_AUGMENT, _SALT_CLASSES, _SALT_RENDER = 11, 1, 2, 3, 4, 5
 
 
 def package_code(profile: dict[str, Any]) -> str:
@@ -255,7 +255,7 @@ class Exporter:
         """``(colour crop, grey crop, record)`` of one planned render."""
         img = render_roi(nominal=plan["nominal"], defect_params=plan["defect"], augment=plan["augment"], roi_size=self.roi,
                          config=dict(self.render_cfg), tolerances=None if self.tolerances is None else dict(self.tolerances),
-                         rng=np.random.default_rng(plan["seed"]), footprint=self.footprint,
+                         rng=np.random.default_rng([plan["seed"], _SALT_RENDER]), footprint=self.footprint,
                          camera_rng=np.random.default_rng([plan["seed"], plan["camera_salt"]]))
         fov = field_mm(self.render_cfg, plan["nominal"], min(self.roi))
         size = max(8, int(round(fov * self.px_per_mm)))

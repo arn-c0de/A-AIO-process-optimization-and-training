@@ -11,7 +11,7 @@ import cv2
 
 from simple_sim.dataset_files import LABELS_JSONL, META_JSONL
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
-from tools.validate_dataset import validate_dataset
+from simple_sim.dataset_validation import validate_dataset
 
 _LOG = logging.getLogger(__name__)
 

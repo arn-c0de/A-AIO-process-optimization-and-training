@@ -9,7 +9,7 @@ from typing import Any
 from collections.abc import Iterable, Sequence
 
 from simple_sim.io_utils import atomic_write_json
-import contextlib
+from gui.utils.tk_safe import quiet
 
 
 @dataclass
@@ -45,7 +45,7 @@ class SettingsStore:
         """Debounced save using a Tk widget's after()."""
         try:
             if self._after_id is not None and self._after_widget is not None:
-                with contextlib.suppress(Exception):
+                with quiet():
                     self._after_widget.after_cancel(self._after_id)
             self._after_widget = widget
             self._after_id = widget.after(int(delay_ms), self.save)
@@ -97,7 +97,7 @@ def restore_persisted_vars(
             continue
         if skip_empty_strings and value == "":
             continue
-        with contextlib.suppress(Exception):
+        with quiet():
             var.set(value)
 
 

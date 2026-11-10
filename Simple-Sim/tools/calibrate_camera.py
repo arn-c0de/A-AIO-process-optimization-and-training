@@ -33,14 +33,15 @@ if not __package__:  # run as a script (python tools/x.py): make the checkout im
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.generators.opencv2d.photoreal import CAMERA_DEFAULTS  # noqa: E402
-from simple_sim.images import list_images  # noqa: E402
+from simple_sim.images import list_images, list_synthetic_images  # noqa: E402
 
 _BLUR_GRID = np.arange(0.0, 3.01, 0.05)
 _IMMERKAER = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], dtype=np.float32)
 
 
-def load_gray(folder: Path, limit: int, rng: np.random.Generator) -> list[np.ndarray]:
-    files = list_images(folder)
+def load_gray(folder: Path, limit: int, rng: np.random.Generator, *, synthetic: bool = False) -> list[np.ndarray]:
+    """Up to *limit* grey images of *folder*. *synthetic*: without the real crops of ``mix-real``."""
+    files = list_synthetic_images(folder) if synthetic else list_images(folder)
     if not files:
         raise SystemExit(f"No images found in {folder}")
     if len(files) > limit:
@@ -83,11 +84,30 @@ def blur_offset(real: list[np.ndarray], syn: list[np.ndarray]) -> float:
     return sign * float(_BLUR_GRID[int(np.argmin(errors))])
 
 
-def fit_camera(real: list[np.ndarray], syn: list[np.ndarray], current: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Measured statistics and the fitted ``render.camera`` (starting from *current*)."""
+def capture_scale(camera: dict[str, Any], mm_per_px: float | None) -> float:
+    """Mean sensor px per ROI px of *camera* (``sensor_px_per_mm`` x *mm_per_px*, else ``capture_scale``), at most 1."""
+    def mean(value: Any) -> float:
+        return float(np.mean(value)) if isinstance(value, (list, tuple)) else float(value or 0.0)
+
+    sensor = mean(camera.get("sensor_px_per_mm"))
+    if sensor > 0.0 and mm_per_px:
+        return min(1.0, sensor * float(mm_per_px))
+    scale = mean(camera.get("capture_scale"))
+    return min(1.0, scale) if scale > 0.0 else 1.0
+
+
+def fit_camera(real: list[np.ndarray], syn: list[np.ndarray], current: dict[str, Any] | None = None,
+               *, scale: float = 1.0) -> dict[str, Any]:
+    """Measured statistics and the fitted ``render.camera`` (starting from *current*).
+
+    The blur offset is measured in ROI pixels, ``blur_sigma`` acts in sensor pixels: *scale*
+    (:func:`capture_scale`, sensor px per ROI px) converts it, else a low-resolution camera
+    (``dv_top``: ~0.26) gets ~4x the blur it needs and the fit never settles.
+    """
     cur = {**CAMERA_DEFAULTS, **(current or {})}
     offset = blur_offset(real, syn)
-    blur = [float(np.sqrt(max(b * b + np.sign(offset) * offset * offset, 0.05**2))) for b in cur["blur_sigma"]]
+    step = offset * float(scale)
+    blur = [float(np.sqrt(max(b * b + np.sign(step) * step * step, 0.05**2))) for b in cur["blur_sigma"]]
     n_real = float(np.median([noise_sigma(i) for i in real]))
     n_syn = float(np.median([noise_sigma(i) for i in syn]))
     k2 = (n_real / max(n_syn, 1e-6)) ** 2
@@ -114,6 +134,7 @@ def main() -> None:
     configure_cli_logging()
 
     current = None
+    scale = 1.0
     if args.config:
         from simple_sim.config import load_config
 
@@ -122,9 +143,12 @@ def main() -> None:
 
         # The effective camera: render.camera.preset and the look's preset (render.look: dv_* / quins)
         # resolved, not just the explicit keys on top of the aoi defaults.
-        current = dict(camera_settings(camera_config(load_config(args.config).get("render") or {})))
+        config = load_config(args.config)
+        current = dict(camera_settings(camera_config(config.get("render") or {})))
+        scale = capture_scale(current, (config.get("roi") or {}).get("mm_per_px"))
     rng = np.random.default_rng(args.seed)
-    result = fit_camera(load_gray(args.real, args.max_images, rng), load_gray(args.synthetic, args.max_images, rng), current)
+    result = fit_camera(load_gray(args.real, args.max_images, rng),
+                        load_gray(args.synthetic, args.max_images, rng, synthetic=True), current, scale=scale)
 
     st = result["stats"]
     print(f"Sharpness  real {st['sharpness_real']:.3f}  synthetic {st['sharpness_synthetic']:.3f}  "

@@ -72,7 +72,8 @@ def neighbour_layout(pads: list[dict[str, int]], keepout: tuple[int, int, int, i
         a_vertical = bool(rng.random() < 0.35)
         a_family = "capacitor" if rng.random() < packing.capacitor_share else "resistor"
         a_pitch = float(rng.uniform(*packing.pitch))  # cell size relative to the part's pad extent
-        n_parts = int(rng.integers(2, int(round(packing.parts * crowd)) + 2))
+        # max(1, ...): a canvas much smaller than the ROI rounds the count to 0 (integers(2, 2) raises).
+        n_parts = int(rng.integers(2, max(1, int(round(packing.parts * crowd))) + 2))
     else:
         n_parts = int(rng.integers(0, int(round(packing.parts * crowd)) + 1))
     for _ in range(n_parts):

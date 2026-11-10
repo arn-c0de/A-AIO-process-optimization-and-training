@@ -8,11 +8,14 @@ renderer.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tqdm import tqdm
+
+from simple_sim.telemetry import emit
 
 if TYPE_CHECKING:
     from simple_sim.generation.dataset import RunInputs
@@ -38,8 +41,20 @@ def render_opencv_2d(groups: Sequence[RenderGroup], out_root: Path, *, jobs_file
         spec = run.render_spec()
         tasks.extend((spec, r, r.get(RENDER_RNG)) for r in records)
     bar = tqdm(total=len(tasks), desc="render")
+    t0 = time.perf_counter()
+
+    def progress(done: int, total: int) -> None:
+        # Telemetry comes from the render pass: planning writes no image, so events from there
+        # named files that did not exist yet (or the previous dataset's) at a sampling rate.
+        bar.update(1)
+        if done % 10 == 0 or done == total:
+            record = tasks[done - 1][1]  # results arrive in task order
+            emit("gen_progress", class_name=str(record.get("class_name") or ""), done=int(done), total=int(total),
+                 global_idx=int(record["index"]), samp_per_s=float(done / max(1e-9, time.perf_counter() - t0)),
+                 last_image_path=record["image_path"], image_root=str(out_root))
+
     try:
-        return render_2d_records(tasks, out_root, progress=lambda done, _total: bar.update(1))
+        return render_2d_records(tasks, out_root, progress=progress)
     finally:
         bar.close()
 

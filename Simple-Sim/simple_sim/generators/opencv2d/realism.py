@@ -89,9 +89,15 @@ def _tri_sample(rng: np.random.Generator, min_val: float, nom_val: float, max_va
         lo = max(min_val, nom_val - delta)
         hi = min(max_val, nom_val + delta)
         return float(rng.triangular(lo, nom_val, hi))
+    # Tail: towards max for magnitudes (blur, noise, ...). A signed range (rotation, perspective,
+    # distortion, hue shift: min < nominal < max around 0) takes either side; one-sided it biased
+    # those to positive values (rotation jitter [-4, 4]: mean +0.4 deg, never below -1.2).
+    end = max_val
+    if min_val < 0.0 < max_val and min_val < nom_val and rng.random() < 0.5:
+        end = min_val
     if rng.random() < 0.95:
-        return float(rng.uniform(nom_val, max_val))
-    return float(max_val)
+        return float(rng.uniform(*sorted((nom_val, end))))
+    return float(end)
 
 
 def _sample_k(rng: np.random.Generator, p0: float, p1: float, p2: float) -> int:
