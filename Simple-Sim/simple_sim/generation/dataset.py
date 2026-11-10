@@ -410,6 +410,84 @@ def _sampling_progress() -> SampleProgress:
     return progress
 
 
+def _blender_render_meta(run: Any) -> dict[str, Any]:
+    """Render settings recorded in the meta rows of a Blender dataset."""
+    config = run.config
+    return {
+        "backend": run.backend,
+        "mm_per_px": float(config["roi"]["mm_per_px"]),
+        "cycles_samples": int(((config.get("render") or {}).get("blender") or {}).get("samples", 0) or 0),
+        "device": blender_settings(config)["device"],
+        "profile_render_3d": run.profile_render_3d,
+    }
+
+
+def _write_manifest(output_dir: Path, run: Any, ext: ExtendState | None, *, run_id: str,
+                    new_rows: tuple[list[Any], list[Any]], all_rows: tuple[list[Any], list[Any]],
+                    splits: dict[str, list[str]]) -> None:
+    """Manifest of the finished dataset: multi-profile (v2) when the extended dataset is one, else single-profile."""
+    profile_id, profile_hash_str, relative_profile_path = run.profile_id, run.profile_hash, run.profile_rel_path
+    meta_rows, label_rows = new_rows
+    all_meta_rows, all_label_rows = all_rows
+    final_splits = splits
+    if ext is not None and (ext.manifest_version == 2 or (ext.manifest and "component_profiles" in ext.manifest)):
+        profiles = ext.profiles or [
+            {"profile_id": profile_id, "profile_hash": profile_hash_str, "profile_path": relative_profile_path}
+        ]
+        write_multi_profile_manifest(
+            output_dir=output_dir,
+            run_id=run_id,
+            profiles=_dedup_profiles(profiles),
+            meta_rows=all_meta_rows,
+            label_rows=all_label_rows,
+            splits=final_splits,
+            script_name="scripts/generate.py",
+            existing=ext.manifest,
+            renderer_version=RENDERER_VERSION,
+        )
+    else:
+        write_dataset_manifest(
+            output_dir=output_dir,
+            run_id=run_id,
+            profile_id=profile_id,
+            profile_hash=profile_hash_str,
+            profile_path=relative_profile_path,
+            meta_rows=meta_rows,  # Only new samples for extend history
+            label_rows=label_rows,
+            splits=final_splits,
+            # Same condition as the append branch above: --extend on a new or empty dataset wrote a
+            # fresh one, which needs a fresh manifest (extend=True would raise "manifest not found").
+            extend=bool(ext is not None and ext.existing_count),
+            renderer_version=RENDERER_VERSION,
+        )
+
+
+def _log_generation_done(output_dir: Path, meta_rows: list[Any], final_splits: dict[str, list[str]], total_s: float) -> None:
+    """Closing log block plus the ``gen_done`` telemetry event (only when samples were written)."""
+    log.info("\n" + "=" * 60)
+    log.info("DATASET GENERATION COMPLETE")
+    log.info("=" * 60)
+    log.info(f"Output directory: {output_dir}")
+    log.info(f"Total samples: {len(meta_rows)}")
+    log.info(f"Generation rate (overall): {len(meta_rows) / total_s:.1f} samples/s  (time: {total_s:.1f}s)")
+    if meta_rows:
+        log.info(f"Last sample: {meta_rows[-1].id}")
+        log.info(f"Last image:  {meta_rows[-1].image_path}")
+        emit(
+            "gen_done",
+            output_dir=str(output_dir),
+            total_samples=int(len(meta_rows)),
+            samp_per_s=float(len(meta_rows) / total_s),
+            elapsed_s=float(total_s),
+            last_id=meta_rows[-1].id,
+            last_image_path=meta_rows[-1].image_path,
+            splits={k: int(len(v)) for k, v in final_splits.items()},
+        )
+    for split_name, sample_ids in final_splits.items():
+        log.info(f"  {split_name}: {len(sample_ids)} samples")
+    log.info("=" * 60)
+
+
 def generate_dataset(
     config_path: Path | Mapping[str, Any],
     output_dir: Path,
@@ -497,15 +575,7 @@ def generate_dataset(
                            labels_profile_id=labels_profile_id, progress=_sampling_progress())
 
     log.info("\nGenerating train/val/test splits")
-    extra_render_meta = None
-    if backend_of(config["render"]).needs_blender:
-        extra_render_meta = {
-            "backend": backend,
-            "mm_per_px": float(config["roi"]["mm_per_px"]),
-            "cycles_samples": int(((config.get("render") or {}).get("blender") or {}).get("samples", 0) or 0),
-            "device": blender_settings(config)["device"],
-            "profile_render_3d": run.profile_render_3d,
-        }
+    extra_render_meta = _blender_render_meta(run) if backend_of(config["render"]).needs_blender else None
     meta_rows, label_rows, new_splits = build_rows(
         records,
         config=config,
@@ -548,60 +618,11 @@ def generate_dataset(
 
     finalize_splits(output_dir, final_splits, all_label_rows)
 
-    if ext is not None and (ext.manifest_version == 2 or (ext.manifest and "component_profiles" in ext.manifest)):
-        profiles = ext.profiles or [
-            {"profile_id": profile_id, "profile_hash": profile_hash_str, "profile_path": relative_profile_path}
-        ]
-        write_multi_profile_manifest(
-            output_dir=output_dir,
-            run_id=run_id,
-            profiles=_dedup_profiles(profiles),
-            meta_rows=all_meta_rows,
-            label_rows=all_label_rows,
-            splits=final_splits,
-            script_name="scripts/generate.py",
-            existing=ext.manifest,
-            renderer_version=RENDERER_VERSION,
-        )
-    else:
-        write_dataset_manifest(
-            output_dir=output_dir,
-            run_id=run_id,
-            profile_id=profile_id,
-            profile_hash=profile_hash_str,
-            profile_path=relative_profile_path,
-            meta_rows=meta_rows,  # Only new samples for extend history
-            label_rows=label_rows,
-            splits=final_splits,
-            # Same condition as the append branch above: --extend on a new or empty dataset wrote a
-            # fresh one, which needs a fresh manifest (extend=True would raise "manifest not found").
-            extend=bool(ext is not None and ext.existing_count),
-            renderer_version=RENDERER_VERSION,
-        )
+    _write_manifest(output_dir, run, ext, run_id=run_id, new_rows=(meta_rows, label_rows),
+                    all_rows=(all_meta_rows, all_label_rows), splits=final_splits)
 
     total_s = max(1e-9, time.perf_counter() - t_total0)
-    log.info("\n" + "=" * 60)
-    log.info("DATASET GENERATION COMPLETE")
-    log.info("=" * 60)
-    log.info(f"Output directory: {output_dir}")
-    log.info(f"Total samples: {len(meta_rows)}")
-    log.info(f"Generation rate (overall): {len(meta_rows) / total_s:.1f} samples/s  (time: {total_s:.1f}s)")
-    if meta_rows:
-        log.info(f"Last sample: {meta_rows[-1].id}")
-        log.info(f"Last image:  {meta_rows[-1].image_path}")
-        emit(
-            "gen_done",
-            output_dir=str(output_dir),
-            total_samples=int(len(meta_rows)),
-            samp_per_s=float(len(meta_rows) / total_s),
-            elapsed_s=float(total_s),
-            last_id=meta_rows[-1].id,
-            last_image_path=meta_rows[-1].image_path,
-            splits={k: int(len(v)) for k, v in final_splits.items()},
-        )
-    for split_name, sample_ids in final_splits.items():
-        log.info(f"  {split_name}: {len(sample_ids)} samples")
-    log.info("=" * 60)
+    _log_generation_done(output_dir, meta_rows, final_splits, total_s)
 
     result = summarize(output_dir, all_label_rows, final_splits, new_samples=len(meta_rows), elapsed_s=total_s)
     result.update(run_id=run_id, profile_id=profile_id, backend=backend, extend=bool(ext is not None and ext.existing_count))
