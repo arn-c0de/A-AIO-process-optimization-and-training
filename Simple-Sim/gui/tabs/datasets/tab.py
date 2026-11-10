@@ -45,17 +45,6 @@ class DatasetsTab(BaseTab):
         self.refresh()
 
     # ------------------------------------------------------------------ helpers
-    def _status(self, text: str, level: str = "success") -> bool:
-        """Non-blocking status message; returns False when no AppContext is available."""
-        ctx = getattr(self.state, "ctx", None)
-        if ctx is None:
-            return False
-        try:
-            ctx.status(text, level)
-            return True
-        except Exception:
-            return False
-
     def refresh(self) -> None:
         if not hasattr(self, "tree"):
             return
@@ -262,8 +251,8 @@ class DatasetsTab(BaseTab):
 
     def _ask_category_with_list(self, *, title: str, initial: str = "", count: int = 1) -> str | None:
         categories = self.catalog.all_categories()
-        items = list(categories) + [_NEW_CATEGORY]
-        labels = list(categories) + ["+ New Category…"]
+        items = [*list(categories), _NEW_CATEGORY]
+        labels = [*list(categories), "+ New Category…"]
         picked = dialogs.pick_from_list(
             self.frame,
             title,

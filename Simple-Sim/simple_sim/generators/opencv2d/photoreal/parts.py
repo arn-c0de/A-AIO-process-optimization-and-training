@@ -372,17 +372,18 @@ def draw_body(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[fl
     else:
         body_col = ctx.look.body_colour(family, base_color) * float(rng.uniform(0.9, 1.1))
 
-    # Side walls: lit on the light-facing side, dark elsewhere.
+    # Side walls: lit on the light-facing side, dark elsewhere. LIGHT points towards the light, so a
+    # wall is lit when its outward normal has a positive component along it (facing > 0).
     a = np.radians(angle_deg)
     light_u = LIGHT[0] * np.cos(a) + LIGHT[1] * np.sin(a)
     light_v = -LIGHT[0] * np.sin(a) + LIGHT[1] * np.cos(a)
     facing = np.where(au / hl > av / hw, np.sign(u) * light_u, np.sign(v) * light_v)
-    side_shade = 0.45 + 0.35 * np.clip(-facing, 0, 1)
+    side_shade = 0.45 + 0.35 * np.clip(facing, 0, 1)
     blend(img, body_col, aa_body)  # body footprint
     img *= np.where(inside & ~top, side_shade, 1.0)[..., None]
 
     # Top face: slight gradient towards the light, surface grain, mild gloss.
-    grad = 1.0 + 0.10 * np.clip(-(u / hl) * light_u - (v / hw) * light_v, -1, 1)
+    grad = 1.0 + 0.10 * np.clip((u / hl) * light_u + (v / hw) * light_v, -1, 1)
     grain_sd = spec.grain_sd
     grain = 1.0 + noise.normal(rng, grain_sd)  # ferrite / iron powder: coarser
     top_img = body_col * (grad * grain)[..., None]
@@ -398,7 +399,7 @@ def draw_body(ctx: RenderContext, img: np.ndarray, family: str, center: tuple[fl
 
     # Fine highlight on top-face edges facing the light.
     edge_top = (aa_top > 0) & (d_top > -1.2 * ctx.ss)
-    img *= np.where(edge_top & (facing < 0), 1.18, 1.0)[..., None]
+    img *= np.where(edge_top & (facing > 0), 1.18, 1.0)[..., None]
 
     m_len = length - 2 * (0.22 * length if family == "resistor" else (0.3 * length if family == "array_r" else inset * 2))
     m_wid = width - 2 * inset

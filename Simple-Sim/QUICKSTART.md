@@ -15,10 +15,10 @@ Get started with Simple-Sim in 5 minutes.
 cd Simple-Sim
 
 # Create virtual environment
-python3 -m venv venv
+python3 -m venv .venv
 
 # Activate virtual environment
-source venv/bin/activate
+source .venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -144,7 +144,7 @@ python -m simple_sim train --data ... --out ... --device cpu
 ### Import errors
 **Solution**: Make sure virtual environment is activated:
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 ### Training accuracy < 70%

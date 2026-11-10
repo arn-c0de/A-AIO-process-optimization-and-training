@@ -7,16 +7,16 @@ Reads ``outputs/models/arena.json`` (tracked models), scans eval/batch reports
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from simple_sim.coerce import as_int
-from simple_sim.io_utils import format_bytes, path_size_bytes, read_json, rel_to
+from simple_sim.io_utils import atomic_write_text, format_bytes, path_size_bytes, read_json, rel_to
 from simple_sim.model_bundle import list_bundle_checkpoints, read_bundle_meta
-from simple_sim.reports import Report, load_reports, metric_value, report_path, report_search_dirs, report_timestamp
+from simple_sim.reports import Report, is_partial_report, load_reports, metric_value, report_path, report_search_dirs, report_timestamp
 from simple_sim.svg_charts import write_svg_barh, write_svg_heatmap, write_svg_pie_with_legend
 
 REPORT_NAME = "ARENA_REPORT.md"
@@ -132,7 +132,7 @@ def _bundle_details(bundle_dir: Path) -> dict[str, Any]:
         else:
             pts = [p for p in list_bundle_checkpoints(bundle_dir, include_last=True) if p.is_file()]
             checkpoints = len(pts)
-            profiles = sorted({p.stem.replace("_last", "") for p in pts})
+            profiles = sorted({p.stem.removesuffix("_last") for p in pts})
         if created == "-":
             created = datetime.fromtimestamp(bundle_dir.stat().st_mtime).strftime("%Y-%m-%d")
     except OSError:
@@ -189,6 +189,19 @@ def _match_tracked(tracked: dict[str, dict[str, Any]], model_abs: Path) -> str |
     return None
 
 
+def dataset_display_name(ds_path: str) -> str:
+    """Arena name of a dataset path: its dir name, ``<name>/<version>`` for a snapshot under ``versions/``.
+
+    Snapshots of different datasets share version names (``v1``); the bare dir name merged them.
+    """
+    if not ds_path:
+        return "-"
+    p = Path(ds_path)
+    if p.parent.parent.name == "versions" and p.parent.name:
+        return f"{p.parent.name}/{p.name}"
+    return p.name
+
+
 def best_rows_by_model(
     sim_root: Path, tracked: dict[str, dict[str, Any]], reports: list[Report] | list[Mapping[str, Any]]
 ) -> dict[str, list[BestByDataset]]:
@@ -205,7 +218,7 @@ def best_rows_by_model(
         if matched is None:
             continue
         ds_path = str(r.get("dataset_path") or "").strip()
-        ds_name = Path(ds_path).name if ds_path else "-"
+        ds_name = dataset_display_name(ds_path)
         per_model_dataset.setdefault((matched, ds_name), []).append(r)
 
     ds_size_cache: dict[str, int] = {}
@@ -214,6 +227,8 @@ def best_rows_by_model(
         # Rank on the test split when available; train/val reports would inflate "best" scores.
         # Reports without a split key (older eval.py) are test reports.
         rs = [rr for rr in rs if str(rr.get("split") or "test") == "test"] or rs
+        # A --max-samples quick check (or an eval with excluded samples) must not outrank a full run.
+        rs = [rr for rr in rs if not is_partial_report(rr)] or rs
         # Timestamps parsed once per report (ISO parse / stat), not inside the sort key (plan S5).
         stamps = [report_timestamp(rr) for rr in rs]
 
@@ -366,24 +381,46 @@ def _dataset_stats(rows: list[tuple[str, BestByDataset]]) -> tuple[int, int]:
     return size, samples
 
 
-def render_markdown(
-    sim_root: Path,
-    tracked: dict[str, dict[str, Any]],
-    reports: list[Report] | list[Mapping[str, Any]],
-    *,
-    missing: list[str],
-    assets_dir: Path | None = None,
-) -> tuple[str, list[ModelRanking]]:
-    """Render the report markdown (writing charts to *assets_dir*); return ``(markdown, overall_ranking)``."""
-    assets_dir = assets_dir or (sim_root / "ARENA_REPORT_assets")
-    model_to_rows = best_rows_by_model(sim_root, tracked, reports)
-    overall = overall_ranking(sim_root, model_to_rows)
+class _Anchors:
+    """Unique HTML anchor ids for one report (a repeated slug gets ``-2``, ``-3``, ...)."""
 
-    dataset_to_models: dict[str, list[tuple[str, BestByDataset]]] = {}
-    for model_abs, rows in model_to_rows.items():
-        for r in rows:
-            dataset_to_models.setdefault(r.dataset_name, []).append((model_abs, r))
+    def __init__(self) -> None:
+        self._used: set[str] = set()
 
+    def new(self, base: str) -> str:
+        base = _anchor_slug(base)
+        cand = base
+        idx = 2
+        while cand in self._used:
+            cand = f"{base}-{idx}"
+            idx += 1
+        self._used.add(cand)
+        return cand
+
+
+def _section_head(anchor: str, title: str) -> list[str]:
+    return [f'<a id="{anchor}"></a>', f"## {title}", ""]
+
+
+def _size_cell(r: BestByDataset) -> str:
+    return format_bytes(int(r.dataset_size_bytes)) if r.dataset_size_bytes is not None else "-"
+
+
+def _float_cell(value: Any, fmt: str) -> str:
+    """``fmt.format(float(value))``, or ``-`` for a missing / non-numeric value."""
+    try:
+        return fmt.format(float(value)) if value is not None else "-"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _write_report_charts(
+    assets_dir: Path,
+    overall: list[ModelRanking],
+    model_to_rows: dict[str, list[BestByDataset]],
+    dataset_to_models: dict[str, list[tuple[str, BestByDataset]]],
+) -> list[tuple[str, str]]:
+    """Dataset-size bars and the model x dataset accuracy heatmap (top 12 each) via :func:`write_charts`."""
     dataset_sizes_map: dict[str, int] = {}
     dataset_samples_map: dict[str, int] = {}
     for ds_name, rows in dataset_to_models.items():
@@ -406,7 +443,7 @@ def render_markdown(
     top_datasets = top_datasets[:12]
     acc_by_pair = {(m, r.dataset_name): r.accuracy for m, rows in model_to_rows.items() for r in rows}
 
-    charts = write_charts(
+    return write_charts(
         assets_dir,
         overall,
         dataset_sizes=dataset_chart_items,
@@ -415,90 +452,297 @@ def render_markdown(
         heatmap_values=[[acc_by_pair.get((m, ds)) for ds in top_datasets] for m in top_model_abs],
     )
 
-    dataset_order = sorted(dataset_to_models.keys())
-    model_order = [str(it.model_abs) for it in overall]
 
-    used_anchor_ids: set[str] = set()
+def _toc_details(summary: str, keys: list[str], anchors: dict[str, str], name_of: Callable[[str], str]) -> list[str]:
+    """Collapsible link list of the navigation block (nothing for an empty list)."""
+    if not keys:
+        return []
+    return ["<details>", f"<summary>{summary}</summary>", "",
+            *(f"- [{_md_escape(name_of(k))}](#{anchors[k]})" for k in keys),
+            "", "</details>", ""]
 
-    def unique_anchor(base: str) -> str:
+
+def _warnings_section(anchor: str, missing: list[str]) -> list[str]:
+    lines = [*_section_head(anchor, "Warnings"), "Tracked paths missing on disk:"]
+    lines.extend(f"- `{rp}`" for rp in missing[:20])
+    if len(missing) > 20:
+        lines.append(f"- ... (+{len(missing) - 20} more)")
+    lines.append("")
+    return lines
+
+
+def _charts_section(anchor: str, charts: list[tuple[str, str]]) -> list[str]:
+    lines = _section_head(anchor, "Charts")
+    for title, rel_path in charts:
+        lines += [f"### {title}", "", f"![{_md_escape(title)}]({rel_path})", ""]
+    return lines
+
+
+def _overall_section(anchor: str, overall: list[ModelRanking]) -> list[str]:
+    lines = [
+        *_section_head(anchor, "Overall Ranking"),
+        "| Rank | Model | Type | Avg Accuracy | Avg F1 | Datasets Tested | Best Dataset | Worst Dataset | Last Run |",
+        "|---:|---|---|---:|---:|---:|---|---|---|",
+    ]
+    for i, it in enumerate(overall, start=1):
+        rank_s, model_s = _rank_cells(i, str(it.model_name))
+        lines.append(_table_row([
+            rank_s,
+            model_s,
+            str(it.type),
+            _fmt4(it.avg_acc),
+            _fmt4(it.avg_f1),
+            str(int(it.datasets)),
+            _md_escape(str(it.best_ds)),
+            _md_escape(str(it.worst_ds)),
+            _md_escape(_fmt_ts(float(it.last_ts or 0.0))),
+        ]))
+    if not overall:
+        lines.append("| - | - | - | - | - | - | - | - | - |")
+    lines.append("")
+    return lines
+
+
+def _per_dataset_section(
+    anchor: str,
+    dataset_order: list[str],
+    dataset_to_models: dict[str, list[tuple[str, BestByDataset]]],
+    dataset_anchor: dict[str, str],
+) -> list[str]:
+    lines = _section_head(anchor, "Per-Dataset Breakdown")
+    for ds_name in dataset_order:
+        rows = sorted(dataset_to_models[ds_name],
+                      key=lambda t: (-(-1.0 if t[1].accuracy is None else t[1].accuracy),
+                                     -(-1.0 if t[1].f1 is None else t[1].f1), -t[1].last_ts, Path(t[0]).name))
+        ds_size_b, ds_samples_n = _dataset_stats(rows)
+        lines += [
+            f'<a id="{dataset_anchor[ds_name]}"></a>',
+            f"### Dataset: {ds_name}",
+            f"- Size on disk: {format_bytes(ds_size_b) if ds_size_b > 0 else '-'}",
+            f"- Total samples: {ds_samples_n if ds_samples_n > 0 else '-'}",
+            "",
+            "| Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |",
+            "|---:|---|---:|---:|---|---:|---:|---|",
+        ]
+        for i, (model_abs, r) in enumerate(rows, start=1):
+            rank_s, model_s = _rank_cells(i, Path(model_abs).name)
+            lines.append(_table_row([
+                rank_s,
+                model_s,
+                _fmt4(r.accuracy),
+                _fmt4(r.f1),
+                _md_escape(r.split),
+                str(r.seen) if r.seen is not None else "-",
+                _md_escape(_size_cell(r)),
+                _md_escape(_fmt_ts(r.last_ts)),
+            ]))
+        lines.append("")
+    return lines
+
+
+def _bundle_section(anchor: str, overall: list[ModelRanking]) -> list[str]:
+    lines = _section_head(anchor, "Bundle Details")
+    bundles = [it for it in overall if it.type == "Bundle"]
+    for it in bundles:
+        bdir = Path(it.model_abs)
+        det = _bundle_details(bdir)
+        lines += [
+            f"### {_md_escape(bdir.name)}",
+            f"- **Profiles:** {', '.join(_md_escape(p) for p in det.get('profiles') or []) or '-'}",
+            f"- **Checkpoints:** {det.get('checkpoints') or 0}",
+            f"- **Created:** {_md_escape(str(det.get('created') or '-'))}",
+            "",
+        ]
+    if not bundles:
+        lines += ["- (No bundle models tracked)", ""]
+    return lines
+
+
+def _per_model_section(
+    anchor: str,
+    overall: list[ModelRanking],
+    model_to_rows: dict[str, list[BestByDataset]],
+    model_anchor: dict[str, str],
+) -> list[str]:
+    lines = _section_head(anchor, "Per-Model Detail Cards")
+    for it in overall:
+        model_abs = it.model_abs
+        rows_m = sorted(model_to_rows.get(model_abs, []), key=lambda r: r.dataset_name)
+        lines += [
+            f'<a id="{model_anchor[model_abs]}"></a>',
+            f"### {_md_escape(Path(model_abs).name)} ({it.type})",
+            "",
+            "| Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |",
+            "|---|---|---:|---:|---|---:|---:|---:|---:|---:|",
+        ]
+        for r in rows_m:
+            epoch = r.extra.get("epoch")
+            epoch_s = (
+                str(int(epoch))
+                if epoch is not None and str(epoch).isdigit()
+                else (str(epoch) if epoch is not None else "-")
+            )
+            lines.append(_table_row([
+                _md_escape(r.dataset_name),
+                _md_escape(r.split),
+                _fmt4(r.accuracy),
+                _fmt4(r.f1),
+                _md_escape(str(r.extra.get("critical_fn") or "-")),
+                str(r.seen) if r.seen is not None else "-",
+                _md_escape(_size_cell(r)),
+                _md_escape(epoch_s),
+                _float_cell(r.extra.get("val_acc"), "{:.4f}"),
+                _md_escape(_float_cell(r.extra.get("img_per_s"), "{:.1f} img/s")),
+            ]))
+        if not rows_m:
+            lines.append("| - | - | - | - | - | - | - | - | - | - |")
+        lines.append("")
+    return lines
+
+
+DatasetRows = dict[str, list[tuple[str, BestByDataset]]]
+
+
+class _Anchors:
+    """Unique HTML anchor ids of the report sections, datasets and models."""
+
+    def __init__(self, dataset_order: list[str], model_order: list[str]) -> None:
+        self._used: set[str] = set()
+        self.warnings = self._unique("warnings")
+        self.charts = self._unique("charts")
+        self.overall = self._unique("overall-ranking")
+        self.per_dataset = self._unique("per-dataset-breakdown")
+        self.bundle = self._unique("bundle-details")
+        self.per_model = self._unique("per-model-detail-cards")
+        self.history = self._unique("history")
+        self.dataset = {ds: self._unique(f"dataset-{ds}") for ds in dataset_order}
+        self.model = {m: self._unique(f"model-{Path(m).name}") for m in model_order}
+
+    def _unique(self, base: str) -> str:
         base = _anchor_slug(base)
         cand = base
         idx = 2
-        while cand in used_anchor_ids:
+        while cand in self._used:
             cand = f"{base}-{idx}"
             idx += 1
-        used_anchor_ids.add(cand)
+        self._used.add(cand)
         return cand
 
-    aid_warnings = unique_anchor("warnings")
-    aid_charts = unique_anchor("charts")
-    aid_overall = unique_anchor("overall-ranking")
-    aid_per_dataset = unique_anchor("per-dataset-breakdown")
-    aid_bundle = unique_anchor("bundle-details")
-    aid_per_model = unique_anchor("per-model-detail-cards")
-    aid_history = unique_anchor("history")
-    dataset_anchor = {ds: unique_anchor(f"dataset-{ds}") for ds in dataset_order}
-    model_anchor = {m: unique_anchor(f"model-{Path(m).name}") for m in model_order}
 
-    lines: list[str] = []
-    lines.append("# Model Arena Report")
-    lines.append(f"> Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append("")
-    lines.append("## Quick Navigation")
-    lines.append("")
-    if missing:
-        lines.append(f"- [Warnings](#{aid_warnings})")
-    if charts:
-        lines.append(f"- [Charts](#{aid_charts})")
-    lines.append(f"- [Overall Ranking](#{aid_overall})")
-    lines.append(f"- [Per-Dataset Breakdown](#{aid_per_dataset})")
-    lines.append(f"- [Bundle Details](#{aid_bundle})")
-    lines.append(f"- [Per-Model Detail Cards](#{aid_per_model})")
-    lines.append(f"- [History](#{aid_history})")
-    lines.append("")
+def _section_head(anchor: str, title: str) -> list[str]:
+    return [f'<a id="{anchor}"></a>', f"## {title}", ""]
 
-    for summary, keys, anchors, name_of in (
-        ("Datasets", dataset_order, dataset_anchor, lambda k: k),
-        ("Models", model_order, model_anchor, lambda k: Path(k).name),
+
+def _fmt_float(value: Any, fmt: str) -> str:
+    """``fmt.format(float(value))``, or ``"-"`` for ``None`` / a non-numeric value."""
+    try:
+        return fmt.format(float(value)) if value is not None else "-"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _fmt_size(size_bytes: int | None) -> str:
+    return format_bytes(int(size_bytes)) if size_bytes is not None else "-"
+
+
+def _group_by_dataset(model_to_rows: dict[str, list[BestByDataset]]) -> DatasetRows:
+    dataset_to_models: DatasetRows = {}
+    for model_abs, rows in model_to_rows.items():
+        for r in rows:
+            dataset_to_models.setdefault(r.dataset_name, []).append((model_abs, r))
+    return dataset_to_models
+
+
+def _write_report_charts(
+    assets_dir: Path,
+    overall: list[ModelRanking],
+    model_to_rows: dict[str, list[BestByDataset]],
+    dataset_to_models: DatasetRows,
+) -> list[tuple[str, str]]:
+    """Chart inputs (dataset sizes, accuracy heatmap) from the ranking rows -> :func:`write_charts`."""
+    dataset_sizes_map: dict[str, int] = {}
+    dataset_samples_map: dict[str, int] = {}
+    for ds_name, rows in dataset_to_models.items():
+        size, samples = _dataset_stats(rows)
+        if size > 0:
+            dataset_sizes_map[ds_name] = size
+        if samples > 0:
+            dataset_samples_map[ds_name] = samples
+
+    dataset_chart_items: list[tuple[str, int]] = []
+    for ds_name, size_b in sorted(dataset_sizes_map.items(), key=lambda t: -int(t[1])):
+        samples = dataset_samples_map.get(ds_name, 0)
+        dataset_chart_items.append((f"{ds_name} ({samples} samples)" if samples > 0 else ds_name, int(size_b)))
+
+    # Heatmap: top models by overall ranking x top datasets by sample count.
+    top_model_abs = [str(it.model_abs) for it in overall[:12]]
+    top_datasets = [ds for ds, _cnt in sorted(dataset_samples_map.items(), key=lambda t: -int(t[1]))]
+    if not top_datasets:
+        top_datasets = sorted(dataset_to_models.keys())
+    top_datasets = top_datasets[:12]
+    acc_by_pair = {(m, r.dataset_name): r.accuracy for m, rows in model_to_rows.items() for r in rows}
+
+    return write_charts(
+        assets_dir,
+        overall,
+        dataset_sizes=dataset_chart_items,
+        heatmap_models=[Path(m).name for m in top_model_abs],
+        heatmap_datasets=top_datasets,
+        heatmap_values=[[acc_by_pair.get((m, ds)) for ds in top_datasets] for m in top_model_abs],
+    )
+
+
+def _md_navigation(
+    anchors: _Anchors, dataset_order: list[str], model_order: list[str], *, has_warnings: bool, has_charts: bool
+) -> list[str]:
+    lines = ["## Quick Navigation", ""]
+    if has_warnings:
+        lines.append(f"- [Warnings](#{anchors.warnings})")
+    if has_charts:
+        lines.append(f"- [Charts](#{anchors.charts})")
+    lines += [
+        f"- [Overall Ranking](#{anchors.overall})",
+        f"- [Per-Dataset Breakdown](#{anchors.per_dataset})",
+        f"- [Bundle Details](#{anchors.bundle})",
+        f"- [Per-Model Detail Cards](#{anchors.per_model})",
+        f"- [History](#{anchors.history})",
+        "",
+    ]
+    for summary, keys, ids, name_of in (
+        ("Datasets", dataset_order, anchors.dataset, lambda k: k),
+        ("Models", model_order, anchors.model, lambda k: Path(k).name),
     ):
         if not keys:
             continue
-        lines.append("<details>")
-        lines.append(f"<summary>{summary}</summary>")
-        lines.append("")
-        for k in keys:
-            lines.append(f"- [{_md_escape(name_of(k))}](#{anchors[k]})")
-        lines.append("")
-        lines.append("</details>")
-        lines.append("")
+        lines += ["<details>", f"<summary>{summary}</summary>", ""]
+        lines += [f"- [{_md_escape(name_of(k))}](#{ids[k]})" for k in keys]
+        lines += ["", "</details>", ""]
     lines.append("")
+    return lines
 
-    if missing:
-        lines.append(f'<a id="{aid_warnings}"></a>')
-        lines.append("## Warnings")
-        lines.append("")
-        lines.append("Tracked paths missing on disk:")
-        for rp in missing[:20]:
-            lines.append(f"- `{rp}`")
-        if len(missing) > 20:
-            lines.append(f"- ... (+{len(missing) - 20} more)")
-        lines.append("")
 
-    if charts:
-        lines.append(f'<a id="{aid_charts}"></a>')
-        lines.append("## Charts")
-        lines.append("")
-        for title, rel_path in charts:
-            lines.append(f"### {title}")
-            lines.append("")
-            lines.append(f"![{_md_escape(title)}]({rel_path})")
-            lines.append("")
-
-    lines.append(f'<a id="{aid_overall}"></a>')
-    lines.append("## Overall Ranking")
+def _md_warnings(anchor: str, missing: list[str], limit: int = 20) -> list[str]:
+    lines = [*_section_head(anchor, "Warnings"), "Tracked paths missing on disk:"]
+    lines += [f"- `{rp}`" for rp in missing[:limit]]
+    if len(missing) > limit:
+        lines.append(f"- ... (+{len(missing) - limit} more)")
     lines.append("")
-    lines.append("| Rank | Model | Type | Avg Accuracy | Avg F1 | Datasets Tested | Best Dataset | Worst Dataset | Last Run |")
-    lines.append("|---:|---|---|---:|---:|---:|---|---|---|")
+    return lines
+
+
+def _md_charts(anchor: str, charts: list[tuple[str, str]]) -> list[str]:
+    lines = _section_head(anchor, "Charts")
+    for title, rel_path in charts:
+        lines += [f"### {title}", "", f"![{_md_escape(title)}]({rel_path})", ""]
+    return lines
+
+
+def _md_overall(anchor: str, overall: list[ModelRanking]) -> list[str]:
+    lines = [
+        *_section_head(anchor, "Overall Ranking"),
+        "| Rank | Model | Type | Avg Accuracy | Avg F1 | Datasets Tested | Best Dataset | Worst Dataset | Last Run |",
+        "|---:|---|---|---:|---:|---:|---|---|---|",
+    ]
     for i, it in enumerate(overall, start=1):
         rank_s, model_s = _rank_cells(i, str(it.model_name))
         lines.append(
@@ -519,24 +763,29 @@ def render_markdown(
     if not overall:
         lines.append("| - | - | - | - | - | - | - | - | - |")
     lines.append("")
+    return lines
 
-    lines.append(f'<a id="{aid_per_dataset}"></a>')
-    lines.append("## Per-Dataset Breakdown")
-    lines.append("")
+
+def _md_per_dataset(anchors: _Anchors, dataset_order: list[str], dataset_to_models: DatasetRows) -> list[str]:
+    lines = _section_head(anchors.per_dataset, "Per-Dataset Breakdown")
     for ds_name in dataset_order:
-        rows = dataset_to_models[ds_name]
-        rows.sort(key=lambda t: (-(t[1].accuracy or -1.0), -(t[1].f1 or -1.0), -t[1].last_ts, Path(t[0]).name))
+        rows = sorted(
+            dataset_to_models[ds_name],
+            key=lambda t: (-(-1.0 if t[1].accuracy is None else t[1].accuracy),
+                           -(-1.0 if t[1].f1 is None else t[1].f1), -t[1].last_ts, Path(t[0]).name),
+        )
         ds_size_b, ds_samples_n = _dataset_stats(rows)
-        lines.append(f'<a id="{dataset_anchor[ds_name]}"></a>')
-        lines.append(f"### Dataset: {ds_name}")
-        lines.append(f"- Size on disk: {format_bytes(ds_size_b) if ds_size_b > 0 else '-'}")
-        lines.append(f"- Total samples: {ds_samples_n if ds_samples_n > 0 else '-'}")
-        lines.append("")
-        lines.append("| Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |")
-        lines.append("|---:|---|---:|---:|---|---:|---:|---|")
+        lines += [
+            f'<a id="{anchors.dataset[ds_name]}"></a>',
+            f"### Dataset: {ds_name}",
+            f"- Size on disk: {format_bytes(ds_size_b) if ds_size_b > 0 else '-'}",
+            f"- Total samples: {ds_samples_n if ds_samples_n > 0 else '-'}",
+            "",
+            "| Rank | Model | Accuracy | F1 | Split | Samples | Dataset Size | Last Run |",
+            "|---:|---|---:|---:|---|---:|---:|---|",
+        ]
         for i, (model_abs, r) in enumerate(rows, start=1):
             rank_s, model_s = _rank_cells(i, Path(model_abs).name)
-            size_s = format_bytes(int(r.dataset_size_bytes)) if r.dataset_size_bytes is not None else "-"
             lines.append(
                 _table_row(
                     [
@@ -546,85 +795,112 @@ def render_markdown(
                         _fmt4(r.f1),
                         _md_escape(r.split),
                         str(r.seen) if r.seen is not None else "-",
-                        _md_escape(size_s),
+                        _md_escape(_fmt_size(r.dataset_size_bytes)),
                         _md_escape(_fmt_ts(r.last_ts)),
                     ]
                 )
             )
         lines.append("")
+    return lines
 
-    lines.append(f'<a id="{aid_bundle}"></a>')
-    lines.append("## Bundle Details")
-    lines.append("")
+
+def _md_bundles(anchor: str, overall: list[ModelRanking]) -> list[str]:
+    lines = _section_head(anchor, "Bundle Details")
     bundles = [it for it in overall if it.type == "Bundle"]
     for it in bundles:
         bdir = Path(it.model_abs)
         det = _bundle_details(bdir)
-        lines.append(f"### {_md_escape(bdir.name)}")
-        lines.append(f"- **Profiles:** {', '.join(_md_escape(p) for p in det.get('profiles') or []) or '-'}")
-        lines.append(f"- **Checkpoints:** {det.get('checkpoints') or 0}")
-        lines.append(f"- **Created:** {_md_escape(str(det.get('created') or '-'))}")
-        lines.append("")
+        lines += [
+            f"### {_md_escape(bdir.name)}",
+            f"- **Profiles:** {', '.join(_md_escape(p) for p in det.get('profiles') or []) or '-'}",
+            f"- **Checkpoints:** {det.get('checkpoints') or 0}",
+            f"- **Created:** {_md_escape(str(det.get('created') or '-'))}",
+            "",
+        ]
     if not bundles:
-        lines.append("- (No bundle models tracked)")
-        lines.append("")
+        lines += ["- (No bundle models tracked)", ""]
+    return lines
 
-    lines.append(f'<a id="{aid_per_model}"></a>')
-    lines.append("## Per-Model Detail Cards")
-    lines.append("")
+
+def _model_card_row(r: BestByDataset) -> str:
+    epoch = r.extra.get("epoch")
+    epoch_s = (
+        str(int(epoch))
+        if epoch is not None and str(epoch).isdigit()
+        else (str(epoch) if epoch is not None else "-")
+    )
+    return _table_row(
+        [
+            _md_escape(r.dataset_name),
+            _md_escape(r.split),
+            _fmt4(r.accuracy),
+            _fmt4(r.f1),
+            _md_escape(str(r.extra.get("critical_fn") or "-")),
+            str(r.seen) if r.seen is not None else "-",
+            _md_escape(_fmt_size(r.dataset_size_bytes)),
+            _md_escape(epoch_s),
+            _fmt_float(r.extra.get("val_acc"), "{:.4f}"),
+            _md_escape(_fmt_float(r.extra.get("img_per_s"), "{:.1f} img/s")),
+        ]
+    )
+
+
+def _md_per_model(
+    anchors: _Anchors, overall: list[ModelRanking], model_to_rows: dict[str, list[BestByDataset]]
+) -> list[str]:
+    lines = _section_head(anchors.per_model, "Per-Model Detail Cards")
     for it in overall:
         model_abs = it.model_abs
         rows_m = sorted(model_to_rows.get(model_abs, []), key=lambda r: r.dataset_name)
-        lines.append(f'<a id="{model_anchor[model_abs]}"></a>')
-        lines.append(f"### {_md_escape(Path(model_abs).name)} ({it.type})")
-        lines.append("")
-        lines.append("| Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |")
-        lines.append("|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
-        for r in rows_m:
-            epoch = r.extra.get("epoch")
-            val_acc = r.extra.get("val_acc")
-            img_s = r.extra.get("img_per_s")
-            epoch_s = (
-                str(int(epoch))
-                if epoch is not None and str(epoch).isdigit()
-                else (str(epoch) if epoch is not None else "-")
-            )
-            try:
-                val_acc_s = f"{float(val_acc):.4f}" if val_acc is not None else "-"
-            except (TypeError, ValueError):
-                val_acc_s = "-"
-            try:
-                img_s_s = f"{float(img_s):.1f} img/s" if img_s is not None else "-"
-            except (TypeError, ValueError):
-                img_s_s = "-"
-            size_s = format_bytes(int(r.dataset_size_bytes)) if r.dataset_size_bytes is not None else "-"
-            lines.append(
-                _table_row(
-                    [
-                        _md_escape(r.dataset_name),
-                        _md_escape(r.split),
-                        _fmt4(r.accuracy),
-                        _fmt4(r.f1),
-                        _md_escape(str(r.extra.get("critical_fn") or "-")),
-                        str(r.seen) if r.seen is not None else "-",
-                        _md_escape(size_s),
-                        _md_escape(epoch_s),
-                        val_acc_s,
-                        _md_escape(img_s_s),
-                    ]
-                )
-            )
+        lines += [
+            f'<a id="{anchors.model[model_abs]}"></a>',
+            f"### {_md_escape(Path(model_abs).name)} ({it.type})",
+            "",
+            "| Dataset | Split | Accuracy | F1 | Critical FN | Samples | Dataset Size | Epoch | Val Acc | Speed |",
+            "|---|---|---:|---:|---|---:|---:|---:|---:|---:|",
+        ]
+        lines += [_model_card_row(r) for r in rows_m]
         if not rows_m:
             lines.append("| - | - | - | - | - | - | - | - | - | - |")
         lines.append("")
+    return lines
 
-    lines.append(f'<a id="{aid_history}"></a>')
-    lines.append("## History")
-    lines.append("")
-    lines.append(
-        f"- {datetime.now().strftime('%Y-%m-%d')}: Report generated ({len(overall)} models, {len(dataset_to_models)} datasets)"
-    )
-    lines.append("")
+
+def render_markdown(
+    sim_root: Path,
+    tracked: dict[str, dict[str, Any]],
+    reports: list[Report] | list[Mapping[str, Any]],
+    *,
+    missing: list[str],
+    assets_dir: Path | None = None,
+) -> tuple[str, list[ModelRanking]]:
+    """Render the report markdown (writing charts to *assets_dir*); return ``(markdown, overall_ranking)``."""
+    assets_dir = assets_dir or (sim_root / "ARENA_REPORT_assets")
+    model_to_rows = best_rows_by_model(sim_root, tracked, reports)
+    overall = overall_ranking(sim_root, model_to_rows)
+    dataset_to_models = _group_by_dataset(model_to_rows)
+    charts = _write_report_charts(assets_dir, overall, model_to_rows, dataset_to_models)
+
+    dataset_order = sorted(dataset_to_models.keys())
+    model_order = [str(it.model_abs) for it in overall]
+    anchors = _Anchors(dataset_order, model_order)
+    now = datetime.now()
+
+    lines: list[str] = ["# Model Arena Report", f"> Last updated: {now.strftime('%Y-%m-%d %H:%M:%S')}", ""]
+    lines += _md_navigation(anchors, dataset_order, model_order, has_warnings=bool(missing), has_charts=bool(charts))
+    if missing:
+        lines += _md_warnings(anchors.warnings, missing)
+    if charts:
+        lines += _md_charts(anchors.charts, charts)
+    lines += _md_overall(anchors.overall, overall)
+    lines += _md_per_dataset(anchors, dataset_order, dataset_to_models)
+    lines += _md_bundles(anchors.bundle, overall)
+    lines += _md_per_model(anchors, overall, model_to_rows)
+    lines += [
+        *_section_head(anchors.history, "History"),
+        f"- {now.strftime('%Y-%m-%d')}: Report generated ({len(overall)} models, {len(dataset_to_models)} datasets)",
+        "",
+    ]
     return "\n".join(lines), overall
 
 
@@ -641,18 +917,18 @@ def write_arena_report(sim_root: Path, out_path: Path | None = None, *, top_n: i
     tracked, missing = load_arena(sim_root)
     overall: list[ModelRanking] = []
     if not tracked:
-        out_path.write_text(
+        atomic_write_text(
+            out_path,
             "# Model Arena Report\n"
             f"> Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
             "No Arena-tracked models found.\n",
-            encoding="utf-8",
         )
     else:
         reports = load_reports(report_search_dirs(sim_root))
         md, overall = render_markdown(
             sim_root, tracked, reports, missing=missing, assets_dir=out_path.parent / f"{out_path.stem}_assets"
         )
-        out_path.write_text(md, encoding="utf-8")
+        atomic_write_text(out_path, md)
 
     return {
         "out_path": str(out_path),

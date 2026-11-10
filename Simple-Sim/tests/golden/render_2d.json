@@ -1,14 +1,14 @@
 {
   "hashes": {
-    "run_0001/000000.png": "ee6967f95ab18adfb9a6b9ef06a05f78",
-    "run_0001/000001.png": "9076c8175ee2a9ce8f4e9224b3f762af",
-    "run_0001/000002.png": "b5b84a8534e4b47a72a2683ddf365e42",
-    "run_qfn32/000000.png": "36b2750981b770c1f9a49893d3b7a149",
-    "run_qfn32/000001.png": "5f9b5b37768620a72c68b1a1d1625bf5",
-    "run_sot23/000000.png": "ae79f881d94d34b405b3fce5aa7f4677",
-    "run_sot23/000001.png": "4ca562adb41626fa7847bfe432967243"
+    "run_0001/000000.png": "ae1567b2650a1c9986ac2e24540e2611",
+    "run_0001/000001.png": "6dacae2fb5d528abcea3386c1df698eb",
+    "run_0001/000002.png": "062a323b6989f4cdad180f3a262642a1",
+    "run_qfn32/000000.png": "c7a3d7a7a6dc6c3b45c70381aa7ce482",
+    "run_qfn32/000001.png": "5ab31584a796f75404be63534ca2a619",
+    "run_sot23/000000.png": "7c334bddea99691cb650225453ef156c",
+    "run_sot23/000001.png": "fad93968124735646f97ca42fe3756b2"
   },
-  "renderer_version": "2",
+  "renderer_version": "3",
   "versions": {
     "numpy": "2.5.2",
     "opencv": "5.0.0"

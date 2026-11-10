@@ -68,7 +68,7 @@ def dataset_info(data: Path) -> dict[str, Any]:
 
 def mix_real(data: Path, real: Path, *, split: str = "train", limit: int = 200, domain: str = "real",
              seed: int = 0) -> dict[str, int]:
-    """Add up to *limit* random crops per class sub-folder of *real* to *split* of the dataset *data*.
+    """Add up to *limit* random crops (0 = all) per class sub-folder of *real* to *split* of the dataset *data*.
 
     Returns the number of crops added per class. Raises ``SystemExit`` for an unknown class or split.
     """
@@ -76,16 +76,20 @@ def mix_real(data: Path, real: Path, *, split: str = "train", limit: int = 200, 
         raise SystemExit(f"--split must be one of {SPLITS}")
     info = dataset_info(data)
     rng = np.random.default_rng(seed)
-    out_dir = data / "images" / "real"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    start = int(info["real_next"])
-    metas, labels, added = [], [], Counter()
-    for group, cls, files in class_folders(real):
+    # Check every folder before the first image is written: an invalid later folder used to abort
+    # with the earlier folders' images already in images/real/ (orphans without rows).
+    folders = list(class_folders(real))
+    for group, cls, _files in folders:
         if cls not in VALID_CLASSES:
             raise SystemExit(f"unknown class folder {group!r} (classes: {sorted(VALID_CLASSES)})")
         if cls not in info["classes"]:
             raise SystemExit(f"class {cls!r} is not trained in {data} (classes: {sorted(info['classes'])})")
-        if len(files) > limit:
+    out_dir = data / "images" / "real"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    start = int(info["real_next"])
+    metas, labels, added = [], [], Counter()
+    for group, cls, files in folders:
+        if 0 < limit < len(files):  # limit <= 0: all, as in real_crops / dv_crops
             files = [files[i] for i in sorted(rng.choice(len(files), limit, replace=False))]
         for path in files:
             img = cv2.imread(str(path), cv2.IMREAD_COLOR)
@@ -105,6 +109,8 @@ def mix_real(data: Path, real: Path, *, split: str = "train", limit: int = 200, 
             labels.append(LabelRow(schema_version=info["label_schema"], id=sample_id, class_name=cls,
                                    profile_id=info["profile_id"]))
             added[cls] += 1
+    if not metas:
+        return {}  # nothing to add: no empty manifest history entry
     append_jsonl_rows(data / "meta.jsonl", metas)
     append_jsonl_rows(data / "labels.jsonl", labels)
     with open(data / "splits" / f"{split}.txt", "a", encoding="utf-8") as fh:
@@ -124,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--data", type=Path, required=True, help="generated dataset directory")
     ap.add_argument("--real", type=Path, required=True, help="folder with one sub-folder per class")
     ap.add_argument("--split", default="train", choices=SPLITS)
-    ap.add_argument("--limit", type=int, default=200, help="max crops per sub-folder (random subset)")
+    ap.add_argument("--limit", type=int, default=200, help="max crops per sub-folder (random subset; 0 = all)")
     ap.add_argument("--domain", default="real")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args(argv)

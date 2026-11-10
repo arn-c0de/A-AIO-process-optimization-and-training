@@ -20,6 +20,9 @@ from simple_sim.model_bundle import (
 class MergeLogic:
     def __init__(self, sim_root: Path):
         self.sim_root = sim_root
+        # (profile_id, hash, val_acc, val_f1) per checkpoint, reused while the file is unchanged:
+        # a scan runs on the Tk thread on every dataset change and used to torch.load every file again.
+        self._scan_meta: dict[str, tuple[tuple[int, int], tuple[str | None, str | None, float | None, float | None]]] = {}
 
     def _model_root(self) -> Path:
         return model_root(self.sim_root)
@@ -39,8 +42,17 @@ class MergeLogic:
 
         profile_models: dict[str, list[tuple[str, Path]]] = {}
         
-        for p in uniq.values():
-            profile_id, _, _, _ = self.load_model_meta(p, {})
+        scan_meta: dict[str, Any] = {}
+        for key, p in uniq.items():
+            try:
+                st = p.stat()
+                sig = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                continue
+            hit = self._scan_meta.get(key)
+            meta = hit[1] if hit is not None and hit[0] == sig else self.load_model_meta(p, {})
+            scan_meta[key] = (sig, meta)
+            profile_id = meta[0]
             if profile_id is None or profile_id == "multi":
                 continue
             
@@ -51,6 +63,7 @@ class MergeLogic:
 
             profile_models.setdefault(profile_id, []).append((disp, p))
 
+        self._scan_meta = scan_meta  # drops entries of deleted files
         for pid in profile_models:
             profile_models[pid].sort(key=lambda t: t[1].stat().st_mtime if t[1].exists() else 0.0, reverse=True)
             

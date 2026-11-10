@@ -103,7 +103,9 @@ type classifier), `predict` (single image), `predict-two-stage`, `sample-check`,
 `create-multi-dataset` (merge datasets), `backfill-manifest` / `backfill-labels` (legacy
 datasets), `render-debug-previews`, `update-sample-gallery`. Sim-to-real helpers (real camera
 crops vs. the synthetic look): `real-crops`, `look-stats`, `look-montage`, `sim-to-real`,
-`calibrate-camera`, `eval-real`, `mix-real` (each also runs as `python tools/<name>.py`).
+`calibrate-camera`, `eval-real`, `mix-real`; DeepVision app helpers: `dv-crops` (reviewed app crops),
+`board-backgrounds` (board textures from stills), `export-deepvision` (reference / probe pairs for the
+judge). Each also runs as `python tools/<name>.py`.
 
 ## Where outputs land
 

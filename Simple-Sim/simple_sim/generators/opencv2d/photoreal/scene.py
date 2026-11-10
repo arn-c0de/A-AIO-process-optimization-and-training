@@ -35,6 +35,14 @@ from .solder_defects import draw_excess, draw_solder_balls, solder_defect_layout
 from .substrate import mask_sheen, procedural_substrate, texture_substrate
 
 
+def _bridge_body_size(family: str, length: float, width: float) -> tuple[int, int]:
+    """Axis-aligned (x, y) body size for :func:`draw_solder_bridge`'s "bridge runs under the body" test:
+    the SOT-23 body stands upright (:func:`nominal_body_angle`), so its length is the y extent."""
+    if abs(nominal_body_angle(family)) == 90.0:
+        return int(width), int(length)
+    return int(length), int(width)
+
+
 def draw_board(ctx: RenderContext, nom: dict[str, float], footprint: str, family: str, shape: tuple[int, int],
            rng: np.random.Generator, crowd: float = 1.0) -> tuple[np.ndarray, np.ndarray, list[dict[str, int]], np.ndarray]:
     """Board around the inspected part at supersampled *shape*: substrate, copper, silkscreen and
@@ -144,7 +152,7 @@ def _render_board(ctx: RenderContext,
     if dp["type"] == DefectClass.SOLDER_BRIDGE:  # flat solder between neighbouring pads
         geo = sg.geo
         img8 = clip8(img)
-        draw_solder_bridge(img8, nom, footprint, geo["center"], (int(geo["length"]), int(geo["width"])),
+        draw_solder_bridge(img8, nom, footprint, geo["center"], _bridge_body_size(family, geo["length"], geo["width"]),
                             param_selector(defect_params), geo["tilt_deg"])
         img = img8.astype(np.float32)
 
@@ -208,7 +216,8 @@ def _draw_part(ctx: RenderContext, img: np.ndarray, sg: SceneGeometry, footprint
             blend(img, body_col * 1.6 + 30.0, facet.astype(np.float32) / 255.0 * 0.4)  # lit facet
         if defect_type == DefectClass.SOLDER_BRIDGE:
             img8 = clip8(img)
-            draw_solder_bridge(img8, nom, footprint, (int(cx), int(cy)), (int(length), int(width_px)), selector, geo["tilt_deg"])
+            draw_solder_bridge(img8, nom, footprint, (int(cx), int(cy)), _bridge_body_size(family, length, width_px), selector,
+                               geo["tilt_deg"])
             img = img8.astype(np.float32)
         draw_excess(ctx, img, base, family, pads, solder["excess"], (float(cx), float(cy)), length, width_px, geo["rotation_deg"])
         draw_solder_balls(ctx, img, base, solder["balls"])

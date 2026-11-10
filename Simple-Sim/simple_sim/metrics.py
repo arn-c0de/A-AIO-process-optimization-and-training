@@ -97,8 +97,9 @@ def compute_metrics(
             class_idx = class_names.index(class_name)
             fn_count = np.sum((y_true == class_idx) & (y_pred != class_idx))
             total_count = np.sum(y_true == class_idx)
-            fn_rate = fn_count / total_count if total_count > 0 else 0.0
-            critical_fn_rates[class_name] = float(fn_rate)
+            # No samples -> no rate: a 0.0 here would rank a dataset without the class as the best run.
+            if total_count > 0:
+                critical_fn_rates[class_name] = float(fn_count / total_count)
 
     return {
         'accuracy': accuracy,
@@ -172,14 +173,16 @@ class SuccessCheck:
         return all(ok for _name, ok in self.checks)
 
 
-def evaluate_success_criteria(val_accuracy: float, metrics: dict[str, Any], entity: str = "class") -> SuccessCheck:
+def evaluate_success_criteria(val_accuracy: float | None, metrics: dict[str, Any], entity: str = "class") -> SuccessCheck:
     """Built-in success criteria: val and test accuracy > 70 %, no *entity* with 0 % recall.
 
-    Classes with zero support are ignored by the recall check.
+    Classes with zero support are ignored by the recall check. *val_accuracy* ``None`` (the checkpoint
+    stores none, e.g. an ensemble) drops the val check instead of failing it.
     """
     supported = [m for m in metrics['per_class'].values() if m.get('support', 1) > 0]
+    val_check = () if val_accuracy is None else (("Val accuracy > 70%", val_accuracy > SUCCESS_ACCURACY),)
     return SuccessCheck((
-        ("Val accuracy > 70%", val_accuracy > SUCCESS_ACCURACY),
+        *val_check,
         ("Test accuracy > 70%", metrics['accuracy'] > SUCCESS_ACCURACY),
         (f"No {entity} with 0% recall", all(m['recall'] > 0 for m in supported)),
     ))

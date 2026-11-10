@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from simple_sim.io_utils import now_iso
+from simple_sim.io_utils import atomic_write_text, now_iso
 
 _LOG = logging.getLogger(__name__)
 
@@ -34,31 +34,33 @@ class FlagManager:
             return
 
         try:
-            with open(self.flags_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    flag_dict = json.loads(line)
-                    sample_id = flag_dict['id']
-
-                    if sample_id not in self._flags:
-                        self._flags[sample_id] = []
-
-                    self._flags[sample_id].append(flag_dict)
+            lines = self.flags_path.read_text(encoding="utf-8").splitlines()
         except Exception as e:
             _LOG.warning("Failed to load flags: %s", e)
+            return
+        for line_num, line in enumerate(lines, 1):
+            line = line.strip()
+            if not line:
+                continue
+            # One bad line must not hide the flags after it (the next save would drop them for good).
+            try:
+                flag_dict = json.loads(line)
+                sample_id = flag_dict['id']
+                flag_dict['flag']
+            except (ValueError, KeyError, TypeError) as e:
+                _LOG.warning("Skipping invalid flag at %s:%d: %s", self.flags_path, line_num, e)
+                continue
+            self._flags.setdefault(sample_id, []).append(flag_dict)
 
     def _save_flags(self) -> None:
         """Save flags to JSONL file."""
         try:
             self.flags_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(self.flags_path, 'w') as f:
-                for _sample_id, flag_list in self._flags.items():
-                    for flag_dict in flag_list:
-                        f.write(json.dumps(flag_dict) + '\n')
+            atomic_write_text(
+                self.flags_path,
+                "".join(json.dumps(flag_dict) + '\n' for flag_list in self._flags.values() for flag_dict in flag_list),
+            )
         except Exception as e:
             _LOG.warning("Failed to save flags: %s", e)
 
@@ -70,23 +72,33 @@ class FlagManager:
             flag_type: Flag type (CORRUPT, OUTLIER, SUSPECT_LABEL, etc.)
             reason: Human-readable reason
         """
-        flag_dict = {
-            'id': sample_id,
-            'flag': flag_type,
-            'reason': reason,
-            'timestamp': now_iso()
-        }
+        if self._add(sample_id, flag_type, reason):
+            self._save_flags()
 
-        if sample_id not in self._flags:
-            self._flags[sample_id] = []
+    def add_flags(self, flags: list[tuple[str, str, str]]) -> int:
+        """Add ``(sample_id, flag_type, reason)`` flags with one save; returns how many were new."""
+        added = sum(self._add(sample_id, flag_type, reason) for sample_id, flag_type, reason in flags)
+        if added:
+            self._save_flags()
+        return added
 
+    def clear(self) -> None:
+        """Remove every flag with one save."""
+        if self._flags:
+            self._flags.clear()
+            self._save_flags()
+
+    def reload(self) -> None:
+        """Re-read ``flags.jsonl`` (another manager of the same dataset may have written it)."""
+        self._load_flags()
+
+    def _add(self, sample_id: str, flag_type: str, reason: str) -> bool:
+        flag_list = self._flags.setdefault(sample_id, [])
         # Don't duplicate flags
-        for existing_flag in self._flags[sample_id]:
-            if existing_flag['flag'] == flag_type:
-                return
-
-        self._flags[sample_id].append(flag_dict)
-        self._save_flags()
+        if any(existing_flag['flag'] == flag_type for existing_flag in flag_list):
+            return False
+        flag_list.append({'id': sample_id, 'flag': flag_type, 'reason': reason, 'timestamp': now_iso()})
+        return True
 
     def remove_flag(self, sample_id: str, flag_type: str | None = None) -> None:
         """Remove flag(s) from a sample.

@@ -117,7 +117,12 @@ def main() -> None:
     if args.config:
         from simple_sim.config import load_config
 
-        current = (load_config(args.config).get("render") or {}).get("camera")
+        from simple_sim.generators.opencv2d.photoreal.camera import camera_settings
+        from simple_sim.generators.opencv2d.photoreal.look import camera_config
+
+        # The effective camera: render.camera.preset and the look's preset (render.look: dv_* / quins)
+        # resolved, not just the explicit keys on top of the aoi defaults.
+        current = dict(camera_settings(camera_config(load_config(args.config).get("render") or {})))
     rng = np.random.default_rng(args.seed)
     result = fit_camera(load_gray(args.real, args.max_images, rng), load_gray(args.synthetic, args.max_images, rng), current)
 

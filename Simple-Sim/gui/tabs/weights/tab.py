@@ -14,7 +14,7 @@ from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.checkpoint_meta import profile_label_suffix
 from gui.utils.dataset_catalog import sim_data_roots, unique_dataset_labels
-from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
+from gui.utils.settings_store import restore_persisted_vars
 from gui.core.tasks import DispatchQueue, as_task_fn, runner_for
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.file_cache import FileCache
@@ -87,27 +87,16 @@ class WeightsTab(BaseTab):
         if hasattr(self.ui, "list_cmp_datasets") and self.ui.list_cmp_datasets.size() > 0:
             if not self.ui.list_cmp_datasets.curselection(): self._select_current_dataset_for_compare()
 
-    def _store(self) -> SettingsStore | None:
-        return self.state.settings_store
-
-    def _status(self, text: str, level: str = "success") -> None:
-        """Non-blocking feedback in the main status bar (no-op without an AppContext)."""
-        ctx = getattr(self.state, "ctx", None)
-        if ctx is None:
-            return
-        try: ctx.status(text, level)
-        except Exception: pass
-
     @staticmethod
     def _fmt_list(items: list[str], limit: int = 8) -> str:
         """Newline-joined list, truncated to ``limit`` entries with a "+N more" line."""
         shown = os.linesep.join(items[:limit])
         return f"{shown}\n... (+{len(items) - limit} more)" if len(items) > limit else shown
 
-    def _run_background(self, fn: Any, *, name: str, on_done: Any, on_error: Any) -> None:
+    def _run_background(self, fn: Any, *, name: str, on_done: Any, on_error: Any, on_finally: Any = None) -> None:
         """Run ``fn()`` / ``fn(task)`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
         call = as_task_fn(fn)  # fn() or fn(task) for cancel/progress
-        runner_for(self.state, self.frame).run(call, name=name, on_done=on_done, on_error=on_error)
+        runner_for(self.state, self.frame).run(call, name=name, on_done=on_done, on_error=on_error, on_finally=on_finally)
 
     def _load_persisted_settings(self) -> None:
         st = self._store()
@@ -136,11 +125,8 @@ class WeightsTab(BaseTab):
                 ("weights.report_sort", self.ui.var_report_sort), ("weights.compare_a", self.ui.var_cmp_a),
                 ("weights.compare_b", self.ui.var_cmp_b)]
 
-    def _wire_settings_autosave(self) -> None:
-        wire_vars_autosave(self._store(), self._persisted_var_bindings(), self.frame)
-
     def on_close(self) -> None:
-        self.logic.stop_prediction()
+        self.logic.stop()
 
     def _on_log_lines(self, lines: list[str]) -> None:
         for line in lines: self.ui.append_log(line)
@@ -651,7 +637,7 @@ class WeightsTab(BaseTab):
         self._refresh_models()
 
     def _stop(self) -> None:
-        self.logic.stop_prediction()
+        self.logic.stop()
         self.ui.var_status.set("status: stopping...")
 
     def _path_from_combo(self, rel: str) -> Path | None:
@@ -665,17 +651,35 @@ class WeightsTab(BaseTab):
     def _run_selected(self) -> None:
         if not dialogs.require(p := self._selected_model_path(), self.frame, "Select a model first."): return
         if not dialogs.require(self.state.dataset_dir, self.frame, "No dataset selected. Choose one in the Pipeline tab first."): return
-        if self.logic.proc and self.logic.proc.poll() is None: return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
+        if self._run_in_progress(): return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
 
         try:
             self.ui.var_status.set(f"status: running (selected({p.name}))")
+            self._busy = True
             self.logic.run_predict(p, self.state.dataset_dir, f"selected({p.name})", self.ui.var_split.get().strip(), self.ui.var_device.get().strip(), self.ui.var_max_samples.get().strip(), self.ui.chk_save_preds.get(), lambda *res: self.post(lambda: self._on_predict_complete(*res)))
         except Exception as e:
+            self._busy = False
             self.ui.var_status.set("status: failed")
             dialogs.show_error(self.frame, "Evaluation Failed", e)
 
+    def _resolved(self, p: Any) -> str:
+        p = Path(str(p))
+        try: return str((p if p.is_absolute() else self.logic.sim_root / p).resolve())
+        except OSError: return str(p)
+
+    def _run_in_progress(self) -> bool:
+        """A run was started from this tab and has not finished.
+
+        The child process alone is no guard: it only exists after the worker's Popen, and a compare
+        has gaps between its runs, so a second click could start a concurrent run.
+        """
+        return bool(getattr(self, "_busy", False)) or bool(self.logic.proc and self.logic.proc.poll() is None)
+
     def _on_predict_complete(self, report_path: Path | None, was_stopped: bool) -> None:
+        self._busy = False
         if was_stopped: self.ui.var_status.set("status: stopped")
+        # No report without a stop: batch-predict failed (class mismatch, missing checkpoint, ...); the log has the error.
+        elif not (report_path and report_path.exists()): self.ui.var_status.set("status: failed (see log)")
         else: self.ui.var_status.set("status: done")
         if report_path and report_path.exists(): self.ui.append_log(self.logic.short_report(report_path))
         self._refresh_reports()
@@ -684,7 +688,7 @@ class WeightsTab(BaseTab):
         a = self._path_from_combo(self.ui.var_cmp_a.get().strip())
         b = self._path_from_combo(self.ui.var_cmp_b.get().strip())
         if not dialogs.require(a and b, self.frame, "Choose two models to compare (Model A and Model B)."): return
-        if self.logic.proc and self.logic.proc.poll() is None: return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
+        if self._run_in_progress(): return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
 
         # Read Tk state on the main thread; the worker must not touch widgets/variables.
         ds_dirs = self._selected_compare_datasets()
@@ -730,9 +734,17 @@ class WeightsTab(BaseTab):
             self.ui.var_status.set("status: failed")
             self._status(f"Compare failed: {exc}", "error")
 
+        def on_finally() -> None:
+            self._busy = False
+
         self.logic.stop_evt.clear()
         self.ui.var_status.set("status: running compare")
-        self._run_background(worker, name="Compare models", on_done=on_done, on_error=on_error)
+        self._busy = True
+        try:
+            self._run_background(worker, name="Compare models", on_done=on_done, on_error=on_error, on_finally=on_finally)
+        except BaseException:
+            self._busy = False
+            raise
 
     def _refresh_reports(self) -> None:
         self._reports = self.logic.load_reports()
@@ -762,7 +774,8 @@ class WeightsTab(BaseTab):
                     except Exception: pass
                 if not matched: continue
             elif scope == "dataset":
-                if not ds_dir or str(r.get("dataset_path") or "") != str(ds_dir): continue
+                # Resolved: reports store the path as given (relative from the CLI, absolute from the GUI).
+                if not ds_dir or not r.get("dataset_path") or self._resolved(r["dataset_path"]) != self._resolved(ds_dir): continue
             filtered.append(r)
         
         if sort_key in ("accuracy", "macro_f1"): filtered.sort(key=lambda rr: metric_value(rr, sort_key) or 0.0, reverse=True)

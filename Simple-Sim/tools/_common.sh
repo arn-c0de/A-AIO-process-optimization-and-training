@@ -3,7 +3,7 @@
 #
 # Sets SIM_ROOT (the Simple-Sim directory) and REPO_ROOT (its parent) and defines:
 #   sim_find_python [--fallback]  set PYTHON to the project venv python
-#                                 ($VENV_DIR, $VIRTUAL_ENV, .venv, venv, ../.venv);
+#                                 ($VENV_DIR, .venv, venv, ../.venv, then $VIRTUAL_ENV);
 #                                 with --fallback use python3 if none exists. Returns 1 if not found.
 #   sim_require_python            sim_find_python or print install hints and exit 1
 #   sim_bootstrap_venv            create ${VENV_DIR:-.venv} if missing and pip install
@@ -16,10 +16,12 @@ sim_find_python() {
   local cand
   for cand in \
     ${VENV_DIR:+"${VENV_DIR}"} \
-    ${VIRTUAL_ENV:+"${VIRTUAL_ENV}"} \
     "${SIM_ROOT}/.venv" \
     "${SIM_ROOT}/venv" \
-    "${REPO_ROOT}/.venv"; do
+    "${REPO_ROOT}/.venv" \
+    ${VIRTUAL_ENV:+"${VIRTUAL_ENV}"}; do
+    # The project venv comes before an activated foreign one: sim_bootstrap_venv (run_pipeline.sh,
+    # gui/run.sh) installs into the project venv, so every launcher must run from the same one.
     # Relative VENV_DIR values are resolved against SIM_ROOT.
     [[ "${cand}" == /* ]] || cand="${SIM_ROOT}/${cand}"
     if [[ -x "${cand}/bin/python" ]]; then
@@ -47,6 +49,10 @@ sim_require_python() {
 sim_bootstrap_venv() {
   local venv="${VENV_DIR:-.venv}"
   [[ "${venv}" == /* ]] || venv="${SIM_ROOT}/${venv}"
+  # An existing venv/ (older docs) is reused instead of creating a second .venv with a full install.
+  if [[ -z "${VENV_DIR:-}" && ! -x "${venv}/bin/python" && -x "${SIM_ROOT}/venv/bin/python" ]]; then
+    venv="${SIM_ROOT}/venv"
+  fi
   PYTHON="${venv}/bin/python"
   if [[ ! -x "${PYTHON}" ]]; then
     echo "Creating venv at ${venv}"

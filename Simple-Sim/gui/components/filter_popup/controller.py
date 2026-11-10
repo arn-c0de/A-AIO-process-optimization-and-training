@@ -39,7 +39,8 @@ def sync_to_external_vars(popup: Any) -> None:
         if isinstance(var, tk.BooleanVar):
             raw_values[key] = var.get()
         elif isinstance(var, tk.DoubleVar):
-            raw_values[key] = f"{var.get():.2f}"
+            # realism_* probabilities are stored with 4 decimals; 2 would turn 0.005 into 0.01.
+            raw_values[key] = f"{var.get():.4f}" if key.startswith("realism_") else f"{var.get():.2f}"
         elif isinstance(var, tk.StringVar):
             raw_values[key] = var.get()
     payload = FilterPopupPayload.from_mapping(raw_values)

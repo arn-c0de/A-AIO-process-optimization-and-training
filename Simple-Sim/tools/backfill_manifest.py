@@ -78,10 +78,14 @@ def backfill_dataset(
         print(f"  ✗ Failed to load config: {e}")
         return STATUS_FAILED
 
-    run_id = config.get('run', {}).get('run_id', 'unknown')
+    # config.yaml with an empty `run:` (None) or a non-mapping top level must not crash the batch.
+    run_cfg = config.get('run') if isinstance(config, dict) else None
+    if not isinstance(run_cfg, dict):
+        run_cfg = {}
+    run_id = run_cfg.get('run_id', 'unknown')
 
     # Determine profile ID
-    profile_id = config.get('run', {}).get('component_profile', default_profile_id)
+    profile_id = run_cfg.get('component_profile', default_profile_id)
 
     # Locate profiles directory if not provided
     if profiles_dir is None:
@@ -206,7 +210,11 @@ Examples:
         root_dir = Path(args.data_root)
         if not root_dir.exists():
             return fail(f"Error: Directory not found: {root_dir}")
-        datasets = sorted(d for d in root_dir.iterdir() if d.is_dir())
+        # Only dirs that look like a dataset: a stray folder (scratch dir, partial output) is not a failure.
+        datasets = sorted(
+            d for d in root_dir.iterdir()
+            if d.is_dir() and any((d / f).exists() for f in ("meta.jsonl", "labels.jsonl", "config.yaml"))
+        )
         if not datasets:
             return fail(f"No datasets found in: {root_dir}")
         print(f"Found {len(datasets)} dataset(s) in: {root_dir}")
@@ -214,7 +222,11 @@ Examples:
     counts = {STATUS_OK: 0, STATUS_SKIPPED: 0, STATUS_FAILED: 0}
     results: dict[str, str] = {}
     for data_dir in datasets:
-        status = backfill_dataset(data_dir, args.profile, profiles_dir)
+        try:
+            status = backfill_dataset(data_dir, args.profile, profiles_dir)
+        except Exception as e:  # noqa: BLE001 - one broken dataset must not abort the batch or the --json line
+            print(f"  ✗ {type(e).__name__}: {e}")
+            status = STATUS_FAILED
         counts[status] += 1
         results[str(data_dir)] = status
 

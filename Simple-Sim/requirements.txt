@@ -6,6 +6,7 @@ scikit-learn
 PyYAML
 tqdm
 pytest
+pytest-cov
 pillow
 matplotlib>=3.10.8
 imagehash>=4.3.2

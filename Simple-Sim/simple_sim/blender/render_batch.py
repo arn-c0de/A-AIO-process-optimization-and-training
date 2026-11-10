@@ -417,7 +417,8 @@ def _build_tht(pads: list[PadMm], board: BoardScene, p: dict[str, Any], mats: di
         y = cy + px * math.sin(angle) + py * math.cos(angle)
         pin_xy.append((x, y))
         if i not in missing:
-            bpy.ops.mesh.primitive_cylinder_add(radius=r_pin, depth=h_pin, location=(x, y, h_pin / 2.0))
+            # parented to root (which carries the pose), so the pin sits at its row-frame position
+            bpy.ops.mesh.primitive_cylinder_add(radius=r_pin, depth=h_pin, location=(px, py, h_pin / 2.0))
             pin = bpy.context.active_object
             pin.name = f"pin_{i}"
             pin.data.materials.append(m_pin)
@@ -477,7 +478,10 @@ def _enable_cycles_gpu() -> bool:
     Returns False (render on CPU) if no GPU backend is available.
     """
     global _GPU_BACKEND
-    if _GPU_BACKEND is None:
+    # main() resets to factory settings before every job, which also resets these preferences: apply
+    # them on every call and only report the device once.
+    first = _GPU_BACKEND is None
+    if first or _GPU_BACKEND:
         _GPU_BACKEND = ""
         try:
             prefs = bpy.context.preferences.addons["cycles"].preferences
@@ -495,7 +499,8 @@ def _enable_cycles_gpu() -> bool:
                     break
         except Exception as exc:  # noqa: BLE001 - fall back to CPU and say why
             print(f"[render_batch] GPU setup failed, rendering on CPU: {exc}", flush=True)
-        print(f"[render_batch] Cycles device: {_GPU_BACKEND or 'CPU'}", flush=True)
+        if first:
+            print(f"[render_batch] Cycles device: {_GPU_BACKEND or 'CPU'}", flush=True)
     return bool(_GPU_BACKEND)
 
 

@@ -386,7 +386,7 @@ class ProfileEditorApp:
         if source in {"yaml", "system"}:
             if event.startswith("profile"):
                 self.profile_form.set_data(profile_data)
-            if event.startswith("run") or event.startswith("profile"):
+            if event.startswith(("run", "profile")):
                 self.run_form.set_data(run_data)
 
         if self.store.profile.text_error:
@@ -480,10 +480,7 @@ class ProfileEditorApp:
             current_run = self.run_var.get().strip()
 
             self.profile_combo["values"] = updated.profile_ids
-            if current_profile not in updated.profile_ids and updated.profile_ids:
-                self.profile_var.set(updated.profile_ids[0])
-                self._on_profile_selected()
-            elif not current_profile and updated.profile_ids:
+            if current_profile not in updated.profile_ids and updated.profile_ids or not current_profile and updated.profile_ids:
                 self.profile_var.set(updated.profile_ids[0])
                 self._on_profile_selected()
 

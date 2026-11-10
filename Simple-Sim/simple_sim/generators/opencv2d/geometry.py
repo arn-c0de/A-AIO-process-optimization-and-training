@@ -146,7 +146,7 @@ def lifted_corner_geometry(
     return {
         "lifted": lifted,
         "facet": np.array([lifted[k], mid_prev, mid_next], dtype=np.float32),
-        "shadow": np.vstack([shadow, [mid_prev, mid_next]]),
+        "shadow": np.vstack([shadow, [mid_next, mid_prev]]),  # simple polygon: c', mp', mn', mn, mp
     }
 
 
@@ -162,7 +162,7 @@ def body_geometry(
     cx = w // 2 + int(round(defect_params["shift_x"]))
     cy = h // 2 + int(round(defect_params["shift_y"]))
     tilt_deg = abs(defect_params["tilt_deg"])
-    thresh = float(tolerances["tombstone_tilt_deg"]) if tolerances is not None else 75.0
+    thresh = float(tolerances.get("tombstone_tilt_deg", 75.0)) if tolerances is not None else 75.0
     # SOLDER_BRIDGE / CORNER_LIFT carry tilt but are never tombstones.
     is_tombstone = tilt_deg >= thresh and defect_params["type"] not in NEVER_TOMBSTONE
     return {

@@ -8,12 +8,12 @@ paths, so the working directory does not matter either. The job lines are
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+from simple_sim.io_utils import iter_json_lines
 from simple_sim.blender.job_schema import DEFAULT_DEVICE, DEFAULT_ENGINE, BlenderJob, PreparedJob
 
 from .bake import apply_camera, prepare_jobs
@@ -53,7 +53,7 @@ def render_blender_batch(
 
     # Bake the shared board textures next to the output; removed again once Blender is done.
     work_dir = output_root / "_board_textures"
-    jobs: list[BlenderJob] = [json.loads(line) for line in jobs_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    jobs: list[BlenderJob] = list(iter_json_lines(jobs_path))
     try:
         _check_stop(should_stop)
         prepared = prepare_jobs(jobs, work_dir)
@@ -119,6 +119,8 @@ def _run_blender(
         blender_executable,
         "--background",
         "--factory-startup",
+        "--python-exit-code",  # an uncaught exception in the batch script must not exit 0
+        "1",
         "--python",
         str(script),
         "--",

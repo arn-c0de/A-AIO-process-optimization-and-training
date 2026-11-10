@@ -19,9 +19,9 @@ label / fault        folder                  meaning
 ok                   OK                      reviewed good part
 fault / fehlt        MISSING                 part missing
 fault / versetzt     MISALIGNED              part shifted
-fault / verdreht     TOMBSTONE               the mapping of the DeepVision export contract (``tools/export_deepvision.py``);
-                                             note: on the xpa boards "verdreht" is a *rotated* part, see docs
-fault / grabstein    TOMBSTONE@grabstein     true tombstone
+fault / verdreht     MISALIGNED@verdreht     part rotated (as in the DeepVision export contract, ``tools/export_deepvision.py``,
+                                             and ``tools/real_crops.py``)
+fault / grabstein    TOMBSTONE               tombstone
 fault / loetbruecke  SOLDER_BRIDGE           solder bridge
 fault / fremdkoerper DEFECT@fremdkoerper     foreign object (no Simple-Sim class, counts as defect)
 fault / other        DEFECT@<fault>          beschaedigt, loetfehler, falsches-teil, ... (or ``DEFECT@unspecified``)
@@ -46,18 +46,24 @@ import csv
 import json
 import math
 import shutil
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from simple_sim.io_utils import read_jsonl_dicts  # noqa: E402
+
 #: review fault -> class folder (``label: fault``). Unlisted faults go to ``DEFECT@<fault>``.
 FAULT_FOLDERS: dict[str, str] = {
     "fehlt": "MISSING",
     "versetzt": "MISALIGNED",
-    "verdreht": "TOMBSTONE",
-    "grabstein": "TOMBSTONE@grabstein",
+    "verdreht": "MISALIGNED@verdreht",
+    "grabstein": "TOMBSTONE",
     "loetbruecke": "SOLDER_BRIDGE",
     "fremdkoerper": "DEFECT@fremdkoerper",
 }
@@ -65,16 +71,6 @@ OK_FOLDER = "OK"
 SIDES = ("top", "bottom")
 #: ``pnp.csv`` columns (no header line).
 PNP_COLUMNS = ("refdes", "part", "value", "unused", "package", "x_mm", "y_mm", "rotation_deg", "bottom")
-
-
-def read_ndjson(path: Path) -> list[dict[str, Any]]:
-    rows = []
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
 
 
 def latest_reviews(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -190,7 +186,7 @@ def export(labels_dir: Path, side: str, out: Path, *, pnp: Path | None, packages
     """Copy the selected crops into ``out/<folder>/<board>_<id>.png`` and write ``out/summary.json``."""
     if side not in SIDES:
         raise ValueError(f"side must be one of {SIDES}")
-    rows = read_ndjson(labels_dir / f"{side}.ndjson")
+    rows = read_jsonl_dicts(labels_dir / f"{side}.ndjson")
     placements = read_pnp(pnp)[side] if pnp is not None else None
     selected, skipped = select(rows, labels_dir, packages=packages, placements=placements, match_mm=match_mm)
     rng = np.random.default_rng(seed)

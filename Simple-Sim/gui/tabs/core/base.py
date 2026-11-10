@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from collections.abc import Callable
 
 from gui.core.tasks import DispatchQueue, TaskRunner, UiDispatcher, dispatcher_for
+from gui.utils.settings_store import SettingsStore, wire_vars_autosave
 
 if TYPE_CHECKING:
     from gui.state import UiState
@@ -57,6 +58,29 @@ class BaseTab:
         d = self.dispatcher
         return q.bind(d.post, handler, max_items=max_items, post_next=d.post_next_tick)
 
+    def _store(self) -> SettingsStore | None:
+        """The shared settings store (``None`` when the tab runs without one, e.g. in tests)."""
+        return self.state.settings_store
+
+    def _persisted_var_bindings(self) -> list[tuple[Any, ...]]:
+        """``(key, var[, default])`` bindings this tab persists; the default persists nothing."""
+        return []
+
+    def _wire_settings_autosave(self) -> None:
+        """Persist every bound variable on write (debounced via ``self.frame``)."""
+        wire_vars_autosave(self._store(), self._persisted_var_bindings(), self.frame)
+
+    def _status(self, text: str, level: str = "success") -> bool:
+        """Non-blocking message in the main status bar; returns False when no AppContext is available."""
+        ctx = getattr(self.state, "ctx", None)
+        if ctx is None:
+            return False
+        try:
+            ctx.status(text, level)
+            return True
+        except Exception:
+            return False
+
     def build_ui(self) -> None:
         """Build the tab UI. Subclasses must implement this."""
         raise NotImplementedError("Subclasses must implement build_ui()")
@@ -75,14 +99,12 @@ class BaseTab:
 
         Subclasses can override to react to dataset changes.
         """
-        pass
 
     def refresh(self) -> None:
         """Refresh tab contents.
 
         Subclasses can override to implement refresh functionality.
         """
-        pass
 
     def on_close(self) -> None:
         """Called once when the main window is closing (before ``root.destroy()``).
@@ -90,4 +112,3 @@ class BaseTab:
         Subclasses that start subprocesses or other long-running work should
         override this to stop it; the default does nothing.
         """
-        pass

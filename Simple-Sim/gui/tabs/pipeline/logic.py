@@ -502,6 +502,8 @@ class PipelineLogic:
         out_dir = out_dir.resolve()
         manifest_path = out_dir / DATASET_MANIFEST
         if manifest_path.exists(): return False
+        # A legacy dataset without manifest: never truncate its rows.
+        if (out_dir / META_JSONL).exists() or (out_dir / LABELS_JSONL).exists(): return False
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "images").mkdir(exist_ok=True)
         (out_dir / SPLITS_DIR).mkdir(exist_ok=True)
@@ -746,6 +748,14 @@ class PipelineLogic:
     def merge_datasets_for_training(self, sources: list[Path], out_dir: Path, log_callback: Callable[[str], None], log_error_callback: Callable[[str], None]) -> None:
         out_dir = Path(out_dir)
         if out_dir.exists(): raise FileExistsError(f"Output directory already exists: {out_dir}")
+        try:
+            self._merge_datasets_into(sources, out_dir, log_callback, log_error_callback)
+        except BaseException:
+            # Do not leave a half-built dataset behind (it would show up in the list and block a retry).
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise
+
+    def _merge_datasets_into(self, sources: list[Path], out_dir: Path, log_callback: Callable[[str], None], log_error_callback: Callable[[str], None]) -> None:
         out_dir.mkdir(parents=True, exist_ok=False)
         images_dir = out_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=False)

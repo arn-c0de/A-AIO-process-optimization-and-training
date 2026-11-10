@@ -242,13 +242,17 @@ def sample_check(
     """
     model_path = Path(model_path)
     data_dir = Path(data_dir)
+    requested_model_path = model_path
+    # Multi-model bundle dir: resolve the checkpoint of the dataset's profile, as eval / predict do.
+    if model_path.is_dir():
+        model_path = resolve_bundle_checkpoint(model_path, dataset_profile(data_dir)[0])
     clf = Classifier(model_path, device)
     chosen, id_to_meta = choose_samples(data_dir, clf.class_names, split, int(per_class), seed)
     if not chosen:
         raise UsageError("No samples found for the requested split/classes.")
 
     log.info("Sample Check")
-    log.info(f"  Model:   {model_path}")
+    log.info(f"  Model:   {requested_model_path}")
     log.info(f"  Dataset: {data_dir}")
     log.info(f"  Split:   {split}")
     log.info(f"  Per cls: {per_class}")

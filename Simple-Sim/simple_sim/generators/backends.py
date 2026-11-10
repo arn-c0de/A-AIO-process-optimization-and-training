@@ -63,12 +63,12 @@ class BackendInfo:
         render: RecordRenderer = load_entry_point(self.renderer)
         return render(groups, Path(out_root), jobs_filename=jobs_filename, expect_at_least=expect_at_least)
 
-    def render_preview(self, **kwargs: Any) -> Any:
-        """Render one profile's previews now and return their preview records (keywords: see
-        :func:`simple_sim.preview.render.preview_opencv_2d`)."""
+    def render_preview(self, request: Any) -> Any:
+        """Render one profile's previews now and return their preview records (*request*: a
+        :class:`simple_sim.preview.render.PreviewRequest`)."""
         if not self.previewer:
             raise ValueError(f"Render backend {self.backend.value!r} has no preview renderer")
-        return load_entry_point(self.previewer)(**kwargs)
+        return load_entry_point(self.previewer)(request)
 
 
 BACKENDS: dict[Backend, BackendInfo] = {

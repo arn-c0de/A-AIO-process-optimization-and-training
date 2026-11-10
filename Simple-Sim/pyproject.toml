@@ -22,7 +22,7 @@ train = ["torch", "torchvision"]
 # Tk monitor GUI and profile editor (tkinter itself comes from the system Python).
 gui = ["pillow", "matplotlib>=3.10.8", "imagehash>=4.3.2"]
 # scikit-learn only for the metrics parity test (simple_sim.metrics is numpy-only).
-dev = ["pytest", "scikit-learn"]
+dev = ["pytest", "pytest-cov", "scikit-learn"]
 all = ["simple-sim[train,gui,dev]"]
 
 [project.scripts]

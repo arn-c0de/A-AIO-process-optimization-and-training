@@ -12,6 +12,7 @@ from collections.abc import Sequence
 
 from simple_sim.classes import SPLIT_NAMES
 from simple_sim.dataset_files import SPLITS_DIR
+from simple_sim.io_utils import atomic_write_text
 from simple_sim.rows import MetaRow, LabelRow
 
 
@@ -188,10 +189,9 @@ def write_splits(output_dir: Path, splits: dict[str, list[str]]) -> None:
     splits_dir.mkdir(parents=True, exist_ok=True)
 
     for split_name, sample_ids in splits.items():
-        split_file = splits_dir / f"{split_name}.txt"
-        with open(split_file, 'w', encoding='utf-8') as f:
-            for sample_id in sample_ids:
-                f.write(sample_id + '\n')
+        # Atomic: --extend and create-multi-dataset rewrite the split files of a live dataset, and
+        # a truncated train.txt would silently train on fewer samples.
+        atomic_write_text(splits_dir / f"{split_name}.txt", "".join(f"{sample_id}\n" for sample_id in sample_ids))
 
 
 def read_split(split_file: Path) -> list[str]:

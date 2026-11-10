@@ -385,6 +385,114 @@ def set_torch_threads(threads: int | None) -> None:
 # Defect classifier
 # ---------------------------------------------------------------------------
 
+def _checkpoint_targets(output_path_arg: Path, resume_path_arg: Path | None,
+                        dataset_profile_id: str) -> tuple[Path | None, Path, Path | None]:
+    """``(bundle_dir, output_path, resume_path)``: per-profile checkpoints inside a bundle dir, else the paths as given."""
+    # "Multi-model" bundle support:
+    # If --out is a directory (or ends with `.bundle`), write per-profile checkpoints into that dir.
+    bundle_dir = output_path_arg if (output_path_arg.is_dir() or output_path_arg.name.endswith(".bundle")) else None
+
+    if bundle_dir is not None:
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        output_path = bundle_checkpoint_path(bundle_dir, dataset_profile_id, kind="best")
+        if resume_path_arg is not None and resume_path_arg.is_dir():
+            resume_path = bundle_checkpoint_path(resume_path_arg, dataset_profile_id, kind="best")
+        else:
+            resume_path = resume_path_arg
+        log.info(f"Multi-model bundle: {bundle_dir}")
+        log.info(f"  Out checkpoint:   {output_path}")
+        if resume_path:
+            log.info(f"  Resume checkpoint:{resume_path}")
+    else:
+        output_path = output_path_arg
+        resume_path = resume_path_arg
+    return bundle_dir, output_path, resume_path
+
+
+def _defect_loaders(data_dir: Path, class_names: list[str], train_config: dict[str, Any], train_seed: int,
+                    loader_kwargs: dict[str, Any]) -> tuple[DataLoader, DataLoader]:
+    """Train (augmented, seeded shuffle) and val loaders of *data_dir*; logs sizes and class distribution."""
+    batch_size = train_config['batch_size']
+    log.info("\nLoading datasets...")
+    # return_id=True so we can show "last seen" sample IDs live in tqdm.
+    train_augment = train_config.get('augment') or {}
+    if train_augment:
+        log.info(f"  Train augmentation: {train_augment}")
+    cache_images = bool(train_config.get('cache_images', False))
+    if cache_images:
+        log.info("  Image cache: decoded images are kept in RAM after the first epoch")
+    train_dataset = ROIDataset(data_dir, 'train', class_names, return_id=True,
+                               transform=build_train_transform(train_augment), cache_images=cache_images)
+    val_dataset = ROIDataset(data_dir, 'val', class_names, return_id=True, cache_images=cache_images)
+    log.info(f"Train samples: {len(train_dataset)}")
+    log.info(f"Val samples: {len(val_dataset)}")
+    log.info(format_distribution("Train class distribution", train_dataset.get_class_distribution()))
+
+    # Shuffle order from its own seeded generator: independent of how much of the global torch RNG
+    # the model init / augmentation consumed, so a run is reproducible for a given train seed.
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                              generator=torch.Generator().manual_seed(train_seed), **loader_kwargs)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
+    return train_loader, val_loader
+
+
+def _restore_resume_state(resume_path: Path, model: nn.Module, optimizer: optim.Optimizer, *, device: torch.device,
+                          class_names: list[str], train_config: dict[str, Any], profile: tuple[str, str | None],
+                          allow_profile_mismatch: bool) -> tuple[int, float, int]:
+    """Load *resume_path* into *model* / *optimizer* after the class and profile guards.
+
+    Returns ``(start_epoch, best_val_f1, best_epoch)`` of the resumed run.
+    """
+    dataset_profile_id, dataset_profile_hash = profile
+    if not resume_path.exists():
+        raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+    log.info("\nLoading resume checkpoint...")
+    checkpoint = load_checkpoint(resume_path, map_location=device)
+
+    # Existing guard: class names
+    ckpt_classes = checkpoint.get('class_names')
+    if ckpt_classes and list(ckpt_classes) != list(class_names):
+        raise ValueError(f"Resume checkpoint classes do not match dataset config.\n"
+                         f"  checkpoint: {ckpt_classes}\n  dataset:    {class_names}")
+
+    # GUARD: component profile validation
+    check_checkpoint_profile(
+        checkpoint, dataset_profile_id, dataset_profile_hash,
+        action="resume training with",
+        allow_mismatch=bool(allow_profile_mismatch),
+        override_verb="Resuming",
+        ckpt_label="Checkpoint profile",
+    )
+
+    model.load_state_dict(checkpoint['model_state_dict'])
+    try:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    except (KeyError, TypeError, ValueError, RuntimeError) as e:
+        # Optimizer state may be missing or incompatible; continue with fresh optimizer state.
+        log.warning(f"Could not restore optimizer state ({e}); using fresh optimizer state.")
+    # The optimizer state carries the (possibly decayed) lr / weight_decay of the old run;
+    # the dataset config is the source of truth, also as base lr of the LR schedule.
+    for group in optimizer.param_groups:
+        group['lr'] = group['initial_lr'] = float(train_config['lr'])
+        group['weight_decay'] = float(train_config['weight_decay'])
+    start_epoch = int(checkpoint.get('epoch', 0))
+    # Prefer the tracked best score; older checkpoints only carry the F1 of their own epoch.
+    best_val_f1 = float(checkpoint.get('best_val_f1', checkpoint.get('val_f1', 0.0)) or 0.0)
+    best_epoch = int(checkpoint.get('best_epoch', checkpoint.get('epoch', 0)))
+    log.info(f"  Resumed from epoch: {start_epoch}")
+    log.info(f"  Resumed best val F1: {best_val_f1:.4f}")
+    return start_epoch, best_val_f1, best_epoch
+
+
+def _total_epochs(epochs: int, start_epoch: int, extra_epochs: int | None) -> int:
+    """Epoch count of the whole run: the config value, or ``start_epoch + extra_epochs`` on resume."""
+    if extra_epochs is not None:
+        if extra_epochs < 0:
+            raise ValueError("--extra-epochs must be >= 0")
+        return max(start_epoch + int(extra_epochs), start_epoch)
+    return max(int(epochs), start_epoch)
+
+
 def train_model(
     data_dir: Path,
     out: Path,
@@ -424,24 +532,7 @@ def train_model(
         pids = [p.get('profile_id') for p in (manifest.get('component_profiles') or []) if isinstance(p, dict)]
         log.info(f"Dataset Profile: multi ({', '.join([x for x in pids if x])})")
 
-    # "Multi-model" bundle support:
-    # If --out is a directory (or ends with `.bundle`), write per-profile checkpoints into that dir.
-    bundle_dir = output_path_arg if (output_path_arg.is_dir() or output_path_arg.name.endswith(".bundle")) else None
-
-    if bundle_dir is not None:
-        bundle_dir.mkdir(parents=True, exist_ok=True)
-        output_path = bundle_checkpoint_path(bundle_dir, dataset_profile_id, kind="best")
-        if resume_path_arg is not None and resume_path_arg.is_dir():
-            resume_path = bundle_checkpoint_path(resume_path_arg, dataset_profile_id, kind="best")
-        else:
-            resume_path = resume_path_arg
-        log.info(f"Multi-model bundle: {bundle_dir}")
-        log.info(f"  Out checkpoint:   {output_path}")
-        if resume_path:
-            log.info(f"  Resume checkpoint:{resume_path}")
-    else:
-        output_path = output_path_arg
-        resume_path = resume_path_arg
+    bundle_dir, output_path, resume_path = _checkpoint_targets(output_path_arg, resume_path_arg, dataset_profile_id)
 
     train_config = config['train']
     epochs = train_config['epochs']
@@ -467,26 +558,7 @@ def train_model(
         log.info(f"  Resume: {resume_path}")
         log.info(f"  Out mode: {out_mode}")
 
-    log.info("\nLoading datasets...")
-    # return_id=True so we can show "last seen" sample IDs live in tqdm.
-    train_augment = train_config.get('augment') or {}
-    if train_augment:
-        log.info(f"  Train augmentation: {train_augment}")
-    cache_images = bool(train_config.get('cache_images', False))
-    if cache_images:
-        log.info("  Image cache: decoded images are kept in RAM after the first epoch")
-    train_dataset = ROIDataset(data_dir, 'train', class_names, return_id=True,
-                               transform=build_train_transform(train_augment), cache_images=cache_images)
-    val_dataset = ROIDataset(data_dir, 'val', class_names, return_id=True, cache_images=cache_images)
-    log.info(f"Train samples: {len(train_dataset)}")
-    log.info(f"Val samples: {len(val_dataset)}")
-    log.info(format_distribution("Train class distribution", train_dataset.get_class_distribution()))
-
-    # Shuffle order from its own seeded generator: independent of how much of the global torch RNG
-    # the model init / augmentation consumed, so a run is reproducible for a given train seed.
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                              generator=torch.Generator().manual_seed(train_seed), **loader_kwargs)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
+    train_loader, val_loader = _defect_loaders(data_dir, class_names, train_config, train_seed, loader_kwargs)
 
     model, criterion, optimizer, scaler, frozen = build_training(len(class_names), train_config, device, use_amp)
 
@@ -496,52 +568,11 @@ def train_model(
     best_epoch = 0
 
     if resume_path:
-        if not resume_path.exists():
-            raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
-        log.info("\nLoading resume checkpoint...")
-        checkpoint = load_checkpoint(resume_path, map_location=device)
+        start_epoch, best_val_f1, best_epoch = _restore_resume_state(
+            resume_path, model, optimizer, device=device, class_names=class_names, train_config=train_config,
+            profile=(dataset_profile_id, dataset_profile_hash), allow_profile_mismatch=allow_profile_mismatch)
 
-        # Existing guard: class names
-        ckpt_classes = checkpoint.get('class_names')
-        if ckpt_classes and list(ckpt_classes) != list(class_names):
-            raise ValueError(f"Resume checkpoint classes do not match dataset config.\n"
-                             f"  checkpoint: {ckpt_classes}\n  dataset:    {class_names}")
-
-        # GUARD: component profile validation
-        check_checkpoint_profile(
-            checkpoint, dataset_profile_id, dataset_profile_hash,
-            action="resume training with",
-            allow_mismatch=bool(allow_profile_mismatch),
-            override_verb="Resuming",
-            ckpt_label="Checkpoint profile",
-        )
-
-        model.load_state_dict(checkpoint['model_state_dict'])
-        try:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        except (KeyError, TypeError, ValueError, RuntimeError) as e:
-            # Optimizer state may be missing or incompatible; continue with fresh optimizer state.
-            log.warning(f"Could not restore optimizer state ({e}); using fresh optimizer state.")
-        # The optimizer state carries the (possibly decayed) lr / weight_decay of the old run;
-        # the dataset config is the source of truth, also as base lr of the LR schedule.
-        for group in optimizer.param_groups:
-            group['lr'] = group['initial_lr'] = float(train_config['lr'])
-            group['weight_decay'] = float(train_config['weight_decay'])
-        start_epoch = int(checkpoint.get('epoch', 0))
-        # Prefer the tracked best score; older checkpoints only carry the F1 of their own epoch.
-        best_val_f1 = float(checkpoint.get('best_val_f1', checkpoint.get('val_f1', 0.0)) or 0.0)
-        best_epoch = int(checkpoint.get('best_epoch', checkpoint.get('epoch', 0)))
-        log.info(f"  Resumed from epoch: {start_epoch}")
-        log.info(f"  Resumed best val F1: {best_val_f1:.4f}")
-
-    # Determine how many total epochs to run.
-    if extra_epochs is not None:
-        if extra_epochs < 0:
-            raise ValueError("--extra-epochs must be >= 0")
-        total_epochs = start_epoch + int(extra_epochs)
-    else:
-        total_epochs = int(epochs)
-    total_epochs = max(total_epochs, start_epoch)
+    total_epochs = _total_epochs(int(epochs), start_epoch, extra_epochs)
 
     # Where to save a "last checkpoint" so resume runs always write something.
     last_path = last_checkpoint_path(output_path)
@@ -589,7 +620,7 @@ def train_model(
         # Decide "best" before building the checkpoint so it carries the best-so-far score.
         # A fresh run (no resumed best) counts its first epoch as best even at F1 0; a resumed
         # best is only replaced by a better epoch, whatever --out-mode is.
-        is_best = val_f1 > best_val_f1 or (best_epoch == 0 and not output_path.exists())
+        is_best = val_f1 > best_val_f1 or best_epoch == 0
         if is_best:
             best_val_f1 = float(val_f1)
             best_val_acc = float(val_acc)
@@ -725,7 +756,7 @@ def train_profile_model(
         torch.save(ckpt, last_path)
 
         # Always write --out at least once, even if val F1 never rises above 0.
-        if val_f1 > best_val_f1 or not output_path.exists():
+        if val_f1 > best_val_f1 or best_epoch == 0:
             best_val_f1 = float(val_f1)
             best_val_acc = float(stats['val_accuracy'])
             best_epoch = int(epoch + 1)

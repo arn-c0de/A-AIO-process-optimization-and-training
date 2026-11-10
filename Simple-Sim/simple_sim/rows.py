@@ -167,6 +167,8 @@ def _iter_jsonl(path: Path, schema_cls: type[T]) -> Iterator[T]:
                 data = json.loads(line)
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON at line {line_num}: {e}") from e
+            if not isinstance(data, dict):
+                raise ValueError(f"Expected a JSON object at line {line_num}, got {type(data).__name__}")
 
             # Check for unknown fields using dataclass introspection
             if expected_fields is None:

@@ -112,7 +112,7 @@ def place_window(board: Board, *, footprint: str, family: str, target_pads: list
     target = part_from_pads(f"{refdes_prefix(family)}1", footprint, family, target_pads, (float(w // 2), float(h // 2)),
                             target_body_px, float(target_rotation), px_to_mm, is_target=True)
     parts = [target]
-    counters = {k: 1 for k in REFDES_PREFIX}
+    counters = dict.fromkeys(REFDES_PREFIX, 1)
     for n in neighbours:
         # angle = 0 / 90 plus up to 1.5 degrees of jitter (round() would miss 91 as vertical)
         vertical = abs(float(n["angle"]) % 180.0 - 90.0) < 45.0

@@ -260,7 +260,7 @@ class ROIDataset(_BaseROIDataset):
 
     def get_class_distribution(self) -> dict[str, int]:
         """Return class name → sample count for this split."""
-        dist = {name: 0 for name in self.class_names}
+        dist = dict.fromkeys(self.class_names, 0)
         for sid in self.samples:
             dist[self.id_to_label[sid]] += 1
         return dist
@@ -302,7 +302,7 @@ class ProfileDataset(_BaseROIDataset):
 
     def get_class_distribution(self) -> dict[str, int]:
         """Return profile name → sample count for this split."""
-        dist = {name: 0 for name in self.profile_names}
+        dist = dict.fromkeys(self.profile_names, 0)
         for sid in self.samples:
             dist[self.id_to_profile[sid]] += 1
         return dist

@@ -17,6 +17,8 @@ from typing import Any
 from simple_sim.io_utils import parse_iso_ts, read_json
 
 REPORT_GLOBS = ("report_*.json", "batch_report_*.json")
+# ``<split>_`` part of a batch report name (``batch_predict.SPLITS``).
+_BATCH_SPLITS = ("train_", "val_", "test_", "all_")
 
 #: Parsed report files kept per process (see :func:`_read_report`).
 REPORT_CACHE_MAX = 4096
@@ -153,6 +155,8 @@ def load_reports(dirs: list[Path], model_stem: str | None = None) -> list[Report
     objects over the cached data, which is read-only (see :class:`Report`).
     """
     globs = (f"report_{model_stem}.json", f"batch_report_{model_stem}_*.json") if model_stem else REPORT_GLOBS
+    # batch_report_<stem>_<split>_<tag>.json: the glob alone also matches the longer stem "<stem>_v2".
+    stem_prefix = f"batch_report_{model_stem}_" if model_stem else None
     reports: list[Report] = []
     seen: set[str] = set()
     for d in dirs:
@@ -164,6 +168,8 @@ def load_reports(dirs: list[Path], model_stem: str | None = None) -> list[Report
             if sp in seen:
                 continue
             seen.add(sp)
+            if stem_prefix and p.name.startswith(stem_prefix) and not p.name[len(stem_prefix):].startswith(_BATCH_SPLITS):
+                continue
             obj = _read_report(p, stats[p])
             if isinstance(obj, dict) and "metrics" in obj:
                 reports.append(Report(sp, obj))
@@ -185,6 +191,26 @@ def metric_value(report: Mapping[str, Any], key: str, critical_class: str | None
         return None
 
 
+def is_partial_report(report: Mapping[str, Any]) -> bool:
+    """True when *report* scored only part of its split, so it must not outrank a full run.
+
+    That is a ``batch-predict --max-samples`` quick check (``max_samples`` key, or fewer
+    ``seen_samples`` than the split holds) or an ``eval`` that had to exclude samples
+    (``excluded_samples``). Reports without those keys count as complete.
+    """
+    try:
+        if report.get("max_samples") or int(report.get("excluded_samples") or 0) > 0:
+            return True
+        seen = report.get("seen_samples")
+        if seen is None:
+            return False
+        sizes = report.get("dataset_split_sizes")
+        total = sizes.get(str(report.get("split") or "test")) if isinstance(sizes, Mapping) else report.get("test_size")
+        return total is not None and int(seen) < int(total)
+    except (TypeError, ValueError):
+        return False
+
+
 def report_timestamp(report: Mapping[str, Any]) -> float:
     """Report time in epoch seconds: ``timestamp`` field, else file mtime, else ``0.0``."""
     ts = parse_iso_ts(report.get("timestamp"))
@@ -197,6 +223,12 @@ def report_timestamp(report: Mapping[str, Any]) -> float:
         except OSError:
             pass
     return 0.0
+
+
+def is_profile_classifier_report(report: Mapping[str, Any]) -> bool:
+    """Whether *report* scores a profile classifier (``eval-profile``), not a defect model. Both share
+    the ``report_*.json`` name pattern, but their accuracies are not comparable."""
+    return report.get("checkpoint_type") == "profile_classifier"
 
 
 def best_report(reports: list[Report], key: str, critical_class: str | None = None) -> Report | None:

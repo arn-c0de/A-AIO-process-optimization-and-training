@@ -56,21 +56,23 @@ def apply_motion_blur(img: np.ndarray, strength: float, angle: float) -> np.ndar
     ksize = int(strength * 10) + 1
     if ksize < 3:
         return img
+    ksize |= 1  # odd: the line and the rotation centre sit on the kernel centre (no image shift)
     kernel = np.zeros((ksize, ksize))
-    kernel[int((ksize - 1) / 2), :] = np.ones(ksize)
-    kernel = kernel / ksize
+    kernel[ksize // 2, :] = 1.0
     rotation_matrix = cv2.getRotationMatrix2D((ksize // 2, ksize // 2), angle, 1.0)
     kernel = cv2.warpAffine(kernel, rotation_matrix, (ksize, ksize))
-    return cv2.filter2D(img, -1, kernel)
+    total = float(kernel.sum())
+    if total <= 0:
+        return img
+    # The rotated line is clipped / resampled: renormalise so the blur keeps the image brightness.
+    return cv2.filter2D(img, -1, kernel / total)
 
 
 def apply_chromatic_aberration(img: np.ndarray, strength: float) -> np.ndarray:
     if strength <= 0:
         return img
     h, w = img.shape[:2]
-    shift = int(strength * 2)
-    if shift == 0:
-        return img
+    shift = float(strength) * 2.0  # sub-pixel shifts are interpolated (strength < 0.5 used to be a no-op)
     b, g, r = cv2.split(img)
     r_shifted = cv2.warpAffine(r, np.float32([[1, 0, shift], [0, 1, 0]]), (w, h), borderMode=cv2.BORDER_REPLICATE)
     b_shifted = cv2.warpAffine(b, np.float32([[1, 0, -shift], [0, 1, 0]]), (w, h), borderMode=cv2.BORDER_REPLICATE)

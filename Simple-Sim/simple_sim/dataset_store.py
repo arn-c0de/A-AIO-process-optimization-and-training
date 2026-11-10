@@ -38,7 +38,9 @@ def validate_dataset_files(data_dir: Path) -> None:
 def atomic_dataset_dir(output_dir: Path) -> Iterator[Path]:
     """Yield a fresh ``<output_dir>.tmp`` dir (with ``images/``); on success it replaces *output_dir*.
 
-    On any exception the temp dir is removed and *output_dir* is left untouched.
+    On an exception in the ``with`` body the temp dir is removed and *output_dir* is left untouched.
+    The swap renames the old dir aside first (``<output_dir>.old``) and deletes it last, so a failing
+    delete can no longer cost the freshly written dataset.
     """
     output_dir = Path(output_dir)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -48,13 +50,22 @@ def atomic_dataset_dir(output_dir: Path) -> Iterator[Path]:
     (temp_dir / "images").mkdir(parents=True)
     try:
         yield temp_dir
-        if output_dir.exists():
-            shutil.rmtree(output_dir)
+    except BaseException:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+    if not output_dir.exists():
+        temp_dir.rename(output_dir)
+        return
+    old_dir = output_dir.with_name(output_dir.name + ".old")
+    if old_dir.exists():
+        shutil.rmtree(old_dir)
+    output_dir.rename(old_dir)
+    try:
         temp_dir.rename(output_dir)
     except BaseException:
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+        old_dir.rename(output_dir)  # put the previous dataset back; the new one stays in <out>.tmp
         raise
+    shutil.rmtree(old_dir, ignore_errors=True)
 
 
 def write_dataset_files(

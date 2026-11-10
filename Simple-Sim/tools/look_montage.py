@@ -23,7 +23,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -34,6 +33,7 @@ import numpy as np
 if not __package__:  # run as a script (python tools/x.py): make the checkout importable
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from simple_sim.io_utils import iter_json_lines  # noqa: E402
 from tools.eval_real import class_folders  # noqa: E402
 
 STAT_KEYS = ("L_std", "b_std", ">200", ">150", "p90", "p99", "metal")
@@ -49,13 +49,25 @@ def load_tile(path: Path, size: int) -> np.ndarray:
 
 def dataset_images(data: Path) -> dict[str, list[Path]]:
     """Image files of a generated dataset per class (from ``labels.jsonl``, sorted by id)."""
+    # meta.jsonl knows the real file of an id (merged datasets: images/train_000003.png) and which rows
+    # are real crops mixed in by tools/mix_real.py; those are not synthetic renders and are left out.
+    image_paths: dict[str, str] = {}
+    real_ids: set[str] = set()
+    meta_path = data / "meta.jsonl"
+    if meta_path.is_file():
+        for meta in iter_json_lines(meta_path):
+            if meta.get("render_backend") == "real":
+                real_ids.add(str(meta.get("id")))
+            elif meta.get("image_path"):
+                image_paths[str(meta.get("id"))] = str(meta["image_path"])
     out: dict[str, list[Path]] = {}
-    with (data / "labels.jsonl").open(encoding="utf-8") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            out.setdefault(str(row["class_name"]), []).append(data / "images" / (Path(str(row["id"])).name + ".png"))
+    for row in iter_json_lines(data / "labels.jsonl"):
+        sample_id = str(row["id"])
+        if sample_id in real_ids:
+            continue
+        rel = image_paths.get(sample_id)
+        path = data / rel if rel else data / "images" / (Path(sample_id).name + ".png")
+        out.setdefault(str(row["class_name"]), []).append(path)
     return {k: sorted(v) for k, v in out.items()}
 
 

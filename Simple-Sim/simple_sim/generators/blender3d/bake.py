@@ -118,7 +118,11 @@ def apply_camera(jobs: list[PreparedJob], output_root: Path, *, workers: int | N
             raise OSError(f"Missing Blender output image: {path}")
         rng = np.random.default_rng([int(job.get("seed", 0)), 1])  # own stream, independent of the bake
         pose = (job.get("board") or {}).get("pose")
-        if not cv2.imwrite(str(path), camera_model(img, rng, job.get("camera"), pose, mm_per_px=job.get("mm_per_px"))):
+        # Blender renders ortho_scale = roi_mm * zoom, so one pixel covers mm_per_px * zoom (as in the 2D scene).
+        mm_per_px = job.get("mm_per_px")
+        if mm_per_px is not None:
+            mm_per_px = float(mm_per_px) * float((pose or {}).get("zoom", 1.0))
+        if not cv2.imwrite(str(path), camera_model(img, rng, job.get("camera"), pose, mm_per_px=mm_per_px)):
             raise OSError(f"Failed to write camera-processed image: {path}")
 
     for _ in imap_ordered(one, jobs, workers=workers):

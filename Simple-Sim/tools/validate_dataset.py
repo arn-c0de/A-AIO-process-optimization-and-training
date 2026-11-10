@@ -105,6 +105,9 @@ def _checks_body(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> No
         c.add("schema:labels", FAIL, f"labels.jsonl invalid - {e}")
         return
     c.add("schema:labels", PASS, f"labels.jsonl valid ({len(label_rows)} rows)")
+    if not meta_rows:
+        # Every later check passes vacuously on zero rows; an empty dataset cannot be trained on.
+        c.add("non_empty", FAIL, "Dataset has no samples (meta.jsonl is empty)")
 
     # 3: Row counts
     print("\n3. Checking row counts...")
@@ -156,6 +159,18 @@ def _checks_body(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> No
             c.add("split_overlap", PASS, f"No overlap between splits ({sizes})")
         except ValueError as e:
             c.add("split_overlap", FAIL, f"Split overlap detected - {e}")
+        # Split files must name samples of this dataset, and every sample should be in a split.
+        meta_ids = {row.id for row in meta_rows}
+        split_ids = {sid for ids in splits.values() for sid in ids}
+        unknown = sorted(split_ids - meta_ids)
+        if unknown:
+            c.add("split_membership", FAIL, f"{len(unknown)} split entries are not in meta.jsonl", unknown)
+        else:
+            c.add("split_membership", PASS, "All split entries are samples of this dataset")
+        unassigned = sorted(meta_ids - split_ids)
+        if unassigned:
+            c.add("split_coverage", WARN, f"{len(unassigned)} samples are in no split file (never trained or evaluated)",
+                  unassigned)
 
     # 7: Class distribution per split (warning only)
     print("\n7. Checking class distribution...")
@@ -239,7 +254,13 @@ def main() -> None:
     args = parser.parse_args()
     configure_cli_logging()
 
-    ok, checks = run_validation(Path(args.data), seed_mismatch_log_limit=args.seed_mismatch_log_limit)
+    try:
+        ok, checks = run_validation(Path(args.data), seed_mismatch_log_limit=args.seed_mismatch_log_limit)
+    except Exception as e:  # noqa: BLE001 - with --json the caller reads the result line, not a traceback
+        if not args.json:
+            raise
+        emit_result("validate", {"dataset": str(args.data)}, ok=False, error=f"{type(e).__name__}: {e}")
+        sys.exit(1)
     if args.json:
         failed = [ch["name"] for ch in checks if ch["status"] == FAIL]
         emit_result(

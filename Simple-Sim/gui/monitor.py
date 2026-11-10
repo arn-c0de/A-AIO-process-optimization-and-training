@@ -262,6 +262,13 @@ class MonitorAppTabbed:
     def _pipeline_button(self, name: str) -> None:
         if self.current_tab != "pipeline":
             return
+        # bind_all shortcuts also fire inside a modal dialog: F5 in the start confirmation would
+        # invoke Start a second time and launch two pipeline runs.
+        try:
+            if name == "btn_start" and self.root.grab_current() is not None:
+                return
+        except Exception:
+            pass
         ui = getattr(self.tabs["pipeline"], "ui", None)
         btn = getattr(ui, name, None)
         if btn is not None:

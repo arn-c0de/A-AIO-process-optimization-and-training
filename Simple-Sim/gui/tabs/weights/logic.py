@@ -3,9 +3,7 @@
 from __future__ import annotations
 import json
 import os
-import queue
 import shutil
-import subprocess
 import threading
 import zipfile
 from pathlib import Path
@@ -14,11 +12,11 @@ from typing import Any
 from gui.utils.checkpoint_meta import checkpoint_class_names
 from gui.utils.dataset_catalog import dataset_display_name, sorted_dataset_dirs
 from gui.utils.paths import list_model_paths, model_root
-from gui.utils.process import run_streaming, terminate_process
+from gui.utils.process import StreamingProcessLogic, run_streaming
 from simple_sim.cli import argv_for
 from simple_sim.cli_utils import parse_result_line
 from simple_sim.eval_utils import dataset_profile
-from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, now_tag, read_json, rel_to
+from simple_sim.io_utils import atomic_write_json, iter_json_lines, load_yaml, now_iso, now_tag, read_json, rel_to
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.model_bundle import resolve_bundle_checkpoint
 from simple_sim.model_store import SNAPSHOT_RUN_RE, snapshot_checkpoint, snapshot_path
@@ -26,13 +24,7 @@ from simple_sim.reports import load_reports, report_search_dirs
 import yaml
 
 
-class WeightsLogic:
-    def __init__(self, sim_root: Path, log_q: queue.Queue[str]) -> None:
-        self.sim_root = sim_root
-        self.log_q = log_q
-        self.proc: subprocess.Popen[str] | None = None
-        self.stop_evt = threading.Event()
-
+class WeightsLogic(StreamingProcessLogic):
     def _model_root(self) -> Path:
         return model_root(self.sim_root)
 
@@ -259,13 +251,6 @@ class WeightsLogic:
         if meta_src.exists():
             shutil.copy2(meta_src, meta_dst)
 
-    def stop_prediction(self) -> None:
-        self.stop_evt.set()
-        terminate_process(self.proc)
-
-    def _set_proc(self, proc: subprocess.Popen[str]) -> None:
-        self.proc = proc
-
     def _predict_cmd(self, model_path: Path, data_dir: Path, split: str, device: str, max_samples_s: str, save_preds: bool) -> tuple[list[str], Path]:
         """``batch-predict --json`` command line and its report dir; a bundle dir resolves to the dataset's profile.
 
@@ -307,7 +292,7 @@ class WeightsLogic:
             try:
                 cmd, _out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
                 self.log_q.put(f"\n$ {' '.join(cmd)}\n")
-                rc = run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q, stop_evt=self.stop_evt, on_line=on_line, on_start=self._set_proc)
+                rc = self._stream(cmd, on_line=on_line)
                 if self.stop_evt.is_set(): self.log_q.put("\n[stopped]\n")
                 elif rc != 0: self.log_q.put(f"\n[error] batch-predict exited with code {rc}\n")
             except Exception as e: self.log_q.put(f"\n[error] Failed to run batch-predict: {e}\n")
@@ -335,9 +320,9 @@ class WeightsLogic:
                 result = res
 
         try:
-            # Track as self.proc (via on_start) so stop_prediction() can terminate it and the "already running" guard sees it.
+            # Track as self.proc (via on_start) so stop() can terminate it and the "already running" guard sees it.
             # run_streaming terminates the child before wait() on stop, so it cannot block on a full stdout pipe.
-            rc = run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q, stop_evt=self.stop_evt, on_line=on_line, on_start=self._set_proc)
+            rc = self._stream(cmd, on_line=on_line)
             if self.stop_evt.is_set():
                 self.log_q.put("\n[stopped]\n")
                 return None
@@ -474,18 +459,10 @@ class WeightsLogic:
         if not labels_path.exists():
             return []
         try:
-            with labels_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        continue
-                    cls = str(obj.get("class_name") or "").strip()
-                    if cls:
-                        classes.add(cls)
+            for obj in iter_json_lines(labels_path, skip_invalid=True):
+                cls = str(obj.get("class_name") or "").strip()
+                if cls:
+                    classes.add(cls)
         except Exception:
             return []
         return sorted(classes)

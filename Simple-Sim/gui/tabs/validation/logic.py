@@ -9,7 +9,7 @@ import json
 from gui.utils.dataset_catalog import list_dataset_dirs
 from gui.utils.validation_suite import run_validation_suite
 from gui.utils.flag_manager import FlagManager
-from simple_sim.io_utils import now_tag
+from simple_sim.io_utils import atomic_write_text, now_tag
 
 
 class ValidationLogic:
@@ -38,14 +38,18 @@ class ValidationLogic:
             from gui.core.tasks import TaskCancelled
 
             raise TaskCancelled("validation")
-        if self.flag_manager:
-            for outlier in results.get('outliers', []):
-                self.flag_manager.add_flag(outlier['sample_id'], outlier['flag'], outlier['reason'])
-            for edge_case in results.get('edge_cases', []):
-                self.flag_manager.add_flag(edge_case['sample_id'], edge_case['flag'], edge_case['reason'])
-            for id1, id2, distance in results.get('duplicates', []):
-                reason = f'Duplicate of {id2} (distance={distance})'
-                self.flag_manager.add_flag(id1, 'DUPLICATE', reason)
+        # Flags belong to the dataset that was validated: self.flag_manager follows the dataset
+        # selection, which may have moved on while the suite ran.
+        fm = self.flag_manager
+        if fm is None or Path(fm.dataset_dir) != Path(dataset_dir):
+            fm = FlagManager(dataset_dir)
+        flags = [(o['sample_id'], o['flag'], o['reason']) for o in results.get('outliers', [])]
+        flags += [(e['sample_id'], e['flag'], e['reason']) for e in results.get('edge_cases', [])]
+        flags += [
+            (id1, 'DUPLICATE', f'Duplicate of {id2} (distance={distance})')
+            for id1, id2, distance in results.get('duplicates', [])
+        ]
+        fm.add_flags(flags)
 
         return results
 
@@ -65,8 +69,11 @@ class ValidationLogic:
 
     def clear_all_flags(self) -> None:
         if self.flag_manager:
-            for sample_id in self.flag_manager.get_all_flagged_samples():
-                self.flag_manager.remove_flag(sample_id)
+            self.flag_manager.clear()
+
+    def reload_flags(self) -> None:
+        if self.flag_manager:
+            self.flag_manager.reload()
 
     def export_report(self, results: dict[str, Any], dataset_dir: Path) -> str:
         output_path = dataset_dir / f"validation_report_{now_tag(micro=False)}.json"
@@ -92,7 +99,6 @@ class ValidationLogic:
                 return [_jsonify(v) for v in obj]
             return str(obj)
 
-        with open(output_path, 'w') as f:
-            json.dump(_jsonify(results), f, indent=2)
-        
+        atomic_write_text(output_path, json.dumps(_jsonify(results), indent=2))
+
         return str(output_path)

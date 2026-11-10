@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 from simple_sim.board.footprints import family_of, profile_footprint
 from simple_sim.config import load_config, merge_profile_render, validate_config

@@ -19,10 +19,11 @@ import sys
 import shutil
 import tempfile
 from pathlib import Path
-from simple_sim.io_utils import load_yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+from simple_sim.io_utils import load_yaml  # noqa: E402  (needs ROOT on sys.path when run as a script)
 
 
 def _make_demo_dataset(sim_root: Path) -> Path | None:

@@ -360,9 +360,9 @@ python tools/dv_crops.py --labels .../products/xpa/aoi/labels --side top --out o
 python tools/dv_crops.py ... --out outputs/dv_real_pkg/top/CAPC1005 --packages CAPC1005 --limit-ok 300
 ```
 
-Review `fault` -> folder: `fehlt` -> `MISSING`, `versetzt` -> `MISALIGNED`, `verdreht` -> `TOMBSTONE` (the
-export contract below maps TOMBSTONE back to `verdreht`; on the xpa boards "verdreht" is a *rotated* part
-and the 5 true tombstones are labelled `grabstein` -> `TOMBSTONE@grabstein`), `loetbruecke` ->
+Review `fault` -> folder: `fehlt` -> `MISSING`, `versetzt` -> `MISALIGNED`, `verdreht` ->
+`MISALIGNED@verdreht` (a *rotated* part, as in the export contract below), `grabstein` -> `TOMBSTONE` (the 5
+true tombstones), `loetbruecke` ->
 `SOLDER_BRIDGE`, everything else `DEFECT@<fault>`. Counts (2026-11-08, `outputs/dv_real/<side>/summary.json`):
 
 | Side | latest reviews | OK available (exported) | fehlt | loetbruecke | verdreht | grabstein | versetzt | other faults | skipped |

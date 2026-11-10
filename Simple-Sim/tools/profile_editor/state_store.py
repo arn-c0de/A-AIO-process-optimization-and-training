@@ -204,7 +204,7 @@ def to_form_text(value: Any) -> str:
 def flatten_leaf_paths(data: dict[str, Any], prefix: PathKey = ()) -> list[tuple[PathKey, Any]]:
     leaves: list[tuple[PathKey, Any]] = []
     for key, value in data.items():
-        p = prefix + (str(key),)
+        p = (*prefix, str(key))
         if isinstance(value, dict):
             leaves.extend(flatten_leaf_paths(value, p))
         else:

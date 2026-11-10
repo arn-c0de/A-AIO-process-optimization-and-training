@@ -650,6 +650,10 @@ class ProfilePreviewTab(BaseTab):
 
     def on_close(self) -> None:
         self._stop.set()
+        # The worker terminates a running Blender on its next stop poll (0.2 s); it is a daemon thread,
+        # so without this short wait the interpreter exits first and Blender renders on as an orphan.
+        if self._worker is not None and self._worker.is_alive():
+            self._worker.join(timeout=2.0)
         if self._poll_id is not None:
             try:
                 self.frame.after_cancel(self._poll_id)

@@ -27,17 +27,6 @@ class ValidationTab(BaseTab):
         self._refresh_datasets()
         self.on_dataset_changed()
 
-    def _status(self, text: str, level: str = "success") -> bool:
-        """Non-blocking status message; returns False when no AppContext is available."""
-        ctx = getattr(self.state, "ctx", None)
-        if ctx is None:
-            return False
-        try:
-            ctx.status(text, level)
-            return True
-        except Exception:
-            return False
-
     def on_dataset_changed(self) -> None:
         self._sync_combo_to_state()
         if self.state.dataset_dir:
@@ -92,7 +81,10 @@ class ValidationTab(BaseTab):
 
         def on_done(results: dict) -> None:
             self.validation_results = results
+            self._results_dataset_dir = dataset_dir
             self.ui.display_results(results)
+            # The run may have written through its own manager (dataset switched meanwhile).
+            self.logic.reload_flags()
             self._refresh_flag_tree()
 
         def on_finally() -> None:
@@ -141,7 +133,9 @@ class ValidationTab(BaseTab):
                                title="No Results"):
             return
         try:
-            path = self.logic.export_report(self.validation_results, self.state.dataset_dir)
+            # The report goes to the dataset the results came from, not to the current selection.
+            path = self.logic.export_report(
+                self.validation_results, getattr(self, "_results_dataset_dir", None) or self.state.dataset_dir)
         except Exception as e:
             dialogs.show_error(self.frame, "Export Failed", e)
             return

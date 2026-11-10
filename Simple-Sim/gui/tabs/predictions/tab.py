@@ -12,7 +12,7 @@ from gui.core.tasks import DispatchQueue
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_dataset_labels
-from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
+from gui.utils.settings_store import restore_persisted_vars
 from simple_sim.cli_utils import parse_result_line
 
 from .ui import PredictionsUI
@@ -77,9 +77,6 @@ class PredictionsTab(BaseTab):
         except Exception:
             pass
 
-    def _store(self) -> SettingsStore | None:
-        return self.state.settings_store
-
     def _load_persisted_settings(self) -> None:
         st = self._store()
         if st is None:
@@ -112,11 +109,8 @@ class PredictionsTab(BaseTab):
             ("pred.multi_datasets", self.ui.var_multi_datasets, False),
         ]
 
-    def _wire_settings_autosave(self) -> None:
-        wire_vars_autosave(self._store(), self._persisted_var_bindings(), self.frame)
-
     def on_close(self) -> None:
-        self.logic.stop_predictions()
+        self.logic.stop()
 
     def _persist_multi_dataset_paths(self) -> None:
         st = self._store()
@@ -209,12 +203,12 @@ class PredictionsTab(BaseTab):
                 self.ui.var_preds_path.set(f"preds: {p}")
 
     def _stop_predictions(self) -> None:
-        self.logic.stop_predictions()
+        self.logic.stop()
         self.ui.var_status.set("status: stopping...")
 
     def _selected_dataset_paths(self) -> list[Path]:
         if hasattr(self.ui, "var_multi_datasets") and bool(self.ui.var_multi_datasets.get()):
-            out: list[Path] = [self.logic.resolve_dataset_path(s) for s in self._multi_dataset_paths if s.strip()]
+            out: list[Path] = [self.logic.resolve_path(s) for s in self._multi_dataset_paths if s.strip()]
             seen = set()
             return [p for p in out if not (str(p) in seen or seen.add(str(p)))]
         ds = self.state.dataset_dir
@@ -226,7 +220,7 @@ class PredictionsTab(BaseTab):
             return
 
         model_s = self.ui.var_model.get().strip()
-        model_path = self.logic.resolve_model_path(model_s)
+        model_path = self.logic.resolve_path(model_s)
         if not model_path.exists():
             dialogs.show_error(self.frame, "Model Not Found", f"Model not found:\n{model_path}",
                                hint="Pick a model from the list or press refresh.")
@@ -239,7 +233,7 @@ class PredictionsTab(BaseTab):
         profile_model_s = self.ui.var_profile_model.get().strip()
         pm_path: Path | None = None
         if profile_model_s:
-            pm_path = self.logic.resolve_model_path(profile_model_s)
+            pm_path = self.logic.resolve_path(profile_model_s)
             if not pm_path.exists():
                 dialogs.show_error(self.frame, "Profile Model Not Found", f"Profile model not found:\n{pm_path}",
                                    hint="Clear the Profile Model field or pick an existing one.")
@@ -289,6 +283,10 @@ class PredictionsTab(BaseTab):
                 self._active_dataset_dir = last_dataset_dir
             if last_report_path and last_report_path.exists():
                 self._load_report(last_report_path)
+            elif not was_stopped:
+                # No report without a stop: batch-predict failed; "done" over "Running..." hid that.
+                self.ui.var_status.set("status: failed")
+                self.ui.set_metrics_text("Prediction failed - no report was written. See the log for the error.\n")
             if last_preds_path and last_preds_path.exists():
                 self._load_preds(last_preds_path)
     

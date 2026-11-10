@@ -150,6 +150,9 @@ def precise_counts(settings: dict[str, Any]) -> tuple[dict[str, Any] | None, str
 
     if per_class:
         classes: dict[str, Any] = s.get("classes") or {}
+        # "classes" keeps the counts of every class set seen so far; only the current config's count.
+        if class_names := list(s.get("class_names") or []):
+            classes = {c: classes[c] for c in class_names if c in classes}
         if not classes:
             return None, "Precise mode: no class entries.\nOpen Precise Settings and click ↻."
         counts = _non_negative_counts(classes)
@@ -256,7 +259,8 @@ def profile_run_targets(base_out: Path, base_model: Path, run_id: str, *, multi:
     selected ones (or inside ``runs``/``versions`` if that root itself is selected).
     """
     if not multi:
-        model = base_model if str(base_model).strip() else models_root / f"{run_id}.pt"
+        # An empty model field arrives as Path("") == Path("."), never as an empty string.
+        model = base_model if str(base_model).strip() not in ("", ".") else models_root / f"{run_id}.pt"
         return base_out, model
     if base_out.name in {"runs", "versions"}:
         out = base_out / run_id

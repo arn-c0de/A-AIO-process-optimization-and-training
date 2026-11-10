@@ -659,7 +659,7 @@ def write_multi_profile_manifest(
     extend_history = [history_entry]
     if existing:
         created_at = existing.get('created_at') or created_at
-        extend_history = list(existing.get('extend_history') or []) + [history_entry]
+        extend_history = [*list(existing.get('extend_history') or []), history_entry]
 
     generator = _generator_block(script_name, git_commit, renderer_version)
 

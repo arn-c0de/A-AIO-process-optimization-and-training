@@ -30,7 +30,7 @@ from simple_sim.eval_utils import (
     resolve_bundle_checkpoint,
     run_inference,
 )
-from simple_sim.io_utils import atomic_write_json, now_iso
+from simple_sim.io_utils import atomic_write_json, now_iso, read_json, unique_path
 from simple_sim.manifest import check_checkpoint_profile
 from simple_sim.model_bundle import safe_profile_filename
 from simple_sim.metrics import (
@@ -85,6 +85,30 @@ def report_path_for(model_path: Path, *, profile_classifier: bool = False, profi
     prefix = "report_profile_classifier_" if profile_classifier else "report_"
     suffix = f"_{safe_profile_filename(profile_id)}" if profile_id else ""
     return model_path.parent / f"{prefix}{model_path.stem}{suffix}.json"
+
+
+def _archive_report_of_other_dataset(report_file: Path, data_dir: Path) -> None:
+    """Move an existing *report_file* that scored another dataset to ``history/`` before it is overwritten.
+
+    ``report_<stem>.json`` does not name the dataset, so evaluating one checkpoint on a second
+    dataset used to drop the first result (and its Arena row). A re-run on the same dataset still
+    replaces the report in place.
+    """
+    old = read_json(report_file)
+    if not isinstance(old, dict) or not old.get("dataset_path"):
+        return
+    old_ds = Path(str(old["dataset_path"]))
+    try:
+        if old_ds.resolve() == Path(data_dir).resolve():
+            return
+        history = report_file.parent / "history"
+        history.mkdir(parents=True, exist_ok=True)
+        target = unique_path(history / f"{report_file.stem}_{old_ds.name}.json")
+        report_file.replace(target)
+    except OSError as e:
+        log.warning(f"Could not archive the previous report {report_file}: {e}")
+        return
+    log.info(f"Previous report (dataset {old_ds.name}) kept as: {target}")
 
 
 def write_report(path: Path, report: dict[str, Any]) -> Path:
@@ -159,6 +183,12 @@ def run_eval(
     log.info("\nLoading test dataset...")
     test_dataset = ROIDataset(data_dir, 'test', class_names, return_id=True)
     test_dist = _load_test_split(test_dataset, "Test class distribution")
+    excluded = len(test_dataset.sample_ids) - len(test_dataset.samples)
+    if excluded:
+        log.warning(
+            f"{excluded} of {len(test_dataset.sample_ids)} test samples are excluded (label unknown to the "
+            "model or missing metadata); the metrics cover the remaining samples only."
+        )
 
     log.info("\n" + _RULE)
     log.info("EVALUATION ON TEST SET")
@@ -188,10 +218,14 @@ def run_eval(
         'seen_samples': int(seen),
         'class_distribution': test_dist,
     }
+    if excluded:
+        report['excluded_samples'] = int(excluded)
     if tta:
         report['tta'] = True
     bundle_profile = dataset_profile_id if model_path != requested_model_path else None
-    report_path = write_report(report_path_for(requested_model_path, profile_id=bundle_profile), report)
+    report_file = report_path_for(requested_model_path, profile_id=bundle_profile)
+    _archive_report_of_other_dataset(report_file, data_dir)
+    report_path = write_report(report_file, report)
 
     success = evaluate_success_criteria(checkpoint_val_accuracy(checkpoint), metrics, entity="class")
     log.info(format_success_criteria(success))

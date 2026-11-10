@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import ConcatDataset, DataLoader, Dataset
+from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 from tqdm import tqdm
 
 from simple_sim.data_loader import ROIDataset
@@ -25,11 +26,11 @@ from simple_sim.dataset_index import DatasetIndex
 from simple_sim.devices import resolve_device
 from simple_sim.eval_utils import ThroughputMeter, dataset_profile, oom_retry
 from simple_sim.evaluation import write_report
-from simple_sim.io_utils import append_jsonl, now_iso, now_tag, unique_path
+from simple_sim.io_utils import atomic_write_jsonl, now_iso, now_tag, unique_path
 from simple_sim.metrics import compute_metrics, format_metrics
 from simple_sim.model_bundle import resolve_bundle_checkpoint
 from simple_sim.models import load_checkpoint_model
-from simple_sim.reports import load_reports, metric_value, report_path
+from simple_sim.reports import is_profile_classifier_report, load_reports, metric_value, report_path
 
 __all__ = [
     "BatchPredictOptions",
@@ -41,6 +42,7 @@ __all__ = [
     "build_dataset",
     "dataset_info",
     "history_rows",
+    "PredictContext",
     "predict_once",
     "resolve_model_path",
     "run_batch_predict",
@@ -92,6 +94,8 @@ class BatchPredictOptions:
             raise ValueError(f"history_metric must be one of {HISTORY_METRICS}, got {self.history_metric!r}")
         if self.history_split not in ("same", "any"):
             raise ValueError(f"history_split must be 'same' or 'any', got {self.history_split!r}")
+        if self.max_samples is not None and int(self.max_samples) <= 0:
+            raise ValueError(f"max_samples must be positive, got {self.max_samples!r}")
 
 
 @dataclass
@@ -174,30 +178,88 @@ def _gt_profile_map(data_dir: Path) -> dict[str, str]:
         return {}
 
 
-def predict_once(
-    ds: Dataset,
+@dataclass(frozen=True)
+class PredictContext:
+    """Everything :func:`predict_once` needs besides the dataset and the (retried) batch size."""
+
+    device: torch.device
+    model: torch.nn.Module
+    class_names: list[str]
+    num_workers: int = 0
+    split: str = "test"
+    max_samples: int | None = None
+    save_preds: bool = False
+    topk: int = 4
+    gt_profile_map: dict[str, str] = field(default_factory=dict)
+    profile_model: torch.nn.Module | None = None
+    profile_class_names: list[str] = field(default_factory=list)
+    ckpt_profile_id: str = ""
+
+    @property
+    def implicit_profile_id(self) -> str:
+        """Without a profile model the checkpoint's own profile stands in as the "predicted" profile.
+
+        The pseudo-id of multi-profile models / ensembles is no profile, so it yields no profile metrics.
+        """
+        return "" if self.ckpt_profile_id == "multi" else self.ckpt_profile_id
+
+    @property
+    def predicts_profile(self) -> bool:
+        return self.profile_model is not None or bool(self.implicit_profile_id)
+
+
+def _prediction_rows(
+    ctx: PredictContext,
     *,
-    device: torch.device,
-    model: torch.nn.Module,
-    class_names: list[str],
-    batch_size: int,
-    num_workers: int,
-    split: str,
-    max_samples: int | None,
-    save_preds: bool,
-    topk: int,
-    gt_profile_map: dict[str, str],
-    profile_model: torch.nn.Module | None,
-    profile_class_names: list[str],
-    ckpt_profile_id: str,
-) -> PredictResult:
+    probs: torch.Tensor,
+    pred_idx: torch.Tensor,
+    labels: torch.Tensor,
+    sample_ids: Any,
+    image_paths: Any,
+    pred_profile: Callable[[int], str],
+    profile_confidence: Callable[[int], float],
+) -> list[dict[str, Any]]:
+    """Per-sample ``--save-preds`` rows of one batch."""
+    class_names = ctx.class_names
+    k = min(ctx.topk, len(class_names))
+    top_vals, top_inds = (t.cpu().numpy() for t in torch.topk(probs, k=k, dim=1))
+    pred_idx_np = pred_idx.cpu().numpy()
+    labels_np = labels.cpu().numpy()
+    rows: list[dict[str, Any]] = []
+    for i in range(int(labels.shape[0])):
+        tid = str(sample_ids[i])
+        gt_name = class_names[int(labels_np[i])]
+        pred_name = class_names[int(pred_idx_np[i])]
+        row: dict[str, Any] = {
+            "id": tid,
+            "image_path": str(image_paths[i]),
+            "gt": gt_name,
+            "pred": pred_name,
+            "correct": bool(pred_name == gt_name),
+            "topk": [{"class": class_names[int(top_inds[i, j])], "prob": float(top_vals[i, j])} for j in range(k)],
+        }
+        gt_prof = str(ctx.gt_profile_map.get(tid, "") or "")
+        if gt_prof:
+            row["gt_profile"] = gt_prof
+        if ctx.predicts_profile:
+            pred_prof = pred_profile(i)
+            row["pred_profile"] = pred_prof
+            row["gt_profile"] = gt_prof
+            row["profile_correct"] = bool(pred_prof == gt_prof) if gt_prof else None
+            row["profile_confidence"] = profile_confidence(i)
+        rows.append(row)
+    return rows
+
+
+def predict_once(ds: Dataset, ctx: PredictContext, *, batch_size: int) -> PredictResult:
     """One pass over *ds*; collects labels/preds, profile labels and (optionally) per-sample rows."""
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=ctx.num_workers)
     res = PredictResult()
     t0 = time.perf_counter()
     meter = ThroughputMeter()
+    max_samples = ctx.max_samples
 
-    progress = tqdm(loader, desc=f"Predict({split})")
+    progress = tqdm(loader, desc=f"Predict({ctx.split})")
     for images, labels, sample_ids, image_paths in progress:
         if max_samples is not None:
             # Truncate the last batch so exactly --max-samples samples are evaluated.
@@ -207,19 +269,19 @@ def predict_once(
                 sample_ids, image_paths = sample_ids[:remaining], image_paths[:remaining]
 
         bt0 = time.perf_counter()
-        images = images.to(device)
-        labels = labels.to(device)
+        images = images.to(ctx.device)
+        labels = labels.to(ctx.device)
 
         with torch.no_grad():
-            logits = model(images)
+            logits = ctx.model(images)
             pred_idx = torch.argmax(logits, dim=1)
             probs = torch.softmax(logits, dim=1)
 
         profile_pred_idx_np = None
         profile_probs_np = None
-        if profile_model is not None:
+        if ctx.profile_model is not None:
             with torch.no_grad():
-                profile_logits = profile_model(images)
+                profile_logits = ctx.profile_model(images)
                 profile_probs_np = torch.softmax(profile_logits, dim=1).cpu().numpy()
                 profile_pred_idx_np = torch.argmax(profile_logits, dim=1).cpu().numpy()
 
@@ -233,46 +295,25 @@ def predict_once(
 
         def pred_profile(i: int) -> str:
             if profile_pred_idx_np is not None:
-                return profile_class_names[int(profile_pred_idx_np[i])]
-            return ckpt_profile_id
+                return ctx.profile_class_names[int(profile_pred_idx_np[i])]
+            return ctx.implicit_profile_id
+
+        def profile_confidence(i: int) -> float:
+            return float(profile_probs_np[i, int(profile_pred_idx_np[i])]) if profile_probs_np is not None else 1.0
 
         # Profile metrics are collected independently of --save-preds.
-        if profile_model is not None or ckpt_profile_id:
+        if ctx.predicts_profile:
             for i in range(bs):
-                gt_prof = str(gt_profile_map.get(str(sample_ids[i]), "") or "")
+                gt_prof = str(ctx.gt_profile_map.get(str(sample_ids[i]), "") or "")
                 if gt_prof:
                     res.profile_pred.append(pred_profile(i))
                     res.profile_gt.append(gt_prof)
 
-        if save_preds:
-            k = min(topk, len(class_names))
-            top_vals, top_inds = (t.cpu().numpy() for t in torch.topk(probs, k=k, dim=1))
-            pred_idx_np = pred_idx.cpu().numpy()
-            labels_np = labels.cpu().numpy()
-            for i in range(bs):
-                tid = str(sample_ids[i])
-                gt_name = class_names[int(labels_np[i])]
-                pred_name = class_names[int(pred_idx_np[i])]
-                row: dict[str, Any] = {
-                    "id": tid,
-                    "image_path": str(image_paths[i]),
-                    "gt": gt_name,
-                    "pred": pred_name,
-                    "correct": bool(pred_name == gt_name),
-                    "topk": [{"class": class_names[int(top_inds[i, j])], "prob": float(top_vals[i, j])} for j in range(k)],
-                }
-                gt_prof = str(gt_profile_map.get(tid, "") or "")
-                if gt_prof:
-                    row["gt_profile"] = gt_prof
-                if profile_model is not None or ckpt_profile_id:
-                    pred_prof = pred_profile(i)
-                    row["pred_profile"] = pred_prof
-                    row["gt_profile"] = gt_prof
-                    row["profile_correct"] = bool(pred_prof == gt_prof) if gt_prof else None
-                    row["profile_confidence"] = (
-                        float(profile_probs_np[i, int(profile_pred_idx_np[i])]) if profile_probs_np is not None else 1.0
-                    )
-                res.rows.append(row)
+        if ctx.save_preds:
+            res.rows.extend(_prediction_rows(
+                ctx, probs=probs, pred_idx=pred_idx, labels=labels, sample_ids=sample_ids, image_paths=image_paths,
+                pred_profile=pred_profile, profile_confidence=profile_confidence,
+            ))
 
         if max_samples is not None and res.seen >= max_samples:
             break
@@ -301,6 +342,24 @@ def format_profile_metrics(profile_metrics: dict[str, Any], names: list[str]) ->
     return "\n".join(lines)
 
 
+def _resolved(p: Any) -> str:
+    try:
+        return str(Path(str(p)).resolve())
+    except OSError:
+        return str(p)
+
+
+def evenly_spaced_indices(total: int, count: int) -> list[int]:
+    """*count* indices spread over ``range(total)`` (all of them when *count* >= *total*).
+
+    Split files are sorted by sample id and generation numbers samples class by class, so the
+    first N samples of a split are its first class(es) only; a spread subset sees every class.
+    """
+    if count >= total:
+        return list(range(total))
+    return [int(i) for i in np.linspace(0, total - 1, num=count).round()]
+
+
 def history_rows(
     compare_dirs: list[Path],
     *,
@@ -314,14 +373,17 @@ def history_rows(
     exclude_path: Path,
 ) -> list[tuple[float, dict[str, Any]]]:
     """Previous reports matching the filters as ``(value, report)``, best first (FN rate: lowest first)."""
-    reports = load_reports(compare_dirs)
+    # Profile-classifier reports (report_profile_classifier_*.json) score another task.
+    reports = [r for r in load_reports(compare_dirs) if not is_profile_classifier_report(r)]
     if scope == "model":
         reports = [
             r for r in reports
             if r.get("model_stem") == model_path.stem or _basename(r.get("model_path")) == model_path.name
         ]
     elif scope == "dataset":
-        reports = [r for r in reports if r.get("dataset_path") == str(data_dir)]
+        # Resolved, so the same dataset given relative (CLI) and absolute (GUI) matches.
+        want = _resolved(data_dir)
+        reports = [r for r in reports if r.get("dataset_path") and _resolved(r["dataset_path"]) == want]
     if split_mode == "same":
         reports = [r for r in reports if r.get("split") == split]
     reports = [r for r in reports if report_path(r) != str(exclude_path)]
@@ -353,6 +415,32 @@ def format_history(rows: list[tuple[float, dict[str, Any]]], *, scope: str, spli
     return "\n".join(lines)
 
 
+def _load_profile_classifier(path: Path | None, device: torch.device) -> tuple[torch.nn.Module | None, list[str]]:
+    """The optional two-stage profile classifier: ``(model, class_names)`` or ``(None, [])``."""
+    if not path:
+        return None, []
+    profile_model_path = Path(path)
+    if not profile_model_path.exists():
+        raise FileNotFoundError(f"Profile model not found: {profile_model_path}")
+    profile_model, profile_class_names, _ = load_checkpoint_model(profile_model_path, device)
+    return profile_model, profile_class_names
+
+
+def _check_model_covers_dataset(class_names: list[str], dataset_classes: list[str]) -> None:
+    """Raise when the dataset has labels the model was not trained on; warn about model classes without samples."""
+    unknown = sorted(set(dataset_classes) - set(class_names))
+    if unknown:
+        raise ValueError(
+            f"Model classes {class_names} do not match dataset classes {dataset_classes}: "
+            f"the dataset has labels the model was not trained on ({unknown}). "
+            "Train a checkpoint on this dataset before running batch_predict."
+        )
+    absent = sorted(set(class_names) - set(dataset_classes))
+    if absent:
+        # A configured class without samples in this dataset is fine; it just has support 0.
+        log.warning(f"Model classes without samples in this dataset: {absent}")
+
+
 def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
     """Predict *opts.split* of *opts.data* with *opts.model*; write the report and compare history.
 
@@ -378,51 +466,32 @@ def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
     # GT profile mapping is built regardless of --profile-model so reports/preds carry GT profile metadata.
     gt_profile_map = _gt_profile_map(data_dir)
 
-    # Profile classifier (optional two-stage)
-    profile_model = None
-    profile_class_names: list[str] = []
-    if opts.profile_model:
-        profile_model_path = Path(opts.profile_model)
-        if not profile_model_path.exists():
-            raise FileNotFoundError(f"Profile model not found: {profile_model_path}")
-        profile_model, profile_class_names, _ = load_checkpoint_model(profile_model_path, device)
+    profile_model, profile_class_names = _load_profile_classifier(opts.profile_model, device)
 
     info = dataset_info(data_dir)
     info.split = opts.split
 
-    dataset_classes = info.class_list
-    unknown = sorted(set(dataset_classes) - set(class_names))
-    if unknown:
-        raise ValueError(
-            f"Model classes {class_names} do not match dataset classes {dataset_classes}: "
-            f"the dataset has labels the model was not trained on ({unknown}). "
-            "Train a checkpoint on this dataset before running batch_predict."
-        )
-    absent = sorted(set(class_names) - set(dataset_classes))
-    if absent:
-        # A configured class without samples in this dataset is fine; it just has support 0.
-        log.warning(f"Model classes without samples in this dataset: {absent}")
+    _check_model_covers_dataset(class_names, info.class_list)
 
     ds = build_dataset(data_dir, opts.split, class_names, return_id=True)
-    pr = oom_retry(
-        lambda bs: predict_once(
-            ds,
-            device=device,
-            batch_size=bs,
-            model=model,
-            class_names=class_names,
-            num_workers=num_workers,
-            split=opts.split,
-            max_samples=opts.max_samples,
-            save_preds=bool(opts.save_preds),
-            topk=int(opts.topk),
-            gt_profile_map=gt_profile_map,
-            profile_model=profile_model,
-            profile_class_names=profile_class_names,
-            ckpt_profile_id=ckpt_profile_id,
-        ),
-        batch_size, device,
+    truncated = opts.max_samples is not None and int(opts.max_samples) < len(ds)
+    if truncated:
+        ds = Subset(ds, evenly_spaced_indices(len(ds), int(opts.max_samples)))
+    ctx = PredictContext(
+        device=device,
+        model=model,
+        class_names=class_names,
+        num_workers=num_workers,
+        split=opts.split,
+        max_samples=opts.max_samples,
+        save_preds=bool(opts.save_preds),
+        topk=int(opts.topk),
+        gt_profile_map=gt_profile_map,
+        profile_model=profile_model,
+        profile_class_names=profile_class_names,
+        ckpt_profile_id=ckpt_profile_id,
     )
+    pr = oom_retry(lambda bs: predict_once(ds, ctx, batch_size=bs), batch_size, device)
     seen, elapsed = pr.seen, pr.elapsed
 
     metrics = compute_metrics(np.array(pr.y_true), np.array(pr.y_pred), class_names, critical_classes=critical_classes)
@@ -468,13 +537,15 @@ def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
         "dataset_path": str(data_dir),
         "split": opts.split,
         "seen_samples": int(seen),
+        # Set for a --max-samples quick check: the report covers a subset and is not ranked as a full run.
+        "max_samples": int(opts.max_samples) if truncated else None,
         "elapsed_s": float(elapsed),
         "img_per_s": float(seen / elapsed),
         "dataset_total_samples": int(info.total_samples),
         "dataset_split_sizes": info.split_sizes,
         "dataset_class_distribution": info.class_distribution,
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
-        "checkpoint_val_accuracy": float(checkpoint.get("val_accuracy", 0.0)),
+        "checkpoint_val_accuracy": float(checkpoint.get("val_accuracy") or 0.0),
         "checkpoint_val_f1": float(checkpoint.get("val_f1", 0.0)),
         "metrics": metrics,
     }
@@ -484,7 +555,7 @@ def run_batch_predict(opts: BatchPredictOptions) -> dict[str, Any]:
     write_report(out_report, report)
 
     if opts.save_preds:
-        append_jsonl(preds_path, pr.rows)
+        atomic_write_jsonl(preds_path, pr.rows)
         log.info(f"Predictions saved to: {preds_path}")
 
     # Compare to previous rounds (reports)

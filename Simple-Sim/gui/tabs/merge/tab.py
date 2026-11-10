@@ -54,16 +54,6 @@ class MergeTab(BaseTab):
     def _append_log(self, s: str) -> None:
         self.ui.append_log(s)
 
-    def _status(self, text: str, level: str = "success") -> None:
-        """Non-blocking feedback in the main status bar (no-op without an AppContext)."""
-        ctx = getattr(self.state, "ctx", None)
-        if ctx is None:
-            return
-        try:
-            ctx.status(text, level)
-        except Exception:
-            pass
-
     def _run_background(self, fn: Any, *, name: str, on_done: Any, on_error: Any, on_finally: Any = None) -> None:
         """Run ``fn()`` / ``fn(task)`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
         call = as_task_fn(fn)  # fn() or fn(task) for cancel/progress

@@ -99,9 +99,11 @@ def gather_rows(
 
     new_meta: list[MetaRow] = []
     new_label_map: dict[str, LabelRow] = {}
+    skipped_unlabeled = 0
     for row in meta_rows:
         label = label_map.get(row.id)
         if label is None:
+            skipped_unlabeled += 1
             continue
         profile_id = str(label.profile_id or default_profile_id).strip()
         if not profile_id:
@@ -139,6 +141,8 @@ def gather_rows(
             schema_version=2, id=new_id, class_name=label.class_name, profile_id=profile_id
         )
 
+    if skipped_unlabeled:
+        print(f"WARNING: {skipped_unlabeled} sample(s) of {ds} have no label row and were not merged")
     return new_meta, new_label_map
 
 
@@ -191,6 +195,25 @@ def create_multi_dataset(
     images_dir = out_dir / "images"
     images_dir.mkdir()
 
+    # out_dir did not exist before: a failed merge removes it again, so the retry is not refused
+    # with "Output directory already exists" over a partial copy.
+    try:
+        summary = _merge_into(out_dir, images_dir, datasets, profiles_dir, classes, run_id, config_path)
+    except BaseException:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise
+    return summary
+
+
+def _merge_into(
+    out_dir: Path,
+    images_dir: Path,
+    datasets: list[Path],
+    profiles_dir: Path,
+    classes: dict[str, Any],
+    run_id: str,
+    config_path: Path | None,
+) -> dict[str, Any]:
     meta_rows: list[MetaRow] = []
     label_rows: list[LabelRow] = []
     split_counters: dict[str, int] = {}
@@ -212,6 +235,8 @@ def create_multi_dataset(
                 raise SystemExit(f"Class {label.class_name} not declared in config classes")
             profiles.setdefault(label.profile_id, _profile_entry(label.profile_id))
             label_rows.append(label)
+            if row.split not in splits:
+                raise SystemExit(f"Sample {row.id} from {ds} has unknown split {row.split!r} (expected train/val/test)")
             splits[row.split].append(row.id)
 
     write_jsonl(out_dir / "meta.jsonl", meta_rows)

@@ -25,6 +25,29 @@ class BoxMesh:
     outline: str
 
 
+def _pad_layout(footprint: str, pad_w: float, pad_h: float, pad_sx: float, pad_sy: float,
+                body_len_x: float, body_len_y: float) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """``((x, y), (size_x, size_y))`` per pad in pad-number order, same layout as the 2D backends."""
+    if footprint == "soic_16":
+        # 8 pads on the left + 8 pads on the right (2D layout, see opencv2d.geometry.pad_positions).
+        # Keep pads distributed along package length and outside body width.
+        row_x = max(pad_sx * 0.5, (body_len_x * 0.5) + (pad_h * 0.65))
+        y_span = max(pad_w * 7.0, body_len_y * 0.82)
+        pitch = y_span / 7.0
+        y0 = -y_span * 0.5
+        return [((x, y0 + i * pitch), (pad_h, pad_w)) for i in range(8) for x in (-row_x, row_x)]
+    if footprint.startswith("qfn"):
+        return [((sx * pad_sx * 0.45, sy * pad_sy * 0.45), (pad_w, pad_h)) for sy in (-1, 1) for sx in (-1, 1)]
+    if footprint == "sot23":
+        # Pads 1/2 on the left column (y = -/+ pad_spacing_y/2), pad 3 on the right at y = 0. pad_spacing is
+        # the left/right column distance; _emit_geometry_updates_from_scene inverts this.
+        # The 2D layout draws the two left pads at 0.8x pad_height.
+        return [((-pad_sx * 0.5, -pad_sy * 0.5), (pad_w, pad_h * 0.8)),
+                ((-pad_sx * 0.5, pad_sy * 0.5), (pad_w, pad_h * 0.8)),
+                ((pad_sx * 0.5, 0.0), (pad_w, pad_h))]
+    return [((-pad_sx * 0.5, 0.0), (pad_w, pad_h)), ((pad_sx * 0.5, 0.0), (pad_w, pad_h))]
+
+
 class Preview3D(ttk.Frame):
     """Interactive fast 3D preview with selection, movement, and live geometry updates."""
 
@@ -439,85 +462,11 @@ class Preview3D(ttk.Frame):
             movable=False,
         )
 
-        pads: list[BoxMesh] = []
-        if footprint == "soic_16":
-            # 8 pads on the left + 8 pads on the right (2D layout, see opencv2d.geometry.pad_positions).
-            # Keep pads distributed along package length and outside body width.
-            row_x = max(pad_sx * 0.5, (body_len_x * 0.5) + (pad_h * 0.65))
-            y_span = max(pad_w * 7.0, body_len_y * 0.82)
-            pitch = y_span / 7.0
-            y0 = -y_span * 0.5
-            idx = 1
-            for i in range(8):
-                y = y0 + i * pitch
-                pads.append(
-                    self._box(
-                        f"pad_{idx}",
-                        (-row_x, y, pad_t * 0.5),
-                        (pad_h, pad_w, pad_t),
-                        "#bd7a33",
-                        "#d79c5f",
-                        movable=True,
-                    )
-                )
-                idx += 1
-                pads.append(
-                    self._box(
-                        f"pad_{idx}",
-                        (row_x, y, pad_t * 0.5),
-                        (pad_h, pad_w, pad_t),
-                        "#bd7a33",
-                        "#d79c5f",
-                        movable=True,
-                    )
-                )
-                idx += 1
-        elif footprint in {"sot23", "qfn_32", "qfn"}:
-            # SOT-23 matches the 2D layout: pads 1/2 on the left column
-            # (y = -/+ pad_spacing_y/2), pad 3 on the right at y = 0. pad_spacing is
-            # the left/right column distance; _emit_geometry_updates_from_scene inverts this.
-            offsets = [(-pad_sx * 0.5, -pad_sy * 0.5), (-pad_sx * 0.5, pad_sy * 0.5), (pad_sx * 0.5, 0.0)]
-            if footprint.startswith("qfn"):
-                offsets = [
-                    (-pad_sx * 0.45, -pad_sy * 0.45),
-                    (pad_sx * 0.45, -pad_sy * 0.45),
-                    (-pad_sx * 0.45, pad_sy * 0.45),
-                    (pad_sx * 0.45, pad_sy * 0.45),
-                ]
-            for i, (ox, oy) in enumerate(offsets, start=1):
-                # The 2D layout draws the two SOT-23 left pads at 0.8x pad_height.
-                ph = pad_h * 0.8 if footprint == "sot23" and i < 3 else pad_h
-                pads.append(
-                    self._box(
-                        f"pad_{i}",
-                        (ox, oy, pad_t * 0.5),
-                        (pad_w, ph, pad_t),
-                        "#bd7a33",
-                        "#d79c5f",
-                        movable=True,
-                    )
-                )
-        else:
-            pads.append(
-                self._box(
-                    "pad_1",
-                    (-pad_sx * 0.5, 0.0, pad_t * 0.5),
-                    (pad_w, pad_h, pad_t),
-                    "#bd7a33",
-                    "#d79c5f",
-                    movable=True,
-                )
-            )
-            pads.append(
-                self._box(
-                    "pad_2",
-                    (pad_sx * 0.5, 0.0, pad_t * 0.5),
-                    (pad_w, pad_h, pad_t),
-                    "#bd7a33",
-                    "#d79c5f",
-                    movable=True,
-                )
-            )
+        pads = [
+            self._box(f"pad_{i}", (x, y, pad_t * 0.5), (w, h, pad_t), "#bd7a33", "#d79c5f", movable=True)
+            for i, ((x, y), (w, h)) in enumerate(
+                _pad_layout(footprint, pad_w, pad_h, pad_sx, pad_sy, body_len_x, body_len_y), start=1)
+        ]
 
         return [substrate, *pads, body]
 

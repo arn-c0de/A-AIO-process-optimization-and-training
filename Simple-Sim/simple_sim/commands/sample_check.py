@@ -25,7 +25,7 @@ def print_sample_check(result: dict[str, Any]) -> None:
     """Human-readable table + summary of :func:`simple_sim.inference.sample_check`."""
     print(f"{'id':<34} {'img':<12} {'gt':<10} {'pred':<10} {'ok'}")
     for r in result["rows"]:
-        print(f"{r['id']:<34} {r['img']:<12} {r['gt']:<10} {r['pred']:<10} {str(r['ok'])}")
+        print(f"{r['id']:<34} {r['img']:<12} {r['gt']:<10} {r['pred']:<10} {r['ok']!s}")
     print("")
     print(f"Summary: {result['correct']}/{result['seen']} correct  (acc={result['accuracy']:.4f})")
 

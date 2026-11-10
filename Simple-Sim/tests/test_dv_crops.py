@@ -51,8 +51,8 @@ def test_folders_name_simple_sim_classes_or_defect_groups():
     assert folder_of({"label": "ok"}) == "OK"
     assert folder_of({"label": "fault", "fault": "fehlt"}) == "MISSING"
     assert folder_of({"label": "fault", "fault": "loetbruecke"}) == "SOLDER_BRIDGE"
-    assert folder_of({"label": "fault", "fault": "verdreht"}) == "TOMBSTONE"
-    assert folder_of({"label": "fault", "fault": "grabstein"}) == "TOMBSTONE@grabstein"
+    assert folder_of({"label": "fault", "fault": "verdreht"}) == "MISALIGNED@verdreht"
+    assert folder_of({"label": "fault", "fault": "grabstein"}) == "TOMBSTONE"
     assert folder_of({"label": "fault", "fault": "kratzer"}) == "DEFECT@kratzer"
     assert folder_of({"label": "fault"}) == "DEFECT@unspecified"
     assert folder_of({"label": "dnp"}) is None and folder_of({"label": "unclear"}) is None
@@ -73,12 +73,12 @@ def test_select_assigns_packages_and_skips_missing_crops(tmp_path):
     assert nearest_package([30.0, 10.0], placements["top"], 0.8) == ("RESC1005", pytest.approx(0.1414, abs=1e-3))
     assert nearest_package([80.0, 10.0], placements["top"], 0.8)[0] == "unknown"
     selected, skipped = select(rows, root, packages=None, placements=placements["top"], match_mm=0.8)
-    assert {k: len(v) for k, v in selected.items()} == {"OK": 1, "SOLDER_BRIDGE": 1, "TOMBSTONE": 1,
+    assert {k: len(v) for k, v in selected.items()} == {"OK": 1, "SOLDER_BRIDGE": 1, "MISALIGNED@verdreht": 1,
                                                         "DEFECT@beschaedigt": 1, "DEFECT@unspecified": 1}
     assert skipped == {"no colour crop": 1, "label:dnp": 1}
     assert selected["OK"][0]["package"] == "CAPC1005" and selected["DEFECT@unspecified"][0]["package"] == "unknown"
     only_r, _ = select(rows, root, packages={"RESC1005"}, placements=placements["top"], match_mm=0.8)
-    assert set(only_r) == {"SOLDER_BRIDGE", "TOMBSTONE"}
+    assert set(only_r) == {"SOLDER_BRIDGE", "MISALIGNED@verdreht"}
 
 
 def test_export_copies_unchanged_and_writes_summary(tmp_path):
@@ -86,13 +86,13 @@ def test_export_copies_unchanged_and_writes_summary(tmp_path):
     out = tmp_path / "real"
     summary = export(root, "top", out, pnp=_pnp(tmp_path / "pnp.csv"), packages=None, limit_ok=500, limit=0, seed=0,
                      match_mm=0.8, dry_run=False)
-    assert sorted(p.name for p in out.iterdir() if p.is_dir()) == ["DEFECT@beschaedigt", "DEFECT@unspecified", "OK",
-                                                                   "SOLDER_BRIDGE", "TOMBSTONE"]
+    assert sorted(p.name for p in out.iterdir() if p.is_dir()) == ["DEFECT@beschaedigt", "DEFECT@unspecified",
+                                                                   "MISALIGNED@verdreht", "OK", "SOLDER_BRIDGE"]
     files = list((out / "OK").iterdir())
     assert [f.name for f in files] == ["b1_p1.png"] and cv2.imread(str(files[0])).shape == (49, 49, 3)
     written = json.loads((out / "summary.json").read_text())
     assert written["folders"] == summary["folders"] == {"DEFECT@beschaedigt": 1, "DEFECT@unspecified": 1, "OK": 1,
-                                                         "SOLDER_BRIDGE": 1, "TOMBSTONE": 1}
+                                                         "SOLDER_BRIDGE": 1, "MISALIGNED@verdreht": 1}
     assert written["px_per_mm"][1] == pytest.approx(49 / 3.037, abs=0.01) and written["packages"]["RESC1005"] == 2
     dry = export(root, "top", tmp_path / "dry", pnp=None, packages=None, limit_ok=500, limit=0, seed=0, match_mm=0.8,
                  dry_run=True)

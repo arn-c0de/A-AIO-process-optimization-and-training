@@ -5,21 +5,39 @@ Everything here is pure stdlib so it can be imported anywhere (no torch/cv2/tk).
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
+import threading
 import time
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+
+
+_TMP_COUNTER = itertools.count()
+
+
+def _tmp_sibling(path: Path) -> Path:
+    """A temp name next to *path* that no other writer uses (pid + thread + counter)."""
+    return path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.{next(_TMP_COUNTER)}.tmp")
 
 
 def atomic_write_text(path: Path, text: str) -> None:
-    """Write *text* to *path* atomically (write ``<name>.tmp`` then rename)."""
+    """Write *text* to *path* atomically (write a unique ``<name>.*.tmp`` sibling, then rename).
+
+    The temp name is unique per writer, so concurrent writers of one file cannot clobber each
+    other's half-written temp file; a failed write leaves no temp file behind.
+    """
     path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    tmp = _tmp_sibling(path)
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def atomic_write_json(path: Path, obj: Any, *, indent: int = 2) -> None:
@@ -44,13 +62,17 @@ def load_yaml(path: Path) -> Any:
 
 
 def atomic_write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
-    """Write dict rows as JSONL atomically (stream to ``<name>.tmp``, then rename)."""
+    """Write dict rows as JSONL atomically (stream to a unique ``<name>.*.tmp`` sibling, then rename)."""
     path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row, ensure_ascii=True) + "\n")
-    tmp.replace(path)
+    tmp = _tmp_sibling(path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -59,6 +81,32 @@ def read_json(path: Path, default: Any = None) -> Any:
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
+
+
+def iter_json_lines(path: Path, *, skip_invalid: bool = False) -> Iterator[Any]:
+    """Parsed objects of a JSONL file, one per non-blank line (unvalidated; see ``rows.read_jsonl`` for schemas).
+
+    A line that is not valid JSON raises ``ValueError``; with ``skip_invalid`` it is dropped instead.
+    """
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except ValueError:
+                if not skip_invalid:
+                    raise
+
+
+def read_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
+    """Parse a JSONL / NDJSON file into plain dicts (blank lines skipped); errors propagate.
+
+    For validated dataset rows use :func:`simple_sim.rows.read_jsonl` instead.
+    """
+    with open(path, encoding="utf-8") as fh:
+        return [json.loads(line) for line in fh if line.strip()]
 
 
 def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:

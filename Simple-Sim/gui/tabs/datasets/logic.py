@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
+from simple_sim.io_utils import iter_json_lines
 
 
 def _load_manifest(ds: Path) -> dict:
@@ -39,6 +40,30 @@ def dataset_created_display(ds: Path) -> str:
         return dt.strftime("%Y-%m-%d %H:%M")
     except Exception:
         return "-"
+
+
+def _label_profile_counts(labels_path: Path) -> Counter[str]:
+    """Samples per ``profile_id`` in ``labels.jsonl`` (unparsable lines are skipped)."""
+    counts: Counter[str] = Counter()
+    if not labels_path.exists():
+        return counts
+    for row in iter_json_lines(labels_path, skip_invalid=True):
+        counts[str(row.get("profile_id") or "").strip() or "unknown_or_legacy"] += 1
+    return counts
+
+
+def _manifest_profile_counts(manifest: dict, total_samples: object) -> Counter[str]:
+    """Fallback without label rows: the manifest's profile(s); only the main one gets the sample total."""
+    counts: Counter[str] = Counter()
+    comp = manifest.get("component_profile")
+    if isinstance(comp, dict) and (pid := str(comp.get("profile_id") or "").strip()):
+        counts[pid] = total_samples if isinstance(total_samples, int) and total_samples >= 0 else 0
+    profiles = manifest.get("profiles")
+    if isinstance(profiles, list):
+        for p in profiles:
+            if isinstance(p, dict) and (pid := str(p.get("profile_id") or "").strip()) and pid not in counts:
+                counts[pid] = 0
+    return counts
 
 
 def dataset_details_text(ds: Path) -> str:
@@ -74,38 +99,7 @@ def dataset_details_text(ds: Path) -> str:
         lines.append(f"Splits: train={tr}, val={va}, test={te}")
     lines.append("")
 
-    profile_counts: Counter[str] = Counter()
-    if labels_path.exists():
-        with labels_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except Exception:
-                    continue
-                pid = str(row.get("profile_id") or "").strip()
-                if not pid:
-                    pid = "unknown_or_legacy"
-                profile_counts[pid] += 1
-
-    if not profile_counts:
-        comp = manifest.get("component_profile")
-        if isinstance(comp, dict):
-            pid = str(comp.get("profile_id") or "").strip()
-            if pid:
-                if isinstance(total_samples, int) and total_samples >= 0:
-                    profile_counts[pid] = total_samples
-                else:
-                    profile_counts[pid] = 0
-        profiles = manifest.get("profiles")
-        if isinstance(profiles, list):
-            for p in profiles:
-                if isinstance(p, dict):
-                    pid = str(p.get("profile_id") or "").strip()
-                    if pid and pid not in profile_counts:
-                        profile_counts[pid] = 0
+    profile_counts = _label_profile_counts(labels_path) or _manifest_profile_counts(manifest, total_samples)
 
     lines.append("Samples per profile:")
     if profile_counts:

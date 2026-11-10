@@ -55,6 +55,12 @@ def apply_image_filter_overrides(
         hi = int(filt.get(f"{base_key}_max", base))
         return int(rng.integers(min(lo, hi), max(lo, hi) + 1))
 
+    def _fixed_angle(key: str) -> float:
+        # An angle set in the filter settings (non-zero) replaces the per-sample random one; 0 (the
+        # default) keeps the sampled angle.
+        value = float(filt.get(key, 0.0) or 0.0) if key in src_keys else 0.0
+        return value if value != 0.0 else float(aug.get(key, 0.0))
+
     rotation_strength = _rand_float("rotation_strength", 1.0)
     blur_strength = _rand_float("blur_strength", 1.0)
     grain_strength = _rand_float("grain_strength", 1.0)
@@ -98,21 +104,21 @@ def apply_image_filter_overrides(
     else:
         # Scale only the jitter; the cardinal 0/90/180/270 base orientation must stay intact.
         rot = float(aug.get("rotation_deg", 0.0))
-        base = (90.0 * round(rot / 90.0)) % 360.0
+        base = 90.0 * round(rot / 90.0)
         aug["rotation_deg"] = base + (rot - base) * rotation_strength
 
     if not filt.get("enable_perspective", True):
         aug["perspective_strength"] = 0.0
     else:
         aug["perspective_strength"] = perspective_strength
-        aug["perspective_angle_x"] = float(aug.get("perspective_angle_x", 0.0))
-        aug["perspective_angle_y"] = float(aug.get("perspective_angle_y", 0.0))
+        aug["perspective_angle_x"] = _fixed_angle("perspective_angle_x")
+        aug["perspective_angle_y"] = _fixed_angle("perspective_angle_y")
 
     if not filt.get("enable_motion_blur", True):
         aug["motion_blur_strength"] = 0.0
     else:
         aug["motion_blur_strength"] = motion_blur_strength
-        aug["motion_blur_angle"] = float(aug.get("motion_blur_angle", 0.0))
+        aug["motion_blur_angle"] = _fixed_angle("motion_blur_angle")
 
     aug["chromatic_strength"] = 0.0 if not filt.get("enable_chromatic_aberration", True) else chromatic_strength
     aug["vignetting_strength"] = 0.0 if not filt.get("enable_vignetting", True) else vignetting_strength

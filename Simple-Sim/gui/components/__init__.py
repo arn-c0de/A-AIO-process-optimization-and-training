@@ -4,7 +4,7 @@ Exports are resolved lazily so tk-free helpers (e.g. ``overlay_renderer`` used
 by ``tools/update_sample_gallery.py``) import without tkinter.
 """
 
-from importlib import import_module
+from gui.lazy import lazy_exports
 
 _EXPORTS = {
     'draw_defect_overlay': '.overlay_renderer',
@@ -17,10 +17,4 @@ _EXPORTS = {
 __all__ = list(_EXPORTS)
 
 
-def __getattr__(name):
-    module_name = _EXPORTS.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module(module_name, __name__), name)
-    globals()[name] = value
-    return value
+__getattr__ = lazy_exports(__name__, _EXPORTS, globals())

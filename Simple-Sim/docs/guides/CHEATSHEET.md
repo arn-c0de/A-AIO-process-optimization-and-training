@@ -7,8 +7,8 @@ Quick reference for common operations.
 ```bash
 # One-time setup
 cd Simple-Sim
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -169,7 +169,7 @@ for cls, count in sorted(counts.items()):
 
 ```bash
 # Check Python version
-python3 --version  # Should be 3.8+
+python3 --version  # Should be 3.11+
 
 # Check installed packages
 pip list | grep -E "numpy|opencv|torch|sklearn|yaml|tqdm|pytest"
@@ -250,11 +250,11 @@ rm -rf outputs/models/*
 
 # Deactivate and remove venv
 deactivate
-rm -rf venv/
+rm -rf .venv/
 
 # Fresh install
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 

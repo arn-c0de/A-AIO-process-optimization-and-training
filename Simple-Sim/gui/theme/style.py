@@ -26,6 +26,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
 from collections.abc import Callable
+from typing import Any
 
 from gui.theme.tokens import FONT_ROLES, SPACE, Palette, font_name, palette_for
 
@@ -162,23 +163,8 @@ def _row_height(root: tk.Misc) -> int:
         return 20
 
 
-def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
-    """Configure ttk + classic widgets for ``mode`` ("light"/"dark") and notify listeners."""
-    pal = palette_for(mode)
-    root = _toplevel_root(root)
-    setattr(root, _ATTR_PALETTE, pal)
-    _ensure_fonts(root)
-
-    style = ttk.Style(root)
-    try:
-        style.theme_use("clam")
-    except Exception:
-        pass
-
-    body, small, heading, title = font("Body"), font("Small"), font("Heading"), font("Title")
-    bold = font("BodyBold")
-    p = pal
-
+def _style_base(style: ttk.Style, p: Palette, body: Any) -> None:
+    """Defaults every ttk widget inherits."""
     style.configure(
         ".",
         background=p.bg,
@@ -196,6 +182,9 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
     )
     style.map(".", foreground=[("disabled", p.text_muted)])
 
+
+def _style_frames_and_labels(style: ttk.Style, p: Palette, small: Any, heading: Any, title: Any, bold: Any) -> None:
+    """Frames and the label variants (status colours, card, toolbar, badge)."""
     # Frames
     style.configure("TFrame", background=p.bg)
     style.configure("Card.TFrame", background=p.surface)
@@ -225,10 +214,12 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
     style.configure("Toolbar.TLabel", background=p.surface_alt, foreground=p.text_muted)
     style.configure("Badge.TLabel", foreground=p.text_muted, font=small, padding=(0, 0, SPACE.M, 0))
 
+
+def _style_buttons(style: ttk.Style, p: Palette, body: Any) -> None:
+    """Buttons, menubuttons and toolbuttons: plain and compact, one control height everywhere."""
     # Buttons: plain and compact. Accent/Danger only tint text + border (no filled blocks).
     # One control height everywhere: buttons, menubuttons, entries, comboboxes, spinboxes.
     pad = (SPACE.L, 1)
-    field_pad = (SPACE.S + 1, 1)
     style.configure("TButton", background=p.surface, foreground=p.text, bordercolor=p.border,
                     lightcolor=p.surface, darkcolor=p.surface, padding=pad, relief="flat", font=body,
                     width=0, anchor="center")
@@ -265,6 +256,9 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
                     font=body, anchor="w")
     style.map("Card.Toolbutton", background=[("selected", p.surface), ("active", p.surface_alt)])
 
+
+def _style_toggles_and_inputs(style: ttk.Style, p: Palette, body: Any) -> None:
+    """Check/radio buttons and the entry-like inputs."""
     # Toggles: small square/round indicator, accent mark, same baseline as other controls.
     for cls in ("TCheckbutton", "TRadiobutton"):
         style.configure(cls, background=p.bg, foreground=p.text, font=body, padding=(0, 1),
@@ -281,6 +275,7 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
         style.map(f"Card.{cls}", background=[("active", p.surface)])
 
     # Inputs
+    field_pad = (SPACE.S + 1, 1)
     for cls in ("TEntry", "TCombobox", "TSpinbox"):
         style.configure(cls, fieldbackground=p.surface, foreground=p.text, bordercolor=p.border,
                         lightcolor=p.surface, darkcolor=p.surface, arrowcolor=p.text_muted,
@@ -292,6 +287,9 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
     style.configure("Invalid.TEntry", bordercolor=p.danger, lightcolor=p.danger)
     style.configure("Invalid.TCombobox", bordercolor=p.danger, lightcolor=p.danger)
 
+
+def _style_navigation(style: ttk.Style, p: Palette, body: Any, small: Any, heading: Any) -> None:
+    """Notebook, sidebar navigation and group boxes."""
     # Notebook
     style.configure("TNotebook", background=p.bg, bordercolor=p.border, tabmargins=(SPACE.S, SPACE.S, 0, 0))
     style.configure("TNotebook.Tab", background=p.bg, foreground=p.text_muted, bordercolor=p.border,
@@ -324,6 +322,9 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
     style.configure("Card.TLabelframe", background=p.surface)
     style.configure("Card.TLabelframe.Label", background=p.surface, font=heading)
 
+
+def _style_tables_and_misc(style: ttk.Style, p: Palette, root: tk.Misc) -> None:
+    """Treeview, panes, scrollbars, progress bars and scales."""
     # Tables
     style.configure("Treeview", background=p.surface, fieldbackground=p.surface, foreground=p.text,
                     bordercolor=p.border, lightcolor=p.surface, darkcolor=p.surface, rowheight=_row_height(root))
@@ -348,6 +349,9 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
                     troughrelief="flat", gripcount=0)
     style.map("TScale", background=[("active", p.surface_alt)])
 
+
+def _apply_option_database(root: tk.Misc, p: Palette, body: Any) -> None:
+    """Classic Tk widgets created later pick these up via the option database."""
     # Classic Tk widgets created later pick these up via the option database.
     root.option_add("*TCombobox*Listbox.background", p.surface)
     root.option_add("*TCombobox*Listbox.foreground", p.text)
@@ -368,6 +372,31 @@ def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
     root.option_add("*Menu.activeBackground", p.select_bg)
     root.option_add("*Menu.activeForeground", p.text)
     root.option_add("*Toplevel.background", p.bg)
+
+
+def apply_theme(root: tk.Misc, mode: str | bool | None = "light") -> Palette:
+    """Configure ttk + classic widgets for ``mode`` ("light"/"dark") and notify listeners."""
+    pal = palette_for(mode)
+    root = _toplevel_root(root)
+    setattr(root, _ATTR_PALETTE, pal)
+    _ensure_fonts(root)
+
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+
+    body, small, heading, title = font("Body"), font("Small"), font("Heading"), font("Title")
+    bold = font("BodyBold")
+    p = pal
+    _style_base(style, p, body)
+    _style_frames_and_labels(style, p, small, heading, title, bold)
+    _style_buttons(style, p, body)
+    _style_toggles_and_inputs(style, p, body)
+    _style_navigation(style, p, body, small, heading)
+    _style_tables_and_misc(style, p, root)
+    _apply_option_database(root, p, body)
 
     try:
         root.configure(bg=p.bg)  # type: ignore[call-arg]

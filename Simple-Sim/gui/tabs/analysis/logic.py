@@ -60,7 +60,9 @@ class AnalysisLogic:
 
     def _load_model_from_path(self, path: Path) -> bool:
         try:
-            self.model = load_model(path)
+            self.model = load_model(path)  # None when loading failed (logged there)
+            if self.model is None:
+                return False
             print(f"Loaded model: {path}")
             return True
         except Exception as e:
@@ -109,12 +111,14 @@ class AnalysisLogic:
         ``cancelled()`` is polled per sample; when it returns True the run stops
         with ``TaskCancelled`` *before* anything is written.
         """
-        if not self.model:
+        # One model for the whole run: a dataset change swaps self.model under the worker thread.
+        model = self.model
+        if not model:
             raise ValueError("No model loaded.")
 
         results = {
             'dataset_path': str(dataset_dir),
-            'model_path': str(self.model.model_path),
+            'model_path': str(model.model_path),
             'samples': [],
             'summary': {},
         }
@@ -140,7 +144,7 @@ class AnalysisLogic:
             )
             image_path = dataset_dir / meta_row.image_path
             try:
-                predicted, confidence, _ = self.model.predict(image_path)
+                predicted, confidence, _ = model.predict(image_path)
                 is_correct = (predicted == ground_truth)
                 if is_correct:
                     correct_count += 1

@@ -253,9 +253,10 @@ def checkpoint_eval_config(checkpoint: dict[str, Any]) -> dict[str, Any]:
     return (checkpoint.get("config") or {}).get("eval") or {}
 
 
-def checkpoint_val_accuracy(checkpoint: dict[str, Any]) -> float:
-    """Validation accuracy stored in *checkpoint* (0.0 when absent, e.g. for ensembles)."""
-    return float(checkpoint.get("val_accuracy") or 0.0)
+def checkpoint_val_accuracy(checkpoint: dict[str, Any]) -> float | None:
+    """Validation accuracy stored in *checkpoint* (``None`` when absent, e.g. for ensembles)."""
+    value = checkpoint.get("val_accuracy")
+    return None if value is None else float(value)
 
 
 def eval_loader(dataset: Dataset, checkpoint: dict[str, Any]) -> DataLoader:
@@ -282,7 +283,7 @@ def format_checkpoint_info(checkpoint: dict[str, Any], label: str = "Classes") -
     return "\n".join([
         f"  {label}: {checkpoint.get('class_names')}",
         f"  Trained epoch: {checkpoint.get('epoch', '-')}",
-        f"  Val accuracy: {checkpoint_val_accuracy(checkpoint):.4f}",
+        f"  Val accuracy: {checkpoint_val_accuracy(checkpoint) or 0.0:.4f}",
         f"  Val F1: {float(checkpoint.get('val_f1') or 0.0):.4f}",
     ])
 

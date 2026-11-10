@@ -235,8 +235,9 @@ def _collect_existing_entries(
 def generate_slug(text: str) -> str:
     s = text.lower().strip()
     s = re.sub(r'[^\w\s-]', '', s) # Remove all non-word chars (except whitespace and hyphen)
-    s = re.sub(r'[\s_-]+', '-', s) # Replace all whitespace and underscore with a single hyphen
-    return s.strip('-') # Remove leading/trailing hyphens
+    # GitHub heading anchors: every space becomes a hyphen, underscores and hyphens stay as they are
+    # ("chip_0402_resistor@1" -> "chip_0402_resistor1").
+    return re.sub(r'\s', '-', s)
 
 
 def main() -> None:
@@ -267,6 +268,12 @@ def main() -> None:
             emit_result("update-sample-gallery", ok=False, error=exc.code)
             raise SystemExit(1) from exc
         raise
+    except Exception as exc:  # noqa: BLE001 - with --json the caller reads the result line, not a traceback
+        if not args.json:
+            raise
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        emit_result("update-sample-gallery", ok=False, error=f"{type(exc).__name__}: {exc}")
+        raise SystemExit(1) from exc
 
 
 def _run(args: argparse.Namespace) -> None:
@@ -282,6 +289,25 @@ def _run(args: argparse.Namespace) -> None:
 
     print(f"Found {len(profiles)} profile(s)")
 
+    # Everything that can be rejected is checked before the old gallery is deleted.
+    roi_override: tuple[int, int, float] | None = None
+    if args.roi:
+        m = re.match(r"^\s*(\d+)x(\d+)@([0-9]*\.?[0-9]+)\s*$", str(args.roi))
+        if not m:
+            raise SystemExit(f"Invalid --roi format: {args.roi!r} (expected WIDTHxHEIGHT@MM_PER_PX)")
+        roi_override = (int(m.group(1)), int(m.group(2)), float(m.group(3)))
+    # The gallery dir is wiped below: it must be a dedicated dir at least two levels inside the
+    # checkout (images/samples), never the checkout, a top-level dir like images/ or a path outside.
+    try:
+        gallery_rel = gallery_dir.relative_to(project_root.resolve())
+    except ValueError:
+        raise SystemExit(f"--out-images-dir must be inside {project_root}: {gallery_dir}") from None
+    if len(gallery_rel.parts) < 2:
+        raise SystemExit(
+            f"--out-images-dir {args.out_images_dir!r} is not a dedicated gallery directory "
+            "(it is cleared on every run); use a sub-directory such as images/samples"
+        )
+
     # Clean previous gallery (never on --dry-run, which must not touch existing images).
     # With --skip-2d/--skip-3d only the profile dirs that are regenerated are cleared
     # (per profile below), so images of the skipped backend survive.
@@ -292,14 +318,6 @@ def _run(args: argparse.Namespace) -> None:
 
     # Collect gallery entries
     entries: list[tuple[str, str, str, str, str]] = []
-
-    # Optional ROI override parsing
-    roi_override: tuple[int, int, float] | None = None
-    if args.roi:
-        m = re.match(r"^\s*(\d+)x(\d+)@([0-9]*\.?[0-9]+)\s*$", str(args.roi))
-        if not m:
-            raise SystemExit(f"Invalid --roi format: {args.roi!r} (expected WIDTHxHEIGHT@MM_PER_PX)")
-        roi_override = (int(m.group(1)), int(m.group(2)), float(m.group(3)))
 
     # Stage 3D jobs and run Blender in batches grouped by (exe, samples, device, engine).
     # We can't mix these in a single Blender invocation because render_batch.py

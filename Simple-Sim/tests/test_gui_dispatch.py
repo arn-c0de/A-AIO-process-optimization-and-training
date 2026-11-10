@@ -372,7 +372,9 @@ def test_pipeline_dataset_profile_cached_on_manifest(tmp_path: Path) -> None:
 def test_no_poll_loops_left_in_the_converted_tabs() -> None:
     """The queue-draining after() loops are gone (N11); remaining timers only watch state."""
     root = Path(__file__).resolve().parents[1]
-    for rel in ("gui/tabs/pipeline/tab.py", "gui/tabs/weights/tab.py", "gui/tabs/predictions/tab.py",
+    pipeline = sorted(p.relative_to(root).as_posix() for p in (root / "gui/tabs/pipeline").glob("*.py"))
+    assert "gui/tabs/pipeline/run_mixin.py" in pipeline  # the tab class is spread over mixin modules
+    for rel in (*pipeline, "gui/tabs/weights/tab.py", "gui/tabs/predictions/tab.py",
                 "gui/tabs/profile_preview/tab.py", "tools/profile_editor/app.py"):
         src = (root / rel).read_text(encoding="utf-8")
         assert "get_nowait" not in src, rel

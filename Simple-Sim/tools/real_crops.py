@@ -36,13 +36,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from simple_sim.io_utils import read_jsonl_dicts  # noqa: E402
 
 #: DeepVision review class -> class folder of ``tools/eval_real.py`` / ``tools/mix_real.py``.
 CLASS_FOLDERS: dict[str, str] = {
@@ -57,16 +62,6 @@ CLASS_FOLDERS: dict[str, str] = {
     "fehler:falsches_bauteil": "DEFECT@falsches_bauteil",
 }
 SPLITS = ("train", "val", "test")
-
-
-def read_manifest(path: Path) -> list[dict[str, Any]]:
-    rows = []
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
 
 
 def select(rows: list[dict[str, Any]], forms: set[str], splits: set[str], classes: set[str] | None) -> dict[str, list[dict[str, Any]]]:
@@ -96,7 +91,7 @@ def export(manifest: Path, out: Path, forms: set[str], splits: set[str], classes
     rng = np.random.default_rng(seed)
     root = manifest.parent
     counts: dict[str, int] = {}
-    for folder, rows in sorted(select(read_manifest(manifest), forms, splits, classes).items()):
+    for folder, rows in sorted(select(read_jsonl_dicts(manifest), forms, splits, classes).items()):
         chosen = sample(rows, limit, rng)
         dest = out / folder
         dest.mkdir(parents=True, exist_ok=True)

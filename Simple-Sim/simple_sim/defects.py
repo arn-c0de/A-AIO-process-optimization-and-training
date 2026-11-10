@@ -42,8 +42,6 @@ PLACEMENT_SAMPLING = ("legacy", "continuous")
 DEFAULT_PLACEMENT_SAMPLING = "legacy"
 # continuous: OK placements stop this close to the boundary (labels use ``>``; keeps float drift out).
 _BOUNDARY_GAP = 0.98
-# continuous: share of the MISALIGNED range covered by half the samples (u**2 density, see _beyond()).
-_MISALIGNED_TAIL_SCALE = 5.0
 
 # ``defects.units``: units of the fixed lateral-shift ranges of the TOMBSTONE / SOLDER_BRIDGE /
 # CORNER_LIFT samplers (rotation and tilt are degrees either way; nothing else changes).
@@ -270,7 +268,7 @@ def _sample_misaligned_continuous(rng, ok_shift_px, ok_rotation_deg, _tombstone,
     Half the samples are pure shifts, half pure rotations, as in the legacy sampler; the other
     quantity stays an OK value, so the label hinges on one measurement.
     """
-    max_shift = _MISALIGNED_TAIL_SCALE * (ok_shift_px + 1.0)  # legacy upper bounds
+    max_shift = _MISALIGNED_SHIFT_SCALE * (ok_shift_px + 1.0)  # legacy upper bounds
     max_rot = _MISALIGNED_ROT_SCALE * (ok_rotation_deg + 1.0)
     if rng.random() < 0.5:
         mag = _beyond(rng, ok_shift_px / _BOUNDARY_GAP, max_shift)  # strictly > tolerance

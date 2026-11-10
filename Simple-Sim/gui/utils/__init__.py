@@ -4,7 +4,7 @@ Exports are resolved lazily so that tk-free helpers (e.g. ``dataset_ops``)
 can be imported in environments without tkinter (tests, CLI tools).
 """
 
-from importlib import import_module
+from gui.lazy import lazy_exports
 
 _EXPORTS = {
     'detect_image_outliers': '.validation_suite',
@@ -20,10 +20,4 @@ _EXPORTS = {
 __all__ = list(_EXPORTS)
 
 
-def __getattr__(name):
-    module_name = _EXPORTS.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module(module_name, __name__), name)
-    globals()[name] = value
-    return value
+__getattr__ = lazy_exports(__name__, _EXPORTS, globals())

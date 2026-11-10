@@ -32,7 +32,7 @@ from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.io_utils import load_yaml, rel_to
 from simple_sim.manifest import read_dataset_manifest
 from simple_sim.model_bundle import is_bundle_dir, list_bundle_checkpoints
-from simple_sim.reports import best_report, load_reports, metric_value, report_search_dirs, report_timestamp
+from simple_sim.reports import best_report, is_partial_report, is_profile_classifier_report, load_reports, metric_value, report_search_dirs, report_timestamp
 
 SIM_ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,6 +91,10 @@ _SPECS = [
     _tool("real-crops", "tools/real_crops.py"),
     _tool("eval-real", "tools/eval_real.py"),
     _tool("mix-real", "tools/mix_real.py"),
+    # DeepVision app: reviewed crops, board backgrounds, judge export
+    _tool("dv-crops", "tools/dv_crops.py"),
+    _tool("board-backgrounds", "tools/board_backgrounds.py"),
+    _tool("export-deepvision", "tools/export_deepvision.py"),
 ]
 
 #: command name -> :class:`CommandSpec`
@@ -180,8 +184,8 @@ def _cmd_commands(argv: list[str]) -> int:
 # status
 # ---------------------------------------------------------------------------
 
-def _run_config_info(path: Path) -> dict[str, Any]:
-    info: dict[str, Any] = {"name": path.stem, "path": rel_to(SIM_ROOT, path)}
+def _run_config_info(path: Path, root: Path) -> dict[str, Any]:
+    info: dict[str, Any] = {"name": path.stem, "path": rel_to(root, path)}
     try:
         cfg = load_yaml(path) or {}
         run = cfg.get("run") or {}
@@ -258,6 +262,15 @@ def _report_summary(r: dict[str, Any] | None, root: Path) -> dict[str, Any] | No
     }
 
 
+def _is_ranked_report(r: Any) -> bool:
+    """Reports ``best_accuracy`` may pick: full test-split runs of defect models (as the Arena ranks)."""
+    return (
+        not is_profile_classifier_report(r)
+        and str(r.get("split") or "test") == "test"
+        and not is_partial_report(r)
+    )
+
+
 def collect_status(root: Path = SIM_ROOT) -> dict[str, Any]:
     """Snapshot of what exists under *root* (a Simple-Sim checkout); pure file inspection."""
     root = Path(root)
@@ -268,13 +281,14 @@ def collect_status(root: Path = SIM_ROOT) -> dict[str, Any]:
     return {
         "root": str(root),
         "profiles": sorted(p.stem for p in (configs / "profiles").glob("*.yaml")),
-        "run_configs": [_run_config_info(p) for p in sorted(configs.glob("run_*.yaml"))],
+        "run_configs": [_run_config_info(p, root) for p in sorted(configs.glob("run_*.yaml"))],
         "datasets": [_dataset_info(d, root) for d in _dataset_dirs(outputs / "sim_data")],
         "models": _models(outputs / "models", root),
         "reports": {
             "count": len(reports),
             "latest": _report_summary(latest, root),
-            "best_accuracy": _report_summary(best_report(reports, "accuracy"), root),
+            "best_accuracy": _report_summary(
+                best_report([r for r in reports if _is_ranked_report(r)], "accuracy"), root),
         },
     }
 

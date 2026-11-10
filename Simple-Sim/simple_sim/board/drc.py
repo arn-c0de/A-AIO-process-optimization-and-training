@@ -36,6 +36,11 @@ class BoardDrcError(RuntimeError):
         self.report = report
         self.seed = seed
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Exception pickling replays __init__ with self.args (the message only): rebuild from the
+        # real arguments so the error survives the trip back from a render worker process.
+        return (BoardDrcError, (self.report, self.seed))
+
 
 @dataclass(frozen=True, slots=True)
 class Violation:
@@ -212,6 +217,8 @@ def _check_target_connected(board: Board, fills: dict[int, np.ndarray], grid: Gr
     x0, y0, x1, y1 = board.bbox
     for pad in target.pads:
         if not pad.net or pad.role == "nc":
+            continue
+        if pad.escape_dir == (0.0, 0.0):  # no fan-out (through-hole pin): the router leaves it alone
             continue
         if not (x0 <= pad.center[0] <= x1 and y0 <= pad.center[1] <= y1):
             continue

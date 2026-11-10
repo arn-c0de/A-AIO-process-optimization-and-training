@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from simple_sim.io_utils import now_iso
+from simple_sim.io_utils import iter_json_lines, now_iso
 
 _LOG = logging.getLogger(__name__)
 
@@ -33,18 +33,13 @@ class FeedbackManager:
             return
 
         try:
-            with self.feedback_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    entry = json.loads(line)
-                    sample_id = str(entry.get("id") or "").strip()
-                    verdict = str(entry.get("verdict") or "").strip()
-                    if not sample_id or verdict not in (VERDICT_THUMBS_UP, VERDICT_THUMBS_DOWN):
-                        continue
-                    self._entries.append(entry)
-                    self._latest_by_sample[sample_id] = entry
+            for entry in iter_json_lines(self.feedback_path):
+                sample_id = str(entry.get("id") or "").strip()
+                verdict = str(entry.get("verdict") or "").strip()
+                if not sample_id or verdict not in (VERDICT_THUMBS_UP, VERDICT_THUMBS_DOWN):
+                    continue
+                self._entries.append(entry)
+                self._latest_by_sample[sample_id] = entry
         except Exception as exc:
             _LOG.warning("Failed to load feedback from %s: %s", self.feedback_path, exc)
 

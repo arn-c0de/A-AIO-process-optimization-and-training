@@ -144,3 +144,34 @@ def _abort(proc: subprocess.Popen) -> None:
         pass
 
 __all__: list[str] = ["run_streaming", "terminate_process"]
+
+
+class StreamingProcessLogic:
+    """Base of tab logic objects that run one streamed child process at a time.
+
+    Holds the log queue, the stop event and the running process, so every tab stops a run the
+    same way: ``stop()`` sets the event and terminates the child (group).
+    """
+
+    def __init__(self, sim_root: Path, log_q: queue.Queue[str]) -> None:
+        self.sim_root = sim_root
+        self.log_q = log_q
+        self.proc: subprocess.Popen[str] | None = None
+        self.stop_evt = threading.Event()
+
+    def stop(self) -> None:
+        self.stop_evt.set()
+        terminate_process(self.proc)
+
+    def _set_proc(self, proc: subprocess.Popen[str]) -> None:
+        self.proc = proc
+
+    def _stream(self, cmd: Sequence[str], *, on_line: Callable[[str], None] | None = None) -> int | None:
+        """``run_streaming`` in ``sim_root``, tracked as ``self.proc`` so ``stop()`` reaches it."""
+        return run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q, stop_evt=self.stop_evt,
+                             on_line=on_line, on_start=self._set_proc)
+
+    def resolve_path(self, s: str) -> Path:
+        """``s`` as an absolute path; relative paths are resolved against ``sim_root``."""
+        p = Path(s)
+        return p if p.is_absolute() else (self.sim_root / p).resolve()

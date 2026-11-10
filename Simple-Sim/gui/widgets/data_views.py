@@ -120,7 +120,7 @@ class ScrolledTree(ttk.Frame):
             except ValueError:
                 return (1, str(v).lower())
 
-        for parent in ("",) + tuple(self.tree.get_children("")):
+        for parent in ("", *tuple(self.tree.get_children(""))):
             kids = list(self.tree.get_children(parent))
             kids.sort(key=key, reverse=desc)
             for i, iid in enumerate(kids):

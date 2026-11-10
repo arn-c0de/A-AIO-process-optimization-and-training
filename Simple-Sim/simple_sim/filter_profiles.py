@@ -24,11 +24,7 @@ DEFAULT_PROFILE = "Default"
 def is_filter_popup_extra_key(key: str) -> bool:
     """Keys only the filter popup/profile store knows (randomize ranges, mode, realism knobs)."""
     return (
-        key.endswith("_randomize")
-        or key.endswith("_min")
-        or key.endswith("_max")
-        or key == "filter_mode"
-        or key.startswith("realism_")
+        key.endswith(("_randomize", "_min", "_max")) or key == "filter_mode" or key.startswith("realism_")
     )
 
 

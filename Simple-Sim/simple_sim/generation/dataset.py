@@ -573,7 +573,9 @@ def generate_dataset(
             meta_rows=meta_rows,  # Only new samples for extend history
             label_rows=label_rows,
             splits=final_splits,
-            extend=extend,
+            # Same condition as the append branch above: --extend on a new or empty dataset wrote a
+            # fresh one, which needs a fresh manifest (extend=True would raise "manifest not found").
+            extend=bool(ext is not None and ext.existing_count),
             renderer_version=RENDERER_VERSION,
         )
 

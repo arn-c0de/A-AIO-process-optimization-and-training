@@ -150,6 +150,56 @@ def _show(
         )
 
 
+def _resolve_backend_mode(args: argparse.Namespace, forced_backend: str | None) -> str:
+    """``--backend`` reconciled with the backend of ``--config``; ``auto`` asks unless non-interactive."""
+    backend_mode = str(args.backend or "auto")
+    if backend_mode == "auto" and forced_backend:
+        backend_mode = forced_backend
+    if backend_mode != "auto" and forced_backend and backend_mode not in {"both", forced_backend}:
+        raise SystemExit(f"--backend={backend_mode!r} conflicts with --config backend={forced_backend!r}")
+    if backend_mode == "auto":
+        backend_mode = "both" if args.non_interactive else _prompt_backend()
+    return backend_mode
+
+
+def _select_profile_ids(args: argparse.Namespace, discovered: list[ProfileEntry], *, profiles_dir: Path,
+                        out_root: Path, backend_mode: str) -> list[str]:
+    """Profile ids from ``--all`` / ``--profiles``, else the ones with missing previews, else a prompt."""
+    selected_ids = [pid for pid, _p, _b in discovered] if args.all else parse_csv_list(args.profiles)
+    # Auto mode: if nothing explicitly selected, render profiles with missing previews.
+    if not selected_ids:
+        selected_ids = auto_select_profiles_with_missing_previews(
+            discovered,
+            profiles_dir=profiles_dir,
+            out_root=out_root,
+            backend_mode=backend_mode,
+            states_override=str(args.states or ""),
+        )
+        if selected_ids:
+            print(f"[auto] Rendering {len(selected_ids)} new/incomplete profile(s): {', '.join(selected_ids)}")
+    if not selected_ids and not args.non_interactive:
+        selected_ids = _prompt_profiles(discovered)
+    return selected_ids
+
+
+def _reuse_existing_previews(view: str, out_root: Path, show_kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Nothing new to render: keep index/view in sync with the previews already on disk."""
+    existing = collect_existing_previews(out_root)
+    if not existing:
+        print("[auto] No new/incomplete profiles found and no existing previews available.")
+        return {"profiles": [], "rendered": False, "index_path": None, "jobs_path": None, "images": []}
+    index_path = write_index_html(out_root, existing)
+    print(f"[auto] No new/incomplete profiles found. Reusing {len(existing)} existing preview(s).")
+    _show(view, out_root, existing, selected_ids=None, **show_kwargs)
+    return {
+        "profiles": sorted({r[0] for r in existing}),
+        "rendered": False,
+        "index_path": str(index_path),
+        "jobs_path": None,
+        "images": [str(out_root / r[3]) for r in existing],
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.json:
         args.non_interactive = True
@@ -177,32 +227,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
-    backend_mode = str(args.backend or "auto")
-    if backend_mode == "auto" and forced_backend:
-        backend_mode = forced_backend
-    if backend_mode != "auto" and forced_backend and backend_mode not in {"both", forced_backend}:
-        raise SystemExit(f"--backend={backend_mode!r} conflicts with --config backend={forced_backend!r}")
-    if backend_mode == "auto":
-        backend_mode = "both" if args.non_interactive else _prompt_backend()
+    backend_mode = _resolve_backend_mode(args, forced_backend)
 
     discovered = [e for e in discovered_all if backend_mode == "both" or backend_mode in e[2]]
     if not discovered:
         raise SystemExit(f"No profiles match backend={backend_mode!r} under: {profiles_dir}")
 
-    selected_ids = [pid for pid, _p, _b in discovered] if args.all else parse_csv_list(args.profiles)
-    # Auto mode: if nothing explicitly selected, render profiles with missing previews.
-    if not selected_ids:
-        selected_ids = auto_select_profiles_with_missing_previews(
-            discovered,
-            profiles_dir=profiles_dir,
-            out_root=out_root,
-            backend_mode=backend_mode,
-            states_override=str(args.states or ""),
-        )
-        if selected_ids:
-            print(f"[auto] Rendering {len(selected_ids)} new/incomplete profile(s): {', '.join(selected_ids)}")
-    if not selected_ids and not args.non_interactive:
-        selected_ids = _prompt_profiles(discovered)
+    selected_ids = _select_profile_ids(args, discovered, profiles_dir=profiles_dir, out_root=out_root,
+                                       backend_mode=backend_mode)
 
     # Translate legacy flags into --view behavior if explicitly set.
     if args.open_browser is True:
@@ -225,30 +257,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         samples=int(args.samples or 0),
         device=str(args.device or ""),
     )
-    show_kwargs = dict(
-        opts=opts, settings_file=settings_file, profiles_dir=profiles_dir, configs_dir=configs_dir, all_profiles=discovered_all
-    )
+    show_kwargs = {
+        "opts": opts, "settings_file": settings_file, "profiles_dir": profiles_dir, "configs_dir": configs_dir, "all_profiles": discovered_all
+    }
     result: dict[str, Any] = {"out_dir": str(out_root), "backend_mode": backend_mode, "dry_run": bool(args.dry_run)}
 
     if not selected_ids:
         if not args.non_interactive:
             raise SystemExit("No profiles selected and no new/incomplete profiles found.")
-        # Keep index/view in sync even when nothing new needs rendering.
-        existing = collect_existing_previews(out_root)
-        if not existing:
-            print("[auto] No new/incomplete profiles found and no existing previews available.")
-            return {**result, "profiles": [], "rendered": False, "index_path": None, "jobs_path": None, "images": []}
-        index_path = write_index_html(out_root, existing)
-        print(f"[auto] No new/incomplete profiles found. Reusing {len(existing)} existing preview(s).")
-        _show(args.view, out_root, existing, selected_ids=None, **show_kwargs)
-        return {
-            **result,
-            "profiles": sorted({r[0] for r in existing}),
-            "rendered": False,
-            "index_path": str(index_path),
-            "jobs_path": None,
-            "images": [str(out_root / r[3]) for r in existing],
-        }
+        return {**result, **_reuse_existing_previews(args.view, out_root, show_kwargs)}
 
     pid_to_entry = {e[0]: e for e in discovered_all}
     unknown = [pid for pid in selected_ids if pid not in pid_to_entry]

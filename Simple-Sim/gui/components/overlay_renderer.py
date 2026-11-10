@@ -7,6 +7,107 @@ from typing import Any
 import math
 
 
+_FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+# BGR colours per defect class.
+_GREEN, _RED, _YELLOW, _MAGENTA, _ORANGE, _CYAN = (0, 255, 0), (0, 0, 255), (0, 255, 255), (255, 0, 255), (0, 165, 255), (255, 255, 0)
+
+
+def _label(img: np.ndarray, text: str, *, color: tuple[int, int, int], xy: tuple[int, int] = (10, 30)) -> None:
+    """Readable label with a subtle backing box (works on bright/dark ROIs)."""
+    h, w = img.shape[:2]
+    x, y = xy
+    scale, thick, pad = 0.8, 2, 4
+    (tw, th), _ = cv2.getTextSize(text, _FONT, scale, thick)
+    cv2.rectangle(img, (max(0, x - pad), max(0, y - th - pad)), (min(w - 1, x + tw + pad), min(h - 1, y + pad)), (0, 0, 0), -1)
+    cv2.putText(img, text, (x, y), _FONT, scale, color, thick)
+
+
+def _draw_ok(img: np.ndarray, cx: int, cy: int, _params: dict[str, Any]) -> None:
+    """Green checkmark at the component center."""
+    size = 30
+    knee = (cx - size // 6, cy + size // 2)
+    cv2.line(img, (cx - size // 2, cy), knee, _GREEN, 3)
+    cv2.line(img, knee, (cx + size // 2, cy - size // 2), _GREEN, 3)
+    _label(img, 'OK', color=_GREEN, xy=(cx + size, max(25, cy - size // 2)))
+
+
+def _draw_missing(img: np.ndarray, cx: int, cy: int, _params: dict[str, Any]) -> None:
+    """Red X at the expected location."""
+    half = 40 // 2
+    cv2.line(img, (cx - half, cy - half), (cx + half, cy + half), _RED, 3)
+    cv2.line(img, (cx - half, cy + half), (cx + half, cy - half), _RED, 3)
+    _label(img, 'MISSING', color=_RED, xy=(cx + 40, max(25, cy)))
+
+
+def _draw_misaligned(img: np.ndarray, cx: int, cy: int, params: dict[str, Any]) -> None:
+    """Yellow arrow along the shift vector plus a rotation arc (each only when significant)."""
+    shift_x, shift_y = params.get('shift_x', 0.0), params.get('shift_y', 0.0)
+    rotation_deg = params.get('rotation_deg', 0.0)
+    shift_magnitude = math.sqrt(shift_x**2 + shift_y**2)
+    if shift_magnitude > 1.0:
+        scale = min(3.0, 50.0 / (shift_magnitude + 1e-6))  # scaled for visibility
+        arrow_end = (cx + int(shift_x * scale), cy + int(shift_y * scale))
+        cv2.arrowedLine(img, (cx, cy), arrow_end, _YELLOW, 2, tipLength=0.3)
+        cv2.putText(img, f'shift: {shift_magnitude:.1f}px', (arrow_end[0] + 10, arrow_end[1]), _FONT, 0.6, _YELLOW, 2)
+    if abs(rotation_deg) > 3.0:
+        arc_radius, start_angle = 40, -90  # arc starts at the top
+        cv2.ellipse(img, (cx, cy), (arc_radius, arc_radius), 0, start_angle, start_angle + rotation_deg, _YELLOW, 2)
+        cv2.putText(img, f'rot: {rotation_deg:.1f}°', (cx + arc_radius + 10, cy - arc_radius), _FONT, 0.6, _YELLOW, 2)
+    _label(img, 'MISALIGNED', color=_YELLOW)
+
+
+def _draw_tombstone(img: np.ndarray, cx: int, cy: int, params: dict[str, Any]) -> None:
+    """Magenta vertical bar plus a rectangle rotated by the tilt angle."""
+    tilt_deg = params.get('tilt_deg', 0.0)
+    rect_width, rect_height = 40, 60
+    cv2.line(img, (cx, cy - rect_height // 2), (cx, cy + rect_height // 2), _MAGENTA, 6)
+
+    tilt_rad = math.radians(tilt_deg)
+    cos_t, sin_t = math.cos(tilt_rad), math.sin(tilt_rad)
+    corners = np.array([
+        [-rect_width // 2, -rect_height // 2],
+        [rect_width // 2, -rect_height // 2],
+        [rect_width // 2, rect_height // 2],
+        [-rect_width // 2, rect_height // 2],
+    ], dtype=np.float32)
+    rotated = np.zeros_like(corners)
+    rotated[:, 0] = corners[:, 0] * cos_t - corners[:, 1] * sin_t + cx
+    rotated[:, 1] = corners[:, 0] * sin_t + corners[:, 1] * cos_t + cy
+    cv2.polylines(img, [rotated.astype(np.int32)], True, _MAGENTA, 2)
+
+    _label(img, 'TOMBSTONE', color=_MAGENTA)
+    _label(img, f'tilt: {tilt_deg:.1f}°', color=_MAGENTA, xy=(10, 60))
+
+
+def _draw_solder_bridge(img: np.ndarray, cx: int, cy: int, _params: dict[str, Any]) -> None:
+    """Red bar across the component area (no footprint-specific pad geometry)."""
+    w = img.shape[1]
+    cv2.line(img, (max(10, cx - int(0.35 * w)), cy), (min(w - 10, cx + int(0.35 * w)), cy), _RED, 10)
+    _label(img, 'SOLDER_BRIDGE', color=_RED)
+
+
+def _draw_corner_lift(img: np.ndarray, cx: int, cy: int, params: dict[str, Any]) -> None:
+    """Orange marker at the top-right corner plus the tilt angle."""
+    h, w = img.shape[:2]
+    size = max(18, min(w, h) // 8)
+    x, y = min(w - 5, cx + size), max(5, cy - size)
+    pts = np.array([[x, y], [x + size, y], [x + size, y + size]], dtype=np.int32)
+    cv2.polylines(img, [pts], True, _ORANGE, 4)
+    _label(img, 'CORNER_LIFT', color=_ORANGE)
+    _label(img, f"tilt: {params.get('tilt_deg', 0.0):.1f}°", color=_ORANGE, xy=(10, 60))
+
+
+_DEFECT_DRAWERS = {
+    'OK': _draw_ok,
+    'MISSING': _draw_missing,
+    'MISALIGNED': _draw_misaligned,
+    'TOMBSTONE': _draw_tombstone,
+    'SOLDER_BRIDGE': _draw_solder_bridge,
+    'CORNER_LIFT': _draw_corner_lift,
+}
+
+
 def draw_defect_overlay(img: np.ndarray, defect_params: dict[str, Any],
                         nominal: dict[str, float]) -> np.ndarray:
     """Draw defect visualization overlay on image.
@@ -21,180 +122,13 @@ def draw_defect_overlay(img: np.ndarray, defect_params: dict[str, Any],
     """
     img_overlay = img.copy()
     h, w = img.shape[:2]
-    center_x, center_y = w // 2, h // 2
-
     defect_type = str(defect_params.get('type', 'OK') or 'OK')
-    shift_x = defect_params.get('shift_x', 0.0)
-    shift_y = defect_params.get('shift_y', 0.0)
-    rotation_deg = defect_params.get('rotation_deg', 0.0)
-    tilt_deg = defect_params.get('tilt_deg', 0.0)
-
-    def _label(text: str, *, color: tuple[int, int, int], xy: tuple[int, int] = (10, 30)) -> None:
-        # Readable label with a subtle backing box (works on bright/dark ROIs).
-        x, y = xy
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        scale = 0.8
-        thick = 2
-        (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
-        pad = 4
-        x0 = max(0, x - pad)
-        y0 = max(0, y - th - pad)
-        x1 = min(w - 1, x + tw + pad)
-        y1 = min(h - 1, y + pad)
-        cv2.rectangle(img_overlay, (x0, y0), (x1, y1), (0, 0, 0), -1)
-        cv2.putText(img_overlay, text, (x, y), font, scale, color, thick)
-
-    if defect_type == 'OK':
-        # Green checkmark at component center
-        color = (0, 255, 0)  # Green
-        thickness = 3
-        size = 30
-
-        # Checkmark: two lines forming a check
-        check_pt1 = (center_x - size//2, center_y)
-        check_pt2 = (center_x - size//6, center_y + size//2)
-        check_pt3 = (center_x + size//2, center_y - size//2)
-
-        cv2.line(img_overlay, check_pt1, check_pt2, color, thickness)
-        cv2.line(img_overlay, check_pt2, check_pt3, color, thickness)
-
-        # Label
-        _label('OK', color=color, xy=(center_x + size, max(25, center_y - size // 2)))
-
-    elif defect_type == 'MISSING':
-        # Red X mark at expected location
-        color = (0, 0, 255)  # Red
-        thickness = 3
-        size = 40
-
-        # X mark: two diagonal lines
-        cv2.line(img_overlay,
-                (center_x - size//2, center_y - size//2),
-                (center_x + size//2, center_y + size//2),
-                color, thickness)
-        cv2.line(img_overlay,
-                (center_x - size//2, center_y + size//2),
-                (center_x + size//2, center_y - size//2),
-                color, thickness)
-
-        # Label
-        _label('MISSING', color=color, xy=(center_x + size, max(25, center_y)))
-
-    elif defect_type == 'MISALIGNED':
-        # Yellow arrow showing shift vector + rotation arc
-        color = (0, 255, 255)  # Yellow
-        thickness = 2
-
-        # Draw arrow from center to shifted position
-        shift_magnitude = math.sqrt(shift_x**2 + shift_y**2)
-        if shift_magnitude > 1.0:  # Only draw if significant shift
-            # Scale for visibility
-            scale = min(3.0, 50.0 / (shift_magnitude + 1e-6))
-            arrow_dx = int(shift_x * scale)
-            arrow_dy = int(shift_y * scale)
-
-            arrow_end = (center_x + arrow_dx, center_y + arrow_dy)
-            cv2.arrowedLine(img_overlay, (center_x, center_y), arrow_end,
-                           color, thickness, tipLength=0.3)
-
-            # Label with shift magnitude
-            label = f'shift: {shift_magnitude:.1f}px'
-            cv2.putText(img_overlay, label,
-                       (arrow_end[0] + 10, arrow_end[1]),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-        # Draw rotation arc if significant
-        if abs(rotation_deg) > 3.0:
-            arc_radius = 40
-            # Arc from 0 to rotation angle
-            start_angle = -90  # Start at top
-            end_angle = start_angle + rotation_deg
-
-            cv2.ellipse(img_overlay, (center_x, center_y),
-                       (arc_radius, arc_radius), 0,
-                       start_angle, end_angle, color, thickness)
-
-            # Rotation label
-            rot_label = f'rot: {rotation_deg:.1f}°'
-            cv2.putText(img_overlay, rot_label,
-                       (center_x + arc_radius + 10, center_y - arc_radius),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-        # Main label
-        _label('MISALIGNED', color=color, xy=(10, 30))
-
-    elif defect_type == 'TOMBSTONE':
-        # Purple vertical bar with tilt angle label
-        color = (255, 0, 255)  # Magenta/Purple
-        thickness = 6
-
-        # Draw thick vertical bar indicating tombstoned component
-        bar_height = 60
-        cv2.line(img_overlay,
-                (center_x, center_y - bar_height//2),
-                (center_x, center_y + bar_height//2),
-                color, thickness)
-
-        # Draw tilt indicator (skewed rectangle)
-        tilt_rad = math.radians(tilt_deg)
-        rect_width = 40
-        rect_height = 60
-
-        # Calculate corners of tilted rectangle
-        cos_t = math.cos(tilt_rad)
-        sin_t = math.sin(tilt_rad)
-
-        corners = np.array([
-            [-rect_width//2, -rect_height//2],
-            [rect_width//2, -rect_height//2],
-            [rect_width//2, rect_height//2],
-            [-rect_width//2, rect_height//2]
-        ], dtype=np.float32)
-
-        # Rotate corners
-        rotated = np.zeros_like(corners)
-        rotated[:, 0] = corners[:, 0] * cos_t - corners[:, 1] * sin_t
-        rotated[:, 1] = corners[:, 0] * sin_t + corners[:, 1] * cos_t
-
-        # Translate to center
-        rotated[:, 0] += center_x
-        rotated[:, 1] += center_y
-
-        # Draw tilted rectangle
-        pts = rotated.astype(np.int32)
-        cv2.polylines(img_overlay, [pts], True, color, 2)
-
-        # Labels
-        _label('TOMBSTONE', color=color, xy=(10, 30))
-        _label(f'tilt: {tilt_deg:.1f}°', color=color, xy=(10, 60))
-
-    elif defect_type == 'SOLDER_BRIDGE':
-        # Red "bridge" bar across the component area. (We don't rely on footprint-specific pad geometry here.)
-        color = (0, 0, 255)  # Red
-        thickness = 10
-        y = center_y
-        x0 = max(10, center_x - int(0.35 * w))
-        x1 = min(w - 10, center_x + int(0.35 * w))
-        cv2.line(img_overlay, (x0, y), (x1, y), color, thickness)
-        _label('SOLDER_BRIDGE', color=color, xy=(10, 30))
-
-    elif defect_type == 'CORNER_LIFT':
-        # Orange corner marker + tilt label.
-        color = (0, 165, 255)  # Orange (BGR)
-        t = 4
-        size = max(18, min(w, h) // 8)
-        # Draw a highlighted top-right corner "lift"
-        cx, cy = min(w - 5, center_x + size), max(5, center_y - size)
-        pts = np.array([[cx, cy], [cx + size, cy], [cx + size, cy + size]], dtype=np.int32)
-        cv2.polylines(img_overlay, [pts], True, color, t)
-        _label('CORNER_LIFT', color=color, xy=(10, 30))
-        _label(f'tilt: {tilt_deg:.1f}°', color=color, xy=(10, 60))
-
+    drawer = _DEFECT_DRAWERS.get(defect_type)
+    if drawer is None:
+        # Fallback: always show the class label even if there is no bespoke icon yet.
+        _label(img_overlay, defect_type, color=_CYAN)
     else:
-        # Fallback: always show the class label even if we don't have a bespoke icon yet.
-        color = (255, 255, 0)  # Cyan-ish (BGR)
-        _label(defect_type, color=color, xy=(10, 30))
-
+        drawer(img_overlay, w // 2, h // 2, defect_params)
     return img_overlay
 
 

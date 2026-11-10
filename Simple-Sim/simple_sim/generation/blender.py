@@ -196,9 +196,13 @@ def render_blender_records(
     images_dir = output_root / "images"
     img_count = len(list(images_dir.glob("*.png"))) if images_dir.is_dir() else 0
     expected = len(records)
-    if expect_at_least and img_count < expected:
+    # Extend mode: images/ already holds the existing samples, so a count cannot prove that the new
+    # ones were written; check every record's own file instead.
+    missing = [r["image_path"] for r in records if not (output_root / r["image_path"]).is_file()]
+    if missing:
         raise RuntimeError(
-            f"Blender render incomplete (extend): expected >= {expected} images, found {img_count} under {images_dir}"
+            f"Blender render incomplete: {len(missing)} of {expected} images missing under {images_dir} "
+            f"(first: {missing[0]})"
         )
     if not expect_at_least and img_count != expected:
         raise RuntimeError(f"Blender render incomplete: expected {expected} images, found {img_count} under {images_dir}")

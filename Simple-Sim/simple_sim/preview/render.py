@@ -446,74 +446,70 @@ def _settings_dict(s: RenderSettings) -> dict[str, Any]:
     return {"executable": s.blender_executable, "samples": s.cycles_samples, "device": s.device, "engine": s.engine}
 
 
-def render_profile_backend(
-    pid: str,
-    prof: dict[str, Any],
-    backend: str,
-    defect_types: list[str],
-    *,
-    opts: PreviewOptions,
-    sim_root: Path,
-    configs_dir: Path,
-    out_root: Path,
-    seed_base: int,
-    run_id: int | None,
-    image_filters: dict[str, Any] | None,
-    enable_cardinal_rotation_90: bool,
-    jobs_path: Path,
-) -> list[PreviewRec]:
+@dataclass(frozen=True)
+class PreviewRequest:
+    """One profile's previews on one backend: the input of a backend's preview renderer
+    (:meth:`~simple_sim.generators.backends.BackendInfo.render_preview`)."""
+
+    pid: str
+    prof: dict[str, Any]
+    defect_types: Sequence[str]
+    opts: PreviewOptions
+    out_root: Path
+    seed_base: int
+    run_id: int | None = None
+    image_filters: dict[str, Any] | None = None
+    enable_cardinal_rotation_90: bool = True
+    cfg: dict[str, Any] | None = None     # run config; filled by :func:`render_profile_backend` when missing
+    jobs_path: Path | None = None         # Blender jobs file (unused by in-process backends)
+
+
+def render_profile_backend(req: PreviewRequest, backend: str, *, sim_root: Path, configs_dir: Path) -> list[PreviewRec]:
     """Render one profile/backend immediately (3D: its own Blender batch). Used by the viewer.
 
-    The backend's preview renderer (:meth:`~simple_sim.generators.backends.BackendInfo.render_preview`:
+    Loads the matching run config into *req* when it has none, then runs the backend's preview renderer
+    (:meth:`~simple_sim.generators.backends.BackendInfo.render_preview`:
     :func:`preview_opencv_2d` / :func:`preview_blender_3d`).
     """
-    cfg, _src = load_preview_config(
-        forced_cfg=opts.forced_cfg, sim_root=sim_root, configs_dir=configs_dir, profile_id=pid, backend=backend
-    )
-    return backend_info(backend).render_preview(
-        pid=pid, prof=prof, cfg=cfg, defect_types=defect_types, opts=opts, out_root=out_root, seed_base=seed_base,
-        run_id=run_id, image_filters=image_filters, enable_cardinal_rotation_90=enable_cardinal_rotation_90,
-        jobs_path=jobs_path,
-    )
+    if req.cfg is None:
+        cfg, _src = load_preview_config(
+            forced_cfg=req.opts.forced_cfg, sim_root=sim_root, configs_dir=configs_dir, profile_id=req.pid, backend=backend
+        )
+        req = replace(req, cfg=cfg)
+    return backend_info(backend).render_preview(req)
 
 
-def preview_opencv_2d(*, pid: str, prof: dict[str, Any], cfg: dict[str, Any], defect_types: Sequence[str],
-                      opts: PreviewOptions, out_root: Path, seed_base: int, run_id: int | None,
-                      image_filters: dict[str, Any] | None, enable_cardinal_rotation_90: bool,
-                      jobs_path: Path | None = None) -> list[PreviewRec]:
-    """Preview renderer of ``opencv_2d`` (:func:`render_2d_previews`; *jobs_path* unused)."""
+def preview_opencv_2d(req: PreviewRequest) -> list[PreviewRec]:
+    """Preview renderer of ``opencv_2d`` (:func:`render_2d_previews`; ``req.jobs_path`` unused)."""
     return render_2d_previews(
-        profile_id=pid,
-        profile=prof,
-        cfg=cfg,
-        out_root=out_root,
-        seed_base=seed_base,
-        defect_types=defect_types,
-        run_id=run_id,
-        roi_override=opts.roi_override,
-        image_filters=image_filters,
-        enable_cardinal_rotation_90=enable_cardinal_rotation_90,
+        profile_id=req.pid,
+        profile=req.prof,
+        cfg=req.cfg,
+        out_root=req.out_root,
+        seed_base=req.seed_base,
+        defect_types=req.defect_types,
+        run_id=req.run_id,
+        roi_override=req.opts.roi_override,
+        image_filters=req.image_filters,
+        enable_cardinal_rotation_90=req.enable_cardinal_rotation_90,
     )
 
 
-def preview_blender_3d(*, pid: str, prof: dict[str, Any], cfg: dict[str, Any], defect_types: Sequence[str],
-                       opts: PreviewOptions, out_root: Path, seed_base: int, run_id: int | None,
-                       image_filters: dict[str, Any] | None, enable_cardinal_rotation_90: bool,
-                       jobs_path: Path) -> list[PreviewRec]:
-    """Preview renderer of ``blender_3d``: one Blender batch for this profile (jobs file *jobs_path*)."""
-    settings = apply_3d_overrides(settings_from_config(cfg), opts)
+def preview_blender_3d(req: PreviewRequest) -> list[PreviewRec]:
+    """Preview renderer of ``blender_3d``: one Blender batch for this profile (jobs file ``req.jobs_path``)."""
+    settings = apply_3d_overrides(settings_from_config(req.cfg), req.opts)
     jobs, recs = build_preview_jobs(
-        profile_id=pid,
-        profile=prof,
+        profile_id=req.pid,
+        profile=req.prof,
         settings=settings,
-        seed_base=seed_base,
-        defect_types=defect_types,
-        run_id=run_id,
-        rotation_range=rotation_jitter_range(cfg),
-        enable_cardinal_rotation_90=enable_cardinal_rotation_90,
-        image_filters=image_filters,
+        seed_base=req.seed_base,
+        defect_types=req.defect_types,
+        run_id=req.run_id,
+        rotation_range=rotation_jitter_range(req.cfg),
+        enable_cardinal_rotation_90=req.enable_cardinal_rotation_90,
+        image_filters=req.image_filters,
     )
-    run_blender_jobs(jobs, output_root=out_root, jobs_path=jobs_path, settings=_settings_dict(settings))
+    run_blender_jobs(jobs, output_root=req.out_root, jobs_path=req.jobs_path, settings=_settings_dict(settings))
     return recs
 
 
@@ -578,11 +574,11 @@ def render_previews(
                     previews.extend((pid, backend, str(d), preview_rel_path(pid, backend, str(d))) for d in defect_types)
                     continue
                 previews.extend(
-                    info.render_preview(
+                    info.render_preview(PreviewRequest(
                         pid=pid, prof=prof, cfg=cfg, defect_types=defect_types, opts=opts, out_root=out_root,
                         seed_base=opts.seed_base, run_id=run_id, image_filters=image_filters,
                         enable_cardinal_rotation_90=opts.enable_cardinal_rotation_90,
-                    )
+                    ))
                 )
             else:
                 # Blender: every profile's jobs go into one batch, run after the loop.
@@ -622,7 +618,6 @@ def render_previews(
         log.info(f"\n[render] Running Blender batch for {len(all_jobs)} previews...")
         run_blender_jobs(
             all_jobs,
-            sim_root=sim_root,
             output_root=out_root,
             jobs_path=jobs_path,
             settings=_merge_blender_settings(per_profile_settings, opts),

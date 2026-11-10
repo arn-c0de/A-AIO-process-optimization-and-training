@@ -40,14 +40,13 @@ def canonicalize_profile(profile_dict: dict[str, Any]) -> dict[str, Any]:
                     continue
                 result[key] = _canonicalize(obj[key])
             return result
-        elif isinstance(obj, list):
+        if isinstance(obj, list):
             # Preserve list order but canonicalize elements
             return [_canonicalize(item) for item in obj]
-        elif isinstance(obj, float):
+        if isinstance(obj, float):
             # Normalize float precision
             return round(obj, 10)
-        else:
-            return obj
+        return obj
 
     return _canonicalize(profile_dict)
 

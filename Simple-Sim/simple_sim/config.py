@@ -55,34 +55,34 @@ def core_section_values(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
     section = "run"
     try:
-        run = dict(
-            run_id=str(run_raw.get("run_id", "")),
-            seed=int(run_raw.get("seed", -1)),
-            schema_version=int(run_raw.get("schema_version", -1)),
-            mode=str(run_raw.get("mode", "")),
-        )
+        run = {
+            "run_id": str(run_raw.get("run_id", "")),
+            "seed": int(run_raw.get("seed", -1)),
+            "schema_version": int(run_raw.get("schema_version", -1)),
+            "mode": str(run_raw.get("mode", "")),
+        }
         section = "roi"
-        roi = dict(
-            width_px=float(roi_raw.get("width_px", 0)),
-            height_px=float(roi_raw.get("height_px", 0)),
-            mm_per_px=float(roi_raw.get("mm_per_px", 0)),
-        )
+        roi = {
+            "width_px": float(roi_raw.get("width_px", 0)),
+            "height_px": float(roi_raw.get("height_px", 0)),
+            "mm_per_px": float(roi_raw.get("mm_per_px", 0)),
+        }
         section = "train"
-        train = dict(
-            model=str(train_raw.get("model", "")),
-            epochs=int(train_raw.get("epochs", 0)),
-            batch_size=int(train_raw.get("batch_size", 0)),
-            lr=float(train_raw.get("lr", 0.0)),
-            optimizer=str(train_raw.get("optimizer", "")),
-            weight_decay=float(train_raw.get("weight_decay", 0.0)),
-            pretrained=train_raw.get("pretrained", None),
-            num_workers=train_raw.get("num_workers", None),
-        )
+        train = {
+            "model": str(train_raw.get("model", "")),
+            "epochs": int(train_raw.get("epochs", 0)),
+            "batch_size": int(train_raw.get("batch_size", 0)),
+            "lr": float(train_raw.get("lr", 0.0)),
+            "optimizer": str(train_raw.get("optimizer", "")),
+            "weight_decay": float(train_raw.get("weight_decay", 0.0)),
+            "pretrained": train_raw.get("pretrained", None),
+            "num_workers": train_raw.get("num_workers", None),
+        }
         section = "eval"
-        eval_cfg = dict(
-            batch_size=int(eval_raw.get("batch_size", 0)),
-            num_workers=eval_raw.get("num_workers", None),
-        )
+        eval_cfg = {
+            "batch_size": int(eval_raw.get("batch_size", 0)),
+            "num_workers": eval_raw.get("num_workers", None),
+        }
     except (TypeError, ValueError, AttributeError) as exc:
         raise ValueError(f"Invalid value in config section '{section}': {exc}") from exc
     return {"run": run, "roi": roi, "train": train, "eval": eval_cfg}
@@ -258,9 +258,8 @@ def _validate_run(cfg: dict[str, Any]) -> tuple[int, str]:
         for p in profiles:
             if not isinstance(p, str) or not p:
                 raise ValueError("run.component_profiles entries must be non-empty strings")
-    elif schema_version == 2:
-        if 'component_profile' not in run:
-            raise ValueError("schema_version=2 requires run.component_profile")
+    elif schema_version == 2 and 'component_profile' not in run:
+        raise ValueError("schema_version=2 requires run.component_profile")
 
     return schema_version, mode
 
@@ -269,7 +268,7 @@ def _required_sections(schema_version: int, mode: str) -> list[str]:
     """Return the list of required top-level config sections."""
     base = ['run', 'roi', 'classes', 'domains', 'splits', 'render', 'augment', 'train', 'eval']
     if schema_version == 1 and mode != 'profile_classifier':
-        return base + ['tolerances']
+        return [*base, 'tolerances']
     return base
 
 
@@ -554,9 +553,8 @@ def _validate_train(train: dict[str, Any]) -> None:
         raise ValueError(f"Unsupported optimizer: {train['optimizer']}")
     if 'pretrained' in train and not isinstance(train['pretrained'], bool):
         raise ValueError("train.pretrained must be a boolean if provided")
-    if 'num_workers' in train:
-        if not isinstance(train['num_workers'], int) or train['num_workers'] < 0:
-            raise ValueError("train.num_workers must be an integer >= 0 if provided")
+    if 'num_workers' in train and (not isinstance(train['num_workers'], int) or train['num_workers'] < 0):
+        raise ValueError("train.num_workers must be an integer >= 0 if provided")
     if not isinstance(train['epochs'], int) or train['epochs'] <= 0:
         raise ValueError("train.epochs must be a positive integer")
     if not isinstance(train['batch_size'], int) or train['batch_size'] <= 0:
@@ -592,21 +590,23 @@ def _validate_train_extras(train: dict[str, Any]) -> None:
         ls = train['label_smoothing']
         if isinstance(ls, bool) or not isinstance(ls, (int, float)) or not 0 <= ls < 1:
             raise ValueError("train.label_smoothing must be a number in [0, 1)")
-    if 'augment' in train:
-        aug = train['augment']
-        if aug is None:
-            return
-        if not isinstance(aug, dict) or set(aug) - set(_TRAIN_AUGMENT_FLAGS) - set(_TRAIN_AUGMENT_JITTER):
-            raise ValueError(f"train.augment must be a mapping with keys from {list(_TRAIN_AUGMENT_FLAGS + _TRAIN_AUGMENT_JITTER)}")
-        for key in _TRAIN_AUGMENT_FLAGS:
-            if key in aug and not isinstance(aug[key], bool):
-                raise ValueError(f"train.augment.{key} must be a boolean")
-        for key in _TRAIN_AUGMENT_JITTER:
-            if key in aug:
-                v = aug[key]
-                limit = 0.5 if key == 'hue' else 1.0
-                if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= limit:
-                    raise ValueError(f"train.augment.{key} must be a number in [0, {limit}]")
+    if train.get('augment') is not None:
+        _validate_train_augment(train['augment'])
+
+
+def _validate_train_augment(aug: Any) -> None:
+    """``train.augment``: boolean flips / quarter turns and colour jitter strengths."""
+    if not isinstance(aug, dict) or set(aug) - set(_TRAIN_AUGMENT_FLAGS) - set(_TRAIN_AUGMENT_JITTER):
+        raise ValueError(f"train.augment must be a mapping with keys from {list(_TRAIN_AUGMENT_FLAGS + _TRAIN_AUGMENT_JITTER)}")
+    for key in _TRAIN_AUGMENT_FLAGS:
+        if key in aug and not isinstance(aug[key], bool):
+            raise ValueError(f"train.augment.{key} must be a boolean")
+    for key in _TRAIN_AUGMENT_JITTER:
+        if key in aug:
+            v = aug[key]
+            limit = 0.5 if key == 'hue' else 1.0
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= limit:
+                raise ValueError(f"train.augment.{key} must be a number in [0, {limit}]")
 
 
 def _validate_eval(eval_cfg: dict[str, Any]) -> None:
@@ -614,9 +614,8 @@ def _validate_eval(eval_cfg: dict[str, Any]) -> None:
         raise ValueError("Missing eval.batch_size")
     if not isinstance(eval_cfg['batch_size'], int) or eval_cfg['batch_size'] <= 0:
         raise ValueError("eval.batch_size must be a positive integer")
-    if 'num_workers' in eval_cfg:
-        if not isinstance(eval_cfg['num_workers'], int) or eval_cfg['num_workers'] < 0:
-            raise ValueError("eval.num_workers must be an integer >= 0 if provided")
+    if 'num_workers' in eval_cfg and (not isinstance(eval_cfg['num_workers'], int) or eval_cfg['num_workers'] < 0):
+        raise ValueError("eval.num_workers must be an integer >= 0 if provided")
     if 'critical_classes' in eval_cfg:
         cc = eval_cfg['critical_classes']
         if not isinstance(cc, list) or not cc:

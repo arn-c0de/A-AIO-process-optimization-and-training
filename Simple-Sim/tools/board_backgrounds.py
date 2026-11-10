@@ -43,11 +43,17 @@ import argparse
 import json
 from collections import Counter
 from dataclasses import dataclass, field
+import sys
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
+
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from simple_sim.io_utils import read_json  # noqa: E402
 
 SIDES = ("top", "bottom")
 CROP_PART_LENGTHS = 3.04       # the app's crop field in body lengths (measured on the real crops)
@@ -75,17 +81,10 @@ class Run:
     quality: dict[str, Any] = field(default_factory=dict)
 
 
-def _load_json(path: Path) -> Any | None:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
 def load_run(folder: Path) -> Run | None:
     """The run in *folder* (still + geometry + components), or ``None`` when anything is unusable."""
-    geometry = _load_json(folder / "geometry.json")
-    components = _load_json(folder / "components.json")
+    geometry = read_json(folder / "geometry.json")
+    components = read_json(folder / "components.json")
     if not geometry or not components or not (folder / "still.jpg").is_file():
         return None
     h = geometry.get("boardToSource")

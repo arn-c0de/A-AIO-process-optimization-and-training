@@ -9,7 +9,7 @@ from datetime import datetime
 from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
+from gui.utils.settings_store import restore_persisted_vars
 from gui.utils.dataset_ops import delete_samples, move_samples
 from gui.utils.dataset_catalog import DatasetCatalog, catalog_labels
 from gui.widgets import ScrolledTree
@@ -55,8 +55,19 @@ class AnalysisTab(BaseTab):
         self._load_persisted_settings()
         self._wire_settings_autosave()
 
+    def _emit_dataset_changed(self) -> None:
+        """Tell the other tabs; this tab loads the dataset itself, so its own event must not load it again."""
+        try:
+            self.parent.event_generate("<<DatasetChanged>>", when="tail")
+            self._own_change_dir = self.state.dataset_dir
+        except Exception:
+            self._own_change_dir = None
+
     def on_dataset_changed(self) -> None:
         if not self.state.dataset_dir: return
+        own, self._own_change_dir = getattr(self, "_own_change_dir", None), None
+        if own is not None and own == self.state.dataset_dir:
+            return  # echo of _emit_dataset_changed(): dataset and model are already loaded
         display = self._display_for_dataset(self.state.dataset_dir)
         if display in self._dataset_by_display:
             self.ui.var_dataset.set(display)
@@ -64,15 +75,12 @@ class AnalysisTab(BaseTab):
             self._refresh_datasets()
             if display in self._dataset_by_display:
                 self.ui.var_dataset.set(display)
-            elif values := list(self.ui.dataset_combo["values"]):
-                self.ui.var_dataset.set(values[0])
-                self._on_dataset_selected()
-                return
+            else:
+                # Not in the list (archived datasets are hidden here but selectable in other tabs):
+                # show it anyway. Picking the first listed one would change the selection of all tabs.
+                self.ui.var_dataset.set(display)
         self._load_dataset()
         self._try_load_model()
-
-    def _store(self) -> SettingsStore | None:
-        return self.state.settings_store
 
     def _load_persisted_settings(self) -> None:
         st = self._store()
@@ -105,9 +113,6 @@ class AnalysisTab(BaseTab):
             ("analysis.sort", self.ui.var_sort),
         ]
 
-    def _wire_settings_autosave(self) -> None:
-        wire_vars_autosave(self._store(), self._persisted_var_bindings(), self.frame)
-
     def _display_for_dataset(self, p: Path) -> str:
         """Category-prefixed display label (before duplicate suffixing)."""
         runs, versions = self.logic.sim_data_roots()
@@ -135,8 +140,7 @@ class AnalysisTab(BaseTab):
     def _on_dataset_selected(self, _evt: object | None = None) -> None:
         if not (ds := self._dataset_by_display.get(self.ui.var_dataset.get().strip())): return
         self.state.dataset_dir = ds
-        try: self.parent.event_generate("<<DatasetChanged>>", when="tail")
-        except Exception: pass
+        self._emit_dataset_changed()
         self._load_dataset()
         self._try_load_model()
 
@@ -154,6 +158,10 @@ class AnalysisTab(BaseTab):
             self.ui.combo_run.configure(values=sorted(list(run_ids)))
             self.ui.combo_domain.configure(values=sorted(list(domains)))
             self.ui.combo_class.configure(values=["All"] + self._sorted_class_values(classes - {"All"}))
+            # A filter value of the previous dataset that does not exist here would hide every sample.
+            for var, valid in ((self.ui.var_run, run_ids), (self.ui.var_domain, domains), (self.ui.var_filter, classes)):
+                if var.get().strip() not in valid:
+                    var.set("All")
             self.ui.set_feedback_class_values(self._sorted_class_values(set(VALID_CLASSES) | (classes - {"All"})))
             profiles = sorted({str(v).strip() for v in self.profile_dict.values() if str(v).strip()})
             self._profile_options = profiles
@@ -316,6 +324,9 @@ class AnalysisTab(BaseTab):
                                "No model loaded. Train a model first.", title="No Model"):
             return
 
+        if getattr(self, "_analysis_running", False):
+            self._analysis_status("An analysis is already running.", "info")
+            return
         # Snapshot state on the main thread; dialogs are shown back on the main thread via after().
         dataset_dir = self.state.dataset_dir
         sample_ids = list(self.sample_ids)
@@ -350,8 +361,23 @@ class AnalysisTab(BaseTab):
         def on_error(exc: BaseException) -> None:
             dialogs.show_error(self.frame, "Analysis Failed", exc)
 
-        runner_for(self.state, self.frame).run(
-            analyze, name=f"Analyze dataset ({mode})", on_done=on_done, on_error=on_error)
+        def on_finally() -> None:
+            self._analysis_running = False
+
+        self._analysis_running = True
+        try:
+            runner_for(self.state, self.frame).run(
+                analyze, name=f"Analyze dataset ({mode})", on_done=on_done, on_error=on_error, on_finally=on_finally)
+        except BaseException:
+            self._analysis_running = False
+            raise
+
+    def _analysis_status(self, text: str, level: str) -> None:
+        ctx = getattr(self.state, "ctx", None)
+        if ctx is not None:
+            ctx.status(text, level)
+        else:
+            dialogs.show_info(self.frame, "Analysis", text)
 
     def _reload_feedback(self) -> None:
         if not self.state.dataset_dir:
@@ -607,10 +633,7 @@ class AnalysisTab(BaseTab):
             self._refresh_datasets()
             self._load_dataset()
             self._try_load_model()
-            try:
-                self.parent.event_generate("<<DatasetChanged>>", when="tail")
-            except Exception:
-                pass
+            self._emit_dataset_changed()
         except Exception as exc:
             dialogs.show_error(self.frame, "Delete Failed", exc)
 
@@ -651,9 +674,6 @@ class AnalysisTab(BaseTab):
             self._refresh_datasets()
             self._load_dataset()
             self._try_load_model()
-            try:
-                self.parent.event_generate("<<DatasetChanged>>", when="tail")
-            except Exception:
-                pass
+            self._emit_dataset_changed()
         except Exception as exc:
             dialogs.show_error(self.frame, "Move Failed", exc)
