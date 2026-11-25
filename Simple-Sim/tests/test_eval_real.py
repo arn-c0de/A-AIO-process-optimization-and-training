@@ -50,3 +50,12 @@ def test_evaluate_scores_groups_and_binary_rates(tmp_path):
 def test_roi_size_from_checkpoint_config():
     assert roi_size({"config": {"roi": {"width_px": 128, "height_px": 96}}}, 256) == (128, 96)
     assert roi_size({}, 256) == (256, 256)
+
+
+def test_eval_real_reads_the_roi_of_an_ensemble():
+    from tools.eval_real import roi_size
+
+    assert roi_size({"config": {"roi": {"width_px": 64, "height_px": 48}}}, 256) == (64, 48)
+    ensemble = {"models": [{"checkpoint": {"config": {"roi": {"width_px": 128, "height_px": 128}}}}]}
+    assert roi_size(ensemble, 256) == (128, 128)
+    assert roi_size({}, 256) == (256, 256)

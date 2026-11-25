@@ -25,7 +25,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(ROOT))
 
 from simple_sim.cli_utils import add_json_flag, configure_cli_logging, emit_result  # noqa: E402
 from simple_sim.io_utils import atomic_write_json, load_yaml  # noqa: E402

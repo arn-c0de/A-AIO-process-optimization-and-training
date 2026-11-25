@@ -9,9 +9,13 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
-from simple_sim.generators.blender3d.bake import bake_fields
+from simple_sim.board.footprints import profile_footprint
+from simple_sim.generation.blender import blender_job, blender_settings
+from simple_sim.generators.blender3d.bake import bake_fields, profile_component_height_mm
 from simple_sim.generators.blender3d import profile_job_fields, render_blender_batch, write_jobs_jsonl
 from simple_sim.generators.blender3d.runner import BlenderCancelled
+
+from .yaml_io import range_mid
 
 
 StatusCallback = Callable[[str, Path | None], None]
@@ -79,7 +83,6 @@ class BlenderLivePreviewWorker:
         run = run_data.get("run") or {}
         roi = run_data.get("roi") or {}
         render = run_data.get("render") or {}
-        blender = render.get("blender") or {}
 
         backend = str(render.get("backend") or "").strip()
         if backend != "blender_3d":
@@ -88,18 +91,14 @@ class BlenderLivePreviewWorker:
         if not isinstance(profile_data.get("render_3d"), dict):
             raise ValueError("profile.render_3d missing")
 
-        footprint = str((profile_data.get("component") or {}).get("footprint") or "chip_2pad").strip() or "chip_2pad"
-        nominal_dims = ((profile_data.get("component") or {}).get("nominal_dims_mm") or {})
+        footprint = profile_footprint(profile_data)
         geometry_ranges = profile_data.get("geometry_ranges") or {}
 
         width_px = int(roi.get("width_px", 256))
         height_px = int(roi.get("height_px", 256))
         mm_per_px = float(roi.get("mm_per_px", 0.01))
 
-        blender_executable = str(blender.get("executable", "blender"))
-        cycles_samples = int(blender.get("samples", 48))
-        device = str(blender.get("device", "CPU"))
-        engine = str(blender.get("engine", "BLENDER_EEVEE"))
+        settings = blender_settings(run_data)  # same defaults as dataset generation (job_schema)
 
         digest = hashlib.sha1(
             json.dumps({"p": profile_data, "r": run_data}, sort_keys=True, default=str).encode("utf-8")
@@ -111,38 +110,29 @@ class BlenderLivePreviewWorker:
         image_rel = f"preview_{digest}.png"
 
         nominal = self._nominal_from_ranges(geometry_ranges)
-        component_height_mm = float(nominal_dims.get("height", 0.45))
-
-        job = {
+        record = {
             "image_path": image_rel,
             "seed": int(run.get("seed", 42)),
-            "mm_per_px": mm_per_px,
-            "roi_width_px": width_px,
-            "roi_height_px": height_px,
-            "footprint": footprint,
-            "component_height_mm": component_height_mm,
             "nominal": nominal,
-            "defect": {
-                "type": "OK",
-                "shift_x": 0.0,
-                "shift_y": 0.0,
-                "rotation_deg": 0.0,
-                "tilt_deg": 0.0,
-            },
+            "defect": {"type": "OK", "shift_x": 0.0, "shift_y": 0.0, "rotation_deg": 0.0, "tilt_deg": 0.0},
             "augment": {"rotation_deg": 0.0},
-            "render_3d": profile_data.get("render_3d") or {},
-            **profile_job_fields(profile_data),
-            **bake_fields(render, roi),  # same board bake (camera, board model, gloss) as the dataset
         }
+        job = blender_job(
+            record, mm_per_px=mm_per_px, roi_width=width_px, roi_height=height_px, footprint=footprint,
+            component_height_mm=profile_component_height_mm(profile_data),
+            render_3d=profile_data.get("render_3d") or {},
+            # same board bake (camera, board model, gloss) as the dataset
+            bake={**profile_job_fields(profile_data), **bake_fields(render, roi)},
+        )
 
         write_jobs_jsonl(jobs_path, [job])
         render_blender_batch(
             jobs_path=jobs_path,
             output_root=out_root,
-            blender_executable=blender_executable,
-            cycles_samples=cycles_samples,
-            device=device,
-            engine=engine,
+            blender_executable=settings["executable"],
+            cycles_samples=settings["samples"],
+            device=settings["device"],
+            engine=settings["engine"],
             # Terminates Blender when the editor closes (it kept rendering as an orphan) or when a
             # newer edit is waiting (the outdated render only delayed it).
             should_stop=lambda: not self._running or self._pending is not None,
@@ -155,13 +145,7 @@ class BlenderLivePreviewWorker:
     @staticmethod
     def _nominal_from_ranges(geometry_ranges: dict[str, Any]) -> dict[str, float]:
         def mid(name: str, fallback: float) -> float:
-            raw = geometry_ranges.get(name, [fallback, fallback])
-            if isinstance(raw, list) and len(raw) == 2:
-                try:
-                    return (float(raw[0]) + float(raw[1])) * 0.5
-                except Exception:
-                    return fallback
-            return fallback
+            return range_mid(geometry_ranges, name, fallback)
 
         out = {
             "pad_width": mid("pad_width", 30.0),

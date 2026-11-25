@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -15,16 +13,6 @@ KEY_CATEGORY_ASSIGNMENTS = "datasets.category_assignments"
 KEY_ARCHIVED_PATHS = "datasets.archived_paths"
 
 
-def _safe_json_load(raw: object, *, want: type, fallback):
-    if not isinstance(raw, str):
-        return fallback
-    try:
-        obj = json.loads(raw)
-    except Exception:
-        return fallback
-    return obj if isinstance(obj, want) else fallback
-
-
 def dataset_relative_key(sim_root: Path, dataset_dir: Path) -> str:
     try:
         return str(dataset_dir.resolve().relative_to(sim_root.resolve()))
@@ -32,12 +20,18 @@ def dataset_relative_key(sim_root: Path, dataset_dir: Path) -> str:
         return str(dataset_dir.resolve())
 
 
+def _strictly_under(path: Path, root: Path) -> bool:
+    """True when resolved *path* lies below resolved *root* (not *root* itself)."""
+    rp, rr = path.resolve(), root.resolve()
+    return rp != rr and rp.is_relative_to(rr)
+
+
 def dataset_display_name(dataset_dir: Path, *, runs_root: Path, versions_root: Path) -> str:
     try:
         rp = dataset_dir.resolve()
-        if str(rp).startswith(str(runs_root.resolve()) + os.sep):
+        if _strictly_under(rp, runs_root):
             return rp.name
-        if str(rp).startswith(str(versions_root.resolve()) + os.sep):
+        if _strictly_under(rp, versions_root):
             return f"{rp.parent.name}:{rp.name}"
     except Exception:
         pass
@@ -63,13 +57,22 @@ def list_dataset_dirs(sim_root: Path) -> list[Path]:
     return cand
 
 
+def dataset_kind(sim_root: Path, dataset_dir: Path) -> str | None:
+    """``"run"`` (under ``outputs/sim_data/runs``), ``"snapshot"`` (under ``.../versions``), else ``None``."""
+    runs, versions = sim_data_roots(sim_root, create=False)
+    try:
+        if _strictly_under(dataset_dir, runs):
+            return "run"
+        if _strictly_under(dataset_dir, versions):
+            return "snapshot"
+    except Exception:
+        pass
+    return None
+
+
 def is_snapshot_dataset(sim_root: Path, dataset_dir: Path) -> bool:
     """True when ``dataset_dir`` lives under ``outputs/sim_data/versions``."""
-    _runs, versions = sim_data_roots(sim_root, create=False)
-    try:
-        return str(dataset_dir.resolve()).startswith(str(versions.resolve()) + os.sep)
-    except Exception:
-        return False
+    return dataset_kind(sim_root, dataset_dir) == "snapshot"
 
 
 def dataset_sort_key(sim_root: Path, dataset_dir: Path) -> tuple:
@@ -106,6 +109,30 @@ def unique_dataset_labels(dataset_dirs: Iterable[Path], *, runs_root: Path, vers
     )
 
 
+def sorted_dataset_labels(sim_root: Path) -> dict[str, Path]:
+    """``unique_dataset_labels`` of every dataset, ordered like ``sorted_dataset_dirs``."""
+    runs, versions = sim_data_roots(sim_root)
+    return unique_dataset_labels(sorted_dataset_dirs(sim_root), runs_root=runs, versions_root=versions)
+
+
+def same_path(a: Path, b: Path) -> bool:
+    """``a`` and ``b`` name the same file system entry (resolved; plain comparison if that fails)."""
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return str(a) == str(b)
+
+
+def label_for_dataset(labels: dict[str, Path], dataset_dir: Path | None, *, alt_label: str | None = None) -> str | None:
+    """The label in *labels* whose path is *dataset_dir* (or that equals *alt_label*), else ``None``."""
+    if dataset_dir is None:
+        return None
+    for label, p in labels.items():
+        if same_path(p, dataset_dir) or (alt_label is not None and label == alt_label):
+            return label
+    return None
+
+
 def catalog_labels(sim_root: Path, catalog: DatasetCatalog, *, save_widget=None) -> dict[str, Path]:
     """Unique ``[Category] name`` labels -> dataset dir for every non-archived dataset.
 
@@ -140,9 +167,9 @@ class DatasetCatalog:
             self.category_assignments = {}
             self.archived_paths = set()
             return
-        custom = _safe_json_load(self.store.get(KEY_CUSTOM_CATEGORIES, "[]"), want=list, fallback=[])
-        assign = _safe_json_load(self.store.get(KEY_CATEGORY_ASSIGNMENTS, "{}"), want=dict, fallback={})
-        archived = _safe_json_load(self.store.get(KEY_ARCHIVED_PATHS, "[]"), want=list, fallback=[])
+        custom = self.store.get_json(KEY_CUSTOM_CATEGORIES, want=list, fallback=[])
+        assign = self.store.get_json(KEY_CATEGORY_ASSIGNMENTS, want=dict, fallback={})
+        archived = self.store.get_json(KEY_ARCHIVED_PATHS, want=list, fallback=[])
 
         self.custom_categories = [str(it).strip() for it in custom if str(it).strip() and str(it).strip() != DEFAULT_CATEGORY]
         self.category_assignments = {
@@ -155,9 +182,9 @@ class DatasetCatalog:
     def save(self, widget=None) -> None:
         if self.store is None:
             return
-        self.store.set(KEY_CUSTOM_CATEGORIES, json.dumps(sorted(set(self.custom_categories)), ensure_ascii=True))
-        self.store.set(KEY_CATEGORY_ASSIGNMENTS, json.dumps(self.category_assignments, ensure_ascii=True))
-        self.store.set(KEY_ARCHIVED_PATHS, json.dumps(sorted(self.archived_paths), ensure_ascii=True))
+        self.store.set_json(KEY_CUSTOM_CATEGORIES, sorted(set(self.custom_categories)))
+        self.store.set_json(KEY_CATEGORY_ASSIGNMENTS, self.category_assignments)
+        self.store.set_json(KEY_ARCHIVED_PATHS, sorted(self.archived_paths))
         if widget is not None:
             self.store.schedule_save(widget)
 

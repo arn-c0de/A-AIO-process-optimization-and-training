@@ -53,9 +53,10 @@ import numpy as np
 if not __package__:  # run as a script (python tools/x.py): make the checkout importable
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from simple_sim.image_sampling import percentiles_10_50_90  # noqa: E402
 from simple_sim.io_utils import read_json  # noqa: E402
+from simple_sim.board3d.dv_store import SIDES  # noqa: E402
 
-SIDES = ("top", "bottom")
 CROP_PART_LENGTHS = 3.04       # the app's crop field in body lengths (measured on the real crops)
 PART_HALF_FACTOR = 1.6         # keep-out half side / body half length (body + pads + a little clearance)
 PART_HALF_MIN_MM = 0.6
@@ -253,7 +254,7 @@ def summarize(results: list[dict[str, Any]], settings: dict[str, Any]) -> dict[s
             counts.update(r["counts"])
         ppm = [r["still_px_per_mm"] for r in rows]
         out["sides"][side] = {"photos": len(rows), "textures": counts["accepted"], "counts": dict(counts),
-                              "still_px_per_mm": [round(float(v), 2) for v in np.percentile(ppm, (10, 50, 90))],
+                              "still_px_per_mm": percentiles_10_50_90(ppm, 2),
                               "runs_with_shapes": sum(1 for r in rows if r["with_shapes"]),
                               "photos_without_texture": sum(1 for r in rows if r["counts"].get("accepted", 0) == 0)}
     return out

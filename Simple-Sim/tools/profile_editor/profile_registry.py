@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 from simple_sim.file_cache import FileCache, file_signature
 from simple_sim.io_utils import load_yaml
 
@@ -36,7 +38,7 @@ class ProfileRegistry:
         def parse(p: Path) -> object:
             try:
                 return load_yaml(p) or {}
-            except Exception:
+            except (OSError, ValueError, yaml.YAMLError):  # ValueError: not UTF-8
                 return _PARSE_FAILED
 
         return self._yaml_cache.get(path, parse, missing=_PARSE_FAILED)

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 from pathlib import Path
-from collections.abc import Callable
-import threading
 
-from simple_sim.two_stage import TwoStageClassifier
+from simple_sim.two_stage import TwoStageClassifier, TwoStageResult
 
 
 class BoardDetectionLogic:
@@ -22,37 +20,26 @@ class BoardDetectionLogic:
         image_path: Path,
         device: str,
         min_profile_confidence: float,
-        on_complete: Callable[[object], None],
-        on_error: Callable[[str], None],
-    ) -> None:
-        """Run two-stage prediction on a worker thread.
+    ) -> TwoStageResult:
+        """Two-stage prediction of *image_path* (blocking: call it from a worker, e.g. ``BaseTab._run_background``).
 
-        ``on_complete``/``on_error`` are invoked from that worker thread; callers
-        must marshal any Tk work onto the main loop (e.g. ``BaseTab.post`` / ``UiDispatcher.post``).
+        The classifier is reused while the model paths and the device stay the same.
         """
-        def _run():
-            try:
-                if (
-                    self._classifier is None
-                    or self._profile_model_path != profile_model_path
-                    or self._defect_bundle_path != defect_bundle_path
-                    or self._device != device
-                ):
-                    self._classifier = TwoStageClassifier(
-                        profile_model_path=profile_model_path,
-                        defect_bundle_path=defect_bundle_path,
-                        device=device,
-                        min_profile_confidence=min_profile_confidence,
-                    )
-                    self._profile_model_path = profile_model_path
-                    self._defect_bundle_path = defect_bundle_path
-                    self._device = device
-                else:
-                    self._classifier.min_profile_confidence = min_profile_confidence
-
-                result = self._classifier.predict(image_path)
-                on_complete(result)
-            except Exception as e:
-                on_error(str(e))
-
-        threading.Thread(target=_run, daemon=True).start()
+        if (
+            self._classifier is None
+            or self._profile_model_path != profile_model_path
+            or self._defect_bundle_path != defect_bundle_path
+            or self._device != device
+        ):
+            self._classifier = TwoStageClassifier(
+                profile_model_path=profile_model_path,
+                defect_bundle_path=defect_bundle_path,
+                device=device,
+                min_profile_confidence=min_profile_confidence,
+            )
+            self._profile_model_path = profile_model_path
+            self._defect_bundle_path = defect_bundle_path
+            self._device = device
+        else:
+            self._classifier.min_profile_confidence = min_profile_confidence
+        return self._classifier.predict(image_path)

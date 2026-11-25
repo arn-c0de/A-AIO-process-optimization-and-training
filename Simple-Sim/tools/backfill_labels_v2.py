@@ -16,7 +16,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(ROOT))
 
 from simple_sim.cli_utils import add_json_flag, run_cli  # noqa: E402
 from simple_sim.manifest import load_dataset_manifest, resolve_dataset_profile  # noqa: E402

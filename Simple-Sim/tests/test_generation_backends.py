@@ -5,24 +5,19 @@ from __future__ import annotations
 import dataclasses
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
 from simple_sim.classes import Backend
-from simple_sim.config import load_config
 from simple_sim.generators import backends
 from simple_sim.generators.backends import BACKENDS, backend_info, load_entry_point
 
-ROOT = Path(__file__).resolve().parent.parent
+from tests.helpers import ROOT, small_run_config
 CALLS: list[tuple[str, int]] = []
 
 
 def _small_config() -> dict:
-    cfg = load_config(ROOT / "configs" / "run_0001.yaml")
-    cfg["classes"] = {"OK": 2, "MISSING": 1, "MISALIGNED": 1}
-    cfg["roi"].update(width_px=48, height_px=48)
-    return cfg
+    return small_run_config({"OK": 2, "MISSING": 1, "MISALIGNED": 1}, 48)
 
 
 def test_every_backend_names_importable_renderers():
@@ -63,11 +58,10 @@ def test_generate_dataset_dispatches_through_backend_info(tmp_path, monkeypatch)
     assert '"fake": 3' in meta  # details went into render_meta
 
 
-def test_extend_state_is_streamed_and_keeps_no_meta_rows(tmp_path, monkeypatch):
+def test_extend_state_is_streamed_and_keeps_no_meta_rows(tmp_path):
     from simple_sim.generation.dataset import LabelKey, generate_dataset, load_extend_state, read_existing_max_index, resolve_run
     from simple_sim.schema import LabelRow, MetaRow, read_jsonl
 
-    monkeypatch.delenv("IMAGE_FILTERS", raising=False)
     ds = tmp_path / "ds"
     generate_dataset(_small_config(), ds, project_root=ROOT)
     generate_dataset(_small_config(), ds, project_root=ROOT, extend=True)

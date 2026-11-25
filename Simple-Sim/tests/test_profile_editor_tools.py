@@ -1,13 +1,11 @@
 """Tests for non-GUI logic in tools/: profile editor state store, label backfill, dataset merge."""
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.generation.dataset import generate_dataset
 from simple_sim.manifest import read_dataset_manifest
@@ -205,3 +203,11 @@ def test_create_multi_dataset_single_profile_writes_v1_manifest(tmp_path):
     assert manifest["manifest_version"] == 1
     assert manifest["component_profile"]["profile_id"] == "chip_0603_resistor@1"
     assert {r.profile_id for r in read_jsonl(out / "labels.jsonl", LabelRow)} == {"chip_0603_resistor@1"}
+
+
+def test_range_mid_midpoint_and_fallbacks():
+    from tools.profile_editor.yaml_io import range_mid
+
+    ranges = {"a": [10, 20], "b": ["x", 1], "c": 5, "d": [1, 2, 3]}
+    assert range_mid(ranges, "a", 0.0) == 15.0
+    assert [range_mid(ranges, k, 7.0) for k in ("b", "c", "d", "missing")] == [7.0, 7.0, 7.0, 7.0]

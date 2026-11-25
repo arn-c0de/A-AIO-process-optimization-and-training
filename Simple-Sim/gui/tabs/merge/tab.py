@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import queue
 import shutil
 import tkinter as tk
@@ -11,10 +10,9 @@ from tkinter import ttk
 from typing import Any
 
 from gui import dialogs
-from gui.utils.model_groups import available_groups, group_for_model
+from gui.utils.model_groups import load_favorites, load_group_state, available_groups, group_for_model
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.core.tasks import as_task_fn, runner_for
 from simple_sim.model_bundle import read_bundle_meta
 from simple_sim.io_utils import now_tag
 
@@ -55,55 +53,20 @@ class MergeTab(BaseTab):
     def _append_log(self, s: str) -> None:
         self.ui.append_log(s)
 
-    def _run_background(self, fn: Any, *, name: str, on_done: Any, on_error: Any, on_finally: Any = None) -> None:
-        """Run ``fn()`` / ``fn(task)`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
-        call = as_task_fn(fn)  # fn() or fn(task) for cancel/progress
-        runner_for(self.state, self.frame).run(call, name=name, on_done=on_done, on_error=on_error, on_finally=on_finally)
-
     def _rebuild(self) -> None:
         self.ui.rebuild_tree(self._profile_models, self._iid_to_model, self._model_meta_cache,
                              self._selected_weights, self._favorites, self._group_for_path, self._available_groups())
         self._refresh_selection_summary()
 
     def _load_group_data(self) -> None:
-        self._favorites.clear()
-        fav_path = self.logic._model_root() / "favorites.json"
-        if fav_path.exists():
-            try:
-                obj = json.loads(fav_path.read_text(encoding="utf-8"))
-                if isinstance(obj, dict):
-                    for it in (obj.get("favorites") or []):
-                        if isinstance(it, dict):
-                            rp = str(it.get("path") or "").strip()
-                            if rp:
-                                self._favorites[rp] = it
-            except Exception:
-                pass
-
-        self._group_assignments.clear()
-        self._custom_groups.clear()
-        st = self.state.settings_store
-        if st is None:
-            return
-        try:
-            custom_raw = st.get("weights.custom_groups")
-            if isinstance(custom_raw, str):
-                parsed = json.loads(custom_raw)
-                if isinstance(parsed, list):
-                    self._custom_groups = [str(k) for k in parsed if isinstance(k, str) and k]
-            assign_raw = st.get("weights.group_assignments")
-            if isinstance(assign_raw, str):
-                parsed = json.loads(assign_raw)
-                if isinstance(parsed, dict):
-                    self._group_assignments = {str(k): str(v) for k, v in parsed.items() if k and v}
-        except Exception:
-            pass
+        self._favorites = load_favorites(self.logic._model_root())
+        self._custom_groups, self._group_assignments = load_group_state(self.state.settings_store)
 
     def _available_groups(self) -> list[str]:
         return available_groups(self._custom_groups, self._group_assignments, bundles=True)
 
     def _group_for_path(self, p: Path) -> str:
-        rel = self.logic._rel(p)
+        rel = self.logic.rel_path(p)
         return group_for_model(p, rel, model_root=self.logic._model_root(), assignments=self._group_assignments,
                                groups=self._available_groups(), favorite=rel in self._favorites,
                                bundled=self.logic._bundle_root_for_path(p) is not None)
@@ -281,9 +244,6 @@ class MergeTab(BaseTab):
             self._status(f"Ensemble build failed: {exc}", "error")
 
         self._run_background(work, name="Build ensemble", on_done=on_done, on_error=on_error)
-
-    def _log_threadsafe(self, msg: str) -> None:
-        runner_for(self.state, self.frame).post(lambda: self._append_log(msg))
 
     def _refresh_bundles(self) -> None:
         bundle_dirs = self.logic.get_existing_bundles()

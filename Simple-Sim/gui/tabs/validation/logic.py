@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 import json
 
-from gui.utils.dataset_catalog import list_dataset_dirs
 from gui.utils.validation_suite import run_validation_suite
 from gui.utils.flag_manager import FlagManager
 from simple_sim.io_utils import atomic_write_text, now_tag
@@ -19,9 +18,6 @@ class ValidationLogic:
 
     def set_dataset(self, dataset_dir: Path) -> None:
         self.flag_manager = FlagManager(dataset_dir)
-
-    def get_datasets(self) -> list[Path]:
-        return list_dataset_dirs(self.sim_root)
 
     def run_validation(self, dataset_dir: Path, checks: dict[str, bool],
                        cancelled: Any = None) -> dict[str, Any]:

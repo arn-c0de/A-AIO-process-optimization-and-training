@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import tkinter as tk
-from tkinter import ttk, simpledialog, filedialog
+from tkinter import ttk
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
@@ -543,11 +543,6 @@ class PipelineUI(LogViewHost):
 
     fmt_bytes = staticmethod(fmt_bytes)
 
-    def refresh_thumbnails(self, recent_imgs: list[str], dataset_dir: Path | None, label_dict: dict[str, str], image_to_sample: dict[str, str], meta_by_sample: dict[str, MetaRow], meta_by_image_rel: dict[str, MetaRow], draw_defect_overlay_func: Callable[..., Any]) -> None:
-        """Synchronous decode + show (the tab uses ``prepare_thumbnails`` in a worker instead)."""
-        self.show_thumbnails(self.prepare_thumbnails(recent_imgs, dataset_dir, label_dict, image_to_sample,
-                                                     meta_by_sample, meta_by_image_rel, draw_defect_overlay_func))
-
     def prepare_thumbnails(self, recent_imgs: list[str], dataset_dir: Path | None, label_dict: dict[str, str], image_to_sample: dict[str, str], meta_by_sample: dict[str, MetaRow], meta_by_image_rel: dict[str, MetaRow], draw_defect_overlay_func: Callable[..., Any]) -> list[tuple[Image.Image | None, str]]:
         """Tk-free part (safe on a worker thread): one ``(PIL thumbnail or None, caption)`` per slot."""
         return prepare_thumbnail_cells(len(self.img_labels), recent_imgs, dataset_dir, label_dict, image_to_sample,
@@ -605,14 +600,8 @@ class PipelineUI(LogViewHost):
         return dialogs.confirm(self.frame, title, message)
 
     def ask_string(self, title: str, prompt: str, initialvalue: str = "") -> str | None:
-        return simpledialog.askstring(title, prompt, initialvalue=initialvalue, parent=self.frame)
+        return dialogs.ask_string(self.frame, title, prompt, initialvalue)
 
-    def open_file_dialog(self, title: str, filetypes: list[tuple[str, str]], initialdir: str) -> str | None:
-        return filedialog.askopenfilename(title=title, filetypes=filetypes, initialdir=initialdir)
-
-    def open_dir_dialog(self, title: str, initialdir: str) -> str | None:
-        return filedialog.askdirectory(title=title, initialdir=initialdir)
-    
     def set_dataset_combo_values(self, values: list[str]) -> None:
         self.dataset_combo["values"] = values
 

@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-import threading
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from gui.utils.dataset_catalog import list_dataset_dirs
 from gui.utils.paths import list_model_paths, model_root
+from gui.utils.pipeline_helpers import batch_predict_argv
 from gui.utils.process import StreamingProcessLogic
 from simple_sim.cli import argv_for
-from simple_sim.cli_utils import parse_result_line
 from simple_sim.dataset_files import LABELS_JSONL, META_JSONL
 from simple_sim.dataset_index import DatasetIndex
 from simple_sim.eval_utils import dataset_profile
@@ -25,9 +22,6 @@ class _Stopped(Exception):
 
 
 class PredictionsLogic(StreamingProcessLogic):
-    def get_datasets(self) -> list[Path]:
-        return list_dataset_dirs(self.sim_root)
-
     def get_models(self) -> list[Path]:
         paths = list_model_paths(model_root(self.sim_root))
         return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
@@ -48,40 +42,38 @@ class PredictionsLogic(StreamingProcessLogic):
         save_preds: bool,
         auto_train_bundle: bool,
         profile_model_path: Path | None,
-        on_complete: Callable[..., None],
-    ) -> None:
+    ) -> tuple[Path | None, Path | None, Path | None, list[dict[str, Any]], dict[str, dict[str, Any]], bool]:
+        """Predict every dataset in turn (blocking; call from a worker).
+
+        Returns ``(last report, last preds, last dataset dir, results, results by dataset key, stopped)``.
+        """
         self.stop_evt.clear()
-
-        def worker() -> None:
-            last: dict[str, Any] = {}
-            multi_results: list[dict[str, Any]] = []
-            multi_result_by_key: dict[str, dict[str, Any]] = {}
-            try:
-                for idx, data_dir in enumerate(dataset_dirs, 1):
-                    if self.stop_evt.is_set():
-                        break
-                    try:
-                        result = self._predict_dataset(
-                            model_path, data_dir, progress=f"[dataset {idx}/{len(dataset_dirs)}]", split=split, device=device, max_samples=max_samples,
-                            save_preds=save_preds, auto_train_bundle=auto_train_bundle,
-                            profile_model_path=profile_model_path,
-                        )
-                    except _Stopped:
-                        self.log_q.put("\n[stopped]\n")
-                        break
-                    if result is None:
-                        continue
-                    if result["key"] is not None:
-                        multi_results.append(result)
-                        multi_result_by_key[result["key"]] = result
-                    last = result
-            except Exception as e:
-                self.log_q.put(f"\n[error] Failed to run predictions: {e}\n")
-            finally:
-                on_complete(last.get("report_path"), last.get("preds_path"), last.get("dataset_dir"),
-                            multi_results, multi_result_by_key, self.stop_evt.is_set())
-
-        threading.Thread(target=worker, daemon=True).start()
+        last: dict[str, Any] = {}
+        multi_results: list[dict[str, Any]] = []
+        multi_result_by_key: dict[str, dict[str, Any]] = {}
+        try:
+            for idx, data_dir in enumerate(dataset_dirs, 1):
+                if self.stop_evt.is_set():
+                    break
+                try:
+                    result = self._predict_dataset(
+                        model_path, data_dir, progress=f"[dataset {idx}/{len(dataset_dirs)}]", split=split, device=device, max_samples=max_samples,
+                        save_preds=save_preds, auto_train_bundle=auto_train_bundle,
+                        profile_model_path=profile_model_path,
+                    )
+                except _Stopped:
+                    self.log_q.put("\n[stopped]\n")
+                    break
+                if result is None:
+                    continue
+                if result["key"] is not None:
+                    multi_results.append(result)
+                    multi_result_by_key[result["key"]] = result
+                last = result
+        except Exception as e:
+            self.log_q.put(f"\n[error] Failed to run predictions: {e}\n")
+        return (last.get("report_path"), last.get("preds_path"), last.get("dataset_dir"),
+                multi_results, multi_result_by_key, self.stop_evt.is_set())
 
     def _bundle_checkpoint(self, bundle_dir: Path, data_dir: Path, *, device: str, auto_train: bool) -> Path | None:
         """Checkpoint of ``bundle_dir`` for the profile of ``data_dir``, trained on demand with ``auto_train``.
@@ -143,23 +135,14 @@ class PredictionsLogic(StreamingProcessLogic):
 
         out_dir = data_dir / "predictions"
         out_dir.mkdir(parents=True, exist_ok=True)
-        cmd = argv_for(
-            "batch-predict", model=model_arg_path, data=data_dir, split=split, out_dir=out_dir,
-            device=None if device == "auto" else device, max_samples=max_samples or None,
-            save_preds=bool(save_preds), profile_model=profile_model_path, json=True,
-        )
+        cmd = batch_predict_argv(model_arg_path, data_dir, split=split, out_dir=out_dir, device=device,
+                                 max_samples=max_samples, save_preds=save_preds, profile_model=profile_model_path)
         self.log_q.put(f"\n{progress} {data_dir}\n")
         self.log_q.put("[cmd] " + " ".join(cmd) + "\n")
 
-        paths: dict[str, Path | None] = {"report_path": None, "preds_path": None}
-
-        def on_line(line: str) -> None:
-            # The --json result line carries the paths (plan D22: no scraping of human output).
-            if (res := parse_result_line(line)) is not None:
-                for name in paths:
-                    paths[name] = Path(res[name]) if res.get(name) else None
-
-        rc = self._stream(cmd, on_line=on_line)
+        # The --json result line carries the paths (plan D22: no scraping of human output).
+        rc, res = self._stream_result(cmd)
+        paths = {name: Path(res[name]) if res and res.get(name) else None for name in ("report_path", "preds_path")}
         if self.stop_evt.is_set():
             raise _Stopped
         if rc != 0:

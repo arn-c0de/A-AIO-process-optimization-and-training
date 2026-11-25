@@ -4,7 +4,7 @@
   keys) for every manifest the writers produce and for freshly generated datasets;
   ``load_dataset_manifest``, ``DatasetIndex.manifest()``.
 - ``Report``: read-only mapping that still answers ``report["_path"]``; ``ModelRanking``.
-- Keyword-only manifest writers (legacy positional form still works silently, same bytes),
+- Keyword-only manifest writers,
   ``stratified_splits``, ``parse_iso_ts`` contract, ``config_schema`` deprecation, ``schema`` ->
   ``rows`` alias.
 """
@@ -17,13 +17,11 @@ import os
 import shutil
 import sys
 import tempfile
-import warnings
 from pathlib import Path
 
 import pytest
 import yaml
 
-from simple_sim import manifest as manifest_mod
 from simple_sim.dataset_files import DATASET_MANIFEST
 from simple_sim.io_utils import atomic_write_json, parse_iso_ts
 from simple_sim.manifest import (DatasetManifest, ProfileRef, load_dataset_manifest, read_dataset_manifest,
@@ -164,7 +162,6 @@ def test_fresh_datasets_round_trip(tmp_path: Path, monkeypatch) -> None:
     from simple_sim.generation.dataset import generate_dataset
     from simple_sim.generation.profile_dataset import generate_profile_dataset
 
-    monkeypatch.delenv("IMAGE_FILTERS", raising=False)
     monkeypatch.setenv("SIMPLE_SIM_RENDER_EXECUTOR", "thread")
     cfg = yaml.safe_load((ROOT / "configs" / "run_0001.yaml").read_text(encoding="utf-8"))
     cfg["classes"] = dict.fromkeys(list(cfg["classes"])[:2], 1)
@@ -223,32 +220,13 @@ def test_dataset_index_manifest_cached_and_invalidated(tmp_path: Path) -> None:
 
 # -- writers: keyword-only (A6) ----------------------------------------------------------------
 
-def test_writers_positional_form_still_works_silently(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(manifest_mod, "now_iso", lambda: "2026-11-07T00:00:00")
-    for name in ("kw", "pos", "kw2", "pos2", "x"):
-        (tmp_path / name).mkdir()
+def test_writers_are_keyword_only(tmp_path: Path) -> None:
     rows = _labels(3)
     splits = {"train": [r.id for r in rows]}
-    write_dataset_manifest(tmp_path / "kw", "run", profile_id="p@1", profile_hash="h", profile_path="p.yaml",
-                           meta_rows=rows, label_rows=rows, splits=splits, git_commit="a")
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")  # legacy positional calls (scripts, GUI) must stay silent
-        write_dataset_manifest(tmp_path / "pos", "run", "p@1", "h", "p.yaml", rows, rows, splits, git_commit="a")
-    assert (tmp_path / "kw" / DATASET_MANIFEST).read_bytes() == (tmp_path / "pos" / DATASET_MANIFEST).read_bytes()
-
-    profiles = [{"profile_id": "a", "profile_hash": "h", "profile_path": "a.yaml"},
-                {"profile_id": "b", "profile_hash": "h", "profile_path": "b.yaml"}]
-    write_multi_profile_manifest(tmp_path / "kw2", "run", profiles=profiles, meta_rows=rows, label_rows=rows,
-                                 splits=splits, script_name="s", git_commit="a")
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        write_multi_profile_manifest(tmp_path / "pos2", "run", profiles, rows, rows, splits, "s", git_commit="a")
-    assert (tmp_path / "kw2" / DATASET_MANIFEST).read_bytes() == (tmp_path / "pos2" / DATASET_MANIFEST).read_bytes()
-
-    with pytest.raises(TypeError, match="multiple values"):
-        write_dataset_manifest(tmp_path / "x", "run", "p@1", profile_id="p@1")
-    with pytest.raises(TypeError, match="positional"):
-        write_multi_profile_manifest(tmp_path / "x", "run", *([None] * 9))
+    with pytest.raises(TypeError):
+        write_dataset_manifest(tmp_path, "run", "p@1", "h", "p.yaml", rows, rows, splits)  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        write_multi_profile_manifest(tmp_path, "run", [], rows, rows, splits)  # type: ignore[misc]
     import inspect
     params = inspect.signature(write_dataset_manifest).parameters
     assert [n for n, p in params.items() if p.kind is p.POSITIONAL_OR_KEYWORD] == ["output_dir", "run_id"]

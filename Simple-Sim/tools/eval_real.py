@@ -26,7 +26,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import torch
 
@@ -35,6 +34,7 @@ if not __package__:  # run as a script (python tools/x.py): make the checkout im
 
 from simple_sim.data_loader import preprocess_bgr  # noqa: E402
 from simple_sim.eval_utils import model_outputs  # noqa: E402
+from simple_sim.image_sampling import read_bgr_or_exit, resize_to, sample_subset  # noqa: E402
 from simple_sim.images import list_images  # noqa: E402
 from simple_sim.metrics import calibration_metrics, format_calibration  # noqa: E402
 from simple_sim.models import load_checkpoint_model  # noqa: E402
@@ -69,13 +69,7 @@ def predict_probs(model: torch.nn.Module, files: list[Path], size: tuple[int, in
     """Softmax probabilities ``[N, C]`` of *files* (with *tta*: averaged over flips and quarter turns)."""
     probs: list[np.ndarray] = []
     for i in range(0, len(files), batch):
-        imgs = []
-        for p in files[i:i + batch]:
-            img = cv2.imread(str(p), cv2.IMREAD_COLOR)
-            if img is None:
-                raise SystemExit(f"Failed to read {p}")
-            interp = cv2.INTER_CUBIC if img.shape[1] < size[0] else cv2.INTER_AREA
-            imgs.append(preprocess_bgr(cv2.resize(img, size, interpolation=interp)))
+        imgs = [preprocess_bgr(resize_to(read_bgr_or_exit(p), size)) for p in files[i:i + batch]]
         probs.append(torch.softmax(model_outputs(model, torch.stack(imgs), tta=tta).float(), dim=1).numpy())
     return np.concatenate(probs) if probs else np.zeros((0, 0), dtype=np.float32)
 
@@ -93,8 +87,7 @@ def evaluate(model: torch.nn.Module, class_names: list[str], root: Path, size: t
     cal_probs: list[np.ndarray] = []
     cal_true: list[int] = []
     for group, cls, files in class_folders(root):
-        if 0 < limit < len(files):  # 0 = all, as in mix-real / dv-crops
-            files = [files[i] for i in sorted(rng.choice(len(files), limit, replace=False))]
+        files = sample_subset(files, limit, rng)  # 0 = all, as in mix-real / dv-crops
         probs = predict_probs(model, files, size, tta=tta)
         names = [class_names[i] for i in probs.argmax(1)]
         hist = Counter(names)

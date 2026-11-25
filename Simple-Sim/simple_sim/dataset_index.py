@@ -13,14 +13,12 @@ Rows are shared between all users of the cache: treat them, the returned tuples 
 
 from __future__ import annotations
 
-import os
-import threading
-from collections import OrderedDict
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
+from simple_sim.file_cache import FileCache
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL, SPLITS_DIR
 from simple_sim.manifest import DatasetManifest, load_dataset_manifest
 from simple_sim.rows import LabelRow, MetaRow, read_jsonl
@@ -31,45 +29,21 @@ SPLIT_NAMES = ("train", "val", "test")
 #: Parsed files kept per process (each dataset contributes meta, labels and up to 3 split files).
 CACHE_MAX_FILES = 32
 
-_CACHE: OrderedDict[tuple[str, str], tuple[tuple[int, int, int, int], Any]] = OrderedDict()
-_LOCK = threading.Lock()
-
-
-def _signature(path: Path) -> tuple[int, int, int, int]:
-    st = os.stat(path)
-    return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+_CACHE = FileCache(max_entries=CACHE_MAX_FILES)
 
 
 def _cached(path: Path, kind: str, load: Callable[[Path], Any]) -> Any:
     """``load(path)``, reused while the file's stat signature is unchanged.
 
-    A missing file raises ``FileNotFoundError`` from the loader, as without the cache.
+    A missing file raises ``FileNotFoundError`` from the loader, as without the cache (errors are
+    not cached).
     """
-    key = (str(Path(path).absolute()), kind)
-    try:
-        sig = _signature(path)
-    except OSError:
-        with _LOCK:
-            _CACHE.pop(key, None)
-        return load(path)
-    with _LOCK:
-        hit = _CACHE.get(key)
-        if hit is not None and hit[0] == sig:
-            _CACHE.move_to_end(key)
-            return hit[1]
-    value = load(path)
-    with _LOCK:
-        _CACHE[key] = (sig, value)
-        _CACHE.move_to_end(key)
-        while len(_CACHE) > CACHE_MAX_FILES:
-            _CACHE.popitem(last=False)
-    return value
+    return _CACHE.cached((str(Path(path).absolute()), kind), (path,), lambda: load(path))
 
 
 def clear_cache() -> None:
     """Drop all cached files (tests; long-running processes that want the memory back)."""
-    with _LOCK:
-        _CACHE.clear()
+    _CACHE.invalidate()
 
 
 def _load_meta(path: Path) -> tuple[tuple[MetaRow, ...], Mapping[str, MetaRow]]:

@@ -6,6 +6,7 @@ from tkinter import ttk
 from typing import Any
 from collections.abc import Callable
 from gui.theme.style import font
+from simple_sim.classes import STANDARD_CLASSES
 from gui.utils.tk_safe import quiet
 
 
@@ -30,7 +31,7 @@ class PrecisePopup:
     _DEFAULTS: dict[str, Any] = {
         "total": 100,
         "per_class": False,
-        "class_names": ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
+        "class_names": list(STANDARD_CLASSES),
         "classes": {},           # class_name -> int
         "multi_profiles": [],    # list[str]; non-empty → multi-profile mode
         "multi_totals": {},      # profile_id -> int
@@ -186,7 +187,7 @@ class PrecisePopup:
 
         multi = bool(self._s["multi_profiles"])
         per_class = self._var_per_class.get()
-        class_names: list[str] = self._s["class_names"] or ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
+        class_names: list[str] = self._s["class_names"] or list(STANDARD_CLASSES)
         default = str(self._s["total"])
 
         if multi:

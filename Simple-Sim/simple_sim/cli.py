@@ -31,10 +31,9 @@ from simple_sim.cli_utils import add_json_flag, emit_result
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.io_utils import load_yaml, rel_to
 from simple_sim.manifest import read_dataset_manifest
+from simple_sim.paths import SIM_ROOT  # re-exported for existing importers (simple_sim.cli.SIM_ROOT)
 from simple_sim.model_bundle import is_bundle_dir, list_bundle_checkpoints
 from simple_sim.reports import best_report, is_partial_report, is_profile_classifier_report, load_reports, metric_value, report_search_dirs, report_timestamp
-
-SIM_ROOT = Path(__file__).resolve().parents[1]
 
 PROG = "python -m simple_sim"
 
@@ -78,6 +77,7 @@ _SPECS = [
     _library("batch-predict"),
     _library("arena-report"),
     _library("render-debug-previews"),
+    _library("parts"),
     _tool("create-multi-dataset", "tools/create_multi_dataset.py"),
     _tool("backfill-manifest", "tools/backfill_manifest.py"),
     _tool("backfill-labels", "tools/backfill_labels_v2.py"),
@@ -95,6 +95,11 @@ _SPECS = [
     _tool("dv-crops", "tools/dv_crops.py"),
     _tool("board-backgrounds", "tools/board_backgrounds.py"),
     _tool("export-deepvision", "tools/export_deepvision.py"),
+    # 3D-Board-Renderer (BACKLOG-Sim/board3d-plan.md)
+    _tool("board3d-import", "tools/board3d_import.py"),
+    _tool("board3d-render", "tools/board3d_render.py"),
+    _tool("board3d-viewer", "tools/board3d_viewer.py"),
+    _tool("board3d-dataset", "tools/board3d_dataset.py"),
 ]
 
 #: command name -> :class:`CommandSpec`

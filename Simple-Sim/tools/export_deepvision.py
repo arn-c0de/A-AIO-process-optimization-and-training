@@ -81,6 +81,7 @@ from simple_sim.io_utils import now_iso  # noqa: E402
 from simple_sim.parallel import imap_ordered, render_workers  # noqa: E402
 from simple_sim.profile_hash import load_profile  # noqa: E402
 from simple_sim.rng import derive_sample_seed  # noqa: E402
+from simple_sim.board3d.dv_store import SIDES  # noqa: E402
 
 #: Simple-Sim class -> DeepVision ``fault`` (spelling of the app's labels; ``None`` = good part). MISALIGNED is
 #: decided per sample by :func:`fault_of` (``versetzt`` = shifted, ``verdreht`` = rotated).
@@ -118,7 +119,6 @@ def fault_of(derived_class: str, defect: dict[str, Any], tolerances: dict[str, A
     return MISALIGNED_ROTATED if rotated and shift <= ok_shift else fault
 ROLE_REF, ROLE_PROBE = "ref", "probe"
 DEFAULT_PX_PER_MM = 16.1        # the app's crop scale (0402: 49 px for 3.037 mm)
-SIDES = ("top", "bottom")
 # salts of the per-pair generators (all derived from the pair seed)
 _SALT_DEFECT, _SALT_CAMERA_REF, _SALT_CAMERA_PROBE, _SALT_PROBE_AUGMENT, _SALT_CLASSES, _SALT_RENDER = 11, 1, 2, 3, 4, 5
 

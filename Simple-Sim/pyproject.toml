@@ -36,7 +36,8 @@ include = ["simple_sim*"]
 
 [tool.setuptools.package-data]
 # The Blender batch script runs inside Blender (no package import), it ships as a data file.
-simple_sim = ["blender/*.py"]
+# The built-in part catalog layer (an empty scaffold; part data stays local) ships as data too.
+simple_sim = ["blender/*.py", "parts/builtin.json"]
 
 [tool.pytest.ini_options]
 # Tests import gui/, scripts/ and tools/ from the checkout, which are not installed.

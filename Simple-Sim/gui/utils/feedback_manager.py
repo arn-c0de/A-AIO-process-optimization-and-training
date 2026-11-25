@@ -80,10 +80,6 @@ class FeedbackManager:
         self._latest_by_sample[sample_id] = entry
         return entry
 
-    def latest_feedback_for(self, sample_id: str) -> dict[str, Any] | None:
-        """Return latest feedback entry for a sample if available."""
-        return self._latest_by_sample.get(sample_id)
-
     def latest_feedback_by_sample(self) -> dict[str, dict[str, Any]]:
         """Return copy of latest-per-sample map."""
         return dict(self._latest_by_sample)

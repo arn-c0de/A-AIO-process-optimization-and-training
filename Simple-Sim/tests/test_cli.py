@@ -155,3 +155,11 @@ def test_tool_scripts_run_directly_without_pythonpath(script, tmp_path):
     proc = subprocess.run([sys.executable, str(SIM_ROOT / script), "--help"], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=120, check=False)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_deepvision_tools_are_registered_commands():
+    from simple_sim.cli import COMMANDS
+
+    for name, script in (("dv-crops", "tools/dv_crops.py"), ("board-backgrounds", "tools/board_backgrounds.py"),
+                         ("export-deepvision", "tools/export_deepvision.py")):
+        assert COMMANDS[name].script == script

@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
-from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,7 @@ from simple_sim.generation.common import sample_record
 from simple_sim.generators.opencv2d import render_roi
 from simple_sim.generators.version import RENDERER_VERSION
 from simple_sim.profile_hash import load_profile
+from tests.helpers import lib_versions
 
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = Path(__file__).resolve().parent / "golden" / "render_variants.json"
@@ -75,10 +76,6 @@ VARIANTS: dict[str, tuple[dict[str, Any], dict[str, Any] | None]] = {
     "filters_realism": ({}, _REALISM_FILTERS),
     "flat_filters": ({"style": "flat"}, _ALL_FILTERS),
 }
-
-
-def _versions() -> dict[str, str]:
-    return {"opencv": cv2.__version__, "numpy": np.__version__}
 
 
 def _md5(arr: np.ndarray) -> str:
@@ -122,28 +119,43 @@ class _Case:
                           rng=np.random.default_rng(int(rec["seed"])), footprint=self.footprint)
 
 
-def iter_cases(textures: Path) -> Iterator[tuple[str, Callable[[], str]]]:
-    """(name, thunk returning the hash) for every golden case, in a fixed order."""
-    cases: dict[str, _Case] = {}
+#: One golden case: ``(name, kind, args)``; *kind* is ``roi`` (run, class, index, variant or None),
+#: ``bake`` (run, supersampling) or ``camera`` (preset). Plain tuples, so cases can go to worker processes.
+CaseSpec = tuple[str, str, tuple[Any, ...]]
 
-    def case(run: str) -> _Case:
-        if run not in cases:
-            cases[run] = _Case(run)
-        return cases[run]
 
-    for run in CONFIGS_2D:
-        for i, cls in enumerate(CLASSES):
-            yield f"base/{run}/{cls}", lambda run=run, cls=cls, i=i: _md5(case(run).render_one(cls, 11 + i, {}, None, textures))
-    for name, (overrides, filters) in VARIANTS.items():
-        for run in VARIANT_CONFIGS:
-            for i, cls in enumerate(VARIANT_CLASSES):
-                yield (f"{name}/{run}/{cls}",
-                       lambda run=run, cls=cls, i=i, o=overrides, f=filters: _md5(case(run).render_one(cls, 101 + i, o, f, textures)))
-    for run in ("run_0001", "run_qfn32", "run_sot23"):
-        for ss in (1, 2, 3):
-            yield f"bake/{run}/ss{ss}", lambda run=run, ss=ss: _bake_hash(case(run), ss)
-    for preset in ("aoi", "phone", "quins"):
-        yield f"camera/{preset}", lambda preset=preset: _camera_hash(preset)
+def case_specs() -> list[CaseSpec]:
+    """Every golden case, in a fixed order."""
+    specs: list[CaseSpec] = [(f"base/{run}/{cls}", "roi", (run, cls, 11 + i, None))
+                             for run in CONFIGS_2D for i, cls in enumerate(CLASSES)]
+    specs += [(f"{name}/{run}/{cls}", "roi", (run, cls, 101 + i, name))
+              for name in VARIANTS for run in VARIANT_CONFIGS for i, cls in enumerate(VARIANT_CLASSES)]
+    specs += [(f"bake/{run}/ss{ss}", "bake", (run, ss)) for run in ("run_0001", "run_qfn32", "run_sot23") for ss in (1, 2, 3)]
+    specs += [(f"camera/{preset}", "camera", (preset,)) for preset in ("aoi", "phone", "quins")]
+    return specs
+
+
+_CASES: dict[str, _Case] = {}  # per process: configs/profiles are loaded once per run config
+
+
+def _case(run: str) -> _Case:
+    if run not in _CASES:
+        _CASES[run] = _Case(run)
+    return _CASES[run]
+
+
+def case_hash(item: tuple[CaseSpec, Path]) -> tuple[str, str]:
+    """``(name, hash)`` of one case (module level and picklable: runs in worker processes)."""
+    (name, kind, args), textures = item
+    os.environ.pop("IMAGE_FILTERS", None)  # a worker may have been forked before the test removed it
+    if kind == "roi":
+        run, cls, index, variant = args
+        overrides, filters = VARIANTS[variant] if variant else ({}, None)
+        return name, _md5(_case(run).render_one(cls, index, overrides, filters, textures))
+    if kind == "bake":
+        run, ss = args
+        return name, _bake_hash(_case(run), ss)
+    return name, _camera_hash(args[0])
 
 
 def _bake_hash(c: _Case, ss: int) -> str:
@@ -170,20 +182,24 @@ def _camera_hash(preset: str) -> str:
     return _md5(camera_model(img, np.random.default_rng(9), cam, pose, mm_per_px=0.01))
 
 
-def render_hashes(tmp_dir: Path) -> dict[str, str]:
+def render_hashes(tmp_dir: Path, workers: int | None = None) -> dict[str, str]:
+    """Hash of every case; computed in worker processes (the renders are independent and seeded per case)."""
+    from simple_sim.parallel import imap_ordered
+
     textures = make_textures(tmp_dir / "textures")
-    return {name: thunk() for name, thunk in iter_cases(textures)}
+    items = [(spec, textures) for spec in case_specs()]
+    n = workers or min(8, os.cpu_count() or 1)
+    return dict(imap_ordered(case_hash, items, workers=n, processes=n > 1, prefetch=4))
 
 
-def test_render_variants_match_golden(tmp_path, monkeypatch):
+def test_render_variants_match_golden(tmp_path):
     if not GOLDEN.exists():
         pytest.fail(f"missing {GOLDEN}; create it with: python -m tests.test_render_golden_variants --update")
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
-    if golden.get("versions") != _versions():
-        pytest.skip(f"golden hashes were written with {golden.get('versions')}, running {_versions()}")
+    if golden.get("versions") != lib_versions():
+        pytest.skip(f"golden hashes were written with {golden.get('versions')}, running {lib_versions()}")
     assert golden["renderer_version"] == RENDERER_VERSION, (
         "RENDERER_VERSION changed: regenerate (python -m tests.test_render_golden_variants --update)")
-    monkeypatch.delenv("IMAGE_FILTERS", raising=False)
     got = render_hashes(tmp_path)
     assert set(got) == set(golden["hashes"]), "the set of golden cases changed"
     changed = sorted(k for k in golden["hashes"] if got[k] != golden["hashes"][k])
@@ -199,7 +215,7 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         hashes = render_hashes(Path(tmp))
     GOLDEN.parent.mkdir(parents=True, exist_ok=True)
-    GOLDEN.write_text(json.dumps({"renderer_version": RENDERER_VERSION, "versions": _versions(), "hashes": hashes},
+    GOLDEN.write_text(json.dumps({"renderer_version": RENDERER_VERSION, "versions": lib_versions(), "hashes": hashes},
                                  indent=1, sort_keys=True) + "\n", encoding="utf-8")
     print(f"wrote {len(hashes)} hashes to {GOLDEN}")
     return 0

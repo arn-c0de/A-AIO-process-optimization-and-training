@@ -20,6 +20,12 @@ dependency actually shipped.
 - pytest
 - pillow
 
+## Vendored Files
+
+- three.js 0.170.0 (MIT, Copyright 2010-2024 three.js authors): `web/board3d/vendor/three/`
+  (`build/three.module.js`, `OrbitControls`, `TransformControls`, `GLTFLoader`, `BufferGeometryUtils`), full
+  license text in `web/board3d/vendor/three/LICENSE`. Used by the 3D-Board-Renderer viewer (`tools/board3d_viewer.py`).
+
 ## How To Update For A Release
 
 1. Freeze exact versions (for example by generating a lock file or a pinned

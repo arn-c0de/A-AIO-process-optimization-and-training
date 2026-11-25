@@ -7,15 +7,17 @@ Mixin of :class:`gui.tabs.pipeline.tab.PipelineControlTab`; it relies on the att
 from __future__ import annotations
 import json
 import logging
-import threading
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from gui.utils.paths import default_model_path
 from gui import dialogs
 from gui.utils.checkpoint_meta import short_profile_hash
-from gui.utils.dataset_catalog import catalog_labels, dataset_display_name, sim_data_roots
+from gui.components.dataset_picker import pick_datasets
+from gui.utils.formatting import RULE, section_header
+from gui.utils.dataset_catalog import catalog_labels, dataset_display_name, label_for_dataset, sim_data_roots
 from gui.utils.pipeline_helpers import (
     decode_dataset_paths_json,
     encode_dataset_paths_json,
@@ -67,7 +69,7 @@ def load_dataset_view(ds: Path, n_recent: int = 12) -> dict[str, Any]:
 class PipelineSelectionMixin:
     def _refresh_profile_models(self) -> None:
         paths = self.logic.get_profile_classifier_models()
-        values = [""] + [str(p.resolve().relative_to(self.sim_root.resolve())) if p.is_relative_to(self.sim_root) else str(p) for p in paths]
+        values = [""] + [rel_to(self.sim_root, p) for p in paths]
         self.ui.set_profile_model_combo_values(values)
         if (cur := self.ui.var_profile_model.get().strip()) and cur in values: return
         if not cur: self.ui.var_profile_model.set("")
@@ -111,7 +113,7 @@ class PipelineSelectionMixin:
         self.ui.var_name.set(ds.name)
         self.ui.var_out.set(str(ds.resolve()))
         
-        model_path = self.sim_root / "outputs" / "models" / f"{ds.name}.pt"
+        model_path = default_model_path(self.sim_root, ds.name)
         try: self.ui.var_model.set(str(model_path.resolve()))
         except Exception: self.ui.var_model.set(str(model_path))
         if not bool(self.ui.var_profiles_multi.get()):
@@ -134,8 +136,8 @@ class PipelineSelectionMixin:
         if self.state.dataset_dir:
             runs, versions = sim_data_roots(self.sim_root, create=False)
             want = self._dataset_catalog.display_label(self.state.dataset_dir, runs_root=runs, versions_root=versions)
-            for label, p in self._dataset_by_label.items():
-                if p == self.state.dataset_dir or label == want: self.ui.var_dataset.set(label); return
+            if (label := label_for_dataset(self._dataset_by_label, self.state.dataset_dir, alt_label=want)) is not None:
+                self.ui.var_dataset.set(label); return
         if self._dataset_labels: self.ui.var_dataset.set(self._dataset_labels[0]); self._on_dataset_selected()
 
     def _dataset_multi_tooltip_text(self) -> str:
@@ -164,20 +166,14 @@ class PipelineSelectionMixin:
             self.ui.show_messagebox("info", "Datasets", "No datasets found. Click Refresh after generating datasets.")
             return
 
-        selected_paths = {str(p.resolve()) for p in self._decode_dataset_paths_json(self.ui.var_dataset_multi_paths.get())}
-        if not selected_paths and (ds := self._selected_dataset_dir_single()) is not None:
-            selected_paths.add(str(ds.resolve()))
-        preselected = [
-            label for label in self._dataset_labels
-            if (p := self._dataset_by_label.get(label)) is not None and str(p.resolve()) in selected_paths
-        ]
-        picked = dialogs.pick_from_list(
-            self.frame, "Select Datasets", self._dataset_labels, multi=True, selected=preselected,
-            prompt="Select one or more datasets. One model is trained on all of them.", size=(640, 480),
-        )
+        selected = self._decode_dataset_paths_json(self.ui.var_dataset_multi_paths.get())
+        if not selected and (ds := self._selected_dataset_dir_single()) is not None:
+            selected = [ds]
+        picked = pick_datasets(self.frame, self._dataset_by_label, selected, size=(640, 480),
+                               prompt="Select one or more datasets. One model is trained on all of them.")
         if picked is None:
             return
-        paths: list[Path] = [self._dataset_by_label[label] for label in picked if label in self._dataset_by_label]
+        paths: list[Path] = picked
         if not paths and (ds := self._selected_dataset_dir_single()) is not None:
             paths = [ds]
 
@@ -220,9 +216,6 @@ class PipelineSelectionMixin:
             if label0 := self._dataset_label_for_path(filtered[0]): self.ui.var_dataset.set(label0)
         self._sync_multi_summary()
 
-    def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
-        return dataset_display_name(p, runs_root=runs, versions_root=versions)
-
     @staticmethod
     def _profile_from_meta(meta: dict[str, Any] | None) -> tuple[str | None, str | None]:
         comp = (meta or {}).get("component_profile")
@@ -245,14 +238,14 @@ class PipelineSelectionMixin:
 
         if uncached:
             # torch.load of every checkpoint is slow: do it off the Tk thread and re-filter when done.
-            def worker() -> None:
-                res = {str(p.resolve()): self._profile_from_meta(self.logic.read_checkpoint_meta(p)) for p in uncached}
-                def apply() -> None:
-                    if gen != self._model_meta_gen: return
-                    self._model_profile_cache.update(res)
-                    self._update_model_dropdown_for_dataset(); self._schedule_profile_compat_check()
-                with quiet(): self.post(apply)
-            threading.Thread(target=worker, daemon=True).start()
+            def load(_task: Any) -> dict[str, tuple[str | None, str | None]]:
+                return {str(p.resolve()): self._profile_from_meta(self.logic.read_checkpoint_meta(p)) for p in uncached}
+
+            def apply(res: dict[str, tuple[str | None, str | None]]) -> None:
+                if gen != self._model_meta_gen: return
+                self._model_profile_cache.update(res)
+                self._update_model_dropdown_for_dataset(); self._schedule_profile_compat_check()
+            self.quiet_tasks.run(load, name="Model metadata", on_done=apply)
 
         root_resolved = self.sim_root.resolve()
         values = [str(resolved[p].relative_to(root_resolved)) if p.is_relative_to(self.sim_root) else str(p) for p in paths]
@@ -291,8 +284,7 @@ class PipelineSelectionMixin:
             # The field may hold an absolute path of a listed model, or the name of a model that is
             # about to be trained (Apply Name / Create dataset): neither must be replaced.
             cur_path = resolve_under(self.sim_root, current)
-            try: cur_rel = str(cur_path.resolve().relative_to(self.sim_root.resolve()))
-            except Exception: cur_rel = current
+            cur_rel = rel_to(self.sim_root, cur_path)
             if current in values or cur_rel in values or not cur_path.exists(): return
         self.ui.var_model.set(values[0] if values else "")
 
@@ -315,8 +307,8 @@ class PipelineSelectionMixin:
             return
 
         suffix = ".bundle" if self.ui.var_model_bundle.get() else ".pt"
-        model_path = self.sim_root / "outputs" / "models" / f"{name}{suffix}"
-        rel = str(model_path.resolve().relative_to(self.sim_root.resolve()))
+        model_path = default_model_path(self.sim_root, name, suffix)
+        rel = rel_to(self.sim_root, model_path)
 
         if rel not in self._all_model_combo_values: self._all_model_combo_values.insert(0, rel)
         if rel not in (current_values := list(self.ui.model_combo["values"])):
@@ -384,7 +376,7 @@ class PipelineSelectionMixin:
         try:
             self._refresh_profiles()
             if pid := self.ui.var_profile.get().strip(): self._autoselect_config_for_profile(pid, prefer_quiet=True)
-        except Exception: pass
+        except Exception as e: _LOG.warning("Profile refresh after a backend change failed: %s", e)
 
     def _on_profile_selected(self, _event: object | None = None) -> None:
         if not (profile_id := self.ui.var_profile.get().strip()): return
@@ -398,7 +390,7 @@ class PipelineSelectionMixin:
     def _select_dataset(self, ds: Path) -> None:
         self._refresh_datasets()
         runs, versions = self.sim_root / "outputs" / "sim_data" / "runs", self.sim_root / "outputs" / "sim_data" / "versions"
-        label = self._display_for_dataset(ds, runs=runs, versions=versions)
+        label = dataset_display_name(ds, runs_root=runs, versions_root=versions)
         for key, value in self._dataset_by_label.items():
             if value == ds or key == label: self.ui.var_dataset.set(key); self._on_dataset_selected(); return
         self.state.dataset_dir = ds
@@ -412,8 +404,7 @@ class PipelineSelectionMixin:
         if not cfg_info: return
 
         cfg_path: Path = cfg_info["path"]
-        try: rel = str(cfg_path.resolve().relative_to(self.sim_root.resolve()))
-        except Exception: rel = str(cfg_path)
+        rel = rel_to(self.sim_root, cfg_path)
 
         if (cur := self.ui.var_config.get().strip()) == rel: return
 
@@ -434,7 +425,7 @@ class PipelineSelectionMixin:
 
         try:
             profile_data = load_yaml(profile_path)
-            info_text = f"Profile ID: {profile_id}\nPath: {profile_path}\n\n" + "="*60 + "\n\n" + yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
+            info_text = f"Profile ID: {profile_id}\nPath: {profile_path}\n\n" + RULE + "\n\n" + yaml.dump(profile_data, default_flow_style=False, sort_keys=False)
             dialogs.show_text(self.frame, f"Profile Info: {profile_id}", info_text, size=(640, 520))
 
         except Exception as e: self.ui.show_messagebox("error", "Error", f"Failed to load profile:\n{e!s}")
@@ -463,7 +454,7 @@ class PipelineSelectionMixin:
             if not ds_profile_id: self.ui.var_profile_compat.set(""); return
 
             if not (model_path_str := self.ui.var_model.get().strip()): self.ui.var_profile_compat.set(""); return
-            model_path = self.logic._resolve_model_path(model_path_str)
+            model_path = self.logic.resolve_path(model_path_str)
             if not model_path.exists(): self.ui.var_profile_compat.set(""); return
             
             if model_path.is_dir():
@@ -476,12 +467,9 @@ class PipelineSelectionMixin:
                 self.ui.var_profile_compat.set("… checking model profile"); self.ui.set_compat_color("gray")
                 if (key := str(model_path.resolve())) not in self._compat_loading:
                     self._compat_loading.add(key)
-                    def worker() -> None:
-                        try: self.logic.read_checkpoint_meta(model_path)
-                        finally:
-                            def done() -> None: self._compat_loading.discard(key); self._schedule_profile_compat_check(0)
-                            with quiet(): self.post(done)
-                    threading.Thread(target=worker, daemon=True).start()
+                    def done() -> None: self._compat_loading.discard(key); self._schedule_profile_compat_check(0)
+                    self.quiet_tasks.run(lambda _t: self.logic.read_checkpoint_meta(model_path),
+                                         name="Model metadata", on_finally=done)
                 return
             if meta.get("error"): self.ui.var_profile_compat.set(""); return
             text, color = profile_compat_status(ds_profile_id, ds_profile_hash, meta.get("component_profile"))
@@ -500,8 +488,8 @@ class PipelineSelectionMixin:
             profiles_dir = self.sim_root / "configs" / "profiles"
             profile_path = profiles_dir / f"{profile_id}.yaml"
 
-            info_text = f"Dataset: {ds.name}\nProfile ID: {profile_id}\nProfile Hash: {profile_hash}\nProfile Path: {profile_path_str}\n\n" + "="*60 + "\nMANIFEST METADATA\n" + "="*60 + "\n\n" + json.dumps(manifest, indent=2)
-            if profile_path.exists(): info_text += "\n\n" + "="*60 + "\nPROFILE DETAILS\n" + "="*60 + "\n\n" + yaml.dump(load_yaml(profile_path), default_flow_style=False, sort_keys=False)
+            info_text = f"Dataset: {ds.name}\nProfile ID: {profile_id}\nProfile Hash: {profile_hash}\nProfile Path: {profile_path_str}\n\n" + section_header("MANIFEST METADATA") + "\n" + json.dumps(manifest, indent=2)
+            if profile_path.exists(): info_text += "\n\n" + section_header("PROFILE DETAILS") + "\n" + yaml.dump(load_yaml(profile_path), default_flow_style=False, sort_keys=False)
             else: info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
             dialogs.show_text(self.frame, f"Dataset Profile: {ds.name}", info_text, size=(680, 560))
 

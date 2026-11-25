@@ -8,7 +8,7 @@ from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal.camera import camera_settings, effective_supersampling
 from simple_sim.generation.common import sample_defect_params
 
-from tests.test_photoreal import CFG, FOOTPRINTS, TOL
+from tests.helpers import CFG, FOOTPRINTS, TOL
 
 
 def test_effective_supersampling_caps_zoomed_out_views_only():

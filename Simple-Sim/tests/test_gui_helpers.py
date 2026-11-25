@@ -58,6 +58,7 @@ from gui.utils.pipeline_helpers import (
     write_temp_yaml,
 )
 from gui.utils.settings_store import SettingsStore
+from simple_sim.arena import dataset_display_name
 
 
 # --------------------------------------------------------------------------- formatting / paths
@@ -297,7 +298,11 @@ def test_dataset_paths_json_round_trip(tmp_path: Path) -> None:
     assert paths == [tmp_path / "a", (tmp_path / "rel" / "b").resolve()]
     assert decode_dataset_paths_json("not json", tmp_path) == []
     assert decode_dataset_paths_json('{"a": 1}', tmp_path) == []
-    assert json.loads(encode_dataset_paths_json(paths, tmp_path)) == [str(p) for p in paths]
+    # Stored relative to the sim root when below it (absolute otherwise); both decode to the same paths.
+    assert json.loads(encode_dataset_paths_json(paths, tmp_path)) == ["a", str(Path("rel") / "b")]
+    assert json.loads(encode_dataset_paths_json([Path("/elsewhere/c")], tmp_path)) == ["/elsewhere/c"]
+    assert decode_dataset_paths_json(encode_dataset_paths_json(paths, tmp_path), tmp_path) == [
+        (tmp_path / "a").resolve(), (tmp_path / "rel" / "b").resolve()]
     assert resolve_under(tmp_path, "x/y") == tmp_path / "x" / "y"
     assert resolve_under(tmp_path, "/abs") == Path("/abs")
 
@@ -397,3 +402,165 @@ def test_render_overrides_and_application() -> None:
     keys = dict(PERSISTED_FIELD_MAP)
     assert {keys["pipeline.look"], keys["pipeline.board_routing"], keys["pipeline.board_drc"], keys["pipeline.board_rules"]} == {
         "var_look", "var_board_routing", "var_board_drc", "var_board_rules"}
+
+
+# --------------------------------------------------------------------------- refactored shared helpers
+
+
+def test_settings_store_json_values(tmp_path: Path) -> None:
+    from gui.utils.settings_store import SettingsStore, parse_json
+
+    store = SettingsStore(tmp_path / "s.json")
+    assert store.get_json("k", want=list, fallback=["d"]) == ["d"]
+    store.set_json("k", {"a": 1})
+    assert store.get_json("k", want=dict, fallback={}) == {"a": 1}
+    assert store.get_json("k", want=list, fallback=[]) == []  # wrong type -> fallback
+    assert parse_json("{bad", want=dict, fallback=None) is None
+    assert parse_json("  ", want=dict, fallback="x") == "x"
+
+
+def test_dataset_label_helpers(tmp_path: Path) -> None:
+    from gui.utils.dataset_catalog import label_for_dataset, same_path, sorted_dataset_labels
+
+    runs, _versions = sim_data_roots(tmp_path)
+    (runs / "b").mkdir()
+    (runs / "a").mkdir()
+    labels = sorted_dataset_labels(tmp_path)
+    assert list(labels) == ["a", "b"]
+    assert label_for_dataset(labels, runs / "b" / ".." / "b") == "b"
+    assert label_for_dataset(labels, tmp_path / "nope", alt_label="a") == "a"
+    assert label_for_dataset(labels, None) is None
+    assert same_path(runs / "a", runs / "b" / ".." / "a")
+
+
+def test_default_model_path(tmp_path: Path) -> None:
+    from gui.utils.paths import default_model_path
+
+    assert default_model_path(tmp_path, "ds") == tmp_path / "outputs" / "models" / "ds.pt"
+    assert default_model_path(tmp_path, "m", ".bundle") == tmp_path / "outputs" / "models" / "m.bundle"
+
+
+def test_manifest_profile(tmp_path: Path) -> None:
+    from gui.utils.dataset_ops import manifest_profile
+
+    assert manifest_profile(tmp_path) == (None, None)
+    (tmp_path / "dataset_manifest.json").write_text(
+        json.dumps({"manifest_version": 1, "component_profile": {"profile_id": "p@1", "profile_hash": "h"}}))
+    assert manifest_profile(tmp_path) == ("p@1", "h")
+    (tmp_path / "dataset_manifest.json").write_text(json.dumps({"manifest_version": 2, "profiles": []}))
+    assert manifest_profile(tmp_path) == ("multi", None)
+
+
+def test_analysis_sample_filtering() -> None:
+    from gui.tabs.analysis.logic import dataset_stats_text, filter_options, filter_sample_tree, ordered_class_names
+
+    ids = ["r/A/train/000001", "r/A/val/000002", "r/B/train/000003", "bad"]
+    labels = {"r/A/train/000001": "OK", "r/A/val/000002": "MISSING", "r/B/train/000003": "OK"}
+    profiles = {"r/A/train/000001": "p1"}
+    assert filter_options(ids) == ({"All", "r"}, {"All", "A", "B"})
+    all_f = dict.fromkeys(("class", "run", "domain", "split", "profile"), "All")
+    tree = filter_sample_tree(ids, labels, profiles, filters={**all_f, "class": "OK"}, selected_profiles=set(),
+                              query="", sort_mode="ID Z-A", mtime=lambda _s: 0.0)
+    assert tree == {"r": {"A": {"train": ["r/A/train/000001"]}, "B": {"train": ["r/B/train/000003"]}}}
+    tree = filter_sample_tree(ids, labels, profiles, filters=all_f, selected_profiles={"unknown_or_legacy"},
+                              query="000002", sort_mode="Default", mtime=lambda _s: 0.0)
+    assert tree == {"r": {"A": {"val": ["r/A/val/000002"]}}}
+    assert dataset_stats_text([], {}) == "Dataset Stats: -"
+    assert dataset_stats_text(ids, profiles) == (
+        "Dataset Stats: total=4 | train=2, val=1, test=0 | profiles: unknown_or_legacy:3, p1:1")
+    assert ordered_class_names({"Z", "MISSING", "OK", ""}) == ["OK", "MISSING", "Z"]
+
+
+def test_pipeline_snapshots_honour_every_and_prune_their_meta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import queue
+
+    from gui.tabs.pipeline.logic import PipelineLogic, replace_dir
+
+    logic = PipelineLogic(tmp_path, queue.Queue(), queue.Queue(), tmp_path / "events.jsonl")
+    model = tmp_path / "outputs" / "models" / "m.pt"
+    model.parent.mkdir(parents=True)
+    snaps = []
+    for run_i in range(1, 7):
+        model.write_bytes(b"x" * run_i)  # changed checkpoint every run
+        os.utime(model, (run_i, run_i))
+        snaps.append(logic._snapshot_model_checkpoint(model, run_i=run_i, snap_every=2, snap_keep=2))
+    assert [s is not None for s in snaps] == [False, True, False, True, False, True]
+    kept = sorted(p.name for p in snaps[-1].parent.iterdir())
+    assert len([n for n in kept if n.endswith(".pt")]) == 2
+    assert len([n for n in kept if n.endswith(".pt.meta.json")]) == 2  # pruned snapshots take their meta along
+
+    # A failed snapshot is logged (not swallowed) and retried for the same checkpoint on the next run.
+    from gui.tabs.pipeline import logic as pipeline_logic
+    from gui.tabs.pipeline.logic import SnapshotOptions
+
+    logic2 = PipelineLogic(tmp_path, queue.Queue(), queue.Queue(), tmp_path / "events.jsonl")
+    lines: list[str] = []
+    opts = SnapshotOptions(enabled=True, every=1, keep=0)
+    def failing_snapshot(*_a, **_k):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as m:
+        m.setattr(pipeline_logic, "snapshot_checkpoint", failing_snapshot)
+        logic2.current_run_iteration = 7
+        logic2._after_full_run(str(model), str(tmp_path), dataset_mode="new", snapshots=opts, log_callback=lines.append)
+    assert any("[model snapshot] failed: disk full" in s for s in lines)
+    assert Path(str(model) + ".meta.json").is_file()
+    logic2._after_full_run(str(model), str(tmp_path), dataset_mode="new", snapshots=opts, log_callback=lines.append)
+    assert lines[-1].startswith("[model snapshot] ") and "failed" not in lines[-1]
+
+    src, dst = tmp_path / "new", tmp_path / "dst"
+    src.mkdir()
+    (src / "f").write_text("new")
+    dst.mkdir()
+    (dst / "f").write_text("old")
+    replace_dir(src, dst)
+    assert (dst / "f").read_text() == "new" and not src.exists()
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith("dst.")] == []
+
+
+def test_arena_names_snapshots_by_dataset_and_version():
+    assert dataset_display_name("outputs/sim_data/runs/run_0001") == "run_0001"
+    assert dataset_display_name("outputs/sim_data/versions/run_A/v1") == "run_A/v1"
+    assert dataset_display_name("outputs/sim_data/versions/run_B/v1") == "run_B/v1"
+    assert dataset_display_name("") == "-"
+
+
+def test_flag_manager_batches_and_survives_a_bad_line(tmp_path):
+    from gui.utils.flag_manager import FlagManager
+
+    fm = FlagManager(tmp_path)
+    assert fm.add_flags([("a", "OUTLIER", "r1"), ("b", "DUPLICATE", "r2"), ("a", "OUTLIER", "again")]) == 2
+    path = tmp_path / "flags.jsonl"
+    lines = path.read_text().splitlines()
+    assert len(lines) == 2
+    path.write_text(lines[0] + "\n{broken\n" + lines[1] + "\n")
+    again = FlagManager(tmp_path)
+    assert sorted(again.get_all_flagged_samples()) == ["a", "b"]  # the line after the bad one is kept
+    again.clear()
+    assert path.read_text() == "" and FlagManager(tmp_path).get_all_flagged_samples() == []
+    assert [p.name for p in tmp_path.iterdir()] == ["flags.jsonl"]
+
+
+def test_empty_model_field_falls_back_to_the_run_id_model():
+    out, model = profile_run_targets(Path("/d/x"), Path(""), "run_7", multi=False, models_root=Path("/m"))
+    assert out == Path("/d/x") and model == Path("/m/run_7.pt")
+
+
+def test_precise_per_class_counts_only_cover_the_current_class_set():
+    settings = {"per_class": True, "class_names": ["OK", "MISSING"],
+                "classes": {"OK": 5, "MISSING": 6, "TOMBSTONE": 7}}
+    assert precise_counts(settings) == ({"OK": 5, "MISSING": 6}, None)
+
+
+def test_dataset_kind_tells_runs_from_snapshots(tmp_path: Path) -> None:
+    from gui.utils.dataset_catalog import dataset_display_name as gui_display_name
+    from gui.utils.dataset_catalog import dataset_kind, is_snapshot_dataset, sim_data_roots
+
+    runs, versions = sim_data_roots(tmp_path)
+    run, snap = runs / "run_a", versions / "run_a" / "v1"
+    assert dataset_kind(tmp_path, run) == "run" and dataset_kind(tmp_path, snap) == "snapshot"
+    assert dataset_kind(tmp_path, runs) is None and dataset_kind(tmp_path, tmp_path / "elsewhere") is None
+    assert dataset_kind(tmp_path, tmp_path / "outputs" / "sim_data" / "runs_old" / "x") is None  # prefix, not a parent
+    assert is_snapshot_dataset(tmp_path, snap) and not is_snapshot_dataset(tmp_path, run)
+    assert gui_display_name(run, runs_root=runs, versions_root=versions) == "run_a"
+    assert gui_display_name(snap, runs_root=runs, versions_root=versions) == "run_a:v1"

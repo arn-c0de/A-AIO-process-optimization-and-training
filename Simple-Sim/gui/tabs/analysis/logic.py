@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 import numpy as np
@@ -9,11 +10,117 @@ import numpy as np
 from gui.utils.checkpoint_meta import read_checkpoint_dict
 from gui.utils.dataset_catalog import sim_data_roots
 from gui.utils.model_inference import load_model, ModelWrapper
+from gui.utils.paths import default_model_path, model_root
+from simple_sim.classes import STANDARD_CLASSES
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL
 from simple_sim.schema import read_jsonl, MetaRow, LabelRow
 from simple_sim.manifest import hash_file
 from simple_sim.io_utils import atomic_write_json
 from simple_sim.metrics import compute_metrics
+
+
+def ordered_class_names(classes: set[str]) -> list[str]:
+    """The standard classes in their canonical order first, then the others alphabetically."""
+    ordered = [c for c in STANDARD_CLASSES if c in classes]
+    ordered.extend(sorted(c for c in classes if c and c not in STANDARD_CLASSES))
+    return ordered
+
+
+UNKNOWN_PROFILE = "unknown_or_legacy"
+SORT_MODES = ("Default", "Newest first", "Oldest first", "ID A-Z", "ID Z-A")
+
+
+def sample_id_parts(sample_id: str) -> list[str]:
+    """``run/domain/split/leaf`` parts of a sample id (moved samples may carry a suffixed leaf)."""
+    return sample_id.split("/")
+
+
+def sample_profile(profiles: dict[str, str], sample_id: str) -> str:
+    return str(profiles.get(sample_id, "")).strip() or UNKNOWN_PROFILE
+
+
+def filter_options(sample_ids: list[str]) -> tuple[set[str], set[str]]:
+    """``(run ids, domains)`` occurring in *sample_ids*, each with ``"All"``."""
+    runs, domains = {"All"}, {"All"}
+    for sid in sample_ids:
+        parts = sample_id_parts(sid)
+        if len(parts) > 1:
+            runs.add(parts[0])
+            domains.add(parts[1])
+    return runs, domains
+
+
+def sort_sample_ids(sample_ids: list[str], sort_mode: str, mtime: Callable[[str], float]) -> list[str]:
+    """*sample_ids* in *sort_mode* order (one of :data:`SORT_MODES`; ``mtime(sid)`` for the date modes)."""
+    if sort_mode == "ID A-Z":
+        return sorted(sample_ids)
+    if sort_mode == "ID Z-A":
+        return sorted(sample_ids, reverse=True)
+    if sort_mode in {"Newest first", "Oldest first"}:
+        return sorted(sample_ids, key=mtime, reverse=sort_mode == "Newest first")
+    return list(sample_ids)
+
+
+def filter_sample_tree(sample_ids: list[str], labels: dict[str, str], profiles: dict[str, str], *,
+                       filters: dict[str, str], selected_profiles: set[str], query: str, sort_mode: str,
+                       mtime: Callable[[str], float]) -> dict[str, dict[str, dict[str, list[str]]]]:
+    """``{run: {domain: {split: [sample ids]}}}`` of the samples passing the filters.
+
+    *filters* holds ``class``/``run``/``domain``/``split``/``profile`` values (``"All"`` = no filter);
+    a non-empty *selected_profiles* replaces the single profile filter. *query* is lower-case.
+    """
+    tree: dict[str, dict[str, dict[str, list[str]]]] = {}
+    for sid in sample_ids:
+        label = labels.get(sid, "?")
+        if filters["class"] != "All" and label != filters["class"]:
+            continue
+        pid = sample_profile(profiles, sid)
+        if selected_profiles:
+            if pid not in selected_profiles:
+                continue
+        elif filters["profile"] != "All" and pid != filters["profile"]:
+            continue
+        parts = sample_id_parts(sid)
+        if len(parts) < 3:
+            continue
+        run, domain, split = parts[0], parts[1], parts[2]
+        if any(filters[k] != "All" and v != filters[k] for k, v in (("run", run), ("domain", domain), ("split", split))):
+            continue
+        if query and query not in f"{sid} {parts[-1]} {label}".lower():
+            continue
+        tree.setdefault(run, {}).setdefault(domain, {}).setdefault(split, []).append(sid)
+    for run_node in tree.values():
+        for domain_node in run_node.values():
+            for split, ids in domain_node.items():
+                domain_node[split] = sort_sample_ids(ids, sort_mode, mtime)
+    return tree
+
+
+def dataset_stats_text(sample_ids: list[str], profiles: dict[str, str]) -> str:
+    """One-line summary: totals per split and per profile (most frequent first)."""
+    if not sample_ids:
+        return "Dataset Stats: -"
+    split_counts: Counter[str] = Counter()
+    profile_counts: Counter[str] = Counter()
+    for sid in sample_ids:
+        parts = sample_id_parts(sid)
+        split_counts[parts[2] if len(parts) > 2 else "unknown"] += 1
+        profile_counts[sample_profile(profiles, sid)] += 1
+    split_text = ", ".join(f"{s}={split_counts.get(s, 0)}" for s in ("train", "val", "test"))
+    profiles_text = ", ".join(
+        f"{pid}:{cnt}" for pid, cnt in sorted(profile_counts.items(), key=lambda x: (-x[1], x[0])))
+    return f"Dataset Stats: total={len(sample_ids)} | {split_text} | profiles: {profiles_text}"
+
+
+def sample_mtime(dataset_dir: Path | None, meta: MetaRow | None) -> float:
+    """Modification time of a sample's image (0.0 when unknown)."""
+    if dataset_dir is None or meta is None:
+        return 0.0
+    try:
+        path = dataset_dir / meta.image_path
+        return path.stat().st_mtime if path.exists() else 0.0
+    except Exception:
+        return 0.0
 
 
 class AnalysisLogic:
@@ -48,7 +155,7 @@ class AnalysisLogic:
                 if self._load_model_from_path(current_model_path):
                     return self.model
 
-        dataset_model = self.sim_root / "outputs" / "models" / f"{dataset_dir.name}.pt"
+        dataset_model = default_model_path(self.sim_root, dataset_dir.name)
         if dataset_model.exists() and self._load_model_from_path(dataset_model):
             return self.model
 
@@ -71,7 +178,7 @@ class AnalysisLogic:
             return False
 
     def _find_model_by_manifest_hash(self, manifest_hash: str) -> Path | None:
-        models_root = self.sim_root / "outputs" / "models"
+        models_root = model_root(self.sim_root)
         candidates = list(models_root.glob("*.pt"))
         candidates.extend(list((models_root / "imports").glob("*.pt")))
         candidates.extend(list((models_root / "versions").glob("**/*.pt")))
@@ -163,7 +270,7 @@ class AnalysisLogic:
                 failed_count += 1
 
         analyzed_count = len(y_true_labels)
-        class_names = self._ordered_class_names(set(y_true_labels) | set(y_pred_labels))
+        class_names = ordered_class_names(set(y_true_labels) | set(y_pred_labels))
         metrics = self._compute_metrics(y_true_labels, y_pred_labels, class_names)
 
         results['summary'] = {
@@ -181,12 +288,6 @@ class AnalysisLogic:
 
         atomic_write_json(dataset_dir / "analysis_results.json", results)
         return results
-
-    def _ordered_class_names(self, classes: set[str]) -> list[str]:
-        priority = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
-        ordered = [p for p in priority if p in classes]
-        ordered.extend(sorted([c for c in classes if c and c not in priority]))
-        return ordered
 
     def _compute_metrics(self, y_true_labels: list[str], y_pred_labels: list[str], class_names: list[str]) -> dict:
         if not y_true_labels or not y_pred_labels or not class_names:

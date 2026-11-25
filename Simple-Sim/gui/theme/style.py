@@ -54,10 +54,6 @@ def palette(widget: tk.Misc | None = None) -> Palette:
     return getattr(_toplevel_root(widget), _ATTR_PALETTE, None) or palette_for("light")
 
 
-def is_dark(widget: tk.Misc | None = None) -> bool:
-    return palette(widget).name == "dark"
-
-
 def on_theme_changed(widget: tk.Misc, callback: Callable[[Palette], None]) -> None:
     """Call ``callback(palette)`` after every ``apply_theme`` (until ``widget`` is destroyed)."""
     root = _toplevel_root(widget)

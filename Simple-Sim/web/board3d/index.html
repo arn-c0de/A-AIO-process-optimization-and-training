@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D-Board-Renderer</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/build/three.module.js", "three/addons/": "./vendor/three/examples/jsm/" } }
+</script>
+</head>
+<body>
+<div id="view"></div>
+<aside id="panel">
+  <header>
+    <h1>3D-Board-Renderer <span id="title"></span></h1>
+    <p id="status">lädt …</p>
+  </header>
+  <section class="tools">
+    <div class="row">
+      <button class="view" data-view="top" title="wie der Flachbettscanner">Draufsicht</button>
+      <button class="view" data-view="angle" title="wie ein Handyfoto">Schräg</button>
+      <button class="view" data-view="low">Flach</button>
+    </div>
+    <div class="row">
+      <button class="quality on" data-quality="photo" title="Schatten, Umgebungsverdeckung">Foto-Look</button>
+      <button class="quality" data-quality="fast" title="ohne Schatten und AO, für schwache Grafik">Schnell</button>
+      <button id="shot" title="aktuelle Ansicht als PNG">Bild speichern</button>
+    </div>
+  </section>
+  <section>
+    <label for="search">Bauteil</label>
+    <input id="search" list="refdes" placeholder="z. B. C201" autocomplete="off">
+    <datalist id="refdes"></datalist>
+    <dl id="info"></dl>
+  </section>
+  <section class="tools">
+    <div class="row">
+      <button data-mode="translate" class="mode on" title="W">Verschieben</button>
+      <button data-mode="rotate" class="mode" title="E">Drehen</button>
+      <button data-mode="lift" class="mode" title="L">Anheben</button>
+    </div>
+    <div class="row">
+      <button id="tomb" title="T">Grabstein</button>
+      <button id="remove" title="Entf">Entfernen</button>
+      <button id="excess" title="X">Zu viel Lot</button>
+    </div>
+    <div class="row">
+      <button id="reset" title="R">Bauteil zurücksetzen</button>
+      <button id="resetAll">Alle zurücksetzen</button>
+    </div>
+  </section>
+  <section>
+    <h2>Fehler <span id="count">0</span></h2>
+    <ol id="ops"></ol>
+    <p id="collide" class="warn" hidden></p>
+  </section>
+  <section class="tools">
+    <div class="row">
+      <input id="name" value="edit" pattern="[A-Za-z0-9_.-]{1,64}" title="Name der Fehlerdatei">
+      <button id="save">Speichern</button>
+    </div>
+    <div class="row">
+      <label for="samples">Samples</label><input id="samples" type="number" min="8" max="256" value="64">
+      <button id="render" class="primary">Fotorealistisch rendern</button>
+    </div>
+  </section>
+  <figure id="result" hidden><img alt="Render neben echtem Bild"><figcaption></figcaption></figure>
+  <footer>Maus: links drehen, rechts schieben, Rad zoomen · Klick wählt ein Bauteil · Esc hebt die Wahl auf</footer>
+</aside>
+<script type="module" src="app.js"></script>
+</body>
+</html>

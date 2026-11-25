@@ -19,7 +19,9 @@ from simple_sim.board.rules import PRESETS, fit_to_pitch, sample_rules
 from simple_sim.board.zones import zone_fill
 from simple_sim.generators.opencv2d import sample_nominal_geometry
 from simple_sim.generators.opencv2d.geometry import pad_positions
-from tests.test_photoreal import FOOTPRINTS, _render
+from tests.helpers import FOOTPRINTS
+from tests.helpers import render_photoreal as _render
+import pickle
 
 WINDOW = (512, 512)   # 256 px ROI at 2x supersampling, as in the run configs
 PX_TO_MM = 0.01 / 2
@@ -542,3 +544,10 @@ def test_pour_raster_resolution_is_one_constant():
     from simple_sim.board import drc, zones
 
     assert drc.POUR_CELLS_PER_CLEARANCE is zones.POUR_CELLS_PER_CLEARANCE == 4
+
+
+def test_board_drc_error_survives_pickling():
+    from simple_sim.board.drc import BoardDrcError, DrcReport
+
+    err = pickle.loads(pickle.dumps(BoardDrcError(DrcReport(), 7)))
+    assert isinstance(err, BoardDrcError) and err.seed == 7

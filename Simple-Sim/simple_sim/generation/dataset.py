@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from tqdm import tqdm
 
+from simple_sim.cli_utils import log_banner, RULE
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE, load_config, merge_profile_render, validate_config
 from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files
 from simple_sim.generation.blender import blender_settings
@@ -482,9 +483,7 @@ def _write_manifest(output_dir: Path, run: Any, ext: ExtendState | None, *, run_
 
 def _log_generation_done(output_dir: Path, meta_rows: list[Any], final_splits: dict[str, list[str]], total_s: float) -> None:
     """Closing log block plus the ``gen_done`` telemetry event (only when samples were written)."""
-    log.info("\n" + "=" * 60)
-    log.info("DATASET GENERATION COMPLETE")
-    log.info("=" * 60)
+    log_banner(log, "DATASET GENERATION COMPLETE")
     log.info(f"Output directory: {output_dir}")
     log.info(f"Total samples: {len(meta_rows)}")
     log.info(f"Generation rate (overall): {len(meta_rows) / total_s:.1f} samples/s  (time: {total_s:.1f}s)")
@@ -503,7 +502,7 @@ def _log_generation_done(output_dir: Path, meta_rows: list[Any], final_splits: d
         )
     for split_name, sample_ids in final_splits.items():
         log.info(f"  {split_name}: {len(sample_ids)} samples")
-    log.info("=" * 60)
+    log.info(RULE)
 
 
 def generate_dataset(

@@ -10,6 +10,15 @@ import hashlib
 from typing import Any
 
 
+def stable_int_seed(*parts: object) -> int:
+    """48-bit seed from ``"|".join(str(p) for p in parts)`` (first 12 hex digits of its SHA-256).
+
+    Independent of Python's hash randomization; used for preview and gallery images (their
+    existing files were rendered with exactly this value, so it must not change).
+    """
+    return int(hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:12], 16)
+
+
 def derive_sample_seed(run_seed: int, domain: str, index: int) -> int:
     """Derive deterministic sample seed from run parameters.
 

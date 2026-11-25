@@ -30,6 +30,10 @@ Thumbs.db
 # Project-specific
 
 Simple-Sim/outputs/
+# 3D-Board-Renderer: plan / measurements name the customer, product, PCB and data paths (production data stays local).
+# The board data itself (scan, photos, mosaic, GLB, board3d.json, renders) lives in Simple-Sim/outputs/ above.
+BACKLOG-Sim/board3d-plan.md
+BACKLOG-Sim/board-twin-plan.md
 # Real board photos cut for render.texture_dir (production images stay local; tools/board_backgrounds.py)
 Simple-Sim/data/board_textures/
 Simple-Sim/wheelhouse/
@@ -71,3 +75,17 @@ Simple-Sim.meta.json
 
 # Temporary Blender board bakes (removed after each render)
 _board_textures/
+
+# Empty placeholder files created by the Claude Code sandbox (mount points, never real config)
+/.bash_profile
+/.bashrc
+/.gitconfig
+/.gitmodules
+/.idea
+/.mcp.json
+/.profile
+/.ripgreprc
+/.vscode
+/.zprofile
+/.zshrc
+/Simple-Sim/.mcp.json

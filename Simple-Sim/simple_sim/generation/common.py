@@ -19,6 +19,7 @@ from simple_sim.generators.opencv2d import apply_image_filter_overrides, sample_
 from simple_sim.generators.opencv2d.spec import RenderSpec, render_record_with_meta
 from simple_sim.parallel import imap_ordered, render_executor, render_processes, render_workers
 from simple_sim.rng import derive_sample_seed, make_sample_id
+from simple_sim.paths import SIM_ROOT
 from simple_sim.rows import LabelRow, MetaRow
 from simple_sim.splits import SPLIT_NAMES, assert_no_overlap, check_class_coverage, generate_splits, write_splits
 
@@ -35,8 +36,8 @@ def sample_domain(config: dict[str, Any], index: int) -> str:
 
 
 def project_root() -> Path:
-    """Simple-Sim root (the directory containing ``simple_sim/`` and ``configs/``)."""
-    return Path(__file__).resolve().parents[2]
+    """Simple-Sim root (the directory containing ``simple_sim/`` and ``configs/``): :data:`simple_sim.paths.SIM_ROOT`."""
+    return SIM_ROOT
 
 
 def rel_profile_path(profile_path: Path, root: Path) -> str:

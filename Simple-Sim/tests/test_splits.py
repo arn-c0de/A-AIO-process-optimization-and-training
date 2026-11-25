@@ -3,6 +3,8 @@
 import pytest
 from simple_sim.schema import MetaRow, LabelRow
 from simple_sim.splits import generate_splits, assert_no_overlap
+from simple_sim.splits import read_split
+from simple_sim.splits import write_splits
 
 
 def create_test_data(n_per_class=10):
@@ -163,3 +165,11 @@ def test_generate_splits_stratifies_by_profile():
         for sid in splits[split_name]:
             per_profile[id_to_profile[sid]] = per_profile.get(id_to_profile[sid], 0) + 1
         assert per_profile == {'prof_a@1': 4, 'prof_b@1': 4}
+
+
+def test_write_splits_replaces_files_atomically(tmp_path):
+    write_splits(tmp_path, {"train": ["a", "b"], "val": [], "test": ["c"]})
+    write_splits(tmp_path, {"train": ["a"], "val": ["b"], "test": ["c"]})
+    assert read_split(tmp_path / "splits" / "train.txt") == ["a"]
+    assert read_split(tmp_path / "splits" / "val.txt") == ["b"]
+    assert sorted(p.name for p in (tmp_path / "splits").iterdir()) == ["test.txt", "train.txt", "val.txt"]

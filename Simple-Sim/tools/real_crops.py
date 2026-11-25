@@ -47,6 +47,7 @@ import numpy as np
 if not __package__:  # run as a script (python tools/x.py): make the checkout importable
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from simple_sim.image_sampling import sample_subset  # noqa: E402
 from simple_sim.io_utils import read_jsonl_dicts  # noqa: E402
 
 #: DeepVision review class -> class folder of ``tools/eval_real.py`` / ``tools/mix_real.py``.
@@ -79,10 +80,7 @@ def select(rows: list[dict[str, Any]], forms: set[str], splits: set[str], classe
 
 
 def sample(rows: list[dict[str, Any]], limit: int, rng: np.random.Generator) -> list[dict[str, Any]]:
-    if limit <= 0 or len(rows) <= limit:
-        return rows
-    idx = sorted(rng.choice(len(rows), limit, replace=False))
-    return [rows[i] for i in idx]
+    return sample_subset(rows, limit, rng)
 
 
 def export(manifest: Path, out: Path, forms: set[str], splits: set[str], classes: set[str] | None,

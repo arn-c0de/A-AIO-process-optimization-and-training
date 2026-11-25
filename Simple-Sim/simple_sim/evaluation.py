@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from simple_sim.cli_utils import log_banner
 from simple_sim.data_loader import ProfileDataset, ROIDataset
 from simple_sim.devices import resolve_device
 from simple_sim.eval_utils import (
@@ -48,9 +49,6 @@ from simple_sim.training import PROFILE_CLASSIFIER
 __all__ = ["evaluate", "report_path_for", "run_eval", "run_eval_profile", "write_report"]
 
 log = logging.getLogger(__name__)
-
-_RULE = "=" * 60
-
 
 def evaluate(
     model: nn.Module,
@@ -190,9 +188,7 @@ def run_eval(
             "model or missing metadata); the metrics cover the remaining samples only."
         )
 
-    log.info("\n" + _RULE)
-    log.info("EVALUATION ON TEST SET")
-    log.info(_RULE)
+    log_banner(log, "EVALUATION ON TEST SET")
 
     critical_classes = checkpoint_eval_config(checkpoint).get('critical_classes')
     metrics, seen = evaluate(
@@ -263,9 +259,7 @@ def run_eval_profile(data_dir: Path, model_path: Path, device: str | torch.devic
     test_dataset = ProfileDataset(data_dir, 'test', profile_names, return_id=True)
     test_dist = _load_test_split(test_dataset, "Test profile distribution")
 
-    log.info("\n" + _RULE)
-    log.info("PROFILE CLASSIFIER EVALUATION ON TEST SET")
-    log.info(_RULE)
+    log_banner(log, "PROFILE CLASSIFIER EVALUATION ON TEST SET")
 
     metrics, seen = evaluate(model, eval_loader(test_dataset, checkpoint), device, profile_names)
 

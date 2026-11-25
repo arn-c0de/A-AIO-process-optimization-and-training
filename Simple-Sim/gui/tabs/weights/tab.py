@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-import json
-import os
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk
 from pathlib import Path
 from typing import Any
 
 from gui import dialogs
-from gui.utils.model_groups import available_groups, group_for_model
+from gui.utils.model_groups import load_group_state, save_group_state, available_groups, group_for_model
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.checkpoint_meta import profile_label_suffix
-from gui.utils.dataset_catalog import sim_data_roots, unique_dataset_labels
+from gui.utils.dataset_catalog import dataset_display_name, label_for_dataset, sim_data_roots, sorted_dataset_labels
 from gui.utils.settings_store import restore_persisted_vars
-from gui.core.tasks import DispatchQueue, as_task_fn, runner_for
+from gui.core.tasks import DispatchQueue
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.file_cache import FileCache
 from simple_sim.io_utils import now_iso, path_size_bytes
@@ -24,7 +22,7 @@ from simple_sim.models import load_checkpoint
 from simple_sim.reports import metric_value, report_timestamp
 from gui.utils.report_rows import report_cells, report_matches_model
 from .ui import WeightsUI
-from .logic import WeightsLogic
+from .logic import WeightsLogic, rekey_tracked_entry
 from datetime import datetime
 from gui.utils.tk_safe import quiet
 
@@ -93,13 +91,8 @@ class WeightsTab(BaseTab):
     @staticmethod
     def _fmt_list(items: list[str], limit: int = 8) -> str:
         """Newline-joined list, truncated to ``limit`` entries with a "+N more" line."""
-        shown = os.linesep.join(items[:limit])
+        shown = "\n".join(items[:limit])
         return f"{shown}\n... (+{len(items) - limit} more)" if len(items) > limit else shown
-
-    def _run_background(self, fn: Any, *, name: str, on_done: Any, on_error: Any, on_finally: Any = None) -> None:
-        """Run ``fn()`` / ``fn(task)`` off the UI thread via ctx.tasks (status bar progress); callbacks run on the UI thread."""
-        call = as_task_fn(fn)  # fn() or fn(task) for cancel/progress
-        runner_for(self.state, self.frame).run(call, name=name, on_done=on_done, on_error=on_error, on_finally=on_finally)
 
     def _load_persisted_settings(self) -> None:
         st = self._store()
@@ -108,18 +101,7 @@ class WeightsTab(BaseTab):
         restore_persisted_vars(st, self._persisted_var_bindings())
 
         self._refresh_reports()
-        custom_raw = st.get("weights.custom_groups")
-        if isinstance(custom_raw, str):
-            try:
-                parsed = json.loads(custom_raw)
-                if isinstance(parsed, list): self._custom_groups = [str(k) for k in parsed if isinstance(k, str) and k]
-            except Exception: pass
-        assignments_raw = st.get("weights.group_assignments")
-        if isinstance(assignments_raw, str):
-            try:
-                parsed = json.loads(assignments_raw)
-                if isinstance(parsed, dict): self._group_assignments = {str(k): str(v) for k, v in parsed.items() if k and v}
-            except Exception: pass
+        self._custom_groups, self._group_assignments = load_group_state(st)
 
     def _persisted_var_bindings(self) -> list[tuple[str, Any]]:
         return [("weights.split", self.ui.var_split), ("weights.device", self.ui.var_device),
@@ -145,13 +127,11 @@ class WeightsTab(BaseTab):
                                                lambda: tuple(self.logic.get_dataset_classes(ds))))
 
     def _refresh_cmp_datasets(self) -> None:
-        cand = self.logic.get_cmp_datasets()
-        self._cmp_dataset_dirs = cand
+        self._cmp_dataset_by_label = sorted_dataset_labels(self.sim_root)
+        self._cmp_dataset_dirs = list(self._cmp_dataset_by_label.values())
         
         old_sel = {str(self.ui.list_cmp_datasets.get(i)) for i in self.ui.list_cmp_datasets.curselection()}
 
-        runs, versions = sim_data_roots(self.sim_root)
-        self._cmp_dataset_by_label = unique_dataset_labels(cand, runs_root=runs, versions_root=versions)
         self._cmp_dataset_labels = list(self._cmp_dataset_by_label)
 
         self.ui.list_cmp_datasets.delete(0, "end")
@@ -168,12 +148,11 @@ class WeightsTab(BaseTab):
         except Exception: return
         if not self.state.dataset_dir: return
         runs, versions = sim_data_roots(self.sim_root)
-        want = self.logic._display_for_dataset(self.state.dataset_dir, runs=runs, versions=versions)
-        for idx, label in enumerate(self._cmp_dataset_labels):
-            if label == want or self._cmp_dataset_by_label.get(label) == self.state.dataset_dir:
-                self.ui.list_cmp_datasets.selection_set(idx)
-                self.ui.list_cmp_datasets.see(idx)
-                return
+        want = dataset_display_name(self.state.dataset_dir, runs_root=runs, versions_root=versions)
+        if (label := label_for_dataset(self._cmp_dataset_by_label, self.state.dataset_dir, alt_label=want)) is not None:
+            idx = self._cmp_dataset_labels.index(label)
+            self.ui.list_cmp_datasets.selection_set(idx)
+            self.ui.list_cmp_datasets.see(idx)
 
     def _select_all_datasets_for_compare(self) -> None:
         with quiet(): self.ui.list_cmp_datasets.selection_set(0, "end")
@@ -232,9 +211,17 @@ class WeightsTab(BaseTab):
         self._refresh_models()
 
     def _generate_arena_report(self) -> None:
-        try: self.logic.generate_arena_report()
-        except FileNotFoundError as e: dialogs.show_error(self.frame, "Missing Script", str(e))
-        except Exception as e: dialogs.show_error(self.frame, "Arena Report Failed", e)
+        if self._run_in_progress(): return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
+
+        def on_error(e: BaseException) -> None:
+            if isinstance(e, FileNotFoundError): dialogs.show_error(self.frame, "Missing Script", str(e))
+            else: dialogs.show_error(self.frame, "Arena Report Failed", e)
+
+        def on_finally() -> None:
+            self._busy = False
+
+        self._busy = True
+        self._run_background(self.logic.generate_arena_report, name="Arena report", on_error=on_error, on_finally=on_finally)
 
     def _refresh_models(self) -> None:
         self._models = self.logic.get_models()
@@ -335,8 +322,7 @@ class WeightsTab(BaseTab):
     def _save_group_state(self) -> None:
         st = self._store()
         if st is None: return
-        st.set("weights.group_assignments", json.dumps(self._group_assignments, ensure_ascii=True))
-        st.set("weights.custom_groups", json.dumps(self._custom_groups, ensure_ascii=True))
+        save_group_state(st, self._custom_groups, self._group_assignments)
         st.schedule_save(self.frame)
 
     def _prompt_new_group(self) -> None:
@@ -506,7 +492,7 @@ class WeightsTab(BaseTab):
             dialogs.show_error(self.frame, "Snapshot Failed", e)
 
     def _import_model(self) -> None:
-        src = filedialog.askopenfilename(parent=self.frame.winfo_toplevel(), title="Import model (.pt) or bundle (.zip)", filetypes=[("PyTorch checkpoint", "*.pt"), ("Bundle archive", "*.zip"), ("All files", "*.*")])
+        src = dialogs.ask_open_file(self.frame, "Import model (.pt) or bundle (.zip)", filetypes=[("PyTorch checkpoint", "*.pt"), ("Bundle archive", "*.zip"), ("All files", "*.*")])
         if not src or not (src_p := Path(src)).exists(): return
         try:
             dst = self.logic.import_model(src_p)
@@ -520,13 +506,13 @@ class WeightsTab(BaseTab):
         if not dialogs.require(p := self._selected_model_path(), self.frame, "Select a model first."): return
         try:
             if p.is_dir():
-                dst = filedialog.asksaveasfilename(parent=self.frame.winfo_toplevel(), title="Export selected bundle (zip)", initialfile=f"{p.name}.zip" if not p.name.endswith(".zip") else p.name, defaultextension=".zip", filetypes=[("Bundle archive", "*.zip"), ("All files", "*.*")])
+                dst = dialogs.ask_save_file(self.frame, "Export selected bundle (zip)", initialfile=f"{p.name}.zip" if not p.name.endswith(".zip") else p.name, defaultextension=".zip", filetypes=[("Bundle archive", "*.zip"), ("All files", "*.*")])
                 if not dst: return
                 self.logic.export_model(p, Path(dst))
                 self.ui.append_log(f"[export] bundle {p} -> {Path(dst).with_suffix('.zip')}\n")
                 self._status(f"Exported bundle: {Path(dst).with_suffix('.zip').name}")
             else:
-                dst = filedialog.asksaveasfilename(parent=self.frame.winfo_toplevel(), title="Export selected model", initialfile=p.name, defaultextension=".pt", filetypes=[("PyTorch checkpoint", "*.pt"), ("All files", "*.*")])
+                dst = dialogs.ask_save_file(self.frame, "Export selected model", initialfile=p.name, defaultextension=".pt", filetypes=[("PyTorch checkpoint", "*.pt"), ("All files", "*.*")])
                 if not dst: return
                 self.logic.export_model(p, Path(dst))
                 self.ui.append_log(f"[export] {p} -> {dst}\n")
@@ -598,27 +584,15 @@ class WeightsTab(BaseTab):
         dst = src.with_name(new_stem + src.suffix)
         if dst.exists(): return dialogs.show_error(self.frame, "Target Exists", f"Target already exists:\n{dst}")
 
-        was_fav = old_rel in self._favorites; fav_entry = self._favorites.get(old_rel)
-        was_arena = old_rel in self._arena; arena_entry = self._arena.get(old_rel)
-
         try:
             self.logic.rename_model(src, dst)
         except Exception as e: return dialogs.show_error(self.frame, "Rename Failed", e)
 
-        if was_fav and fav_entry:
-            self._favorites.pop(old_rel, None)
-            fav_entry = dict(fav_entry)
-            fav_entry["path"], fav_entry["renamed"] = self.logic.rel_path(dst), now_iso(timespec="seconds")
-            self._favorites[fav_entry["path"]] = fav_entry
-            self.logic.save_favorites(self._favorites)
-        if was_arena and arena_entry:
-            self._arena.pop(old_rel, None)
-            arena_entry = dict(arena_entry)
-            arena_entry["path"], arena_entry["renamed"] = self.logic.rel_path(dst), now_iso(timespec="seconds")
-            self._arena[arena_entry["path"]] = arena_entry
-            self.logic.save_arena(self._arena)
+        new_rel = self.logic.rel_path(dst)
+        if rekey_tracked_entry(self._favorites, old_rel, new_rel): self.logic.save_favorites(self._favorites)
+        if rekey_tracked_entry(self._arena, old_rel, new_rel): self.logic.save_arena(self._arena)
         if old_rel in self._group_assignments:
-            self._group_assignments[self.logic.rel_path(dst)] = self._group_assignments.pop(old_rel)
+            self._group_assignments[new_rel] = self._group_assignments.pop(old_rel)
             self._save_group_state()
 
         self.ui.append_log(f"[rename] {old_rel} -> {self.logic.rel_path(dst)}\n")
@@ -642,14 +616,21 @@ class WeightsTab(BaseTab):
         if not dialogs.require(self.state.dataset_dir, self.frame, "No dataset selected. Choose one in the Pipeline tab first."): return None
         if self._run_in_progress(): return dialogs.show_info(self.frame, "Run In Progress", "A run is already in progress.")
 
-        try:
-            self.ui.var_status.set(f"status: running (selected({p.name}))")
-            self._busy = True
-            self.logic.run_predict(p, self.state.dataset_dir, f"selected({p.name})", self.ui.var_split.get().strip(), self.ui.var_device.get().strip(), self.ui.var_max_samples.get().strip(), self.ui.chk_save_preds.get(), lambda *res: self.post(lambda: self._on_predict_complete(*res)))
-        except Exception as e:
+        # Read Tk state on the main thread; the worker must not touch widgets/variables.
+        ds, label = self.state.dataset_dir, f"selected({p.name})"
+        args = (self.ui.var_split.get().strip(), self.ui.var_device.get().strip(), self.ui.var_max_samples.get().strip(),
+                self.ui.chk_save_preds.get())
+
+        def on_error(e: BaseException) -> None:
             self._busy = False
             self.ui.var_status.set("status: failed")
             dialogs.show_error(self.frame, "Evaluation Failed", e)
+
+        self.ui.var_status.set(f"status: running ({label})")
+        self._busy = True
+        self._run_background(lambda: self.logic.predict(p, ds, label, *args), name=f"Evaluate {p.name}",
+                             on_done=lambda report: self._on_predict_complete(report, self.logic.stop_evt.is_set()),
+                             on_error=on_error)
 
     def _resolved(self, p: Any) -> str:
         p = Path(str(p))

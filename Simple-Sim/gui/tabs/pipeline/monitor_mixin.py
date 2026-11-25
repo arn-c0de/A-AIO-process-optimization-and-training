@@ -22,7 +22,7 @@ from gui.utils.pipeline_helpers import (
 )
 
 from simple_sim.dataset_files import DATASET_MANIFEST
-from simple_sim.io_utils import append_jsonl
+from simple_sim.io_utils import append_jsonl, path_size_bytes
 
 
 _LOG = logging.getLogger(__name__)
@@ -30,6 +30,16 @@ _LOG = logging.getLogger(__name__)
 #: Period of the remaining status timer (process liveness, run buttons, dataset size); log lines and
 #: events are pushed through the dispatcher and do not wait for it.
 _STATUS_TICK_MS = 250
+
+#: Telemetry event -> phase shown in the monitor (``validate_done`` depends on its ``ok`` field).
+_EVENT_PHASE: dict[str, str] = {
+    "gen_start": "generating", "gen_progress": "generating", "gen_done": "generated",
+    "train_start": "training", "epoch_start": "training", "train_batch": "training",
+    "eval_start": "evaluating", "eval_batch": "evaluating", "eval_done": "done",
+    "validate_start": "validating",
+}
+#: Events that name the dataset of the running process (``gen_start``: ``output_dir``, else ``dataset_dir``).
+_DATASET_START_EVENTS = frozenset({"gen_start", "train_start", "eval_start"})
 
 
 class PipelineMonitorMixin:
@@ -39,53 +49,40 @@ class PipelineMonitorMixin:
             self.event_q.put(evt)
             return
         et = evt.get("event")
+        if et == "validate_done":
+            phase = "validated_ok" if evt.get("ok") else "validated_fail"
+        elif (phase := _EVENT_PHASE.get(et)) is None:
+            return
+        self.ui.var_phase.set(f"phase: {phase}")
         # The dataset of the running process is kept in _monitor_dir (thumbnails, size display).
         # It used to be written to the shared state.dataset_dir without a <<DatasetChanged>>: the
         # other tabs kept showing dataset A while their actions (analyze, delete images, predict,
         # validate) went to the dataset being generated.
-        if et == "gen_start":
-            self.ui.var_phase.set("phase: generating")
-            if out_dir := evt.get("output_dir"): self._monitor_dir = Path(out_dir)
+        if et in _DATASET_START_EVENTS:
+            if ds := evt.get("output_dir" if et == "gen_start" else "dataset_dir"): self._monitor_dir = Path(ds)
         elif et == "gen_progress":
-            self.ui.var_phase.set("phase: generating")
             rate = evt.get("samp_per_s")
             self.ui.var_ips.set(f"img/s: {rate:.1f}" if isinstance(rate, (int, float)) else "img/s: -")
             # A new dataset is rendered into <out>.tmp and moved in at the end: image_root says where.
             if root := evt.get("image_root"): self._monitor_image_root = Path(root)
             if last_img := evt.get("last_image_path"): self._push_image(last_img, root=self._monitor_image_root)
         elif et == "gen_done":
-            self.ui.var_phase.set("phase: generated")
-            if out_dir := evt.get("output_dir"):
-                self._monitor_dir = Path(out_dir)
-                if (tmp_root := self._monitor_image_root) is not None and tmp_root != self._monitor_dir:
-                    self._recent_imgs = [n.replace(str(tmp_root), str(self._monitor_dir), 1) for n in self._recent_imgs]
-            self._monitor_image_root = None
-            if last_img := evt.get("last_image_path"): self._push_image(last_img)
-        elif et == "train_start":
-            self.ui.var_phase.set("phase: training")
-            if ds := evt.get("dataset_dir"): self._monitor_dir = Path(ds)
+            self._on_gen_done(evt)
         elif et == "epoch_start":
-            self.ui.var_phase.set("phase: training")
             self.ui.var_epoch.set(f"epoch: {evt.get('epoch', '-')}/{evt.get('epochs', '-')}")
-        elif et == "train_batch":
-            self.ui.var_phase.set("phase: training")
+        elif et in ("train_batch", "eval_batch"):
             if ips := evt.get("img_per_s"): self.ui.var_ips.set(f"img/s: {ips:.1f}")
-            if lid := evt.get("last_id"): self.ui.var_last.set(f"last: {lid}")
+            if et == "train_batch" and (lid := evt.get("last_id")): self.ui.var_last.set(f"last: {lid}")
             if limg := evt.get("last_image_path"): self._push_image(limg)
-        elif et == "eval_start":
-            self.ui.var_phase.set("phase: evaluating")
-            if ds := evt.get("dataset_dir"): self._monitor_dir = Path(ds)
-        elif et == "eval_batch":
-            self.ui.var_phase.set("phase: evaluating")
-            if ips := evt.get("img_per_s"): self.ui.var_ips.set(f"img/s: {ips:.1f}")
-            if limg := evt.get("last_image_path"): self._push_image(limg)
-        elif et == "eval_done":
-            self.ui.var_phase.set("phase: done")
-        elif et == "validate_start":
-            self.ui.var_phase.set("phase: validating")
-        elif et == "validate_done":
-            ok = evt.get("ok")
-            self.ui.var_phase.set("phase: validated_ok" if ok else "phase: validated_fail")
+
+    def _on_gen_done(self, evt: dict[str, Any]) -> None:
+        """Generation finished: the images moved from the temp root into the dataset (re-point the thumbnails)."""
+        if out_dir := evt.get("output_dir"):
+            self._monitor_dir = Path(out_dir)
+            if (tmp_root := self._monitor_image_root) is not None and tmp_root != self._monitor_dir:
+                self._recent_imgs = [n.replace(str(tmp_root), str(self._monitor_dir), 1) for n in self._recent_imgs]
+        self._monitor_image_root = None
+        if last_img := evt.get("last_image_path"): self._push_image(last_img)
 
     _monitor_dir: Path | None = None         # dataset of the running process (telemetry events)
     _monitor_image_root: Path | None = None  # where its new images are written right now
@@ -195,15 +192,17 @@ class PipelineMonitorMixin:
         self._dataset_size_job_id += 1
         job_id = self._dataset_size_job_id
         self.ui.var_ds_size.set("DS: calculating...")
-        
-        def apply(size_b: int) -> None:
+
+        def apply(size_b: int) -> None:  # Tk thread; a newer request wins
             if job_id == self._dataset_size_job_id:
                 self.ui.var_ds_size.set(f"DS: {self.ui.fmt_bytes(size_b)} ({ds.name})")
 
-        def update_ui(size_b: int) -> None:  # worker thread
-            self.post(lambda: apply(size_b))
+        def failed(exc: BaseException) -> None:
+            if job_id == self._dataset_size_job_id:
+                self.ui.var_ds_size.set(f"DS: size unknown ({ds.name})")
+            _LOG.warning("Dataset size of %s failed: %s", ds, exc)
 
-        self.logic.start_dataset_size_calc(ds, update_ui)
+        self.quiet_tasks.run(lambda _t: path_size_bytes(ds), name="Dataset size", on_done=apply, on_error=failed)
 
     def _refresh_dataset_stats(self) -> None:
         ds = self.state.dataset_dir

@@ -33,6 +33,7 @@ if not __package__:  # run as a script (python tools/x.py): make the checkout im
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.generators.opencv2d.photoreal import CAMERA_DEFAULTS  # noqa: E402
+from simple_sim.image_sampling import read_bgr_or_exit, sample_subset  # noqa: E402
 from simple_sim.images import list_images, list_synthetic_images  # noqa: E402
 
 _BLUR_GRID = np.arange(0.0, 3.01, 0.05)
@@ -44,9 +45,7 @@ def load_gray(folder: Path, limit: int, rng: np.random.Generator, *, synthetic: 
     files = list_synthetic_images(folder) if synthetic else list_images(folder)
     if not files:
         raise SystemExit(f"No images found in {folder}")
-    if len(files) > limit:
-        files = [files[i] for i in sorted(rng.choice(len(files), limit, replace=False))]
-    return [cv2.imread(str(p), cv2.IMREAD_GRAYSCALE).astype(np.float32) for p in files]
+    return [read_bgr_or_exit(p, cv2.IMREAD_GRAYSCALE).astype(np.float32) for p in sample_subset(files, limit, rng)]
 
 
 def sharpness(img: np.ndarray) -> float:

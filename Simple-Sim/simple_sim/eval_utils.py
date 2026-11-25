@@ -29,8 +29,6 @@ if TYPE_CHECKING:
     import torch.nn as nn
     from torch.utils.data import DataLoader, Dataset
 
-MANIFEST_NAME = DATASET_MANIFEST  # kept for existing importers
-
 log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
@@ -312,7 +310,7 @@ def metrics_summary(metrics: dict[str, Any]) -> dict[str, Any]:
 
 def require_manifest(data_dir: Path) -> Path:
     """Return ``<data_dir>/dataset_manifest.json`` or raise FileNotFoundError with a backfill hint."""
-    manifest_path = Path(data_dir) / MANIFEST_NAME
+    manifest_path = Path(data_dir) / DATASET_MANIFEST
     if not manifest_path.exists():
         raise FileNotFoundError(
             f"Dataset manifest not found: {manifest_path}\n"

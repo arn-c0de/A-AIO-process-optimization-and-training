@@ -8,7 +8,7 @@ from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal import RenderContext
 from simple_sim.generators.opencv2d.photoreal.context import missing_residue
 
-from tests.test_photoreal import CFG, FOOTPRINTS, TOL
+from tests.helpers import CFG, FOOTPRINTS, TOL
 
 
 def _render(defect_type="MISSING", seed=2, **cfg):

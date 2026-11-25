@@ -24,9 +24,10 @@ from pathlib import Path
 from typing import Any
 
 import cv2
-import numpy as np
 import pytest
 import yaml
+
+from tests.helpers import lib_versions
 
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = Path(__file__).resolve().parent / "golden" / "profile_dataset.json"
@@ -97,21 +98,16 @@ def generate_cases(tmp_dir: Path) -> dict[str, dict[str, str]]:
     return out
 
 
-def _versions() -> dict[str, str]:
-    return {"opencv": cv2.__version__, "numpy": np.__version__}
-
-
 def test_profile_datasets_match_golden(tmp_path, monkeypatch):
     from simple_sim.generators.version import RENDERER_VERSION
 
     if not GOLDEN.exists():
         pytest.fail(f"missing {GOLDEN}; create it with: python -m tests.test_profile_dataset_golden --update")
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
-    if golden.get("versions") != _versions():
-        pytest.skip(f"golden hashes were written with {golden.get('versions')}, running {_versions()}")
+    if golden.get("versions") != lib_versions():
+        pytest.skip(f"golden hashes were written with {golden.get('versions')}, running {lib_versions()}")
     assert golden["renderer_version"] == RENDERER_VERSION, (
         "RENDERER_VERSION changed: regenerate (python -m tests.test_profile_dataset_golden --update)")
-    monkeypatch.delenv("IMAGE_FILTERS", raising=False)
     monkeypatch.setenv("SIMPLE_SIM_RENDER_EXECUTOR", "thread")
     got = generate_cases(tmp_path)
     assert set(got) == set(golden["datasets"])
@@ -121,14 +117,13 @@ def test_profile_datasets_match_golden(tmp_path, monkeypatch):
         assert not changed, f"{name}: generate_profile_dataset output changed in {changed}"
 
 
-def test_config_mapping_and_profiles_dir(tmp_path, monkeypatch):
+def test_config_mapping_and_profiles_dir(tmp_path):
     """A config mapping (not modified) and an explicit profiles dir give the same samples as the file
     and the default dir (the manifest then records the profiles' absolute paths)."""
     import shutil
 
     from simple_sim.generation.profile_dataset import generate_profile_dataset
 
-    monkeypatch.delenv("IMAGE_FILTERS", raising=False)
     cfg, _ = cases()["plain"]
     cfg["classes"] = {"OK": 1, "MISSING": 1}
     before = json.dumps(cfg, sort_keys=True)
@@ -162,7 +157,7 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         datasets = generate_cases(Path(tmp))
     GOLDEN.parent.mkdir(parents=True, exist_ok=True)
-    GOLDEN.write_text(json.dumps({"renderer_version": RENDERER_VERSION, "versions": _versions(), "datasets": datasets},
+    GOLDEN.write_text(json.dumps({"renderer_version": RENDERER_VERSION, "versions": lib_versions(), "datasets": datasets},
                                  indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"wrote {sum(map(len, datasets.values()))} hashes to {GOLDEN}")
     return 0

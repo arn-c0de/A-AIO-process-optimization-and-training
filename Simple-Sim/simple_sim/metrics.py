@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 
+from simple_sim.cli_utils import RULE
 from simple_sim.classes import CRITICAL_CLASSES
 
 DEFAULT_CRITICAL_CLASSES: tuple[str, ...] = tuple(CRITICAL_CLASSES)
@@ -191,9 +192,9 @@ def evaluate_success_criteria(val_accuracy: float | None, metrics: dict[str, Any
 def format_success_criteria(check: SuccessCheck, *, ascii_only: bool = False) -> str:
     """The console ``SUCCESS CRITERIA CHECK`` block (starts with a blank line)."""
     ok_mark, fail_mark = ("", "") if ascii_only else ("✓ ", "✗ ")
-    lines = ["", "=" * 60, "SUCCESS CRITERIA CHECK", "=" * 60]
+    lines = ["", RULE, "SUCCESS CRITERIA CHECK", RULE]
     lines += [f"{ok_mark if ok else fail_mark}{'PASS' if ok else 'FAIL'}: {name}" for name, ok in check.checks]
-    lines += ["", f"{ok_mark}ALL CHECKS PASSED" if check.passed else f"{fail_mark}SOME CHECKS FAILED", "=" * 60]
+    lines += ["", f"{ok_mark}ALL CHECKS PASSED" if check.passed else f"{fail_mark}SOME CHECKS FAILED", RULE]
     return "\n".join(lines)
 
 
@@ -208,9 +209,9 @@ def format_metrics(metrics: dict[str, Any], class_names: list[str]) -> str:
         Formatted string
     """
     lines = []
-    lines.append("=" * 60)
+    lines.append(RULE)
     lines.append("METRICS")
-    lines.append("=" * 60)
+    lines.append(RULE)
     lines.append(f"Accuracy: {metrics['accuracy']:.4f}")
     lines.append(f"Macro F1: {metrics['macro_f1']:.4f}")
     lines.append("")
@@ -247,6 +248,6 @@ def format_metrics(metrics: dict[str, Any], class_names: list[str]) -> str:
         for class_name, fn_rate in metrics['critical_fn_rates'].items():
             lines.append(f"  {class_name}: {fn_rate:.4f}")
 
-    lines.append("=" * 60)
+    lines.append(RULE)
 
     return "\n".join(lines)

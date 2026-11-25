@@ -11,6 +11,7 @@ from typing import Any
 import cv2
 import yaml
 
+from simple_sim.cli_utils import RULE
 from simple_sim.io_utils import load_yaml
 from simple_sim.manifest import read_dataset_manifest
 from simple_sim.rng import derive_sample_seed, parse_sample_id
@@ -62,57 +63,78 @@ def run_validation(data_dir: Path, seed_mismatch_log_limit: int = 5) -> tuple[bo
 
 
 def _run_checks(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> None:
-    print("=" * 60)
+    print(RULE)
     print("DATASET VALIDATION")
-    print("=" * 60)
+    print(RULE)
     print(f"Dataset: {data_dir}\n")
     try:
         _checks_body(data_dir, seed_mismatch_log_limit, c)
     finally:
-        print("\n" + "=" * 60)
+        print("\n" + RULE)
         print("✓ ALL VALIDATIONS PASSED" if c.ok else "✗ SOME VALIDATIONS FAILED")
-        print("=" * 60)
+        print(RULE)
 
 
 def _checks_body(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> None:
-    # 1: Required files/directories
+    if not _check_files(data_dir, c):
+        return  # Can't continue without images
+    rows = _check_schemas(data_dir, c)
+    if rows is None:
+        return
+    meta_rows, label_rows = rows
+    _check_row_counts(data_dir, meta_rows, label_rows, c)
+    _check_images(data_dir, meta_rows, c)
+    splits = _check_splits(data_dir / "splits", meta_rows, c)
+    _check_class_distribution(splits, label_rows, c)
+
+    # 8: Determinism (seed replay on the first 20 samples)
+    print("\n8. Checking determinism (sample verification)...")
+    _check_seeds(data_dir, meta_rows, seed_mismatch_log_limit, c)
+
+
+def _check_files(data_dir: Path, c: _Checks) -> bool:
+    """1: Required files/directories; False when ``images/`` is missing."""
     print("1. Checking required files...")
     for filename in ("meta.jsonl", "labels.jsonl", "config.yaml"):
         exists = (data_dir / filename).exists()
         c.add(f"file:{filename}", PASS if exists else FAIL, f"{filename} exists" if exists else f"Missing {filename}")
-    splits_dir = data_dir / "splits"
-    c.add("dir:splits", PASS if splits_dir.exists() else FAIL,
-          "splits/ directory exists" if splits_dir.exists() else "Missing splits directory")
-    if not c.add("dir:images", PASS if (data_dir / "images").exists() else FAIL,
-                 "images/ directory exists" if (data_dir / "images").exists() else "Missing images directory"):
-        return  # Can't continue without images
+    splits_exist = (data_dir / "splits").exists()
+    c.add("dir:splits", PASS if splits_exist else FAIL,
+          "splits/ directory exists" if splits_exist else "Missing splits directory")
+    images_exist = (data_dir / "images").exists()
+    return c.add("dir:images", PASS if images_exist else FAIL,
+                 "images/ directory exists" if images_exist else "Missing images directory")
 
-    # 2: Schema validation
+
+def _check_schemas(data_dir: Path, c: _Checks) -> tuple[list[MetaRow], list[LabelRow]] | None:
+    """2: Schema validation; None when a file cannot be parsed."""
     print("\n2. Validating JSONL schemas...")
     try:
         meta_rows = read_jsonl(data_dir / "meta.jsonl", MetaRow)
     except Exception as e:  # noqa: BLE001 - any parse error is a failed check
         c.add("schema:meta", FAIL, f"meta.jsonl invalid - {e}")
-        return
+        return None
     c.add("schema:meta", PASS, f"meta.jsonl valid ({len(meta_rows)} rows)")
     try:
         label_rows = read_jsonl(data_dir / "labels.jsonl", LabelRow)
     except Exception as e:  # noqa: BLE001
         c.add("schema:labels", FAIL, f"labels.jsonl invalid - {e}")
-        return
+        return None
     c.add("schema:labels", PASS, f"labels.jsonl valid ({len(label_rows)} rows)")
     if not meta_rows:
         # Every later check passes vacuously on zero rows; an empty dataset cannot be trained on.
         c.add("non_empty", FAIL, "Dataset has no samples (meta.jsonl is empty)")
+    return meta_rows, label_rows
 
-    # 3: Row counts
+
+def _check_row_counts(data_dir: Path, meta_rows: list[MetaRow], label_rows: list[LabelRow], c: _Checks) -> None:
+    """3: Row counts, 4: ID consistency."""
     print("\n3. Checking row counts...")
     if len(meta_rows) == len(label_rows):
         c.add("row_counts", PASS, f"Row counts match ({len(meta_rows)} samples)")
     else:
         c.add("row_counts", FAIL, f"Row count mismatch (meta={len(meta_rows)}, labels={len(label_rows)})")
 
-    # 4: ID consistency
     print("\n4. Checking ID consistency...")
     try:
         validate_jsonl_pair(data_dir / "meta.jsonl", data_dir / "labels.jsonl")
@@ -120,7 +142,9 @@ def _checks_body(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> No
     except Exception as e:  # noqa: BLE001
         c.add("id_consistency", FAIL, f"ID mismatch - {e}")
 
-    # 5: Images exist and are readable
+
+def _check_images(data_dir: Path, meta_rows: list[MetaRow], c: _Checks) -> None:
+    """5: Images exist and are readable."""
     print("\n5. Checking image files...")
     missing: list[str] = []
     corrupt: list[str] = []
@@ -139,7 +163,9 @@ def _checks_body(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> No
     else:
         c.add("images:readable", PASS, "All images readable")
 
-    # 6: Split files and overlap
+
+def _check_splits(splits_dir: Path, meta_rows: list[MetaRow], c: _Checks) -> dict[str, list[str]]:
+    """6: Split files, overlap and membership; returns the split files that exist."""
     print("\n6. Checking split overlap...")
     splits: dict[str, list[str]] = {}
     for split_name in ("train", "val", "test"):
@@ -148,27 +174,31 @@ def _checks_body(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> No
             splits[split_name] = read_split(split_file)
         else:
             c.add(f"split:{split_name}", FAIL, f"Missing {split_name}.txt")
-    if len(splits) == 3:
-        try:
-            assert_no_overlap(splits)
-            sizes = ", ".join(f"{k}={len(v)}" for k, v in splits.items())
-            c.add("split_overlap", PASS, f"No overlap between splits ({sizes})")
-        except ValueError as e:
-            c.add("split_overlap", FAIL, f"Split overlap detected - {e}")
-        # Split files must name samples of this dataset, and every sample should be in a split.
-        meta_ids = {row.id for row in meta_rows}
-        split_ids = {sid for ids in splits.values() for sid in ids}
-        unknown = sorted(split_ids - meta_ids)
-        if unknown:
-            c.add("split_membership", FAIL, f"{len(unknown)} split entries are not in meta.jsonl", unknown)
-        else:
-            c.add("split_membership", PASS, "All split entries are samples of this dataset")
-        unassigned = sorted(meta_ids - split_ids)
-        if unassigned:
-            c.add("split_coverage", WARN, f"{len(unassigned)} samples are in no split file (never trained or evaluated)",
-                  unassigned)
+    if len(splits) != 3:
+        return splits
+    try:
+        assert_no_overlap(splits)
+        sizes = ", ".join(f"{k}={len(v)}" for k, v in splits.items())
+        c.add("split_overlap", PASS, f"No overlap between splits ({sizes})")
+    except ValueError as e:
+        c.add("split_overlap", FAIL, f"Split overlap detected - {e}")
+    # Split files must name samples of this dataset, and every sample should be in a split.
+    meta_ids = {row.id for row in meta_rows}
+    split_ids = {sid for ids in splits.values() for sid in ids}
+    unknown = sorted(split_ids - meta_ids)
+    if unknown:
+        c.add("split_membership", FAIL, f"{len(unknown)} split entries are not in meta.jsonl", unknown)
+    else:
+        c.add("split_membership", PASS, "All split entries are samples of this dataset")
+    unassigned = sorted(meta_ids - split_ids)
+    if unassigned:
+        c.add("split_coverage", WARN, f"{len(unassigned)} samples are in no split file (never trained or evaluated)",
+              unassigned)
+    return splits
 
-    # 7: Class distribution per split (warning only)
+
+def _check_class_distribution(splits: dict[str, list[str]], label_rows: list[LabelRow], c: _Checks) -> None:
+    """7: Class distribution per split (warning only)."""
     print("\n7. Checking class distribution...")
     id_to_label = {row.id: row.class_name for row in label_rows}
     all_classes = {row.class_name for row in label_rows}
@@ -178,10 +208,6 @@ def _checks_body(data_dir: Path, seed_mismatch_log_limit: int, c: _Checks) -> No
             c.add(f"class_coverage:{split_name}", WARN, f"{split_name} missing classes: {sorted(missing_classes)}")
         else:
             c.add(f"class_coverage:{split_name}", PASS, f"{split_name} contains all classes")
-
-    # 8: Determinism (seed replay on the first 20 samples)
-    print("\n8. Checking determinism (sample verification)...")
-    _check_seeds(data_dir, meta_rows, seed_mismatch_log_limit, c)
 
 
 def _check_seeds(data_dir: Path, meta_rows: list[MetaRow], log_limit: int, c: _Checks) -> None:

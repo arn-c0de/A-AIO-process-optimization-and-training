@@ -9,20 +9,18 @@ This module provides functions for:
 from __future__ import annotations
 
 import copy
-import functools
 import logging
-import hashlib
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, TypeVar
-from collections.abc import Callable
+from typing import Any
 
 from simple_sim import __version__ as _VERSION
 from simple_sim.dataset_files import DATASET_MANIFEST
-from simple_sim.io_utils import atomic_write_json, load_json, now_iso, sha256_tag
+from simple_sim.io_utils import SHA256_PREFIX, atomic_write_json, file_sha256, load_json, now_iso
+from simple_sim.paths import SIM_ROOT
 
 
 log = logging.getLogger(__name__)
@@ -43,13 +41,7 @@ def hash_file(file_path: Path) -> str:
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    hash_obj = hashlib.sha256()
-    with open(file_path, 'rb') as f:
-        # Read in chunks for large files
-        while chunk := f.read(8192):
-            hash_obj.update(chunk)
-
-    return sha256_tag(hash_obj)
+    return f"{SHA256_PREFIX}{file_sha256(file_path)}"
 
 
 @lru_cache(maxsize=1)
@@ -70,7 +62,7 @@ def _get_git_commit() -> str | None:
             text=True,
             timeout=5,
             check=False,
-            cwd=Path(__file__).parent.parent
+            cwd=SIM_ROOT
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -118,35 +110,6 @@ def _generator_block(script_name: str, git_commit: str | None, renderer_version:
     if renderer_version is not None:
         generator['renderer_version'] = renderer_version
     return generator
-
-
-_F = TypeVar("_F", bound=Callable[..., Any])
-
-
-def _legacy_positional(n_positional: int, names: tuple[str, ...]) -> Callable[[_F], _F]:
-    """Accept the pre-A6 positional form of a writer whose parameters after the first
-    *n_positional* are keyword-only now (plan A6).
-
-    Extra positional arguments are mapped onto *names* (the old parameter order), silently for
-    now (callers in scripts/GUI still use it); passing one of them both ways raises ``TypeError``
-    like a normal call.
-    """
-    def deco(fn: _F) -> _F:
-        @functools.wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if len(args) > n_positional:
-                extra = args[n_positional:]
-                if len(extra) > len(names):
-                    raise TypeError(f"{fn.__name__}() takes at most {n_positional + len(names)} "
-                                    f"positional arguments ({len(args)} given)")
-                for name, value in zip(names, extra):
-                    if name in kwargs:
-                        raise TypeError(f"{fn.__name__}() got multiple values for argument '{name}'")
-                    kwargs[name] = value
-                args = args[:n_positional]
-            return fn(*args, **kwargs)
-        return wrapper  # type: ignore[return-value]
-    return deco
 
 
 _PROFILE_FIELDS = ("profile_id", "profile_hash", "profile_path")
@@ -361,8 +324,6 @@ def _extend_manifest(
         stats['classes'][class_name] = stats['classes'].get(class_name, 0) + count
 
 
-@_legacy_positional(2, ("profile_id", "profile_hash", "profile_path", "meta_rows", "label_rows", "splits",
-                            "extend", "script_name", "renderer_version", "git_commit"))
 def write_dataset_manifest(
     output_dir: Path,
     run_id: str,
@@ -380,8 +341,7 @@ def write_dataset_manifest(
 ) -> None:
     """Write or update dataset manifest.
 
-    Everything after *run_id* is keyword-only (plan A6); the old positional form is still
-    accepted (legacy, silently).
+    Everything after *run_id* is keyword-only (plan A6).
 
     Args:
         output_dir: Dataset output directory
@@ -478,33 +438,19 @@ def read_dataset_manifest(manifest_path: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"Dataset manifest not found: {manifest_path}")
 
     manifest = load_json(manifest_path)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Invalid manifest: expected a JSON object, got {type(manifest).__name__}")
 
-    # Validate manifest structure
-    required_fields = [
-        'manifest_version',
-        'created_at',
-        'run_id',
-        'generator',
-        'dataset_stats',
-        'extend_history'
-    ]
-
-    for name in required_fields:
+    for name in _MANIFEST_REQUIRED_FIELDS:
         if name not in manifest:
             raise ValueError(f"Invalid manifest: missing field '{name}'")
 
     version = manifest.get('manifest_version', 1)
-
     if version == 1:
         # Single-profile manifest
         if 'component_profile' not in manifest:
             raise ValueError("Invalid manifest: missing 'component_profile'")
-        profile_fields = ['profile_id', 'profile_hash', 'profile_path']
-        for field in profile_fields:
-            if field not in manifest['component_profile']:
-                raise ValueError(
-                    f"Invalid manifest: missing component_profile.{field}"
-                )
+        _require_profile_fields(manifest['component_profile'], "component_profile")
     elif version == 2:
         # Multi-profile manifest
         if 'component_profiles' not in manifest:
@@ -513,13 +459,24 @@ def read_dataset_manifest(manifest_path: Path) -> dict[str, Any]:
         if not isinstance(profiles, list) or len(profiles) < 2:
             raise ValueError("manifest_version=2 requires component_profiles list with 2+ entries")
         for i, p in enumerate(profiles):
-            for field in ['profile_id', 'profile_hash', 'profile_path']:
-                if field not in p:
-                    raise ValueError(f"Invalid manifest: missing component_profiles[{i}].{field}")
+            _require_profile_fields(p, f"component_profiles[{i}]")
     else:
         raise ValueError(f"Unsupported manifest_version: {version}")
 
     return manifest
+
+
+_MANIFEST_REQUIRED_FIELDS = ('manifest_version', 'created_at', 'run_id', 'generator', 'dataset_stats', 'extend_history')
+_PROFILE_REF_FIELDS = ('profile_id', 'profile_hash', 'profile_path')
+
+
+def _require_profile_fields(entry: Any, where: str) -> None:
+    """*entry* is a mapping with every profile reference field (``ValueError`` naming *where* otherwise)."""
+    if not isinstance(entry, dict):
+        raise ValueError(f"Invalid manifest: {where} must be an object")
+    for name in _PROFILE_REF_FIELDS:
+        if name not in entry:
+            raise ValueError(f"Invalid manifest: missing {where}.{name}")
 
 
 def load_dataset_manifest(manifest_path: Path) -> DatasetManifest:
@@ -601,8 +558,6 @@ def check_checkpoint_profile(
     return ckpt_profile_id
 
 
-@_legacy_positional(2, ("profiles", "meta_rows", "label_rows", "splits", "script_name", "existing",
-                        "renderer_version", "git_commit"))
 def write_multi_profile_manifest(
     output_dir: Path,
     run_id: str,
@@ -618,8 +573,7 @@ def write_multi_profile_manifest(
 ) -> None:
     """Write a multi-profile dataset manifest (manifest_version 2).
 
-    Everything after *run_id* is keyword-only (plan A6); the old positional form is still
-    accepted (legacy, silently).
+    Everything after *run_id* is keyword-only (plan A6).
 
     Args:
         output_dir: Dataset output directory
@@ -681,6 +635,45 @@ def write_multi_profile_manifest(
 
     atomic_write_json(manifest_path, manifest)
     log.info(f"Multi-profile dataset manifest written: {manifest_path}")
+
+
+def write_manifest_for_profiles(
+    output_dir: Path,
+    run_id: str,
+    *,
+    profiles: list[dict[str, str]],
+    meta_rows: list[Any],
+    label_rows: list[Any],
+    splits: dict[str, list[str]],
+    script_name: str,
+    renderer_version: str | None = None,
+    git_commit: str | None = None,
+) -> int:
+    """Manifest of a freshly written dataset whose samples use *profiles* (``profile_id`` / ``profile_hash`` /
+    ``profile_path`` dicts): one profile -> v1 (:func:`write_dataset_manifest`), two or more -> v2
+    (:func:`write_multi_profile_manifest`, profiles sorted by id). Duplicate ids keep their first entry.
+
+    Returns the manifest version written; 0 (nothing written, warning logged) without any profile.
+    """
+    unique: dict[str, dict[str, str]] = {}
+    for prof in profiles:
+        pid = str(prof.get("profile_id") or "").strip()
+        if pid:
+            unique.setdefault(pid, {"profile_id": pid, "profile_hash": str(prof.get("profile_hash") or ""),
+                                    "profile_path": str(prof.get("profile_path") or "")})
+    if not unique:
+        log.warning(f"No component profile for {output_dir}: no dataset_manifest.json written")
+        return 0
+    if len(unique) == 1:
+        only = next(iter(unique.values()))
+        write_dataset_manifest(output_dir, run_id, profile_id=only["profile_id"], profile_hash=only["profile_hash"],
+                               profile_path=only["profile_path"], meta_rows=meta_rows, label_rows=label_rows, splits=splits,
+                               script_name=script_name, renderer_version=renderer_version, git_commit=git_commit)
+        return 1
+    write_multi_profile_manifest(output_dir, run_id, profiles=[unique[pid] for pid in sorted(unique)], meta_rows=meta_rows,
+                                 label_rows=label_rows, splits=splits, script_name=script_name,
+                                 renderer_version=renderer_version, git_commit=git_commit)
+    return 2
 
 
 def check_renderer_version(manifest: dict[str, Any], current: str, *, allow_mismatch: bool = False) -> None:

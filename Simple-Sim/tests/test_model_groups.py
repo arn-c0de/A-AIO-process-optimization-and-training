@@ -36,3 +36,20 @@ def test_group_for_model_precedence(tmp_path: Path) -> None:
     assert group(snap, favorite=True, assignments={"v1.pt": "Mine"}) == "Mine"
     # An assignment to a group that no longer exists is ignored.
     assert group(snap, assignments={"v1.pt": "Gone"}) == "Snapshots"
+
+
+def test_group_state_round_trip_through_the_settings_store(tmp_path: Path) -> None:
+    from gui.utils.model_groups import load_favorites, load_group_state, save_favorites, save_group_state
+    from gui.utils.settings_store import SettingsStore
+
+    store = SettingsStore(tmp_path / "settings.json")
+    assert load_group_state(None) == ([], {})
+    assert load_group_state(store) == ([], {})
+    save_group_state(store, ["Mine"], {"a.pt": "Mine", "b.pt": ""})
+    assert load_group_state(store) == (["Mine"], {"a.pt": "Mine"})
+    store.set("weights.custom_groups", "not json")
+    assert load_group_state(store)[0] == []
+
+    assert load_favorites(tmp_path / "models") == {}
+    save_favorites(tmp_path / "models", {"x.pt": {"path": "x.pt", "added": "t"}})
+    assert load_favorites(tmp_path / "models") == {"x.pt": {"path": "x.pt", "added": "t"}}

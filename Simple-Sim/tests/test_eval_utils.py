@@ -1,6 +1,5 @@
 """Tests for simple_sim.eval_utils and the importable cores of the train/eval/predict scripts."""
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +9,6 @@ import torch.nn as nn
 import yaml
 from torch.utils.data import DataLoader, TensorDataset
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.cli_utils import UsageError, parse_result, run_cli
 from simple_sim.eval_utils import (
@@ -24,6 +22,7 @@ from simple_sim.eval_utils import (
     tta_views,
     unpack_batch,
 )
+import json
 
 
 def test_unpack_batch_variants():
@@ -223,3 +222,29 @@ def test_ensemble_and_bundle_eval_predict(tmp_path):
     # One report per (bundle, profile): evaluating the bundle on another profile's dataset must not overwrite it.
     assert Path(ev["report_path"]) == bundle.parent / f"report_my_{dataset_profile(data)[0]}.json"
     assert ev["model_path"] == str(bundle) and ev["resolved_model_path"] != str(bundle)
+
+
+def test_max_samples_subset_is_spread_over_the_split():
+    pytest.importorskip("torch")
+    from simple_sim.batch_predict import evenly_spaced_indices
+
+    assert evenly_spaced_indices(5, 10) == [0, 1, 2, 3, 4]
+    idx = evenly_spaced_indices(100, 4)
+    assert idx == [0, 33, 66, 99]  # first N would be the first class only (ids are sorted class by class)
+    assert len(set(evenly_spaced_indices(7, 6))) == 6
+    assert evenly_spaced_indices(100, 1) == [0]
+
+
+def test_eval_keeps_the_report_of_another_dataset(tmp_path):
+    pytest.importorskip("torch")
+    from simple_sim.evaluation import _archive_report_of_other_dataset
+
+    report = tmp_path / "report_m.json"
+    report.write_text(json.dumps({"dataset_path": str(tmp_path / "ds_a"), "metrics": {"accuracy": 0.9}}))
+    _archive_report_of_other_dataset(report, tmp_path / "ds_a")  # same dataset: replaced in place later
+    assert report.exists() and not (tmp_path / "history").exists()
+    _archive_report_of_other_dataset(report, tmp_path / "ds_b")
+    assert not report.exists()
+    kept = tmp_path / "history" / "report_m_ds_a.json"
+    assert json.loads(kept.read_text())["metrics"]["accuracy"] == 0.9
+    _archive_report_of_other_dataset(report, tmp_path / "ds_b")  # nothing there: no error

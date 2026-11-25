@@ -8,13 +8,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import json
+import logging
 from pathlib import Path
 import shutil
 from collections.abc import Iterable
 
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL, META_JSONL, SPLITS_DIR
-from simple_sim.io_utils import atomic_write_json, atomic_write_text
+from simple_sim.io_utils import atomic_write_json, atomic_write_text, read_json
+from simple_sim.manifest import resolve_dataset_profile
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, write_jsonl
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -120,6 +124,7 @@ def move_samples(
     dst_image_paths = {row.image_path for row in dst_meta}
 
     moved_pairs: list[tuple[Path, Path]] = []
+    backup: _FileBackup | None = None
     selected_set = set(selected)
 
     new_src_meta = [row for row in src_meta if row.id not in selected_set]
@@ -167,6 +172,9 @@ def move_samples(
             ))
             new_dst_labels.append(replace(src_label_row, id=new_id))
 
+        # From here on files are rewritten: keep their bytes, so a failure half-way (e.g. the target's
+        # labels.jsonl cannot be written after the source rows were removed) does not lose samples.
+        backup = _FileBackup(_row_files(src_dataset_dir, src_splits) + _row_files(dst_dataset_dir, dst_splits))
         write_jsonl(src_dataset_dir / META_JSONL, new_src_meta)
         write_jsonl(src_dataset_dir / LABELS_JSONL, new_src_labels)
         write_jsonl(dst_dataset_dir / META_JSONL, new_dst_meta)
@@ -180,13 +188,15 @@ def move_samples(
         recompute_manifest_stats(src_dataset_dir)
         recompute_manifest_stats(dst_dataset_dir)
     except Exception:
+        if backup is not None:
+            backup.restore()
         for src_file, dst_file in reversed(moved_pairs):
             try:
                 src_file.parent.mkdir(parents=True, exist_ok=True)
                 if dst_file.exists():
                     shutil.move(str(dst_file), str(src_file))
-            except Exception:
-                pass
+            except Exception as exc:  # keep going: put back as many images as possible
+                _LOG.warning("Rollback could not move %s back to %s: %s", dst_file, src_file, exc)
         raise
 
     return DatasetEditSummary(requested=len(selected), affected=len(selected))
@@ -219,6 +229,33 @@ def recompute_manifest_stats(dataset_dir: Path) -> None:
     }
 
     atomic_write_json(manifest_path, manifest)
+
+
+class _FileBackup:
+    """Byte copies of files an edit is about to rewrite; ``restore()`` puts them back (best effort).
+
+    A file that did not exist is removed again on restore.
+    """
+
+    def __init__(self, paths: Iterable[Path]) -> None:
+        self._saved = {Path(p): (Path(p).read_bytes() if Path(p).is_file() else None) for p in paths}
+
+    def restore(self) -> None:
+        for path, data in self._saved.items():
+            try:
+                if data is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(data)
+            except Exception as exc:  # keep going: restore as many files as possible
+                _LOG.warning("Rollback could not restore %s: %s", path, exc)
+
+
+def _row_files(dataset_dir: Path, splits: dict[str, list[str]]) -> list[Path]:
+    """The files ``move_samples`` rewrites in *dataset_dir*: rows, manifest and the *splits* files."""
+    dataset_dir = Path(dataset_dir)
+    return ([dataset_dir / META_JSONL, dataset_dir / LABELS_JSONL, dataset_dir / DATASET_MANIFEST]
+            + [dataset_dir / SPLITS_DIR / f"{name}.txt" for name in splits])
 
 
 def _read_split_files(dataset_dir: Path) -> dict[str, list[str]]:
@@ -316,17 +353,26 @@ def _ensure_profile_compatibility(src_dataset_dir: Path, dst_dataset_dir: Path) 
         )
 
 
-def _read_profile_id(dataset_dir: Path) -> str | None:
-    manifest_path = Path(dataset_dir) / DATASET_MANIFEST
-    if not manifest_path.exists():
-        return None
+def manifest_profile(dataset_dir: Path | None) -> tuple[str | None, str | None]:
+    """``(profile_id, profile_hash)`` of a dataset manifest via ``simple_sim.manifest.resolve_dataset_profile``.
+
+    A multi-profile (v2) manifest gives ``("multi", None)``; a missing or unreadable manifest ``(None, None)``.
+    """
+    if not dataset_dir:
+        return None, None
+    manifest = read_json(Path(dataset_dir) / DATASET_MANIFEST)
+    if not isinstance(manifest, dict):
+        return None, None
     try:
-        with open(manifest_path, encoding="utf-8") as f:
-            data = json.load(f)
-        profile = data.get("component_profile")
-        if isinstance(profile, dict):
-            value = profile.get("profile_id")
-            return str(value).strip() if value else None
+        profile_id, profile_hash = resolve_dataset_profile(manifest)
     except Exception:
-        return None
-    return None
+        return None, None
+    if profile_id == "multi":
+        return "multi", None
+    return (str(profile_id).strip() or None) if profile_id else None, profile_hash
+
+
+def _read_profile_id(dataset_dir: Path) -> str | None:
+    """Profile id of a single-profile dataset (``None`` for multi-profile or legacy datasets)."""
+    profile_id = manifest_profile(dataset_dir)[0]
+    return None if profile_id == "multi" else profile_id

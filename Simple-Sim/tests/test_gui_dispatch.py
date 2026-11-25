@@ -248,7 +248,8 @@ def test_profile_registry_poll_parses_nothing_when_unchanged(tmp_path: Path, mon
 
 
 def _write_dataset(root: Path, n: int = 3) -> Path:
-    from simple_sim.schema import LabelRow, MetaRow, write_jsonl
+    from simple_sim.schema import LabelRow, write_jsonl
+    from tests.helpers import meta_row
 
     (root / "images").mkdir(parents=True)
     meta, labels = [], []
@@ -256,15 +257,7 @@ def _write_dataset(root: Path, n: int = 3) -> Path:
         image = f"images/{i:06d}.png"
         cv2.imwrite(str(root / image), np.full((40, 60, 3), (50 + 13 * i) % 256, np.uint8))
         sid = f"r/domain_A/train/{i:06d}"
-        meta.append(MetaRow(
-            schema_version=2, id=sid, run_id="r", domain="domain_A", split="train", seed=1, image_path=image,
-            render_backend="opencv_2d", footprint="0603",
-            nominal={"pad_width": 1.0, "pad_height": 1.0, "pad_spacing": 1.0, "component_length": 1.0,
-                     "component_width": 1.0},
-            defect={"type": "OK", "shift_x": 0.0, "shift_y": 0.0, "rotation_deg": 0.0, "tilt_deg": 0.0},
-            augment={"blur_sigma": 0.0, "noise_stddev": 0.0, "brightness_factor": 1.0, "contrast_factor": 1.0,
-                     "rotation_deg": 0.0},
-        ))
+        meta.append(meta_row(sid, image))
         labels.append(LabelRow(schema_version=2, id=sid, class_name=("OK", "MISSING")[i % 2], profile_id="p@1"))
     write_jsonl(root / "meta.jsonl", meta)
     write_jsonl(root / "labels.jsonl", labels)

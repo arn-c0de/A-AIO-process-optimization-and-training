@@ -11,6 +11,11 @@ def model_root(sim_root: Path) -> Path:
     return Path(sim_root) / "outputs" / "models"
 
 
+def default_model_path(sim_root: Path, name: str, suffix: str = ".pt") -> Path:
+    """The default checkpoint of a dataset/run *name*: ``outputs/models/<name><suffix>``."""
+    return model_root(sim_root) / f"{name}{suffix}"
+
+
 def newest_file(directory: Path, pattern: str, *, min_mtime: float | None = None) -> Path | None:
     """Most recently modified file in *directory* matching *pattern* (optionally ``mtime >= min_mtime``)."""
     try:

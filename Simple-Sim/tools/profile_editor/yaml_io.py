@@ -9,6 +9,18 @@ from simple_sim.io_utils import atomic_write_text
 from simple_sim.io_utils import load_yaml as read_yaml_file
 
 
+def range_mid(ranges: dict[str, Any], name: str, fallback: float) -> float:
+    """Midpoint of the ``[lo, hi]`` range ``ranges[name]`` (``geometry_ranges`` of a profile); *fallback* when
+    the entry is missing, not a two-element list or not numeric."""
+    raw = ranges.get(name, [fallback, fallback])
+    if isinstance(raw, list) and len(raw) == 2:
+        try:
+            return (float(raw[0]) + float(raw[1])) * 0.5
+        except (TypeError, ValueError):
+            return fallback
+    return fallback
+
+
 class YamlError(Exception):
     """Raised when YAML cannot be read/written."""
 

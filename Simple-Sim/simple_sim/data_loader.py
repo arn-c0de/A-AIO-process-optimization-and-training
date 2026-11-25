@@ -182,16 +182,31 @@ class _BaseROIDataset(Dataset):
                 stacklevel=3,
             )
 
-    # Subclasses implement these two hooks:
+    # Subclasses set these before calling ``super().__init__``: the LabelRow field that names a
+    # sample's label, the ordered label names and name -> index.
+    _label_attr: str = "class_name"
+    _names: list[str]
+    _index: dict[str, int]
 
     def _init_label_mapping(self, label_rows: list[LabelRow]) -> None:
-        raise NotImplementedError
+        self._id_to_name: dict[str, str] = {row.id: getattr(row, self._label_attr) for row in label_rows}
 
     def _sample_is_valid(self, sample_id: str) -> bool:
-        raise NotImplementedError
+        return (
+            sample_id in self.id_to_meta
+            and sample_id in self._id_to_name
+            and self._id_to_name[sample_id] in self._index  # same keys as _names, O(1) lookup
+        )
 
     def _get_label_index(self, sample_id: str) -> int:
-        raise NotImplementedError
+        return self._index[self._id_to_name[sample_id]]
+
+    def get_class_distribution(self) -> dict[str, int]:
+        """Return label name (class or profile) → sample count for this split."""
+        dist = dict.fromkeys(self._names, 0)
+        for sid in self.samples:
+            dist[self._id_to_name[sid]] += 1
+        return dist
 
     # Shared implementation:
 
@@ -242,28 +257,13 @@ class ROIDataset(_BaseROIDataset):
                 about 200 KB per 256 px image, each DataLoader worker holds its own copy)
         """
         self.class_names = class_names
-        self._class_index = _first_index(class_names)
+        self._names, self._index = class_names, _first_index(class_names)
         super().__init__(data_dir, split, return_id, transform, cache_images)
 
-    def _init_label_mapping(self, label_rows: list[LabelRow]) -> None:
-        self.id_to_label: dict[str, str] = {row.id: row.class_name for row in label_rows}
-
-    def _sample_is_valid(self, sample_id: str) -> bool:
-        return (
-            sample_id in self.id_to_meta
-            and sample_id in self.id_to_label
-            and self.id_to_label[sample_id] in self.class_names
-        )
-
-    def _get_label_index(self, sample_id: str) -> int:
-        return self._class_index[self.id_to_label[sample_id]]
-
-    def get_class_distribution(self) -> dict[str, int]:
-        """Return class name → sample count for this split."""
-        dist = dict.fromkeys(self.class_names, 0)
-        for sid in self.samples:
-            dist[self.id_to_label[sid]] += 1
-        return dist
+    @property
+    def id_to_label(self) -> dict[str, str]:
+        """Sample id → class name (all label rows of the dataset)."""
+        return self._id_to_name
 
 
 class ProfileDataset(_BaseROIDataset):
@@ -272,6 +272,8 @@ class ProfileDataset(_BaseROIDataset):
     Labels are profile indices rather than defect classes.
     Requires v2 labels with profile_id set.
     """
+
+    _label_attr = "profile_id"
 
     def __init__(self, data_dir: Path, split: str, profile_names: list[str], return_id: bool = False):
         """Initialize profile dataset.
@@ -284,25 +286,10 @@ class ProfileDataset(_BaseROIDataset):
             return_id: If True, __getitem__ returns (image, label, sample_id, image_rel_path)
         """
         self.profile_names = list(profile_names)
-        self._profile_index = _first_index(self.profile_names)
+        self._names, self._index = self.profile_names, _first_index(self.profile_names)
         super().__init__(data_dir, split, return_id)
 
-    def _init_label_mapping(self, label_rows: list[LabelRow]) -> None:
-        self.id_to_profile: dict[str, str] = {row.id: row.profile_id for row in label_rows}
-
-    def _sample_is_valid(self, sample_id: str) -> bool:
-        return (
-            sample_id in self.id_to_meta
-            and sample_id in self.id_to_profile
-            and self.id_to_profile[sample_id] in self.profile_names
-        )
-
-    def _get_label_index(self, sample_id: str) -> int:
-        return self._profile_index[self.id_to_profile[sample_id]]
-
-    def get_class_distribution(self) -> dict[str, int]:
-        """Return profile name → sample count for this split."""
-        dist = dict.fromkeys(self.profile_names, 0)
-        for sid in self.samples:
-            dist[self.id_to_profile[sid]] += 1
-        return dist
+    @property
+    def id_to_profile(self) -> dict[str, str]:
+        """Sample id → profile id (all label rows of the dataset)."""
+        return self._id_to_name

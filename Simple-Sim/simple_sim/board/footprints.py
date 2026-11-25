@@ -214,8 +214,8 @@ class PadSpec:
 
 
 def profile_footprint(profile: Mapping[str, Any]) -> str:
-    """``component.footprint`` of a component profile (:data:`DEFAULT_FOOTPRINT` when unset)."""
-    return str((profile.get("component") or {}).get("footprint", DEFAULT_FOOTPRINT))
+    """``component.footprint`` of a component profile (:data:`DEFAULT_FOOTPRINT` when unset, empty or null)."""
+    return str((profile.get("component") or {}).get("footprint") or "").strip() or DEFAULT_FOOTPRINT
 
 
 def family_of(footprint: str, component_type: str = "") -> str:
@@ -380,10 +380,6 @@ def pads_px(part: Part, px_to_mm: float) -> list[dict[str, int]]:
 
 def pin_count(part: Part) -> int:
     return sum(1 for p in part.pads if p.role != "thermal")
-
-
-def thermal_pads(part: Part) -> list[Pad]:
-    return [p for p in part.pads if p.role == "thermal"]
 
 
 def describe(part: Part) -> dict[str, Any]:

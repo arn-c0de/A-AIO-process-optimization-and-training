@@ -299,16 +299,10 @@ class MonitorAppTabbed:
         self.statusbar.show("UI scale is applied after a restart.", "info")
 
     def _open_path(self, path: Path) -> None:
-        import subprocess
+        from gui.utils.process import open_path
 
-        opener = "xdg-open" if sys.platform.startswith("linux") else ("open" if sys.platform == "darwin" else None)
         try:
-            if opener is None:
-                import os
-
-                os.startfile(str(path))  # type: ignore[attr-defined]
-            else:
-                subprocess.Popen([opener, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            open_path(path)
         except Exception as exc:
             self.statusbar.show(f"Cannot open {path}: {exc}", "error")
 

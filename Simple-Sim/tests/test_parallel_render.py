@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_sim.generators.opencv2d.photoreal.imageops import blend  # noqa: E402
-from simple_sim.parallel import imap_ordered, render_workers  # noqa: E402
-from tests.test_photoreal import CLASSES, FOOTPRINTS, _render  # noqa: E402
+from simple_sim.generators.opencv2d.photoreal.imageops import blend
+from simple_sim.parallel import imap_ordered, render_workers
+from tests.helpers import CLASSES, FOOTPRINTS
+from tests.helpers import render_photoreal as _render
 
 
 def test_imap_ordered_keeps_order_and_matches_sequential():
@@ -113,7 +113,7 @@ def test_parallel_board_bake_matches_sequential(tmp_path, monkeypatch):
     import cv2
 
     from simple_sim.generators.blender3d.bake import prepare_jobs
-    from tests.test_blender_bake import _job
+    from tests.helpers import bake_job as _job
 
     jobs = [_job(cls) for cls in ("OK", "MISSING", "TOMBSTONE", "SOLDER_BALL")]
     monkeypatch.setenv("SIMPLE_SIM_RENDER_WORKERS", "1")
@@ -162,7 +162,6 @@ def test_process_rendering_falls_back_to_threads_without_a_main_guard(tmp_path):
     """A script that calls generate_dataset at module level (no ``__main__`` guard) breaks spawned
     workers; generation must still finish, with the same images as a thread run."""
     import subprocess
-    import sys
 
     import cv2
 

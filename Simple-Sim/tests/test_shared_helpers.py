@@ -64,7 +64,8 @@ def _rows(n: int, profile_id: str = "p@1") -> list[LabelRow]:
 
 def test_manifest_v1_blocks_and_key_order(tmp_path: Path) -> None:
     rows = _rows(3)
-    write_dataset_manifest(tmp_path, "run", "p@1", "sha256:x", "p.yaml", rows, rows, {"train": [r.id for r in rows]},
+    write_dataset_manifest(tmp_path, "run", profile_id="p@1", profile_hash="sha256:x", profile_path="p.yaml", meta_rows=rows,
+                           label_rows=rows, splits={"train": [r.id for r in rows]},
                            renderer_version="9", git_commit="abc")
     m = json.loads((tmp_path / dataset_files.DATASET_MANIFEST).read_text())
     assert list(m) == ["manifest_version", "created_at", "run_id", "component_profile", "generator",
@@ -76,7 +77,8 @@ def test_manifest_v1_blocks_and_key_order(tmp_path: Path) -> None:
     assert (entry["samples_added"], entry["git_commit"], entry["renderer_version"]) == (3, "abc", "9")
 
     more = _rows(2)
-    write_dataset_manifest(tmp_path, "run", "p@1", "sha256:x", "p.yaml", more, more, {"train": [r.id for r in rows + more]},
+    write_dataset_manifest(tmp_path, "run", profile_id="p@1", profile_hash="sha256:x", profile_path="p.yaml", meta_rows=more,
+                           label_rows=more, splits={"train": [r.id for r in rows + more]},
                            extend=True, git_commit="def")  # no renderer_version: entry without the key
     m = json.loads((tmp_path / dataset_files.DATASET_MANIFEST).read_text())
     assert list(m["extend_history"][1]) == ["timestamp", "samples_added", "git_commit"]
@@ -87,14 +89,14 @@ def test_manifest_v2_blocks_and_key_order(tmp_path: Path) -> None:
     profiles = [{"profile_id": "a", "profile_hash": "h", "profile_path": "a.yaml"},
                 {"profile_id": "b", "profile_hash": "h", "profile_path": "b.yaml"}]
     rows = _rows(4, "a")
-    write_multi_profile_manifest(tmp_path, "run", profiles, rows, rows, {"train": []}, git_commit="abc")
+    write_multi_profile_manifest(tmp_path, "run", profiles=profiles, meta_rows=rows, label_rows=rows, splits={"train": []}, git_commit="abc")
     first = json.loads((tmp_path / dataset_files.DATASET_MANIFEST).read_text())
     assert list(first["generator"]) == ["version", "git_commit", "script"]
     assert list(first["extend_history"][0]) == ["timestamp", "samples_added", "git_commit"]
 
     first["generator"]["renderer_version"] = "7"
     rows = _rows(6, "a")
-    write_multi_profile_manifest(tmp_path, "run", profiles, rows, rows, {"train": []}, existing=first, git_commit="abc")
+    write_multi_profile_manifest(tmp_path, "run", profiles=profiles, meta_rows=rows, label_rows=rows, splits={"train": []}, existing=first, git_commit="abc")
     m = json.loads((tmp_path / dataset_files.DATASET_MANIFEST).read_text())
     assert list(m["generator"]) == ["version", "git_commit", "script", "renderer_version"]
     assert m["generator"]["renderer_version"] == "7"
@@ -148,7 +150,8 @@ def test_batch_predict_bundle_error_text_unchanged(tmp_path: Path) -> None:
     data = tmp_path / "ds"
     data.mkdir()
     rows = _rows(1)
-    write_dataset_manifest(data, "run", "p@1", "sha256:x", "p.yaml", rows, rows, {"train": []}, git_commit="a")
+    write_dataset_manifest(data, "run", profile_id="p@1", profile_hash="sha256:x", profile_path="p.yaml", meta_rows=rows,
+                           label_rows=rows, splits={"train": []}, git_commit="a")
     bundle = tmp_path / "m.bundle"
     bundle.mkdir()
     with pytest.raises(FileNotFoundError) as exc:
@@ -171,7 +174,8 @@ def test_weights_tab_bundle_error_text_unchanged(tmp_path: Path) -> None:
     data = tmp_path / "ds"
     data.mkdir()
     rows = _rows(1)
-    write_dataset_manifest(data, "run", "p@1", "sha256:x", "p.yaml", rows, rows, {"train": []}, git_commit="a")
+    write_dataset_manifest(data, "run", profile_id="p@1", profile_hash="sha256:x", profile_path="p.yaml", meta_rows=rows,
+                           label_rows=rows, splits={"train": []}, git_commit="a")
     bundle = tmp_path / "m.bundle"
     bundle.mkdir()
     (bundle / "q@1.pt").write_bytes(b"x")

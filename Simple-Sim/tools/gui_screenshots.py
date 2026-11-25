@@ -21,7 +21,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(ROOT))
 
 from simple_sim.io_utils import load_yaml  # noqa: E402  (needs ROOT on sys.path when run as a script)
 

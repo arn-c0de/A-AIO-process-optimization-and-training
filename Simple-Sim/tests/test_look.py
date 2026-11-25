@@ -10,8 +10,8 @@ from simple_sim.generators.opencv2d.photoreal import (LOOKS, RenderContext, came
 from simple_sim.generators.opencv2d.photoreal.look import DV_BOTTOM_LOOK, DV_TOP_LOOK, LEGACY_LOOK, QUINS_LOOK
 from simple_sim.generators.opencv2d.photoreal.meniscus import SOLDER_TINT as LEGACY_TINT
 
-from tests.test_photoreal import CFG as BASE_CFG
-from tests.test_photoreal import CLASSES, FOOTPRINTS, TOL
+from tests.helpers import CFG as BASE_CFG
+from tests.helpers import CLASSES, FOOTPRINTS, TOL
 
 CFG = {**BASE_CFG, "mm_per_px": 0.01}
 

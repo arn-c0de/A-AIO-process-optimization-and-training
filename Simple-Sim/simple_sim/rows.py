@@ -45,45 +45,39 @@ class MetaRow:
         """Validate required fields."""
         if self.schema_version not in (1, 2):
             raise ValueError(f"Unsupported schema version: {self.schema_version}")
-        if not self.id:
-            raise ValueError("id cannot be empty")
-        if not self.run_id:
-            raise ValueError("run_id cannot be empty")
-        if not self.domain:
-            raise ValueError("domain cannot be empty")
-        if self.split not in ['train', 'val', 'test']:
+        for name in ("id", "run_id", "domain"):
+            if not getattr(self, name):
+                raise ValueError(f"{name} cannot be empty")
+        if self.split not in _SPLITS:
             raise ValueError(f"Invalid split: {self.split}")
         # 0 is a valid seed for NumPy; require only non-negative.
         if self.seed < 0:
             raise ValueError("seed must be non-negative")
-        if not self.image_path:
-            raise ValueError("image_path cannot be empty")
-        if not self.render_backend:
-            raise ValueError("render_backend cannot be empty")
-        if not self.footprint:
-            raise ValueError("footprint cannot be empty")
+        for name in ("image_path", "render_backend", "footprint"):
+            if not getattr(self, name):
+                raise ValueError(f"{name} cannot be empty")
         if self.render_meta is None:
             raise ValueError("render_meta cannot be null")
-        if not isinstance(self.render_meta, dict):
-            raise ValueError("render_meta must be a dict")
+        for name in ("render_meta", "nominal", "defect", "augment"):
+            if not isinstance(getattr(self, name), dict):
+                raise ValueError(f"{name} must be a dict")
 
-        # Validate nominal geometry (must contain at least these keys; extras like pad_spacing_y are allowed)
-        required_nominal = {'pad_width', 'pad_height', 'pad_spacing', 'component_length', 'component_width'}
-        missing = required_nominal - set(self.nominal.keys())
+        # Nominal geometry must contain at least these keys (extras like pad_spacing_y are allowed).
+        missing = _REQUIRED_NOMINAL - self.nominal.keys()
         if missing:
             raise ValueError(f"nominal is missing required keys: {missing}")
-
-        # Validate defect params
-        required_defect = {'type', 'shift_x', 'shift_y', 'rotation_deg', 'tilt_deg'}
-        if set(self.defect.keys()) != required_defect:
-            raise ValueError(f"defect must have exactly {required_defect}")
+        if self.defect.keys() != _REQUIRED_DEFECT:
+            raise ValueError(f"defect must have exactly {set(_REQUIRED_DEFECT)}")
         if self.defect['type'] not in VALID_CLASSES:
             raise ValueError(f"Invalid defect type: {self.defect['type']}")
+        if self.augment.keys() != _REQUIRED_AUGMENT:
+            raise ValueError(f"augment must have exactly {set(_REQUIRED_AUGMENT)}")
 
-        # Validate augment params
-        required_augment = {'blur_sigma', 'noise_stddev', 'brightness_factor', 'contrast_factor', 'rotation_deg'}
-        if set(self.augment.keys()) != required_augment:
-            raise ValueError(f"augment must have exactly {required_augment}")
+
+_SPLITS = ('train', 'val', 'test')
+_REQUIRED_NOMINAL = frozenset({'pad_width', 'pad_height', 'pad_spacing', 'component_length', 'component_width'})
+_REQUIRED_DEFECT = frozenset({'type', 'shift_x', 'shift_y', 'rotation_deg', 'tilt_deg'})
+_REQUIRED_AUGMENT = frozenset({'blur_sigma', 'noise_stddev', 'brightness_factor', 'contrast_factor', 'rotation_deg'})
 
 
 @dataclass

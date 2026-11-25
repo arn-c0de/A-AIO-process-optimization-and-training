@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import Any
 
+from gui.utils.settings_store import parse_json
 from simple_sim.coerce import as_bool
 from simple_sim.filter_profiles import is_filter_popup_extra_key
 
@@ -24,18 +24,12 @@ def load_filter_popup_extras_from_profiles_json(raw_profiles: str, raw_active: s
     raw_active = str(raw_active or "").strip() or "Default"
     if not raw_profiles:
         return extras
-    try:
-        obj = json.loads(raw_profiles)
-        if not isinstance(obj, dict):
-            return extras
-        active_profile = obj.get(raw_active)
-        if not isinstance(active_profile, dict) and obj:
-            first_key = min(obj.keys())
-            active_profile = obj.get(first_key)
-        if isinstance(active_profile, dict):
-            extras = extract_filter_popup_extras(active_profile)
-    except Exception:
-        return {}
+    obj = parse_json(raw_profiles, want=dict, fallback={})
+    active_profile = obj.get(raw_active)
+    if not isinstance(active_profile, dict) and obj:
+        active_profile = obj.get(min(obj.keys()))
+    if isinstance(active_profile, dict):
+        extras = extract_filter_popup_extras(active_profile)
     return extras
 
 

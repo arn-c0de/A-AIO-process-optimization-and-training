@@ -31,6 +31,7 @@ import numpy as np
 if not __package__:  # run as a script (python tools/x.py): make the checkout importable
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from simple_sim.image_sampling import percentiles_10_50_90, sample_subset  # noqa: E402
 from simple_sim.images import list_synthetic_images  # noqa: E402
 
 METRICS = ("mask_h", "mask_s", "mask_v", "p1", "p99", "white", "spec", "sharp")
@@ -54,14 +55,12 @@ def folder_stats(folder: Path, limit: int, size: int, seed: int = 0) -> dict[str
     files = list_synthetic_images(folder)  # a dataset's images/ without the mixed-in real crops
     if not files:
         raise SystemExit(f"No images found in {folder}")
-    if len(files) > limit:
-        rng = np.random.default_rng(seed)
-        files = [files[i] for i in sorted(rng.choice(len(files), limit, replace=False))]
+    files = sample_subset(files, limit, np.random.default_rng(seed))
     rows = [image_stats(img, size) for img in (cv2.imread(str(p), cv2.IMREAD_COLOR) for p in files) if img is not None]
     out: dict[str, list[float] | int] = {"images": len(rows)}
     for key in METRICS:
         values = [r[key] for r in rows if key in r]
-        out[key] = [round(float(x), 4) for x in np.percentile(values, (10, 50, 90))] if values else []
+        out[key] = percentiles_10_50_90(values, 4) if values else []
     return out
 
 

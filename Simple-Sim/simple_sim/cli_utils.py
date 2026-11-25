@@ -20,6 +20,17 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
+
+#: Separator line of the console banners (training, evaluation, generation, validation reports).
+RULE = "=" * 60
+
+
+def log_banner(logger: logging.Logger, title: str) -> None:
+    """Log *title* between two :data:`RULE` lines, preceded by an empty line."""
+    logger.info("\n" + RULE)
+    logger.info(title)
+    logger.info(RULE)
+
 RESULT_JSON_PREFIX = "SIMPLE_SIM_RESULT "
 
 #: Flag advice appended by :func:`with_hint` to the library's neutral mismatch errors.

@@ -42,7 +42,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 import shutil
@@ -56,7 +55,10 @@ import numpy as np
 if not __package__:  # run as a script (python tools/x.py): make the checkout importable
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from simple_sim.image_sampling import percentiles_10_50_90, sample_subset  # noqa: E402
 from simple_sim.io_utils import read_jsonl_dicts  # noqa: E402
+from simple_sim.board3d.dv_store import PNP_COLUMNS, SIDES  # noqa: E402,F401  (PNP_COLUMNS re-exported)
+from simple_sim.board3d.dv_store import read_pnp as read_store_pnp  # noqa: E402
 
 #: review fault -> class folder (``label: fault``). Unlisted faults go to ``DEFECT@<fault>``.
 FAULT_FOLDERS: dict[str, str] = {
@@ -68,9 +70,6 @@ FAULT_FOLDERS: dict[str, str] = {
     "fremdkoerper": "DEFECT@fremdkoerper",
 }
 OK_FOLDER = "OK"
-SIDES = ("top", "bottom")
-#: ``pnp.csv`` columns (no header line).
-PNP_COLUMNS = ("refdes", "part", "value", "unused", "package", "x_mm", "y_mm", "rotation_deg", "bottom")
 
 
 def latest_reviews(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -98,19 +97,10 @@ def folder_of(row: dict[str, Any]) -> str | None:
 
 
 def read_pnp(path: Path) -> dict[str, list[tuple[float, float, str, str]]]:
-    """Placements per side: ``(x_mm, y_mm, package, refdes)``."""
-    out: dict[str, list[tuple[float, float, str, str]]] = {"top": [], "bottom": []}
-    with path.open(encoding="utf-8", errors="replace", newline="") as fh:
-        for rec in csv.reader(fh):
-            if len(rec) < len(PNP_COLUMNS):
-                continue
-            row = dict(zip(PNP_COLUMNS, rec))
-            try:
-                x, y = float(row["x_mm"]), float(row["y_mm"])
-            except ValueError:
-                continue
-            side = "bottom" if row["bottom"].strip().upper() in ("YES", "Y", "TRUE", "1", "BOTTOM") else "top"
-            out[side].append((x, y, row["package"].strip(), row["refdes"].strip()))
+    """Placements per side: ``(x_mm, y_mm, package, refdes)`` (parsed by :func:`simple_sim.board3d.dv_store.read_pnp`)."""
+    out: dict[str, list[tuple[float, float, str, str]]] = {side: [] for side in SIDES}
+    for p in read_store_pnp(path):
+        out[p.side].append((p.x_mm, p.y_mm, p.package, p.refdes))
     return out
 
 
@@ -152,16 +142,13 @@ def select(rows: list[dict[str, Any]], labels_dir: Path, *, packages: set[str] |
 
 
 def sample(rows: list[dict[str, Any]], limit: int, rng: np.random.Generator) -> list[dict[str, Any]]:
-    if limit <= 0 or len(rows) <= limit:
-        return rows
-    idx = sorted(rng.choice(len(rows), limit, replace=False))
-    return [rows[i] for i in idx]
+    return sample_subset(rows, limit, rng)
 
 
 def _percentiles(values: list[float]) -> list[float] | None:
     if not values:
         return None
-    return [round(float(v), 3) for v in np.percentile(values, (10, 50, 90))]
+    return percentiles_10_50_90(values, 3)
 
 
 def summarize(selected: dict[str, list[dict[str, Any]]], skipped: Counter, side: str) -> dict[str, Any]:

@@ -8,7 +8,6 @@ Tk viewer (:mod:`simple_sim.preview.viewer_tk`).
 from __future__ import annotations
 
 import logging
-import hashlib
 import html
 import re
 import time
@@ -31,6 +30,7 @@ from simple_sim.board.footprints import profile_footprint
 from simple_sim.generators.opencv2d.augment import clean_augment, sample_rotation_deg
 from simple_sim.generators.opencv2d.geometry import sample_nominal_geometry
 from simple_sim.profile_hash import load_profile
+from simple_sim.rng import stable_int_seed
 
 log = logging.getLogger(__name__)
 
@@ -179,9 +179,13 @@ def discover_profiles(profiles_dir: Path, *, backend_mode: str = "both") -> list
     return out
 
 
-def find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: str) -> list[Path]:
+def find_matching_run_configs(configs_dir: Path, *, profile_id: str, backend: str, pattern: str = "*.yaml") -> list[Path]:
+    """Configs under *configs_dir* (matching *pattern*) with ``render.backend == backend`` and
+    ``run.component_profile == profile_id``, sorted by name; unreadable YAML files are skipped."""
     hits: list[Path] = []
-    for p in sorted(Path(configs_dir).glob("*.yaml")):
+    for p in sorted(Path(configs_dir).glob(pattern)):
+        if p.name.startswith("."):
+            continue
         try:
             cfg = load_config(p)
         except Exception:  # noqa: BLE001 - skip unrelated/invalid YAML files
@@ -331,8 +335,7 @@ def apply_filter_overrides_to_augment(augment: dict[str, float], image_filters: 
     return apply_image_filter_overrides(a, f, rng)
 
 
-def _preview_seed(*parts: object) -> int:
-    return int(hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:12], 16)
+_preview_seed = stable_int_seed  # kept for gui.tabs.profile_preview
 
 
 def _seed_parts(seed_base: int, profile_id: str, backend: str | None, defect_type: str, run_id: int | None) -> list[object]:
@@ -379,7 +382,7 @@ def render_2d_previews(
 
     recs: list[PreviewRec] = []
     for defect_type in map(str, defect_types):
-        rng = np.random.default_rng(_preview_seed(*_seed_parts(seed_base, profile_id, BACKEND_2D, defect_type, run_id)))
+        rng = np.random.default_rng(stable_int_seed(*_seed_parts(seed_base, profile_id, BACKEND_2D, defect_type, run_id)))
         augment = sample_preview_augment(rng, rotation_range=rot_range, enable_cardinal_rotation_90=bool(enable_cardinal_rotation_90))
         augment = apply_filter_overrides_to_augment(augment, image_filters, rng)
         nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
@@ -421,7 +424,7 @@ def build_preview_jobs(
     jobs: list[dict[str, Any]] = []
     previews: list[PreviewRec] = []
     for defect_type in map(str, defect_types):
-        seed = _preview_seed(*_seed_parts(seed_base, profile_id, None, defect_type, run_id))
+        seed = stable_int_seed(*_seed_parts(seed_base, profile_id, None, defect_type, run_id))
         rng = np.random.default_rng(seed)
         nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
         defect = sample_defect_params(defect_type, rng, tolerances=tolerances)

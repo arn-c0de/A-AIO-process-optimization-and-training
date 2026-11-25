@@ -98,6 +98,13 @@ corner-lift shift ranges in mm via `roi.mm_per_px`), several `domains` with a he
 ResNet stages, changes the model), `train --threads N` (torch threads; on hybrid CPUs try the number
 of performance cores).
 
+Part catalog (`simple_sim.parts`, `python -m simple_sim parts list|lookup|check|add`): datasheet geometry of real
+parts (body l / w / **height above the board**, kind, orientation, material, source url + `datasheet|distributor|estimate`),
+shared by every tool. Only the code is published. Layers: local files (`$SIMPLE_SIM_PARTS_DB`, `os.pathsep`-separated, else `outputs/parts/catalog.json`;
+all part data lives there and stays off GitHub) over `simple_sim/parts/builtin.json` (empty in the repo); match by MPN,
+then package name, then regex. `load_board3d` applies it (`board3d["partCatalog"]`); the viewer re-exports its GLB when
+the applied heights change. Use `PartCatalog.load().lookup(texts=[value, part], package=pkg)` in generators too.
+
 Other commands: `generate-profile-dataset` / `train-profile` / `eval-profile` (component
 type classifier), `predict` (single image), `predict-two-stage`, `sample-check`,
 `create-multi-dataset` (merge datasets), `backfill-manifest` / `backfill-labels` (legacy
@@ -118,8 +125,33 @@ judge). Each also runs as `python tools/<name>.py`.
 | Batch-predict reports | `<model_dir>/history/batch_report_<stem>_<split>_<timestamp>.json` (or `--out-dir`) |
 | Arena | `outputs/models/arena.json` -> `ARENA_REPORT.md` |
 | Telemetry (optional) | JSONL events at `$SIMPLE_SIM_EVENT_LOG` if set |
+| Part catalog (local) | `outputs/parts/catalog.json` or `$SIMPLE_SIM_PARTS_DB` (git-ignored; `simple_sim/parts/builtin.json` is an empty scaffold) |
 
 The exact report path is also in the command's result line.
+
+## Production data stays local (3D-Board-Renderer and everything else)
+
+Only the **tools** go to GitHub (code, `web/board3d/` viewer, vendored three.js, tests with synthetic data). Never
+commit, push or paste into code, tests, docs, commit messages or PR texts anything from the real boards:
+
+- board data: scans, phone photos, the photo mosaic, GLB exports, `board3d.json`, renders, defect crops, datasets
+  (all under `outputs/`, git-ignored: `outputs/board3d/<product>/<side>/`, `outputs/sim_data/`, ...);
+- identifying details: customer, product and PCB names, part numbers, serials / MAC labels, DeepVision run ids,
+  store or network paths (`Database/...`, `store/...`, `testing-content/...`), PnP contents, part counts of a
+  product;
+- the 3D-Board-Renderer plan with its measurements (`BACKLOG-Sim/board3d-plan.md`, git-ignored).
+
+So: no product defaults in code or scripts (`PRODUCT=<id> ./3d-board-viewer.sh`, `--product` is required), examples
+use `<product>`, comments say "the first product", per-dataset settings live next to the data (e.g. the mosaic's
+excluded runs in `outputs/board3d/<product>/<side>/photos/exclude.txt`). Before a commit check
+`git status --untracked-files=all` and `git diff --cached` for such content; earlier local commits are checked too
+before a push (`git log origin/<branch>..`).
+
+## Commits and pull requests
+
+Never add AI attribution: no `Co-Authored-By: Claude ...` trailer, no "Generated with Claude Code" line, no
+mention of Claude / an AI assistant as author in commit messages, PR titles or PR bodies. Commits carry the
+user's git identity only.
 
 ## Evaluating results
 

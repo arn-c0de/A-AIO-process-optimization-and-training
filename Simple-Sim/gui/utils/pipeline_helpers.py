@@ -22,7 +22,7 @@ from simple_sim.board.rules import PRESETS as DESIGN_RULE_PRESETS
 from simple_sim.classes import STANDARD_CLASSES
 from simple_sim.cli import argv_for
 from simple_sim.generators.options import LOOKS
-from simple_sim.io_utils import load_yaml
+from simple_sim.io_utils import load_yaml, rel_to
 
 #: Interpreter for spawned commands: the one running the GUI (its venv), not a hard-coded path (plan P4).
 PYTHON = sys.executable
@@ -390,13 +390,25 @@ def decode_dataset_paths_json(raw: str, sim_root: Path) -> list[Path]:
 
 
 def encode_dataset_paths_json(paths: list[Path], sim_root: Path) -> str:
-    """JSON list of dataset paths (relative paths stored relative to *sim_root*)."""
-    return json.dumps([str(p) if p.is_absolute() else str(p.resolve().relative_to(sim_root.resolve())) for p in paths])
+    """JSON list of dataset paths: relative to *sim_root* when below it, else absolute.
+
+    Relative entries of *paths* are taken relative to *sim_root*; ``decode_dataset_paths_json`` reads
+    both forms (older settings hold absolute paths).
+    """
+    return json.dumps([rel_to(sim_root, p if Path(p).is_absolute() else Path(sim_root) / p) for p in paths])
 
 
 # ---------------------------------------------------------------------------
 # Command lines
 # ---------------------------------------------------------------------------
+
+def batch_predict_argv(model: Path, data: Path, *, split: str, out_dir: Path, device: str, max_samples: str,
+                       save_preds: bool, **extra: object) -> list[str]:
+    """``batch-predict --json`` (``device="auto"`` and an empty *max_samples* are left to the CLI)."""
+    return argv_for("batch-predict", model=model, data=data, split=split, out_dir=out_dir,
+                    device=None if device == "auto" else device, max_samples=max_samples or None,
+                    save_preds=bool(save_preds), json=True, **extra)
+
 
 def chain_commands(argvs: list[list[str]]) -> str:
     """Shell-quote each argv and join them with ``&&``."""

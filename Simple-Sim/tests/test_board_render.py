@@ -55,7 +55,7 @@ def test_draw_via_window_matches_full_canvas():
 @pytest.mark.parametrize("footprint,mm_per_px", [("sot23", 0.01), ("qfn_32", 0.03), ("chip_2pad", 0.01)])
 def test_escape_warn_mode_renders(footprint, mm_per_px):
     """``drc: warn`` logs violations but always returns an image (strict mode raises instead)."""
-    from tests.test_photoreal import _render
+    from tests.helpers import render_photoreal as _render
 
     board = {"routing": "escape", "drc": "warn", "pour_probability": 1.0}
     img = _render(footprint, "OK", seed=4, board=board, mm_per_px=mm_per_px)
@@ -89,7 +89,7 @@ def test_collect_drc_gathers_the_board_summary_without_changing_the_image():
 
 
 def _render_photoreal(footprint, board, seed=3):
-    from tests.test_photoreal import _render
+    from tests.helpers import render_photoreal as _render
 
     return _render(footprint, "OK", seed=seed, board=board)
 
@@ -98,9 +98,9 @@ def test_render_record_with_meta_reports_board_drc():
     from simple_sim.generation.common import sample_record
     from simple_sim.generation.dataset import resolve_run
     from simple_sim.generators.opencv2d import RenderSpec, render_record, render_record_with_meta
-    from tests.test_generate_library import ROOT, _small_config
+    from tests.helpers import ROOT, small_run_config
 
-    cfg = _small_config()
+    cfg = small_run_config({"OK": 2, "MISSING": 1, "TOMBSTONE": 1}, 96)
     run = resolve_run(cfg, profiles_dir=ROOT / "configs" / "profiles", root=ROOT)
     rec, _rng = sample_record(0, "OK", config=run.config, run_seed=1, geometry_ranges=None, tolerances=run.tolerances,
                               image_filters={}, enable_cardinal_rotation_90=False, footprint=run.footprint)
@@ -120,11 +120,10 @@ def test_dataset_meta_rows_carry_board_drc(tmp_path, monkeypatch, executor):
     import json
 
     from simple_sim.generation.dataset import generate_dataset
-    from tests.test_generate_library import ROOT, _small_config
+    from tests.helpers import ROOT, small_run_config
 
-    monkeypatch.delenv("IMAGE_FILTERS", raising=False)
     monkeypatch.setenv("SIMPLE_SIM_RENDER_EXECUTOR", executor)
-    cfg = _small_config()
+    cfg = small_run_config({"OK": 2, "MISSING": 1, "TOMBSTONE": 1}, 96)
     cfg["classes"] = {"OK": 1, "MISSING": 1}
     cfg["render"]["board"] = {"routing": "escape", "drc": "warn", "design_rules": "hdi"}
     generate_dataset(cfg, tmp_path / "ds", project_root=ROOT)

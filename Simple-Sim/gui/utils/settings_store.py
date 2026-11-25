@@ -12,6 +12,17 @@ from simple_sim.io_utils import atomic_write_json
 from gui.utils.tk_safe import quiet
 
 
+def parse_json(raw: object, *, want: type, fallback: Any) -> Any:
+    """``json.loads(raw)`` if *raw* is a non-empty string holding a *want* instance, else *fallback*."""
+    if not isinstance(raw, str) or not raw.strip():
+        return fallback
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return fallback
+    return obj if isinstance(obj, want) else fallback
+
+
 @dataclass
 class SettingsStore:
     path: Path
@@ -32,6 +43,15 @@ class SettingsStore:
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.data.get(key, default)
+
+    def get_json(self, key: str, *, want: type, fallback: Any) -> Any:
+        """A value stored as a JSON string (see :meth:`set_json`), or *fallback* when it is
+        missing, not valid JSON or not an instance of *want*."""
+        return parse_json(self.data.get(key), want=want, fallback=fallback)
+
+    def set_json(self, key: str, value: Any) -> None:
+        """Store *value* (a list/dict) as an ASCII JSON string."""
+        self.set(key, json.dumps(value, ensure_ascii=True))
 
     def set(self, key: str, value: Any) -> None:
         # Keep JSON-friendly primitives only.

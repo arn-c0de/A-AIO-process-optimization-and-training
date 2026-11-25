@@ -111,3 +111,18 @@ def test_cli_prints_counts_only(tmp_path, capsys):
     (root / "bottom.ndjson").write_text('{"board": "b", "id": "x", "label": "dnp"}\n', encoding="utf-8")
     with pytest.raises(SystemExit, match="no crops matched"):
         main(["--labels", str(root), "--side", "bottom", "--out", str(tmp_path / "o")])
+
+
+def test_dv_crops_reexport_removes_crops_whose_review_changed(tmp_path):
+    from tools.dv_crops import crop_stem, remove_stale
+
+    out = tmp_path / "out"
+    for folder, name in (("OK", "b1_R1.png"), ("OK", "b1_R2.png"), ("TOMBSTONE@grabstein", "b1_R3.png"), ("OK", "mine.png")):
+        (out / folder).mkdir(parents=True, exist_ok=True)
+        (out / folder / name).write_bytes(b"x")
+    stems = {"b1_R1", "b1_R2", "b1_R3"}
+    keep = {out / "MISSING" / "b1_R1.png", out / "OK" / "b1_R2.png", out / "TOMBSTONE" / "b1_R3.png"}
+    assert remove_stale(out, stems, keep) == 2
+    assert sorted(p.name for p in (out / "OK").iterdir()) == ["b1_R2.png", "mine.png"]  # foreign files stay
+    assert not (out / "TOMBSTONE@grabstein").exists()
+    assert crop_stem({"run": "b2", "id": "R1"}) == "b2_R1" and crop_stem({"board": "b1", "run": "x", "id": "R9"}) == "b1_R9"

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from simple_sim.blender.job_schema import (DEFAULT_BLENDER_EXECUTABLE, DEFAULT_CYCLES_SAMPLES, DEFAULT_DEVICE, DEFAULT_ENGINE,
-                                           BakeOptions, BlenderJob, PreparedJob)
+from simple_sim.blender.job_schema import (BLENDER_ENV_VAR, DEFAULT_BLENDER_EXECUTABLE, DEFAULT_CYCLES_SAMPLES, DEFAULT_DEVICE,
+                                           DEFAULT_ENGINE, BakeOptions, BlenderJob, PreparedJob)
 from simple_sim.generators.blender3d.runner import render_prepared_batch
 from simple_sim.generators.blender3d import render_blender_batch, write_jobs_jsonl
 from simple_sim.filter_settings import NEUTRAL_AUGMENT
@@ -32,11 +33,19 @@ _POST_FILTER_SECONDARY_KEYS = frozenset({
 })
 
 
+def resolve_blender_executable(configured: str | None = None) -> str:
+    """Blender executable: *configured* (``render.blender.executable``) > ``$SIMPLE_SIM_BLENDER`` > ``blender``."""
+    return str(configured or os.environ.get(BLENDER_ENV_VAR) or DEFAULT_BLENDER_EXECUTABLE)
+
+
 def blender_settings(config: dict[str, Any]) -> dict[str, Any]:
-    """``render.blender`` settings with defaults (``simple_sim.blender.job_schema``): executable, samples, device, engine."""
+    """``render.blender`` settings with defaults (``simple_sim.blender.job_schema``): executable, samples, device, engine.
+
+    The executable falls back to ``$SIMPLE_SIM_BLENDER``, then ``blender`` (:func:`resolve_blender_executable`).
+    """
     cfg = (config.get("render") or {}).get("blender") or {}
     return {
-        "executable": str(cfg.get("executable", DEFAULT_BLENDER_EXECUTABLE)),
+        "executable": resolve_blender_executable(cfg.get("executable")),
         "samples": int(cfg.get("samples", DEFAULT_CYCLES_SAMPLES)),
         "device": str(cfg.get("device", DEFAULT_DEVICE)),
         "engine": str(cfg.get("engine", DEFAULT_ENGINE)),

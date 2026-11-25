@@ -5,6 +5,7 @@ Everything here is pure stdlib so it can be imported anywhere (no torch/cv2/tk).
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import os
@@ -116,6 +117,15 @@ def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
 
 #: Prefix of the content hashes stored in manifests and checkpoints (``sha256:<hex>``).
 SHA256_PREFIX = "sha256:"
+
+
+def file_sha256(path: Path, chunk_size: int = 1 << 20) -> str:
+    """Hex SHA-256 of the file at *path* (read in *chunk_size* chunks)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(chunk_size):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def sha256_tag(digest: Any) -> str:

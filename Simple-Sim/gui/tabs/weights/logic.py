@@ -4,24 +4,57 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import threading
 import zipfile
 from pathlib import Path
 from typing import Any
 
 from gui.utils.checkpoint_meta import checkpoint_class_names
-from gui.utils.dataset_catalog import dataset_display_name, sorted_dataset_dirs
 from gui.utils.paths import list_model_paths, model_root
-from gui.utils.process import StreamingProcessLogic, run_streaming
+from gui.utils.process import StreamingProcessLogic
 from simple_sim.cli import argv_for
-from simple_sim.cli_utils import parse_result_line
 from simple_sim.eval_utils import dataset_profile
-from simple_sim.io_utils import atomic_write_json, iter_json_lines, load_yaml, now_iso, now_tag, read_json, rel_to
+from simple_sim.io_utils import iter_json_lines, load_yaml, now_iso, now_tag, read_json, rel_to
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.model_bundle import resolve_bundle_checkpoint
-from simple_sim.model_store import SNAPSHOT_RUN_RE, snapshot_checkpoint, snapshot_path
+from gui.utils.pipeline_helpers import batch_predict_argv
+from gui.utils.formatting import section_header
+from gui.utils.model_groups import load_favorites, load_path_items, save_favorites, save_path_items
+from simple_sim.model_store import SNAPSHOT_RUN_RE, snapshot_checkpoint
 from simple_sim.reports import load_reports, report_search_dirs
 import yaml
+
+
+def rekey_tracked_entry(entries: dict[str, dict[str, Any]], old_rel: str, new_rel: str) -> bool:
+    """Move the favorites / Arena entry of a renamed checkpoint to its new path; True when one moved."""
+    if not (entry := entries.get(old_rel)):
+        return False
+    del entries[old_rel]
+    entries[new_rel] = {**entry, "path": new_rel, "renamed": now_iso(timespec="seconds")}
+    return True
+
+
+def _safe_extract_zip(archive: Path, out_dir: Path) -> None:
+    """Extract *archive* into *out_dir*; refuses empty archives and absolute / ``..`` member paths."""
+    with zipfile.ZipFile(archive, "r") as zf:
+        members = zf.namelist()
+        if not members:
+            raise ValueError("Empty zip archive")
+        for m in members:
+            mp = Path(m)
+            if mp.is_absolute() or ".." in mp.parts:
+                raise ValueError(f"Unsafe path in zip: {m}")
+        zf.extractall(out_dir)
+
+
+def _bundle_root(extracted: Path) -> Path:
+    """The bundle folder of an extracted archive: a single top-level folder, then a single ``*.bundle`` inside."""
+    kids = list(extracted.iterdir())
+    root = kids[0] if len(kids) == 1 and kids[0].is_dir() else extracted
+    if not root.name.endswith(".bundle"):
+        bundle_dirs = [p for p in root.iterdir() if p.is_dir() and p.name.endswith(".bundle")]
+        if len(bundle_dirs) == 1:
+            root = bundle_dirs[0]
+    return root
 
 
 class WeightsLogic(StreamingProcessLogic):
@@ -34,39 +67,20 @@ class WeightsLogic(StreamingProcessLogic):
     def rel_path(self, p: Path) -> str:
         return rel_to(self.sim_root, p)
 
-    def _favorites_path(self) -> Path:
-        return self._model_root() / "favorites.json"
-
     def _arena_path(self) -> Path:
         return self._model_root() / "arena.json"
 
-    @staticmethod
-    def _load_path_items(p: Path, list_key: str) -> dict[str, dict[str, Any]]:
-        """``{path: item}`` from a ``{list_key: [{"path": ...}, ...]}`` JSON file (``{}`` if missing/invalid)."""
-        obj = read_json(p)
-        items = obj.get(list_key) if isinstance(obj, dict) else None
-        out: dict[str, dict[str, Any]] = {}
-        for it in items if isinstance(items, list) else []:
-            if isinstance(it, dict) and (rp := str(it.get("path") or "").strip()):
-                out[rp] = it
-        return out
-
-    @staticmethod
-    def _save_path_items(p: Path, list_key: str, items: dict[str, dict[str, Any]]) -> None:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(p, {list_key: sorted(items.values(), key=lambda it: str(it.get("path") or ""))})
-
     def load_favorites(self) -> dict[str, dict[str, Any]]:
-        return self._load_path_items(self._favorites_path(), "favorites")
+        return load_favorites(self._model_root())
 
     def save_favorites(self, favorites: dict[str, dict[str, Any]]) -> None:
-        self._save_path_items(self._favorites_path(), "favorites", favorites)
+        save_favorites(self._model_root(), favorites)
 
     def load_arena(self) -> dict[str, dict[str, Any]]:
-        return self._load_path_items(self._arena_path(), "arena_models")
+        return load_path_items(self._arena_path(), "arena_models")
 
     def save_arena(self, arena: dict[str, dict[str, Any]]) -> None:
-        self._save_path_items(self._arena_path(), "arena_models", arena)
+        save_path_items(self._arena_path(), "arena_models", arena)
 
     def add_to_arena(self, paths: list[Path], arena: dict[str, dict[str, Any]]) -> None:
         for p in paths:
@@ -86,84 +100,55 @@ class WeightsLogic(StreamingProcessLogic):
                 arena.pop(rel, None)
 
     def generate_arena_report(self) -> None:
+        """Run ``arena-report`` (blocking; call from a worker). Tracked as ``self.proc``, so Stop ends it."""
         # The GUI's own interpreter (its venv), not the system python3 (plan X11/P4).
         cmd = argv_for("arena-report", sim_root=self.sim_root)
+        self.stop_evt.clear()
         self.log_q.put(f"\n$ {' '.join(cmd)}\n")
-
-        def worker() -> None:
-            try:
-                rc = run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q)
-                if rc != 0:
-                    self.log_q.put(f"\n[error] arena-report exited with code {rc}\n")
-            except Exception as e:
-                self.log_q.put(f"\n[error] Failed to run arena-report: {e}\n")
-
-        threading.Thread(target=worker, daemon=True).start()
+        try:
+            rc = self._stream(cmd)
+            if self.stop_evt.is_set(): self.log_q.put("\n[stopped]\n")
+            elif rc != 0: self.log_q.put(f"\n[error] arena-report exited with code {rc}\n")
+        except Exception as e:
+            self.log_q.put(f"\n[error] Failed to run arena-report: {e}\n")
 
     def snapshot_active_model(self, active_model_path: Path) -> Path:
         return snapshot_checkpoint(self._model_root(), active_model_path)
 
-    def _snapshot_path_for(self, model_path: Path) -> Path:
-        return snapshot_path(self._model_root(), model_path)
-
     def import_model(self, src_p: Path) -> Path:
+        """Copy a checkpoint into ``models/imports`` or unpack a bundle ``.zip`` into ``models/bundles``."""
         tag = now_tag(micro=False)
         if src_p.suffix.lower() == ".zip":
-            bundles_dir = self._model_root() / "bundles"
-            bundles_dir.mkdir(parents=True, exist_ok=True)
-
-            stem = src_p.stem
-            if not stem.endswith(".bundle"):
-                stem = f"{stem}.bundle"
-            dst = bundles_dir / f"{tag}_{stem}"
-
-            if dst.exists():
-                for i in range(1, 1000):
-                    cand = bundles_dir / f"{tag}_{src_p.stem}_{i:03d}.bundle"
-                    if not cand.exists():
-                        dst = cand
-                        break
-
-            tmp = bundles_dir / f".tmp_import_{tag}"
-            try:
-                if tmp.exists():
-                    shutil.rmtree(tmp)
-                tmp.mkdir(parents=True, exist_ok=True)
-
-                with zipfile.ZipFile(src_p, "r") as zf:
-                    members = zf.namelist()
-                    if not members:
-                        raise ValueError("Empty zip archive")
-
-                    for m in members:
-                        mp = Path(m)
-                        if mp.is_absolute() or ".." in mp.parts:
-                            raise ValueError(f"Unsafe path in zip: {m}")
-                    zf.extractall(tmp)
-
-                kids = list(tmp.iterdir())
-                extracted_root = tmp
-                if len(kids) == 1 and kids[0].is_dir():
-                    extracted_root = kids[0]
-
-                if not extracted_root.name.endswith(".bundle"):
-                    bundle_dirs = [p for p in extracted_root.iterdir() if p.is_dir() and p.name.endswith(".bundle")]
-                    if len(bundle_dirs) == 1:
-                        extracted_root = bundle_dirs[0]
-
-                pts = list(extracted_root.glob("*.pt"))
-                if not pts:
-                    raise ValueError("Bundle archive contains no .pt checkpoints at the expected level")
-
-                shutil.move(str(extracted_root), str(dst))
-            finally:
-                if tmp.exists():
-                    shutil.rmtree(tmp)
-            return dst
+            return self._import_bundle_zip(src_p, tag)
         dst_dir = self._model_root() / "imports"
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst = dst_dir / f"{tag}_{src_p.name}"
         shutil.copy2(src_p, dst)
+        return dst
+
+    def _import_bundle_zip(self, src_p: Path, tag: str) -> Path:
+        bundles_dir = self._model_root() / "bundles"
+        bundles_dir.mkdir(parents=True, exist_ok=True)
+        stem = src_p.stem if src_p.stem.endswith(".bundle") else f"{src_p.stem}.bundle"
+        dst = bundles_dir / f"{tag}_{stem}"
+        for i in range(1, 1000):
+            if not dst.exists():
+                break
+            dst = bundles_dir / f"{tag}_{src_p.stem}_{i:03d}.bundle"
+
+        tmp = bundles_dir / f".tmp_import_{tag}"
+        try:
+            if tmp.exists():
+                shutil.rmtree(tmp)
+            tmp.mkdir(parents=True, exist_ok=True)
+            _safe_extract_zip(src_p, tmp)
+            extracted_root = _bundle_root(tmp)
+            if not list(extracted_root.glob("*.pt")):
+                raise ValueError("Bundle archive contains no .pt checkpoints at the expected level")
+            shutil.move(str(extracted_root), str(dst))
+        finally:
+            if tmp.exists():
+                shutil.rmtree(tmp)
         return dst
 
     def export_model(self, src_p: Path, dst: Path) -> None:
@@ -188,7 +173,7 @@ class WeightsLogic(StreamingProcessLogic):
         """
         try:
             rp = p.resolve()
-            root = (self.sim_root / "outputs" / "models").resolve()
+            root = model_root(self.sim_root).resolve()
             return str(rp).startswith(str(root) + os.sep) and rp.parent != root
         except Exception:
             return False
@@ -222,17 +207,17 @@ class WeightsLogic(StreamingProcessLogic):
             profile_path = profiles_dir / f"{profile_id}.yaml"
 
             info_text = f"Model: {p.name}\nPath: {p}\n\n"
-            info_text += "="*60 + "\n" + "COMPONENT PROFILE\n" + "="*60 + "\n"
+            info_text += section_header("COMPONENT PROFILE")
             info_text += f"Profile ID: {profile_id}\nProfile Hash: {profile_hash}\nTrained on dataset: {dataset_path}\nDataset manifest hash: {manifest_hash}\n"
 
             if profile_path.exists():
-                info_text += "\n" + "="*60 + "\n" + "PROFILE DETAILS\n" + "="*60 + "\n\n"
+                info_text += "\n" + section_header("PROFILE DETAILS") + "\n"
                 profile_yaml = load_yaml(profile_path)
                 info_text += yaml.dump(profile_yaml, default_flow_style=False, sort_keys=False)
             else:
                 info_text += f"\n\n⚠ Profile file not found at: {profile_path}"
 
-            info_text += "\n" + "="*60 + "\n" + "CHECKPOINT METADATA\n" + "="*60 + "\n"
+            info_text += "\n" + section_header("CHECKPOINT METADATA")
             info_text += f"Epoch: {checkpoint.get('epoch', 'unknown')}\n"
             info_text += f"Val F1: {checkpoint.get('val_f1', 'unknown')}\n"
             info_text += f"Val Accuracy: {checkpoint.get('val_accuracy', 'unknown')}\n"
@@ -275,36 +260,24 @@ class WeightsLogic(StreamingProcessLogic):
 
         if max_samples_s:
             int(max_samples_s)
-        cmd = argv_for(
-            "batch-predict", model=model_path, data=data_dir, split=split, out_dir=out_dir,
-            device=None if device == "auto" else device, max_samples=max_samples_s or None,
-            save_preds=bool(save_preds), json=True,
-        )
+        cmd = batch_predict_argv(model_path, data_dir, split=split, out_dir=out_dir, device=device,
+                                 max_samples=max_samples_s, save_preds=save_preds)
         return cmd, out_dir
 
-    def run_predict(self, model_path: Path, data_dir: Path, label: str, split: str, device: str, max_samples_s: str, save_preds: bool, on_complete: callable) -> None:
+    def predict(self, model_path: Path, data_dir: Path, label: str, split: str, device: str, max_samples_s: str,
+                save_preds: bool) -> Path | None:
+        """One ``batch-predict`` run (blocking; call from a worker); the report path, or ``None``."""
         self.stop_evt.clear()
         self.log_q.put(f"\n[run] {label}\n")
-
-        def worker() -> None:
-            report_path: Path | None = None
-
-            def on_line(line: str) -> None:
-                nonlocal report_path
-                if (res := parse_result_line(line)) is not None and res.get("report_path"):
-                    report_path = Path(res["report_path"])
-
-            try:
-                cmd, _out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
-                self.log_q.put(f"\n$ {' '.join(cmd)}\n")
-                rc = self._stream(cmd, on_line=on_line)
-                if self.stop_evt.is_set(): self.log_q.put("\n[stopped]\n")
-                elif rc != 0: self.log_q.put(f"\n[error] batch-predict exited with code {rc}\n")
-            except Exception as e: self.log_q.put(f"\n[error] Failed to run batch-predict: {e}\n")
-            finally:
-                on_complete(report_path, self.stop_evt.is_set())
-
-        threading.Thread(target=worker, daemon=True).start()
+        result: dict[str, Any] | None = None
+        try:
+            cmd, _out_dir = self._predict_cmd(model_path, data_dir, split, device, max_samples_s, save_preds)
+            self.log_q.put(f"\n$ {' '.join(cmd)}\n")
+            rc, result = self._stream_result(cmd)
+            if self.stop_evt.is_set(): self.log_q.put("\n[stopped]\n")
+            elif rc != 0: self.log_q.put(f"\n[error] batch-predict exited with code {rc}\n")
+        except Exception as e: self.log_q.put(f"\n[error] Failed to run batch-predict: {e}\n")
+        return Path(result["report_path"]) if result and result.get("report_path") else None
 
     def run_predict_blocking(self, model_path: Path, data_dir: Path, label: str, split: str, device: str, max_samples_s: str, save_preds: bool) -> dict[str, Any] | None:
         try:
@@ -317,17 +290,10 @@ class WeightsLogic(StreamingProcessLogic):
         if self.stop_evt.is_set(): return None
         self.log_q.put(f"\n$ {' '.join(cmd)}\n")
         self.log_q.put(f"[run] {label}\n")
-        result: dict[str, Any] | None = None
-
-        def on_line(line: str) -> None:
-            nonlocal result
-            if (res := parse_result_line(line)) is not None:
-                result = res
-
         try:
-            # Track as self.proc (via on_start) so stop() can terminate it and the "already running" guard sees it.
+            # Tracked as self.proc so stop() can terminate it and the "already running" guard sees it.
             # run_streaming terminates the child before wait() on stop, so it cannot block on a full stdout pipe.
-            rc = self._stream(cmd, on_line=on_line)
+            rc, result = self._stream_result(cmd)
             if self.stop_evt.is_set():
                 self.log_q.put("\n[stopped]\n")
                 return None
@@ -424,12 +390,6 @@ class WeightsLogic(StreamingProcessLogic):
         if cfn_a is not None and cfn_b is not None: lines.append(f"  MISALIGNED FN rate: A={cfn_a:.4f}  B={cfn_b:.4f}  delta(B-A)={cfn_b-cfn_a:+.4f}")
         lines.append(f"  winner: {winner}\n")
         return "\n".join(lines)
-
-    def get_cmp_datasets(self) -> list[Path]:
-        return sorted_dataset_dirs(self.sim_root)
-
-    def _display_for_dataset(self, p: Path, *, runs: Path, versions: Path) -> str:
-        return dataset_display_name(p, runs_root=runs, versions_root=versions)
 
     def describe_dataset_samples(self, ds: Path) -> str:
         try:

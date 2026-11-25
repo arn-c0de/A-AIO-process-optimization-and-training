@@ -30,27 +30,14 @@ from .controller import (
     reset_defaults,
     reset_to_one,
     save_profile,
-    selected_profile_name,
     set_clean_filters,
     sync_to_external_vars,
     update_internal_vars,
     update_rotation_row_state,
 )
-from .preview_panel import (
-    build_left_preview_panel,
-    do_render_2d_preview,
-    do_render_3d_preview,
-    get_preview_filter_values,
-    on_left_preview_profile_selected,
-    on_preview_profile_selected,
-    populate_left_filter_profiles,
-    populate_preview_profiles,
-    render_left_preview,
-    render_preview,
-    show_preview_image,
-)
-from .ui_custom import add_filter_sections, build_filter_controls
-from .ui_realism import build_realism_controls, set_realism_defaults
+from .preview_panel import INLINE_PANEL, LEFT_PANEL, ProfilePreviewPanel
+from .ui_custom import build_filter_controls
+from .ui_realism import set_realism_defaults
 from gui.theme.style import font
 
 
@@ -82,10 +69,8 @@ class FilterPopup:
         self.ask_yes_no = ask_yes_no
         self._sim_root: str | None = str(sim_root) if sim_root is not None else None
 
-        self._preview_profiles_2d: set[str] = set()
-        self._preview_profiles_3d: set[str] = set()
-        self._preview_is_rendering: bool = False
-        self._preview_photo: Any = None
+        self._inline_preview: ProfilePreviewPanel | None = None
+        self._left_preview: ProfilePreviewPanel | None = None
 
         self.top = tk.Toplevel(parent)
         # Named fonts/label styles exist only after apply_theme(); the popup is
@@ -145,86 +130,19 @@ class FilterPopup:
     def _build_filter_controls(self, parent: ttk.Frame) -> None:
         build_filter_controls(self, parent)
 
-    def _build_realism_controls(self, parent: ttk.Frame, current: dict[str, Any]) -> None:
-        build_realism_controls(self, parent, current)
-
     def _set_realism_defaults(self) -> None:
         set_realism_defaults(self)
 
-    # Preview delegates
+    # Preview panels
     def _build_preview_panel(self, parent: ttk.Frame) -> None:
-        lf = ttk.LabelFrame(parent, text="Filter Preview", padding=8)
-        lf.pack(fill="both", expand=True)
-
-        # Always-visible marker to confirm panel construction at runtime.
-        ttk.Label(lf, text="Preview Panel Active", style="Success.TLabel").pack(anchor="w", pady=(0, 6))
-
-        sel_row = ttk.Frame(lf)
-        sel_row.pack(fill="x", pady=(0, 4))
-        ttk.Label(sel_row, text="Profile:").pack(side="left")
-        self._preview_profile_var = tk.StringVar()
-        self._preview_profile_combo = ttk.Combobox(
-            sel_row,
-            textvariable=self._preview_profile_var,
-            width=28,
-            state="readonly",
-        )
-        self._preview_profile_combo.pack(side="left", padx=(6, 0), fill="x", expand=True)
-        self._preview_profile_combo.bind("<<ComboboxSelected>>", self._on_preview_profile_selected)
-
-        btn_row = ttk.Frame(lf)
-        btn_row.pack(fill="x", pady=(4, 4))
-        ttk.Button(btn_row, text="Render Preview", command=self._render_preview).pack(side="left")
-
-        self._preview_status_var = tk.StringVar(value="")
-        ttk.Label(
-            lf,
-            textvariable=self._preview_status_var,
-            style="Muted.TLabel",
-            wraplength=330,
-            justify="left",
-        ).pack(anchor="w", pady=(0, 6))
-
-        self._preview_img_label = ttk.Label(lf, text="No preview yet", anchor="center")
-        self._preview_img_label.pack(fill="both", expand=True)
-
-        try:
-            self._populate_preview_profiles()
-        except Exception as exc:
-            self._preview_status_var.set(f"Preview init error: {exc}")
+        self._inline_preview = ProfilePreviewPanel(self, parent, INLINE_PANEL)
 
     def _build_left_preview(self, parent: ttk.Frame) -> None:
-        build_left_preview_panel(self, parent)
+        self._left_preview = ProfilePreviewPanel(self, parent, LEFT_PANEL)
 
     def _populate_left_filter_profiles(self) -> None:
-        populate_left_filter_profiles(self)
-
-    def _on_left_preview_profile_selected(self, _evt: tk.Event | None = None) -> None:
-        on_left_preview_profile_selected(self, _evt)
-
-    def _render_left_preview(self) -> None:
-        render_left_preview(self)
-
-    def _populate_preview_profiles(self) -> None:
-        populate_preview_profiles(self)
-
-    def _on_preview_profile_selected(self, _evt: tk.Event | None = None) -> None:
-        on_preview_profile_selected(self, _evt)
-
-    def _get_preview_filter_values(self) -> dict[str, Any]:
-        return get_preview_filter_values(self)
-
-    def _render_preview(self) -> None:
-        render_preview(self)
-
-    def _do_render_2d_preview(self, profile_id: str, filter_vals: dict[str, Any]) -> tuple[Any, str]:
-        return do_render_2d_preview(self, profile_id, filter_vals)
-
-    def _do_render_3d_preview(self, profile_id: str, filter_vals: dict[str, Any]) -> tuple[Any, str]:
-        return do_render_3d_preview(self, profile_id, filter_vals)
-
-    def _show_preview_image(self, img_bgr: Any, profile_id: str = "", backend: str = "2D") -> None:
-        show_preview_image(self, img_bgr, profile_id, backend)
+        if self._left_preview is not None:  # the profile list is filled before the panel exists
+            self._left_preview.populate()
 
     # Scrolling
     def _bind_mousewheel(self) -> None:
@@ -247,16 +165,9 @@ class FilterPopup:
             canvas.yview_scroll(-1 if delta > 0 else 1, "units")
         return "break"
 
-    # Custom/Realism tab helpers
-    def _add_filter_sections(self, parent: ttk.Frame, current: dict[str, Any]) -> None:
-        add_filter_sections(self, parent, current)
-
     # Controller delegates
     def _refresh_profile_list(self, select_name: str | None = None) -> None:
         refresh_profile_list(self, select_name)
-
-    def _selected_profile_name(self) -> str | None:
-        return selected_profile_name(self)
 
     def _persist_active_profile(self) -> None:
         persist_active_profile(self)

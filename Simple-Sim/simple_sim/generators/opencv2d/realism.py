@@ -26,6 +26,7 @@ import numpy as np
 
 from simple_sim.filter_settings import NEUTRAL_AUGMENT
 from simple_sim.io_utils import load_yaml
+from simple_sim.paths import CONFIGS_DIR
 
 log = logging.getLogger(__name__)
 
@@ -139,8 +140,7 @@ def _choose_groups(rng: np.random.Generator, probs: dict[str, float], k: int) ->
 def default_presets_path() -> Path:
     """``$SIMPLE_SIM_REALISM_PRESETS_PATH`` or the checkout's ``configs/realism_profiles.yaml``."""
     env = str(os.environ.get("SIMPLE_SIM_REALISM_PRESETS_PATH", "")).strip()
-    # .../Simple-Sim/simple_sim/generators/opencv2d/realism.py -> Simple-Sim/configs/realism_profiles.yaml
-    return Path(env) if env else Path(__file__).resolve().parents[3] / "configs" / "realism_profiles.yaml"
+    return Path(env) if env else CONFIGS_DIR / "realism_profiles.yaml"
 
 
 def _normalize_yaml_preset(raw: dict[str, Any], fallback: Mapping[str, float]) -> dict[str, float]:

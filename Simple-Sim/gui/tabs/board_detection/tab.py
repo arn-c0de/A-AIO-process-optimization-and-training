@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tkinter import ttk, filedialog
+from tkinter import ttk
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from gui.state import UiState
 
 from gui import dialogs
+from gui.utils.paths import model_root
 from gui.tabs.core.base import BaseTab
 from .ui import BoardDetectionUI
 from .logic import BoardDetectionLogic
@@ -31,25 +32,25 @@ class BoardDetectionTab(BaseTab):
         self.ui.frame.pack(fill="both", expand=True)
 
     def _browse_profile_model(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select Profile Classifier Model",
+        path = dialogs.ask_open_file(
+            self.frame, "Select Profile Classifier Model",
             filetypes=[("PyTorch checkpoint", "*.pt"), ("All files", "*.*")],
-            initialdir=str(self.sim_root / "outputs" / "models"),
+            initialdir=str(model_root(self.sim_root)),
         )
         if path:
             self.ui._profile_model_var.set(path)
 
     def _browse_defect_bundle(self) -> None:
-        path = filedialog.askdirectory(
-            title="Select Defect Model Bundle Directory",
-            initialdir=str(self.sim_root / "outputs" / "models"),
+        path = dialogs.ask_dir(
+            self.frame, "Select Defect Model Bundle Directory",
+            initialdir=str(model_root(self.sim_root)),
         )
         if path:
             self.ui._defect_bundle_var.set(path)
 
     def _browse_image(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select Image",
+        path = dialogs.ask_open_file(
+            self.frame, "Select Image",
             filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp"), ("All files", "*.*")],
             initialdir=str(self.sim_root / "outputs" / "sim_data"),
         )
@@ -83,16 +84,10 @@ class BoardDetectionTab(BaseTab):
         self.ui.set_status("Loading models and predicting...")
         self.ui.set_review_flag("")
 
-        self.logic.predict(
-            profile_model_path=Path(profile_model),
-            defect_bundle_path=Path(defect_bundle),
-            image_path=Path(image_path),
-            device=self.ui._device_var.get(),
-            min_profile_confidence=min_conf,
-            # Callbacks run on the worker thread: marshal UI updates onto the Tk main loop.
-            on_complete=lambda result: self.post(lambda: self._on_predict_complete(result)),
-            on_error=lambda msg: self.post(lambda: self.ui.show_error(msg)),
-        )
+        args = (Path(profile_model), Path(defect_bundle), Path(image_path), self.ui._device_var.get(), min_conf)
+        # Callbacks run on the Tk thread; the worker only runs the model.
+        self._run_background(lambda: self.logic.predict(*args), name="Board detection",
+                             on_done=self._on_predict_complete, on_error=lambda e: self.ui.show_error(str(e)))
 
     def _on_predict_complete(self, result: TwoStageResult) -> None:
         self.ui.set_predict_button_state("normal")

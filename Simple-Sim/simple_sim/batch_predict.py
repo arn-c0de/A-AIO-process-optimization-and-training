@@ -21,6 +21,7 @@ import torch
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 from tqdm import tqdm
 
+from simple_sim.cli_utils import log_banner, RULE
 from simple_sim.data_loader import ROIDataset
 from simple_sim.dataset_index import DatasetIndex
 from simple_sim.devices import resolve_device
@@ -54,9 +55,6 @@ log = logging.getLogger(__name__)
 SPLITS = ("train", "val", "test", "all")
 HISTORY_SCOPES = ("model", "dataset", "all")
 HISTORY_METRICS = ("accuracy", "macro_f1", "critical_fn_rate")
-
-_RULE = "=" * 60
-
 
 @dataclass(frozen=True, slots=True)
 class BatchPredictOptions:
@@ -330,7 +328,7 @@ def profile_classification_metrics(gt: list[str], pred: list[str]) -> tuple[dict
 
 
 def format_profile_metrics(profile_metrics: dict[str, Any], names: list[str]) -> str:
-    lines = ["", _RULE, "PROFILE CLASSIFICATION", _RULE,
+    lines = ["", RULE, "PROFILE CLASSIFICATION", RULE,
              f"Profile Accuracy: {profile_metrics['accuracy']:.4f}",
              f"Profile Macro F1: {profile_metrics['macro_f1']:.4f}"]
     pc = profile_metrics.get("per_class") or {}
@@ -399,7 +397,7 @@ def format_history(rows: list[tuple[float, dict[str, Any]]], *, scope: str, spli
     title = f"HISTORY (scope={scope}, split={split_mode}, metric={metric}"
     if crit:
         title += f", class={crit}"
-    lines = ["\n" + _RULE, title + ")", _RULE]
+    lines = ["\n" + RULE, title + ")", RULE]
     if not rows:
         lines.append("No previous reports found for the chosen filters.")
         return "\n".join(lines)
@@ -447,9 +445,7 @@ def _log_report(opts: BatchPredictOptions, requested_model_path: Path, effective
                 info: RunInfo, pr: Any, metrics: dict[str, Any], class_names: list[str]) -> None:
     """Report header (model, dataset, speed) followed by the metrics table."""
     seen, elapsed = pr.seen, pr.elapsed
-    log.info("\n" + _RULE)
-    log.info("BATCH PREDICT REPORT")
-    log.info(_RULE)
+    log_banner(log, "BATCH PREDICT REPORT")
     log.info(f"Model:       {requested_model_path}")
     if effective_model_path.resolve() != requested_model_path.resolve():
         log.info(f"Resolved:    {effective_model_path}")

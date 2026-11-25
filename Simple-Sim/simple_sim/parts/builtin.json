@@ -1,0 +1,5 @@
+{
+ "schema": 1,
+ "_comment": "Built-in layer of the part catalog: empty in the repo on purpose. Part data lives in the local, git-ignored catalog (outputs/parts/catalog.json or $SIMPLE_SIM_PARTS_DB).",
+ "parts": []
+}

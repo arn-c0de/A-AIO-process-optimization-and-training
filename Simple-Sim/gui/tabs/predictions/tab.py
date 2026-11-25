@@ -7,11 +7,15 @@ from tkinter import ttk
 from pathlib import Path
 from typing import Any
 
+from simple_sim.io_utils import rel_to
+from gui.utils.paths import default_model_path
 from gui import dialogs
 from gui.core.tasks import DispatchQueue
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_dataset_labels
+from gui.components.dataset_picker import pick_datasets
+from gui.utils.dataset_catalog import label_for_dataset, sorted_dataset_labels
+from gui.utils.pipeline_helpers import decode_dataset_paths_json, encode_dataset_paths_json
 from gui.utils.settings_store import restore_persisted_vars
 from simple_sim.cli_utils import parse_result_line
 
@@ -32,7 +36,7 @@ class PredictionsTab(BaseTab):
         self._pred_row_by_id: dict[str, dict[str, Any]] = {}
         self._active_dataset_dir: Path | None = None
 
-        self._multi_dataset_paths: list[str] = []
+        self._multi_dataset_paths: list[Path] = []
         self._multi_results: list[dict[str, Any]] = []
         self._multi_result_by_key: dict[str, dict[str, Any]] = {}
         
@@ -85,14 +89,7 @@ class PredictionsTab(BaseTab):
             # Another tab already picked a dataset; keep the shared selection.
             bindings = [b for b in bindings if b[0] != "pred.dataset_selection"]
         restore_persisted_vars(st, bindings)
-        try:
-            raw = st.get("pred.multi_dataset_paths_json")
-            if isinstance(raw, str) and raw.strip():
-                obj = json.loads(raw)
-                if isinstance(obj, list):
-                    self._multi_dataset_paths = [str(x) for x in obj if str(x).strip()]
-        except Exception:
-            self._multi_dataset_paths = []
+        self._multi_dataset_paths = decode_dataset_paths_json(st.get("pred.multi_dataset_paths_json", ""), self.sim_root)
 
     def _persisted_var_bindings(self) -> list[tuple[Any, ...]]:
         # (key, var[, default]); defaults are applied when the key was never persisted.
@@ -116,13 +113,13 @@ class PredictionsTab(BaseTab):
         if st is None:
             return
         try:
-            st.set("pred.multi_dataset_paths_json", json.dumps(self._multi_dataset_paths, ensure_ascii=True))
+            st.set("pred.multi_dataset_paths_json", encode_dataset_paths_json(self._multi_dataset_paths, self.sim_root))
             st.schedule_save(self.frame)
         except Exception:
             pass
 
     def _update_multi_sel_label(self) -> None:
-        n = len([p for p in self._multi_dataset_paths if str(p).strip()])
+        n = len(self._multi_dataset_paths)
         with quiet():
             self.ui.var_multi_sel.set(f"selected: {n}")
 
@@ -144,37 +141,13 @@ class PredictionsTab(BaseTab):
         except Exception:
             pass
 
-    def _dataset_rel(self, p: Path) -> str:
-        try:
-            return str(p.resolve().relative_to(self.sim_root.resolve()))
-        except Exception:
-            return str(p.resolve())
-
     def _open_multi_dataset_dialog(self) -> None:
         self._refresh_datasets()
-        labels = list(self._dataset_by_label.keys())
-        want = {str(p).strip() for p in self._multi_dataset_paths if str(p).strip()}
-        preselected = [lab for lab in labels if self._dataset_rel(self._dataset_by_label[lab]) in want]
-        picked_labels = dialogs.pick_from_list(
-            self.frame,
-            "Select Datasets",
-            labels,
-            multi=True,
-            selected=preselected,
-            prompt="Select one or more datasets (Ctrl/Shift for ranges). Predictions run on each of them.",
-            size=(560, 460),
-        )
-        if picked_labels is None:
+        picked = pick_datasets(
+            self.frame, self._dataset_by_label, self._multi_dataset_paths, size=(560, 460),
+            prompt="Select one or more datasets (Ctrl/Shift for ranges). Predictions run on each of them.")
+        if picked is None:
             return
-        picked: list[str] = []
-        for lab in picked_labels:
-            try:
-                p = self._dataset_by_label.get(lab)
-                if not p:
-                    continue
-                picked.append(str(p.resolve().relative_to(self.sim_root.resolve())))
-            except Exception:
-                continue
         self._multi_dataset_paths = picked
         self._persist_multi_dataset_paths()
         self._update_multi_sel_label()
@@ -205,9 +178,7 @@ class PredictionsTab(BaseTab):
 
     def _selected_dataset_paths(self) -> list[Path]:
         if hasattr(self.ui, "var_multi_datasets") and bool(self.ui.var_multi_datasets.get()):
-            out: list[Path] = [self.logic.resolve_path(s) for s in self._multi_dataset_paths if s.strip()]
-            seen = set()
-            return [p for p in out if not (str(p) in seen or seen.add(str(p)))]
+            return list(self._multi_dataset_paths)  # decoded/picked paths are unique
         ds = self.state.dataset_dir
         return [ds] if ds else []
 
@@ -251,18 +222,17 @@ class PredictionsTab(BaseTab):
         self.ui.btn_run.configure(state="disabled")
         self.ui.btn_stop.configure(state="normal")
 
-        self.logic.run_predictions(
-            model_path,
-            dataset_dirs,
-            self.ui.var_split.get().strip() or "test",
-            self.ui.var_device.get().strip() or "auto",
-            self.ui.var_max_samples.get().strip(),
-            bool(self.ui.chk_save_preds.get()),
-            bool(self.ui.chk_auto_train_bundle.get()),
-            pm_path,
-            # Called from the worker thread: hop onto the Tk main loop before touching widgets.
-            lambda *res: self.post(lambda: self._on_prediction_complete(*res)),
-        )
+        # Read Tk state here; the worker must not touch widgets/variables.
+        args = (model_path, dataset_dirs, self.ui.var_split.get().strip() or "test",
+                self.ui.var_device.get().strip() or "auto", self.ui.var_max_samples.get().strip(),
+                bool(self.ui.chk_save_preds.get()), bool(self.ui.chk_auto_train_bundle.get()), pm_path)
+
+        def on_error(e: BaseException) -> None:
+            self._on_prediction_complete(None, None, None, [], {}, self.logic.stop_evt.is_set())
+            dialogs.show_error(self.frame, "Predictions Failed", e)
+
+        self._run_background(lambda: self.logic.run_predictions(*args), name="Predictions",
+                             on_done=lambda res: self._on_prediction_complete(*res), on_error=on_error)
 
     def _on_prediction_complete(self, last_report_path, last_preds_path, last_dataset_dir, multi_results, multi_result_by_key, was_stopped):
         self.ui.btn_run.configure(state="normal")
@@ -288,22 +258,12 @@ class PredictionsTab(BaseTab):
                 self._load_preds(last_preds_path)
     
     def _refresh_datasets(self) -> None:
-        def same_path(a: Path, b: Path) -> bool:
-            try:
-                return a.resolve() == b.resolve()
-            except Exception:
-                return str(a) == str(b)
-
         prev_selected: Path | None = self._selected_dataset_dir()
         if prev_selected is None and self.state.dataset_dir is not None:
             prev_selected = self.state.dataset_dir
 
-        cand = self.logic.get_datasets()
-        cand.sort(key=lambda p: dataset_sort_key(self.sim_root, p))
-        self._dataset_dirs = cand
-
-        runs, versions = sim_data_roots(self.sim_root)
-        self._dataset_by_label = unique_dataset_labels(cand, runs_root=runs, versions_root=versions)
+        self._dataset_by_label = sorted_dataset_labels(self.sim_root)
+        self._dataset_dirs = list(self._dataset_by_label.values())
         labels: list[str] = list(self._dataset_by_label)
 
         self.ui.combo_dataset["values"] = labels
@@ -311,17 +271,13 @@ class PredictionsTab(BaseTab):
         if cur and cur in self._dataset_by_label:
             self.state.dataset_dir = self._dataset_by_label[cur]
             return
-        if prev_selected is not None:
-            for label, p in self._dataset_by_label.items():
-                if same_path(p, prev_selected):
-                    self.ui.var_dataset.set(label)
-                    self.state.dataset_dir = p
-                    return
-        if self.state.dataset_dir:
-            for label, p in self._dataset_by_label.items():
-                if same_path(p, self.state.dataset_dir):
-                    self.ui.var_dataset.set(label)
-                    return
+        if (label := label_for_dataset(self._dataset_by_label, prev_selected)) is not None:
+            self.ui.var_dataset.set(label)
+            self.state.dataset_dir = self._dataset_by_label[label]
+            return
+        if (label := label_for_dataset(self._dataset_by_label, self.state.dataset_dir)) is not None:
+            self.ui.var_dataset.set(label)
+            return
         if labels:
             self.ui.var_dataset.set(labels[0])
             self._on_dataset_selected()
@@ -343,15 +299,15 @@ class PredictionsTab(BaseTab):
 
     def _refresh_models(self) -> None:
         paths = self.logic.get_models()
-        values = [str(p.resolve().relative_to(self.sim_root.resolve())) if p.is_relative_to(self.sim_root) else str(p) for p in paths]
+        values = [rel_to(self.sim_root, p) for p in paths]
         self.ui.combo_model["values"] = values
 
-        default_model = self.sim_root / "outputs" / "models" / f"{self.state.dataset_dir.name}.pt" if self.state.dataset_dir else None
+        default_model = default_model_path(self.sim_root, self.state.dataset_dir.name) if self.state.dataset_dir else None
         cur = self.ui.var_model.get().strip()
         if cur and cur in values: return
 
         if default_model and default_model.exists():
-            rel = str(default_model.resolve().relative_to(self.sim_root.resolve()))
+            rel = rel_to(self.sim_root, default_model)
             if rel in values:
                 self.ui.var_model.set(rel)
                 return
@@ -360,7 +316,7 @@ class PredictionsTab(BaseTab):
 
     def _refresh_profile_models(self) -> None:
         paths = self.logic.get_profile_models()
-        values = [""] + [str(p.resolve().relative_to(self.sim_root.resolve())) if p.is_relative_to(self.sim_root) else str(p) for p in paths]
+        values = [""] + [rel_to(self.sim_root, p) for p in paths]
         self.ui.combo_profile_model["values"] = values
         
         cur = self.ui.var_profile_model.get().strip()

@@ -2,6 +2,7 @@
 
 import pytest
 from simple_sim.rng import derive_sample_seed, make_sample_id, parse_sample_id
+import numpy as np
 
 
 def test_derive_sample_seed_deterministic():
@@ -60,3 +61,26 @@ def test_parse_sample_id_invalid():
 
     with pytest.raises(ValueError):
         parse_sample_id("run/domain")
+
+
+def test_render_stream_is_independent_of_the_sampling_stream():
+    from simple_sim.generation.common import sample_record  # noqa: F401 (the sampler uses default_rng(seed))
+    from simple_sim.rng import STREAM_BAKE, STREAM_POST, render_seed
+
+    seeds = np.arange(1, 400)
+    sampling = np.array([np.random.default_rng(int(s)).random() for s in seeds])
+    for stream in (None, STREAM_BAKE, STREAM_POST):
+        key = [render_seed(int(s)) if stream is None else render_seed(int(s), stream) for s in seeds]
+        render = np.array([np.random.default_rng(k).random() for k in key])
+        # The first render draw used to equal the first sampling draw (correlation 1.0).
+        assert abs(np.corrcoef(sampling, render)[0, 1]) < 0.2
+
+
+def test_render_record_does_not_replay_the_sampling_draws(monkeypatch):
+    from simple_sim.generators.opencv2d import spec as spec_mod
+
+    seen: dict[str, float] = {}
+    monkeypatch.setattr(spec_mod, "render_sample", lambda _s, _n, _d, _a, rng, **_kw: seen.setdefault("first", rng.random()))
+    spec_mod.render_record(None, {"seed": 1234, "nominal": {}, "defect": {}, "augment": {}})
+    assert seen["first"] != np.random.default_rng(1234).random()
+    assert seen["first"] == np.random.default_rng([1234, 1]).random()

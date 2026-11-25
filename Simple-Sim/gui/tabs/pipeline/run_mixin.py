@@ -5,16 +5,19 @@ Mixin of :class:`gui.tabs.pipeline.tab.PipelineControlTab`; it relies on the att
 """
 
 from __future__ import annotations
+import logging
 import os
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from pathlib import Path
 from typing import Any
-import shutil
 import shlex
 
 
+from gui import dialogs
+from gui.utils.dataset_catalog import is_snapshot_dataset
+from gui.utils.paths import model_root
 from gui.utils.pipeline_helpers import (
     apply_render_overrides,
     mixed_profile_config,
@@ -29,8 +32,11 @@ from gui.utils.pipeline_helpers import (
 
 from simple_sim.io_utils import load_yaml, now_tag, rel_to
 
+from .logic import SnapshotOptions
 from .start_summary import start_summary
 from gui.utils.tk_safe import quiet
+
+_LOG = logging.getLogger(__name__)
 
 
 class PipelineRunMixin:
@@ -126,7 +132,7 @@ class PipelineRunMixin:
 
     def _confirm_overwrite_existing_new_dataset(self, out_dir: str) -> bool:
         """Double confirmation before overwriting an existing dataset in Create New mode."""
-        out_path = self.logic._resolve_out_dir(out_dir)
+        out_path = self.logic.resolve_path(out_dir)
         if not out_path.exists():
             return True
         if not self.ui.ask_yes_no(
@@ -150,16 +156,13 @@ class PipelineRunMixin:
             "No: Merge into temporary dataset and auto-cleanup\n"
             "Cancel: Abort"
         )
-        choice = messagebox.askyesnocancel("Multi-dataset training", msg)
+        choice = dialogs.ask_yes_no_cancel(self.frame, "Multi-dataset training", msg)
         if choice is None:
             return None
         return "merge_keep" if choice else "merge_temp"
 
     def start_pipeline(self) -> None: self._start_pipeline(task="full")
     def start_pipeline_generate_only(self) -> None: self._start_pipeline(task="generate_only")
-
-    def _rel_to_sim_root(self, p: Path) -> str:
-        return rel_to(self.sim_root, p)
 
     def _build_run_specs(
         self,
@@ -221,10 +224,10 @@ class PipelineRunMixin:
                 return None
             cfg_path = Path(cfg_info["path"])
             self._append_log(f"[config] {pid}: {cfg_path}\n")
-            cfg_rel = self._rel_to_sim_root(cfg_path)
+            cfg_rel = rel_to(self.sim_root, cfg_path)
             run_id = str(cfg_info.get("run_id") or pid)
             out_i, model_i = profile_run_targets(
-                base_out, base_model, run_id, multi=len(profile_ids) > 1, models_root=self.sim_root / "outputs" / "models"
+                base_out, base_model, run_id, multi=len(profile_ids) > 1, models_root=model_root(self.sim_root)
             )
 
             run_specs.append({
@@ -276,7 +279,7 @@ class PipelineRunMixin:
             self.ui.show_messagebox("error", "Error", "Extend Existing is not supported for a mixed multi-profile dataset (2D only).\n\nUse 'Create New', or extend with a single profile.")
             return None
         return [{
-            "profile_id": "multi", "config": self._rel_to_sim_root(tmp_cfg_path), "out_dir": out_dir,
+            "profile_id": "multi", "config": rel_to(self.sim_root, tmp_cfg_path), "out_dir": out_dir,
             "model_path": self.ui.var_model.get().strip(),
         }]
 
@@ -284,7 +287,7 @@ class PipelineRunMixin:
         self, resolved_configs: list[tuple[str, Path, str, str]], dataset_mode: str, out_dir: str,
     ) -> tuple[list[dict[str, str]], str, Any, str] | None:
         """Profiles of several backends: one generate-only run per profile into temp dirs, merged afterwards."""
-        final_out = self.logic._resolve_out_dir(out_dir)
+        final_out = self.logic.resolve_path(out_dir)
         replace_existing_final_out = False
         if final_out.exists() and dataset_mode == "extend":
             replace_existing_final_out = True
@@ -311,67 +314,19 @@ class PipelineRunMixin:
             tmp_out = tmp_root / f"{idx:02d}_{self.logic.slugify_name(pid)}"
             run_specs.append({
                 "profile_id": pid,
-                "config": self._rel_to_sim_root(cfg_path),
+                "config": rel_to(self.sim_root, cfg_path),
                 "out_dir": str(tmp_out),
                 "model_path": self.ui.var_model.get().strip(),
             })
             self._append_log(f"[mixed] {pid} -> backend={backend} tmp={tmp_out}\n")
 
         def _merge_after_run(_run_i: int, specs: list[dict[str, str]], log_callback) -> bool:
-            return self._merge_mixed_outputs(specs, log_callback, final_out=final_out, tmp_root=tmp_root,
-                                             extend=replace_existing_final_out and dataset_mode == "extend",
-                                             replace=replace_existing_final_out)
+            return self.logic.merge_mixed_outputs([Path(spec["out_dir"]) for spec in specs], log_callback,
+                                                  final_out=final_out, tmp_root=tmp_root,
+                                                  extend=replace_existing_final_out and dataset_mode == "extend",
+                                                  replace=replace_existing_final_out)
 
         return run_specs, "generate_only", _merge_after_run, out_dir
-
-    def _merge_mixed_outputs(self, specs: list[dict[str, str]], log_callback: Any, *, final_out: Path, tmp_root: Path,
-                             extend: bool, replace: bool) -> bool:
-        """Merge the per-profile temp datasets into *final_out* (worker thread); temp data is kept on failure."""
-        ok = True
-        src_dirs: list[Path] = []
-        try:
-            src_dirs = [Path(spec["out_dir"]).resolve() for spec in specs]
-            merge_sources = list(src_dirs)
-            merge_target = final_out
-            tmp_target: Path | None = None
-
-            if replace and final_out.exists():
-                if extend:
-                    merge_sources = [final_out, *merge_sources]
-                    tmp_target = final_out.parent / f"{final_out.name}.__merge_tmp_{int(time.time())}_{os.getpid()}"
-                    if tmp_target.exists():
-                        shutil.rmtree(tmp_target, ignore_errors=True)
-                    merge_target = tmp_target
-                    log_callback(f"[mixed] extend mode: including existing dataset as merge source: {final_out}\n")
-                else:
-                    shutil.rmtree(final_out, ignore_errors=True)
-                    log_callback(f"[mixed] removed previous dataset at target: {final_out}\n")
-
-            log_callback(f"[mixed] merging {len(merge_sources)} source datasets into: {merge_target}\n")
-            self.logic.merge_datasets_for_training(merge_sources, merge_target, log_callback, log_callback)
-            if tmp_target is not None and merge_target == tmp_target:
-                if final_out.exists():
-                    shutil.rmtree(final_out, ignore_errors=True)
-                tmp_target.rename(final_out)
-                log_callback(f"[mixed] extend mode: replaced target dataset with merged result: {final_out}\n")
-            log_callback(f"[mixed] merged dataset ready: {final_out}\n")
-        except Exception as e:
-            log_callback(f"[mixed] merge failed: {e}\n")
-            ok = False
-        if not ok:
-            # Keep freshly generated samples so a failed merge can be retried manually.
-            log_callback(f"[mixed] temp generation data kept after failed merge: {tmp_root}\n")
-        else:
-            try:
-                for p in src_dirs:
-                    if p.exists():
-                        shutil.rmtree(p, ignore_errors=True)
-                if tmp_root.exists():
-                    shutil.rmtree(tmp_root, ignore_errors=True)
-                log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
-            except Exception as e:
-                log_callback(f"[mixed] temp cleanup warning: {e}\n")
-        return ok
 
     def _apply_precise_counts_to_run_specs(self, run_specs: list[dict[str, str]]) -> list[dict[str, str]] | None:
         counts = self._get_precise_counts()
@@ -383,7 +338,7 @@ class PipelineRunMixin:
             spec_counts = precise_counts_for_profile(counts, spec.get("profile_id", ""))
             try:
                 patched_path = self._write_precise_config(cfg_path, spec_counts)
-                patched_specs.append({**spec, "config": self._rel_to_sim_root(patched_path)})
+                patched_specs.append({**spec, "config": rel_to(self.sim_root, patched_path)})
             except Exception as e:
                 self.ui.show_messagebox("error", "Error", f"Failed to write precise config:\n\n{e}")
                 return None
@@ -404,7 +359,7 @@ class PipelineRunMixin:
                 data = load_yaml(cfg_path) or {}
                 data["render"] = apply_render_overrides(dict(data.get("render") or {}), overrides)
                 patched_path = self._write_temp_cfg(data, prefix="render_")
-                patched_specs.append({**spec, "config": self._rel_to_sim_root(patched_path)})
+                patched_specs.append({**spec, "config": rel_to(self.sim_root, patched_path)})
             except Exception as e:
                 self.ui.show_messagebox("error", "Error", f"Failed to write render config:\n\n{e}")
                 return None
@@ -416,11 +371,9 @@ class PipelineRunMixin:
             if not (selected_ds := self._selected_dataset_dir()):
                 self.ui.show_messagebox("error", "Error", "No dataset selected to extend.\n\nSelect a dataset or use 'Create New' mode.")
                 return None
-            try:
-                if str(selected_ds.resolve()).startswith(str((self.sim_root / "outputs" / "sim_data" / "versions").resolve()) + os.sep):
-                    self.ui.show_messagebox("error", "Error", "Cannot extend/overwrite a dataset snapshot under outputs/sim_data/versions.\n\nSelect a dataset under outputs/sim_data/runs instead.")
-                    return None
-            except Exception: pass
+            if is_snapshot_dataset(self.sim_root, selected_ds):
+                self.ui.show_messagebox("error", "Error", "Cannot extend/overwrite a dataset snapshot under outputs/sim_data/versions.\n\nSelect a dataset under outputs/sim_data/runs instead.")
+                return None
             if not self.ui.ask_yes_no("Extend dataset?", f"Extend Existing will APPEND new samples into the selected dataset folder.\n\nDataset:\n{selected_ds}\n\nContinue?"): return None
             out_dir = str(selected_ds)
             self._append_log(f"\n=== Extending selected dataset: {out_dir} ===\n")
@@ -464,7 +417,7 @@ class PipelineRunMixin:
 
         try:
             if profile_ids: self._autoselect_config_for_profile(profile_ids[0], prefer_quiet=True)  # keeps a matching Config field
-        except Exception: pass
+        except Exception as e: _LOG.warning("Config auto-selection for %s failed: %s", profile_ids[0], e)
 
         built_specs = self._build_run_specs(
             task=task,
@@ -532,32 +485,31 @@ class PipelineRunMixin:
         self.ui.set_run_buttons_state(True)
         self.logic.stop_evt.clear()
 
-        status_vars = {
-            "phase": self.ui.var_phase, "run_progress": self.ui.var_run_progress,
-            "epoch": self.ui.var_epoch, "ips": self.ui.var_ips, "last": self.ui.var_last,
-            "dataset_dir": self.state.dataset_dir,
-            "snap_every": self._snap_every_n(), "snap_keep": self._snap_keep_n(), "autosnap": self.ui.var_autosnap.get()
-        }
+        snapshots = SnapshotOptions(enabled=bool(self.ui.var_autosnap.get()), every=self._snap_every_n(),
+                                    keep=self._snap_keep_n())
+        status_vars = {"phase": self.ui.var_phase, "run_progress": self.ui.var_run_progress}
+
+        def on_status(field: str, text: str) -> None:  # worker thread -> Tk thread
+            if (var := status_vars.get(field)) is not None:
+                self.post(lambda: var.set(text))
         self.logic.start_pipeline(
             run_specs=run_specs, run_count=run_count, dataset_mode=runtime_dataset_mode, task=effective_task,
             image_filters=image_filters,
             event_callback=self._handle_event, log_callback=self._append_log,
             ui_update_callback=lambda: self.post(self._after_pipeline_run_ui_update),
             ui_reset_callback=lambda: self.post(self._reset_ui_on_pipeline_end),
-            status_vars=status_vars,
+            snapshots=snapshots, on_status=on_status,
             run_complete_callback=run_complete_callback,
         )
 
     def _after_pipeline_run_ui_update(self) -> None:
         self._refresh_datasets()
         if self.ui.var_dataset_mode.get() != "extend":
-            out_path = self.logic._resolve_out_dir(self.ui.var_out.get())
+            out_path = self.logic.resolve_path(self.ui.var_out.get())
             runs_base = (self.sim_root / "outputs" / "sim_data" / "runs").resolve()
-            try:
-                out_path.resolve().relative_to(runs_base)
+            if out_path.resolve().is_relative_to(runs_base):
                 self.ui.var_dataset.set(self._dataset_label_for_path(out_path) or out_path.name)
                 self._on_dataset_selected()
-            except Exception: pass
         elif self.state.dataset_dir: self._start_dataset_size_calc(self.state.dataset_dir)
 
     def _reset_ui_on_pipeline_end(self) -> None:

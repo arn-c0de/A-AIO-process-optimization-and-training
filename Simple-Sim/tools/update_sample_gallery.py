@@ -14,7 +14,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import re
 import shutil
 import sys
@@ -28,7 +27,8 @@ import numpy as np
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if not __package__:  # run as a script (python tools/x.py): make the checkout importable
+    sys.path.insert(0, str(ROOT))
 
 from gui.components.overlay_renderer import draw_defect_overlay  # noqa: E402
 from simple_sim.cli_utils import add_json_flag, configure_cli_logging, emit_result  # noqa: E402
@@ -37,8 +37,12 @@ from simple_sim.defects import sample_defect_params  # noqa: E402
 from simple_sim.board.footprints import profile_footprint  # noqa: E402
 from simple_sim.generators.blender3d.bake import bake_fields, profile_component_height_mm  # noqa: E402
 from simple_sim.generators.blender3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # noqa: E402
-from simple_sim.generators.opencv2d import RenderSpec, render_sample, sample_nominal_geometry  # noqa: E402
+from simple_sim.generators.opencv2d import RenderSpec, clean_augment, render_sample, sample_nominal_geometry  # noqa: E402
+from simple_sim.generation.blender import blender_job, blender_settings  # noqa: E402
+from simple_sim.blender.job_schema import DEFAULT_BLENDER_EXECUTABLE, DEFAULT_CYCLES_SAMPLES, DEFAULT_DEVICE  # noqa: E402
 from simple_sim.classes import STANDARD_CLASSES  # noqa: E402
+from simple_sim.preview.render import BACKEND_2D, BACKEND_3D, find_matching_run_configs, profile_backends  # noqa: E402
+from simple_sim.rng import stable_int_seed  # noqa: E402
 from simple_sim.io_utils import atomic_write_text, load_yaml  # noqa: E402
 
 # Standard defect classes for PCB components
@@ -68,32 +72,16 @@ def get_profile_id(profile: dict) -> str:
 
 def get_render_backend(profile: dict) -> str:
     """Determine render backend from profile (2D or 3D)."""
-    backends = profile.get("profile", {}).get("supported_render_backends", [])
-    if "blender_3d" in backends:
-        return "blender_3d"
-    if "opencv_2d" in backends:
-        return "opencv_2d"
+    backends = profile_backends(profile)
+    if BACKEND_3D in backends:
+        return BACKEND_3D
+    if BACKEND_2D in backends:
+        return BACKEND_2D
     # Fallback: check profile name for hints
     profile_id = get_profile_id(profile)
     if "3d" in profile_id.lower():
         return "blender_3d"
     return "opencv_2d"
-
-
-def _stable_int_seed(*parts: str) -> int:
-    # Deterministic per (profile_id, class, backend) without depending on Python's hash randomization.
-    s = "|".join(str(p) for p in parts)
-    h = hashlib.sha256(s.encode("utf-8")).hexdigest()
-    return int(h[:12], 16)
-
-
-def _iter_run_configs(configs_dir: Path) -> list[Path]:
-    out: list[Path] = []
-    for p in sorted(Path(configs_dir).glob("run_*.yaml")):
-        if p.name.startswith("."):
-            continue
-        out.append(p)
-    return out
 
 
 def _find_matching_run_cfg(
@@ -103,15 +91,11 @@ def _find_matching_run_cfg(
     backend: str,
 ) -> tuple[dict[str, Any] | None, Path | None]:
     """Find a run_*.yaml that uses `run.component_profile == profile_id` and `render.backend == backend`."""
-    for cfg_path in _iter_run_configs(configs_dir):
+    for cfg_path in find_matching_run_configs(configs_dir, profile_id=profile_id, backend=backend, pattern="run_*.yaml"):
         try:
             cfg = load_config(cfg_path)
             validate_config(cfg)
         except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError):
-            continue
-        if str(cfg.get("run", {}).get("component_profile", "")) != str(profile_id):
-            continue
-        if str(cfg.get("render", {}).get("backend", "")) != str(backend):
             continue
         return cfg, cfg_path
     return None, None
@@ -137,9 +121,9 @@ def _render_one_2d(
     roi_w = int(roi_cfg.get("width_px", 256))
     roi_h = int(roi_cfg.get("height_px", 256))
 
-    rng = np.random.default_rng(_stable_int_seed(str(seed_base), profile_id, defect_type, "opencv_2d"))
+    rng = np.random.default_rng(stable_int_seed(seed_base, profile_id, defect_type, BACKEND_2D))
 
-    footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
+    footprint = profile_footprint(profile)
     geometry_ranges = profile.get("geometry_ranges") or {}
     tolerances = profile.get("tolerances") or {}
 
@@ -148,13 +132,7 @@ def _render_one_2d(
 
     render_cfg = merge_profile_render(cfg.get("render") or {}, profile, roi_cfg)
     # Gallery should be stable and "clean": no blur/noise/brightness jitter.
-    augment = {
-        "blur_sigma": 0.0,
-        "noise_stddev": 0.0,
-        "brightness_factor": 1.0,
-        "contrast_factor": 1.0,
-        "rotation_deg": 0.0,
-    }
+    augment = clean_augment()
 
     spec = RenderSpec(roi_size=(roi_w, roi_h), render=render_cfg, footprint=footprint, tolerances=tolerances)
     img = render_sample(spec, nominal, defect, augment, rng)
@@ -181,7 +159,7 @@ def _build_3d_job(
     roi_w = int(roi_cfg.get("width_px", 256))
     roi_h = int(roi_cfg.get("height_px", 256))
 
-    rng = np.random.default_rng(_stable_int_seed(str(seed_base), profile_id, defect_type, "blender_3d"))
+    rng = np.random.default_rng(stable_int_seed(seed_base, profile_id, defect_type, BACKEND_3D))
 
     footprint = profile_footprint(profile)
     geometry_ranges = profile.get("geometry_ranges") or {}
@@ -192,22 +170,17 @@ def _build_3d_job(
     nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
 
-    rel_image_path = str(out_path.relative_to(project_root))
-    job = {
-        "image_path": rel_image_path,
-        "seed": int(_stable_int_seed(str(seed_base), profile_id, defect_type, "blender_3d", "job_seed")),
-        "mm_per_px": float(mm_per_px),
-        "roi_width_px": int(roi_w),
-        "roi_height_px": int(roi_h),
-        "footprint": str(footprint),
-        "component_height_mm": float(component_height_mm),
+    record = {
+        "image_path": str(out_path.relative_to(project_root)),
+        "seed": stable_int_seed(seed_base, profile_id, defect_type, BACKEND_3D, "job_seed"),
         "nominal": nominal,
         "defect": defect,
-        "render_3d": render_3d,
-        **profile_job_fields(profile),
-        **bake_fields(cfg.get("render") or {}, roi_cfg),
+        "augment": clean_augment(),  # render_batch.py reads only rotation_deg (0 here)
     }
-    return job, nominal, defect
+    job = blender_job(record, mm_per_px=mm_per_px, roi_width=roi_w, roi_height=roi_h, footprint=footprint,
+                      component_height_mm=component_height_mm, render_3d=render_3d,
+                      bake={**profile_job_fields(profile), **bake_fields(cfg.get("render") or {}, roi_cfg)})
+    return dict(job), nominal, defect
 
 
 def _overlay_in_place(path: Path, defect: dict[str, Any], nominal: dict[str, Any]) -> None:
@@ -280,7 +253,8 @@ def _default_gallery_cfg(render_backend: str) -> dict[str, Any]:
     else:
         render = {
             "backend": "blender_3d",
-            "blender": {"executable": "blender", "engine": "CYCLES", "samples": 64, "device": "CPU"},
+            "blender": {"executable": DEFAULT_BLENDER_EXECUTABLE, "engine": "CYCLES", "samples": DEFAULT_CYCLES_SAMPLES,
+                        "device": DEFAULT_DEVICE},
         }
     return {"roi": {"width_px": 256, "height_px": 256, "mm_per_px": 0.01}, "render": render}
 
@@ -414,6 +388,32 @@ def _run_keeping_gallery(args: argparse.Namespace) -> None:
         shutil.rmtree(moved[1], ignore_errors=True)
 
 
+def _move_aside(gallery_dir: Path) -> Path:
+    """Rename *gallery_dir* to ``<name>.old`` (replacing an older backup) and return the backup path.
+
+    Moved aside, not deleted: :func:`_run_keeping_gallery` puts it back when the run fails (the 3D batch
+    runs last, so a missing / failing Blender used to leave SAMPLE_GALLERY.md pointing at deleted images).
+    """
+    backup = gallery_dir.with_name(gallery_dir.name + ".old")
+    if backup.exists():
+        shutil.rmtree(backup)
+    gallery_dir.rename(backup)
+    return backup
+
+
+def _profile_render_cfg(configs_dir: Path, profile_id: str, render_backend: str,
+                        roi_override: tuple[int, int, float] | None) -> tuple[dict[str, Any], Path | None]:
+    """Render config of a profile: a matching ``run_*.yaml`` (and its path) or the gallery default, with the
+    ``--roi`` override applied."""
+    cfg, cfg_path = _find_matching_run_cfg(configs_dir=configs_dir, profile_id=profile_id, backend=render_backend)
+    if cfg is None:
+        cfg = _default_gallery_cfg(render_backend)
+    if roi_override is not None:
+        w, h, mpp = roi_override
+        cfg = {**cfg, "roi": {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}}
+    return cfg, cfg_path
+
+
 def _run(args: argparse.Namespace) -> None:
     project_root = ROOT
     profiles_dir = (project_root / args.profiles_dir).resolve()
@@ -436,13 +436,7 @@ def _run(args: argparse.Namespace) -> None:
     # (per profile below), so images of the skipped backend survive.
     partial_run = bool(args.skip_2d or args.skip_3d)
     if gallery_dir.exists() and not args.dry_run and not partial_run:
-        # Moved aside, not deleted: main() puts it back when the run fails (the 3D batch runs last, so
-        # a missing / failing Blender used to leave SAMPLE_GALLERY.md pointing at deleted images).
-        backup = gallery_dir.with_name(gallery_dir.name + ".old")
-        if backup.exists():
-            shutil.rmtree(backup)
-        gallery_dir.rename(backup)
-        args.gallery_backup = (gallery_dir, backup)
+        args.gallery_backup = (gallery_dir, _move_aside(gallery_dir))
     gallery_dir.mkdir(parents=True, exist_ok=True)
 
     # Collect gallery entries
@@ -474,21 +468,15 @@ def _run(args: argparse.Namespace) -> None:
                   f" (keeping {len(kept)} existing image(s))")
             continue
 
-        if render_backend in ("opencv_2d", "blender_3d") and partial_run and not args.dry_run and profile_gallery.exists():
+        if render_backend not in ("opencv_2d", "blender_3d"):
+            print(f"  [skip] Unsupported render backend: {render_backend}")
+            continue
+        if partial_run and not args.dry_run and profile_gallery.exists():
             shutil.rmtree(profile_gallery)
         profile_gallery.mkdir(parents=True, exist_ok=True)
 
-        # Resolve render settings from a matching run_*.yaml if available.
-        cfg, cfg_path = _find_matching_run_cfg(configs_dir=configs_dir, profile_id=profile_id, backend=render_backend)
-        if cfg is None:
-            cfg = _default_gallery_cfg(render_backend)
-
-        # Apply ROI override if requested.
-        if roi_override is not None:
-            w, h, mpp = roi_override
-            cfg = dict(cfg)
-            cfg["roi"] = {"width_px": int(w), "height_px": int(h), "mm_per_px": float(mpp)}
-
+        cfg, cfg_path = _profile_render_cfg(configs_dir, profile_id, render_backend, roi_override)
+        cfg_note = "" if cfg_path is None else f" (cfg: {cfg_path.name})"
         defect_types = _profile_defect_set(profile_data)
 
         if render_backend == "opencv_2d":
@@ -505,14 +493,14 @@ def _run(args: argparse.Namespace) -> None:
                     )
                 rel = dst.relative_to(project_root)
                 entries.append((profile_id, profile_id, class_name, str(rel), render_backend))
-                print(f"  {class_name:12} [{render_backend}]: -> {rel}" + ("" if cfg_path is None else f" (cfg: {cfg_path.name})"))
+                print(f"  {class_name:12} [{render_backend}]: -> {rel}{cfg_note}")
 
-        elif render_backend == "blender_3d":
-            blender_cfg = (cfg.get("render") or {}).get("blender") or {}
-            this_exe = str(args.blender or blender_cfg.get("executable", "blender"))
-            this_samples = int(args.samples or blender_cfg.get("samples", 64))
-            this_device = str(args.device or blender_cfg.get("device", "CPU"))
-            this_engine = str(blender_cfg.get("engine", "BLENDER_EEVEE"))
+        else:  # blender_3d
+            b = blender_settings(cfg)
+            this_exe = str(args.blender or b["executable"])
+            this_samples = int(args.samples or b["samples"])
+            this_device = str(args.device or b["device"])
+            this_engine = str(b["engine"])
             group_key = (this_exe, this_samples, this_device, this_engine)
             if group_key not in staged_3d_groups:
                 staged_3d_groups[group_key] = {"jobs": [], "overlays": []}
@@ -533,10 +521,7 @@ def _run(args: argparse.Namespace) -> None:
                     staged_3d_groups[group_key]["overlays"].append((dst, defect, nominal))
                 rel = dst.relative_to(project_root)
                 entries.append((profile_id, profile_id, class_name, str(rel), render_backend))
-                print(f"  {class_name:12} [{render_backend}]: -> {rel}" + ("" if cfg_path is None else f" (cfg: {cfg_path.name})"))
-        else:
-            print(f"  [skip] Unsupported render backend: {render_backend}")
-            continue
+                print(f"  {class_name:12} [{render_backend}]: -> {rel}{cfg_note}")
 
     if staged_3d_groups and not args.dry_run:
         _render_staged_3d(staged_3d_groups, project_root)

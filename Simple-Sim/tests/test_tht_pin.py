@@ -13,7 +13,7 @@ from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal import render_board
 from simple_sim.generators.opencv2d.photoreal.solder_defects import tht_layout
 
-from tests.test_blender_part_params import ROOT, load_script, trace
+from tests.blender_stub import ROOT, load_script, trace
 
 PROFILE = yaml.safe_load((ROOT / "configs" / "profiles" / "tht_pin_3d@1.yaml").read_text(encoding="utf-8"))
 NOMINAL = {"pad_width": 42.0, "pad_height": 42.0, "pad_spacing": 64.0, "component_length": 190.0, "component_width": 42.0}

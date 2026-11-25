@@ -8,6 +8,10 @@ from collections.abc import Callable
 import tkinter as tk
 from tkinter import ttk
 
+from simple_sim.board.footprints import footprint_pads, profile_footprint
+
+from .yaml_io import range_mid
+
 
 Vec3 = tuple[float, float, float]
 Face = tuple[Vec3, Vec3, Vec3, Vec3]
@@ -25,9 +29,25 @@ class BoxMesh:
     outline: str
 
 
+#: Side of the virtual image the shared pad geometry is laid out in (raw profile pixels, centred).
+_LAYOUT_CANVAS = 4000
+
+
 def _pad_layout(footprint: str, pad_w: float, pad_h: float, pad_sx: float, pad_sy: float,
-                body_len_x: float, body_len_y: float) -> list[tuple[tuple[float, float], tuple[float, float]]]:
-    """``((x, y), (size_x, size_y))`` per pad in pad-number order, same layout as the 2D backends."""
+                body_len_x: float, body_len_y: float, *, nominal_raw: dict[str, float] | None = None,
+                scale: float = 1.0) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """``((x, y), (size_x, size_y))`` per pad in pad-number order, same layout as the 2D backends.
+
+    chip_2pad, sot23, soic_16 and qfn keep the editor's own layout (dragging their pads is translated back
+    into ``geometry_ranges`` by ``_emit_geometry_updates_from_scene``). Every other footprint (tssop, sot_6,
+    chip_array_8, tht_pin_N, ...) takes the shared geometry of :func:`simple_sim.board.footprints.footprint_pads`
+    from *nominal_raw* (profile pixels) scaled by *scale*; without *nominal_raw* it falls back to two pads.
+    """
+    if nominal_raw is not None and footprint != "chip_2pad" and footprint not in ("soic_16", "sot23") \
+            and not footprint.startswith("qfn"):
+        c = _LAYOUT_CANVAS // 2
+        return [(((p.center[0] - c) * scale, (p.center[1] - c) * scale), (p.w * scale, p.h * scale))
+                for p in footprint_pads(footprint, nominal_raw, (_LAYOUT_CANVAS, _LAYOUT_CANVAS))]
     if footprint == "soic_16":
         # 8 pads on the left + 8 pads on the right (2D layout, see opencv2d.geometry.pad_positions).
         # Keep pads distributed along package length and outside body width.
@@ -253,7 +273,7 @@ class Preview3D(ttk.Frame):
             return
         try:
             x, y, z = float(loc[0]), float(loc[1]), float(loc[2])
-        except Exception:
+        except (TypeError, ValueError):
             return
         horizontal = math.sqrt(x * x + y * y)
         self.yaw = math.atan2(x, y + 1e-9)
@@ -400,13 +420,7 @@ class Preview3D(ttk.Frame):
             gr = {}
 
         def mid(name: str, fallback: float) -> float:
-            raw = gr.get(name, [fallback, fallback])
-            if isinstance(raw, list) and len(raw) == 2:
-                try:
-                    return (float(raw[0]) + float(raw[1])) * 0.5
-                except Exception:
-                    return fallback
-            return fallback
+            return range_mid(gr, name, fallback)
 
         pad_w_raw = mid("pad_width", 30.0)
         pad_h_raw = mid("pad_height", 40.0)
@@ -435,7 +449,7 @@ class Preview3D(ttk.Frame):
         comp_h = max(8.0, min(42.0, h_ratio * max(comp_l, comp_w) * 0.65))
         pad_t = max(2.0, min(10.0, min(pad_w, pad_h) * 0.22))
 
-        footprint = str((profile.get("component") or {}).get("footprint") or "chip_2pad").strip()
+        footprint = profile_footprint(profile)
         self._scene_footprint = footprint
 
         # Same axes as the 2D layout used by both backends: component_length along x.
@@ -465,7 +479,10 @@ class Preview3D(ttk.Frame):
         pads = [
             self._box(f"pad_{i}", (x, y, pad_t * 0.5), (w, h, pad_t), "#bd7a33", "#d79c5f", movable=True)
             for i, ((x, y), (w, h)) in enumerate(
-                _pad_layout(footprint, pad_w, pad_h, pad_sx, pad_sy, body_len_x, body_len_y), start=1)
+                _pad_layout(footprint, pad_w, pad_h, pad_sx, pad_sy, body_len_x, body_len_y, scale=scale,
+                            nominal_raw={"pad_width": pad_w_raw, "pad_height": pad_h_raw, "pad_spacing": pad_sx_raw,
+                                         "pad_spacing_y": pad_sy_raw, "component_length": comp_l_raw,
+                                         "component_width": comp_w_raw}), start=1)
         ]
 
         return [substrate, *pads, body]
@@ -766,15 +783,16 @@ class Preview3D(ttk.Frame):
         cam = data.get("camera") or {}
         if isinstance(cam, dict):
             try:
-                self.yaw = float(cam.get("yaw", self.yaw))
-                self.pitch = float(cam.get("pitch", self.pitch))
-                self.distance = max(80.0, min(1600.0, float(cam.get("distance", self.distance))))
-                self.pan_x = float(cam.get("pan_x", self.pan_x))
-                self.pan_y = float(cam.get("pan_y", self.pan_y))
+                # Parse everything first: an invalid value must not leave a half-restored camera.
+                yaw, pitch = float(cam.get("yaw", self.yaw)), float(cam.get("pitch", self.pitch))
+                distance = max(80.0, min(1600.0, float(cam.get("distance", self.distance))))
+                pan_x, pan_y = float(cam.get("pan_x", self.pan_x)), float(cam.get("pan_y", self.pan_y))
+            except (TypeError, ValueError):
+                pass  # corrupt settings: keep the default camera
+            else:
+                self.yaw, self.pitch, self.distance, self.pan_x, self.pan_y = yaw, pitch, distance, pan_x, pan_y
                 self._camera_initialized = True
                 self._camera_restored = bool(cam)
-            except Exception:
-                pass
 
         vis = data.get("component_visibility") or {}
         if isinstance(vis, dict):

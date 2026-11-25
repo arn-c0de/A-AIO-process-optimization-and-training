@@ -8,20 +8,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from simple_sim.defects import sample_defect_params
 from simple_sim.generators.blender3d.bake import BOARD_SCALE, prepare_jobs
 from simple_sim.generators.opencv2d import sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal import render_board
 
-TOL = {"ok_shift_px": 3.0, "ok_rotation_deg": 5.0, "tombstone_tilt_deg": 75.0}
-
-
-def _job(defect_type, footprint="chip_2pad", seed=3):
-    rng = np.random.default_rng(seed)
-    return {"image_path": f"images/{defect_type}.png", "seed": seed, "mm_per_px": 0.01, "roi_width_px": 64,
-            "roi_height_px": 64, "footprint": footprint, "component_height_mm": 0.45,
-            "nominal": sample_nominal_geometry({}, rng, {"pad_spacing_y": [36.0, 50.0]}), "defect": sample_defect_params(defect_type, rng, TOL),
-            "augment": {"rotation_deg": 0.0}, "render_3d": {}, "component_type": "chip_resistor", "tolerances": TOL}
+from tests.helpers import TOL
+from tests.helpers import bake_job as _job
 
 
 def test_board_does_not_depend_on_the_defect():

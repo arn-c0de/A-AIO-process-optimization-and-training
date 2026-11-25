@@ -64,17 +64,6 @@ class FlagManager:
         except Exception as e:
             _LOG.warning("Failed to save flags: %s", e)
 
-    def add_flag(self, sample_id: str, flag_type: str, reason: str) -> None:
-        """Add a flag to a sample.
-
-        Args:
-            sample_id: Sample ID
-            flag_type: Flag type (CORRUPT, OUTLIER, SUSPECT_LABEL, etc.)
-            reason: Human-readable reason
-        """
-        if self._add(sample_id, flag_type, reason):
-            self._save_flags()
-
     def add_flags(self, flags: list[tuple[str, str, str]]) -> int:
         """Add ``(sample_id, flag_type, reason)`` flags with one save; returns how many were new."""
         added = sum(self._add(sample_id, flag_type, reason) for sample_id, flag_type, reason in flags)

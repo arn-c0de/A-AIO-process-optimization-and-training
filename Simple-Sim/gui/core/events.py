@@ -36,9 +36,6 @@ class EventBus:
         self._post = post
         self._ui_thread = threading.get_ident()
 
-    def set_post(self, post: Callable[[Callable[[], None]], None] | None) -> None:
-        self._post = post
-
     def subscribe(self, topic: str, handler: Handler) -> Callable[[], None]:
         with self._lock:
             self._subs[topic].append(handler)

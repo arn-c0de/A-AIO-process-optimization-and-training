@@ -3,7 +3,6 @@
 from __future__ import annotations
 from tkinter import ttk
 from pathlib import Path
-from collections import Counter
 from datetime import datetime
 
 from gui import dialogs
@@ -11,16 +10,23 @@ from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.settings_store import restore_persisted_vars
 from gui.utils.dataset_ops import delete_samples, move_samples
-from gui.utils.dataset_catalog import DatasetCatalog, catalog_labels
+from gui.utils.dataset_catalog import DatasetCatalog, catalog_labels, label_for_dataset
 from gui.widgets import ScrolledTree
-from gui.core.tasks import runner_for
 from gui.utils.feedback_manager import (
     FeedbackManager,
     VERDICT_THUMBS_DOWN,
     VERDICT_THUMBS_UP,
 )
 from .ui import AnalysisUI
-from .logic import AnalysisLogic
+from .logic import (
+    SORT_MODES,
+    AnalysisLogic,
+    dataset_stats_text,
+    filter_options,
+    filter_sample_tree,
+    ordered_class_names,
+    sample_mtime,
+)
 from simple_sim.schema import MetaRow
 from simple_sim.config import VALID_CLASSES
 
@@ -126,10 +132,9 @@ class AnalysisTab(BaseTab):
 
         if self.state.dataset_dir:
             want = self._display_for_dataset(self.state.dataset_dir)
-            for d, pp in self._dataset_by_display.items():
-                if pp == self.state.dataset_dir or d == want:
-                    self.ui.var_dataset.set(d)
-                    return
+            if (label := label_for_dataset(self._dataset_by_display, self.state.dataset_dir, alt_label=want)) is not None:
+                self.ui.var_dataset.set(label)
+                return
         if displays: self.ui.var_dataset.set(displays[0])
 
     def refresh(self) -> None:
@@ -151,25 +156,24 @@ class AnalysisTab(BaseTab):
             self._reload_feedback()
             self.sample_date_dict = self._build_sample_date_dict()
             
-            run_ids = {"All"} | {sid.split('/')[0] for sid in self.sample_ids if '/' in sid}
-            domains = {"All"} | {sid.split('/')[1] for sid in self.sample_ids if len(sid.split('/')) > 1}
+            run_ids, domains = filter_options(self.sample_ids)
             classes = {"All"} | {c for c in self.effective_label_dict.values() if c and c != "?"}
             
             self.ui.combo_run.configure(values=sorted(run_ids))
             self.ui.combo_domain.configure(values=sorted(domains))
-            self.ui.combo_class.configure(values=["All", *self._sorted_class_values(classes - {"All"})])
+            self.ui.combo_class.configure(values=["All", *ordered_class_names(classes - {"All"})])
             # A filter value of the previous dataset that does not exist here would hide every sample.
             for var, valid in ((self.ui.var_run, run_ids), (self.ui.var_domain, domains), (self.ui.var_filter, classes)):
                 if var.get().strip() not in valid:
                     var.set("All")
-            self.ui.set_feedback_class_values(self._sorted_class_values(set(VALID_CLASSES) | (classes - {"All"})))
+            self.ui.set_feedback_class_values(ordered_class_names(set(VALID_CLASSES) | (classes - {"All"})))
             profiles = sorted({str(v).strip() for v in self.profile_dict.values() if str(v).strip()})
             self._profile_options = profiles
             self.ui.combo_profile.configure(values=["All", *profiles])
             if self.ui.var_profile.get().strip() not in ({"All"} | set(profiles)):
                 self.ui.var_profile.set("All")
-            self.ui.combo_sort.configure(values=["Default", "Newest first", "Oldest first", "ID A-Z", "ID Z-A"])
-            if self.ui.var_sort.get().strip() not in {"Default", "Newest first", "Oldest first", "ID A-Z", "ID Z-A"}:
+            self.ui.combo_sort.configure(values=list(SORT_MODES))
+            if self.ui.var_sort.get().strip() not in SORT_MODES:
                 self.ui.var_sort.set("Default")
             self._selected_profiles = {p for p in self._selected_profiles if p in set(profiles)}
             self._update_profile_multi_label()
@@ -180,12 +184,8 @@ class AnalysisTab(BaseTab):
         except Exception as e:
             dialogs.show_error(self.frame, "Load Error", e, hint=f"Failed to load dataset {self.state.dataset_dir}.")
 
-    def _sorted_class_values(self, classes: set[str]) -> list[str]:
-        priority = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"]
-        return [p for p in priority if p in classes] + sorted([c for c in classes if c not in priority])
-
     def _filter_images(self, display_first: bool = True):
-        hierarchy, self.visible_sample_ids, self.visible_sample_item_by_id = {}, [], {}
+        self.visible_sample_ids, self.visible_sample_item_by_id = [], {}
         query = self.ui.var_search.get().strip().lower()
         filters = {
             'class': self.ui.var_filter.get().strip(),
@@ -194,31 +194,11 @@ class AnalysisTab(BaseTab):
             'split': self.ui.var_split.get().strip(),
             'profile': self.ui.var_profile.get().strip(),
         }
+        hierarchy = filter_sample_tree(
+            self.sample_ids, self.effective_label_dict, self.profile_dict, filters=filters,
+            selected_profiles=self._selected_profiles, query=query,
+            sort_mode=self.ui.var_sort.get().strip() or "Default", mtime=self._sample_mtime_key)
 
-        for sid in self.sample_ids:
-            if filters['class'] != "All" and self.effective_label_dict.get(sid, "?") != filters['class']: continue
-            sid_profile = str(self.profile_dict.get(sid, "")).strip() or "unknown_or_legacy"
-            if self._selected_profiles:
-                if sid_profile not in self._selected_profiles:
-                    continue
-            elif filters['profile'] != "All" and sid_profile != filters['profile']:
-                continue
-            parts = sid.split('/')
-            if len(parts) >= 3:
-                run, domain, split = parts[0], parts[1], parts[2]
-                if filters['run'] != "All" and run != filters['run']: continue
-                if filters['domain'] != "All" and domain != filters['domain']: continue
-                if filters['split'] != "All" and split != filters['split']: continue
-                if query and query not in f"{sid} {sid.split('/')[-1]} {self.effective_label_dict.get(sid, '?')}".lower(): continue
-
-                hierarchy.setdefault(run, {}).setdefault(domain, {}).setdefault(split, []).append(sid)
-
-        sort_mode = self.ui.var_sort.get().strip() or "Default"
-        for run in hierarchy.values():
-            for domain in run.values():
-                for split, sample_list in domain.items():
-                    domain[split] = self._sorted_sample_ids(sample_list, sort_mode)
-        
         self.ui.populate_tree(
             hierarchy,
             self.effective_label_dict,
@@ -235,31 +215,7 @@ class AnalysisTab(BaseTab):
             self._select_sample_id(self.current_sample_id, display=False)
 
     def _update_dataset_stats_label(self) -> None:
-        if not self.sample_ids:
-            self.ui.var_dataset_stats.set("Dataset Stats: -")
-            return
-
-        total = len(self.sample_ids)
-        split_counts = Counter()
-        for sid in self.sample_ids:
-            parts = sid.split("/")
-            split = parts[2] if len(parts) > 2 else "unknown"
-            split_counts[split] += 1
-
-        profile_counts = Counter()
-        for sid in self.sample_ids:
-            pid = str(self.profile_dict.get(sid, "")).strip() or "unknown_or_legacy"
-            profile_counts[pid] += 1
-
-        split_text = (
-            f"train={split_counts.get('train', 0)}, "
-            f"val={split_counts.get('val', 0)}, "
-            f"test={split_counts.get('test', 0)}"
-        )
-        profiles_text = ", ".join(
-            f"{pid}:{cnt}" for pid, cnt in sorted(profile_counts.items(), key=lambda x: (-x[1], x[0]))
-        )
-        self.ui.var_dataset_stats.set(f"Dataset Stats: total={total} | {split_text} | profiles: {profiles_text}")
+        self.ui.var_dataset_stats.set(dataset_stats_text(self.sample_ids, self.profile_dict))
 
     def _schedule_filter_images(self) -> None:
         if self._filter_after_id: self.frame.after_cancel(self._filter_after_id)
@@ -366,7 +322,7 @@ class AnalysisTab(BaseTab):
 
         self._analysis_running = True
         try:
-            runner_for(self.state, self.frame).run(
+            self._run_background(
                 analyze, name=f"Analyze dataset ({mode})", on_done=on_done, on_error=on_error, on_finally=on_finally)
         except BaseException:
             self._analysis_running = False
@@ -494,27 +450,8 @@ class AnalysisTab(BaseTab):
             return
         self.ui.var_profile_multi.set(f"multi: {len(self._selected_profiles)} selected")
 
-    def _sorted_sample_ids(self, sample_ids: list[str], sort_mode: str) -> list[str]:
-        if sort_mode == "ID A-Z":
-            return sorted(sample_ids)
-        if sort_mode == "ID Z-A":
-            return sorted(sample_ids, reverse=True)
-        if sort_mode in {"Newest first", "Oldest first"}:
-            reverse = sort_mode == "Newest first"
-            return sorted(sample_ids, key=self._sample_mtime_key, reverse=reverse)
-        return list(sample_ids)
-
     def _sample_mtime_key(self, sample_id: str) -> float:
-        if not self.state.dataset_dir:
-            return 0.0
-        try:
-            meta = self.meta_dict.get(sample_id)
-            if not meta:
-                return 0.0
-            path = self.state.dataset_dir / meta.image_path
-            return path.stat().st_mtime if path.exists() else 0.0
-        except Exception:
-            return 0.0
+        return sample_mtime(self.state.dataset_dir, self.meta_dict.get(sample_id))
 
     def _build_sample_date_dict(self) -> dict[str, str]:
         out: dict[str, str] = {}

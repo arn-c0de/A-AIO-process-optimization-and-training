@@ -4,7 +4,6 @@ sample_check split selection from the split files (C1)."""
 from __future__ import annotations
 
 import os
-import sys
 import warnings
 from pathlib import Path
 
@@ -17,23 +16,15 @@ from simple_sim.data_loader import ProfileDataset, ROIDataset
 from simple_sim.dataset_index import DatasetIndex
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, write_jsonl
 from simple_sim.splits import write_splits
+from tests.helpers import meta_row
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 
 CLASSES = ["OK", "MISSING", "TOMBSTONE"]
 
 
 def _meta(sid: str, split: str, image: str) -> MetaRow:
-    return MetaRow(
-        schema_version=2, id=sid, run_id="r", domain="domain_A", split=split, seed=1, image_path=image,
-        render_backend="opencv_2d", footprint="0603",
-        nominal={"pad_width": 1.0, "pad_height": 1.0, "pad_spacing": 1.0, "component_length": 1.0,
-                 "component_width": 1.0},
-        defect={"type": "OK", "shift_x": 0.0, "shift_y": 0.0, "rotation_deg": 0.0, "tilt_deg": 0.0},
-        augment={"blur_sigma": 0.0, "noise_stddev": 0.0, "brightness_factor": 1.0, "contrast_factor": 1.0,
-                 "rotation_deg": 0.0},
-    )
+    return meta_row(sid, image, split=split)
 
 
 def make_dataset(root: Path, n: int = 12, *, resplit: bool = False) -> Path:

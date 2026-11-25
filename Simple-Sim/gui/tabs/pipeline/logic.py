@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+from dataclasses import dataclass
 import os
 import queue
 import subprocess
@@ -17,55 +18,60 @@ import shlex
 import yaml
 
 from gui.utils.checkpoint_meta import CheckpointMetaCache
+from gui.utils.dataset_ops import manifest_profile
+from gui.utils.process import StreamingProcessLogic
 from gui.utils.paths import list_model_paths, model_root
-from gui.utils.process import terminate_process
 from simple_sim.cli import argv_for
+from simple_sim.dataset_merge import MergeResult, merge_datasets
 from simple_sim.dataset_files import CONFIG_YAML, DATASET_MANIFEST, LABELS_JSONL, META_JSONL, SPLITS_DIR
-from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, path_size_bytes, read_json, rel_to
+from simple_sim.io_utils import atomic_write_json, load_yaml, now_iso, rel_to
 from simple_sim.profile_hash import hash_profile
-from simple_sim.schema import read_jsonl, LabelRow, MetaRow, write_jsonl
-from simple_sim.manifest import read_dataset_manifest, write_dataset_manifest, write_multi_profile_manifest
+from simple_sim.manifest import write_dataset_manifest
 from simple_sim.model_store import snapshot_checkpoint
 from gui.utils.tk_safe import quiet
 
 
-def _config_classes_and_roi(cfg: dict) -> tuple[tuple[str, ...], int, int]:
-    """Sorted class names and ROI ``(width_px, height_px)`` of a dataset config (0 where unset)."""
-    classes = cfg.get("classes") or {}
-    roi = cfg.get("roi") or {}
-    return (tuple(sorted(classes.keys() if isinstance(classes, dict) else [])),
-            int(roi.get("width_px") or 0), int(roi.get("height_px") or 0))
+@dataclass(frozen=True)
+class SnapshotOptions:
+    """Model snapshots after full runs: every ``every``-th run when ``enabled``, keeping the newest ``keep``
+    (``keep == 0``: keep all)."""
+
+    enabled: bool = False
+    every: int = 1
+    keep: int = 30
 
 
-def _manifest_profiles(ds: Path, manifest: dict) -> list[dict[str, str]]:
-    """Component profiles of a dataset manifest: the single one of a v1 manifest, all named ones of v2."""
-    mver = int(manifest.get("manifest_version", 1) or 1)
-    if mver == 1:
-        comp = manifest.get("component_profile") or {}
-        pid = str(comp.get("profile_id") or "")
-        if not pid:
-            raise ValueError(f"Invalid manifest in {ds}: missing profile_id")
-        return [{"profile_id": pid, "profile_hash": str(comp.get("profile_hash") or ""),
-                 "profile_path": str(comp.get("profile_path") or "")}]
-    if mver == 2:
-        profs = manifest.get("component_profiles") or []
-        if not isinstance(profs, list) or not profs:
-            raise ValueError(f"Invalid manifest in {ds}: component_profiles missing/empty")
-        return [{"profile_id": pid, "profile_hash": str(p.get("profile_hash") or ""),
-                 "profile_path": str(p.get("profile_path") or "")}
-                for p in profs if isinstance(p, dict) and (pid := str(p.get("profile_id") or "").strip())]
-    raise ValueError(f"Unsupported manifest_version in {ds}: {mver}")
+def replace_dir(src: Path, dst: Path) -> None:
+    """Move directory *src* to *dst*, replacing an existing *dst* without a window where neither exists.
+
+    The old *dst* is renamed aside first and deleted last; if the final rename fails it is put back.
+    """
+    if not dst.exists():
+        src.rename(dst)
+        return
+    old = dst.with_name(f"{dst.name}.__old_{os.getpid()}")
+    shutil.rmtree(old, ignore_errors=True)
+    dst.rename(old)
+    try:
+        src.rename(dst)
+    except BaseException:
+        old.rename(dst)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
 
 
-class PipelineLogic:
+class PipelineLogic(StreamingProcessLogic):
+    """Pipeline runs: ``self.proc`` / ``self.stop_evt`` / ``stop()`` come from :class:`StreamingProcessLogic`.
+
+    The pipeline reads its child's output itself (``launch_process``): chunk-wise with CR handling for
+    the tqdm progress lines and an events.jsonl tailer per run, which ``run_streaming`` does not do.
+    """
+
     def __init__(self, sim_root: Path, log_q: queue.Queue[str], event_q: queue.Queue[dict[str, Any]], event_log_path: Path):
-        self.sim_root = sim_root
-        self.log_q = log_q
+        super().__init__(sim_root, log_q)
         self.event_q = event_q
         self.event_log_path = event_log_path
 
-        self.proc: subprocess.Popen[str] | None = None
-        self.stop_evt = threading.Event()
         self._temp_merge_cleanup_dir: Path | None = None
 
         self._last_snap_sig: tuple[int, int] | None = None  # (mtime_ns, size)
@@ -74,8 +80,6 @@ class PipelineLogic:
 
         # True while the start_pipeline loop thread is alive (also between runs, when no process is running).
         self.loop_running: bool = False
-        # Marshals a zero-arg callable onto the Tk main thread; the tab sets this (e.g. via frame.after).
-        self.ui_call: Callable[[Callable[[], None]], None] | None = None
         # Done-event of the currently active events.jsonl tailer (only one tailer at a time).
         self._tail_done: threading.Event | None = None
         self._tail_lock = threading.Lock()
@@ -99,105 +103,34 @@ class PipelineLogic:
     def _model_root(self) -> Path:
         return model_root(self.sim_root)
 
-    def _resolve_out_dir(self, out_dir: str) -> Path:
-        p = Path(out_dir)
-        if p.is_absolute(): return p
-        return (self.sim_root / p).resolve()
-
-    def _resolve_model_path(self, model_path: str) -> Path:
-        p = Path(model_path)
-        if p.is_absolute(): return p
-        return (self.sim_root / p).resolve()
-
     def start_pipeline(self, run_specs: list[dict[str, str]], run_count: int, dataset_mode: str, task: str,
                        image_filters: dict[str, Any],
                        event_callback: Callable[[dict[str, Any]], None], log_callback: Callable[[str], None],
                        ui_update_callback: Callable[[], None], ui_reset_callback: Callable[[], None],
-                       status_vars: dict,
+                       snapshots: SnapshotOptions | None = None,
+                       on_status: Callable[[str, str], None] | None = None,
                        run_complete_callback: Callable[[int, list[dict[str, str]], Callable[[str], None]], bool] | None = None) -> None:
+        """Run *run_specs* *run_count* times (-1: until stopped) on a worker thread.
+
+        ``on_status(field, text)`` (``field`` in ``"phase"``, ``"run_progress"``) is called from that thread.
+        """
+        snapshots = snapshots or SnapshotOptions()
         self.stop_evt.clear()
         self.current_run_iteration = 0
         self.total_run_count = run_count
         self.loop_running = True
 
-        def _run_pipeline_loop_thread():
+        def status(field: str, text: str) -> None:
+            if on_status is not None:
+                try: on_status(field, text)
+                except Exception as e: self.log_q.put(f"[ui] failed to update status: {e}\n")
+
+        def _run_pipeline_loop_thread() -> None:
             try:
-                while run_count == -1 or self.current_run_iteration < run_count:
-                    if self.stop_evt.is_set():
-                        log_callback(f"\n=== Pipeline stopped by user after {self.current_run_iteration} runs ===\n")
-                        break
-
-                    self.current_run_iteration += 1
-                
-                    # Update status display
-                    if run_count > 0:
-                        self._ui_set_var(status_vars.get("run_progress"), f"run: {self.current_run_iteration}/{run_count}")
-                    else:
-                        self._ui_set_var(status_vars.get("run_progress"), f"run: {self.current_run_iteration} (∞)")
-
-                    log_callback(f"\n{'='*60}\n")
-                    log_callback(f"Pipeline Run {self.current_run_iteration}" + (f"/{run_count}" if run_count > 0 else " (continuous)") + "\n")
-                    log_callback(f"{'='*60}\n\n")
-
-                    overall_ok = True
-                    for spec in run_specs:
-                        if self.stop_evt.is_set():
-                            overall_ok = False
-                            break
-                    
-                        pid = spec.get("profile_id", "")
-                        cfg = spec.get("config", "")
-                        out_dir = spec.get("out_dir", "")
-                        model_path = spec.get("model_path", "")
-
-                        log_callback(f"[profile] {pid}\n")
-                        log_callback(f"[config]  {cfg}\n")
-                        log_callback(f"[out]     {out_dir}\n")
-                        if task == "full": log_callback(f"[model]   {model_path}\n")
-                        log_callback("\n")
-
-                        status_vars["dataset_dir"] = Path(out_dir)
-
-                        ok = self._run_single_pipeline(
-                            out_dir, dataset_mode=dataset_mode, task=task, config_path=cfg, model_path=model_path,
-                            image_filters=image_filters,
-                            status_vars=status_vars, log_callback=log_callback, event_callback=event_callback
-                        )
-                        overall_ok = overall_ok and bool(ok)
-
-                        if task == "full":
-                            try:
-                                mp = self._resolve_model_path(model_path)
-                                if mp.exists():
-                                    self._write_model_meta(mp, run_i=self.current_run_iteration, dataset_dir=status_vars["dataset_dir"], dataset_mode=dataset_mode, out_dir=self._resolve_out_dir(out_dir))
-                                snap_every = status_vars["snap_every"]
-                                if status_vars["autosnap"] and mp.exists() and mp.is_file() and self.current_run_iteration % snap_every == 0:
-                                    snap = self._snapshot_model_checkpoint(
-                                        mp,
-                                        run_i=self.current_run_iteration,
-                                        snap_every=snap_every,
-                                        snap_keep=status_vars.get("snap_keep", 30),
-                                    )
-                                    if snap: log_callback(f"[model snapshot] {snap}\n")
-                            except Exception: pass
-
-                    success = overall_ok
-                    if success and run_complete_callback is not None:
-                        try:
-                            success = bool(run_complete_callback(self.current_run_iteration, run_specs, log_callback))
-                        except Exception as e:
-                            log_callback(f"[post-run] failed: {e}\n")
-                            success = False
-
-                    if not success and run_count != 1: log_callback(f"\n⚠ Run {self.current_run_iteration} failed, but continuing...\n")
-
-                    ui_update_callback()
-
-                    if run_count != 1 and not self.stop_evt.is_set(): self.stop_evt.wait(2)
-
-                log_callback(f"\n{'='*60}\n")
-                log_callback(f"All pipeline runs complete! Total: {self.current_run_iteration}\n")
-                log_callback(f"{'='*60}\n")
+                self._pipeline_loop(run_specs, run_count, dataset_mode=dataset_mode, task=task, image_filters=image_filters,
+                                    snapshots=snapshots, status=status, log_callback=log_callback,
+                                    event_callback=event_callback, ui_update_callback=ui_update_callback,
+                                    run_complete_callback=run_complete_callback)
             except Exception as e: log_callback(f"\n[pipeline] loop crashed: {e}\n")
             finally:
                 self.loop_running = False
@@ -206,9 +139,95 @@ class PipelineLogic:
         try: threading.Thread(target=_run_pipeline_loop_thread, daemon=True).start()
         except Exception: self.loop_running = False; raise
 
+    def _pipeline_loop(self, run_specs: list[dict[str, str]], run_count: int, *, dataset_mode: str, task: str,
+                       image_filters: dict[str, Any], snapshots: SnapshotOptions, status: Callable[[str, str], None],
+                       log_callback: Callable[[str], None], event_callback: Callable[[dict[str, Any]], None],
+                       ui_update_callback: Callable[[], None],
+                       run_complete_callback: Callable[[int, list[dict[str, str]], Callable[[str], None]], bool] | None) -> None:
+        """Body of the ``start_pipeline`` worker thread: *run_count* runs (-1: until stopped) of all *run_specs*."""
+        rule = "=" * 60
+        while run_count == -1 or self.current_run_iteration < run_count:
+            if self.stop_evt.is_set():
+                log_callback(f"\n=== Pipeline stopped by user after {self.current_run_iteration} runs ===\n")
+                break
+
+            self.current_run_iteration += 1
+            run_i = self.current_run_iteration
+            status("run_progress", f"run: {run_i}/{run_count}" if run_count > 0 else f"run: {run_i} (∞)")
+            log_callback(f"\n{rule}\n")
+            log_callback(f"Pipeline Run {run_i}" + (f"/{run_count}" if run_count > 0 else " (continuous)") + "\n")
+            log_callback(f"{rule}\n\n")
+
+            overall_ok = True
+            for spec in run_specs:
+                if self.stop_evt.is_set():
+                    overall_ok = False
+                    break
+                ok = self._run_spec(spec, dataset_mode=dataset_mode, task=task, image_filters=image_filters,
+                                    snapshots=snapshots, status=status, log_callback=log_callback,
+                                    event_callback=event_callback)
+                overall_ok = overall_ok and ok
+
+            success = overall_ok
+            if success and run_complete_callback is not None:
+                try:
+                    success = bool(run_complete_callback(run_i, run_specs, log_callback))
+                except Exception as e:
+                    log_callback(f"[post-run] failed: {e}\n")
+                    success = False
+
+            if not success and run_count != 1: log_callback(f"\n⚠ Run {run_i} failed, but continuing...\n")
+
+            ui_update_callback()
+
+            if run_count != 1 and not self.stop_evt.is_set(): self.stop_evt.wait(2)
+
+        log_callback(f"\n{rule}\n")
+        log_callback(f"All pipeline runs complete! Total: {self.current_run_iteration}\n")
+        log_callback(f"{rule}\n")
+
+    def _run_spec(self, spec: dict[str, str], *, dataset_mode: str, task: str, image_filters: dict[str, Any],
+                  snapshots: SnapshotOptions, status: Callable[[str, str], None], log_callback: Callable[[str], None],
+                  event_callback: Callable[[dict[str, Any]], None]) -> bool:
+        """One profile of a pipeline run (+ model meta / snapshot after a full run); True when it succeeded."""
+        out_dir, model_path = spec.get("out_dir", ""), spec.get("model_path", "")
+        cfg = spec.get("config", "")
+        log_callback(f"[profile] {spec.get('profile_id', '')}\n")
+        log_callback(f"[config]  {cfg}\n")
+        log_callback(f"[out]     {out_dir}\n")
+        if task == "full": log_callback(f"[model]   {model_path}\n")
+        log_callback("\n")
+
+        ok = self._run_single_pipeline(
+            out_dir, dataset_mode=dataset_mode, task=task, config_path=cfg, model_path=model_path,
+            image_filters=image_filters, on_status=status, log_callback=log_callback, event_callback=event_callback)
+        if task == "full":
+            self._after_full_run(model_path, out_dir, dataset_mode=dataset_mode, snapshots=snapshots,
+                                 log_callback=log_callback)
+        return bool(ok)
+
+    def _after_full_run(self, model_path: str, out_dir: str, *, dataset_mode: str, snapshots: SnapshotOptions,
+                        log_callback: Callable[[str], None]) -> None:
+        """Write the model's ``.meta.json`` and the optional snapshot; failures are logged, not raised."""
+        run_i = self.current_run_iteration
+        try:
+            mp = self.resolve_path(model_path)
+            if mp.exists():
+                self._write_model_meta(mp, run_i=run_i, dataset_dir=Path(out_dir), dataset_mode=dataset_mode,
+                                       out_dir=self.resolve_path(out_dir))
+        except Exception as e:
+            log_callback(f"[model meta] failed: {e}\n")
+            return
+        if not (snapshots.enabled and mp.is_file()): return
+        try:
+            if snap := self._snapshot_model_checkpoint(mp, run_i=run_i, snap_every=snapshots.every, snap_keep=snapshots.keep):
+                log_callback(f"[model snapshot] {snap}\n")
+        except Exception as e:
+            log_callback(f"[model snapshot] failed: {e}\n")
+
     def _run_single_pipeline(self, out_dir: str, *, dataset_mode: str, task: str, config_path: str, model_path: str,
                              image_filters: dict[str, Any],
-                             status_vars: dict, log_callback: Callable[[str], None], event_callback: Callable[[dict[str, Any]], None]) -> bool:
+                             on_status: Callable[[str, str], None], log_callback: Callable[[str], None], event_callback: Callable[[dict[str, Any]], None]) -> bool:
         eventlog = self.event_log_path
         cfg = str(config_path).strip()
         model_path = str(model_path).strip()
@@ -251,7 +270,7 @@ class PipelineLogic:
 
         try:
             p = self.launch_process(cmd, env, log_callback, event_callback)
-            self._ui_set_var(status_vars.get("phase"), "running")
+            on_status("phase", "running")
             p.wait()
             rc = p.returncode
             self.proc = None
@@ -288,8 +307,7 @@ class PipelineLogic:
         except Exception as e: log_callback(f"[merge] cleanup failed: {cleanup} ({e})\n")
 
     def stop_pipeline(self) -> None:
-        self.stop_evt.set()
-        terminate_process(self.proc)
+        self.stop()
 
     def _read_process_output_thread(self, proc: subprocess.Popen[str], log_callback: Callable[[str], None], *,
                                     done: threading.Event | None = None, on_exit: Callable[[int | None], None] | None = None) -> None:
@@ -361,16 +379,6 @@ class PipelineLogic:
                 rc = proc.wait(timeout=0.2 if self.stop_evt.is_set() else None)
         self.log_q.put(f"\n[process exited rc={rc}]\n")
 
-    def _ui_set_var(self, tk_var: Any, value: str) -> None:
-        """Set a Tk variable on the main thread (via ui_call when called from a worker thread)."""
-        if tk_var is None: return
-        def _apply() -> None:
-            try: tk_var.set(value)
-            except Exception as e: self.log_q.put(f"[ui] failed to set status var: {e}\n")
-        if threading.current_thread() is threading.main_thread() or self.ui_call is None: _apply(); return
-        try: self.ui_call(_apply)
-        except Exception as e: self.log_q.put(f"[ui] failed to schedule status update: {e}\n")
-
     def _tail_events_thread(self, event_callback: Callable[[dict[str, Any]], None], *, done: threading.Event | None = None, start_pos: int = 0) -> None:
         """Tail events.jsonl from start_pos until done is set (then drain once more); resets on truncation."""
         path = self.event_log_path
@@ -403,19 +411,21 @@ class PipelineLogic:
         atomic_write_json(Path(str(model_path) + ".meta.json"), meta)
 
     def _snapshot_model_checkpoint(self, model_path: Path, *, run_i: int, snap_every: int, snap_keep: int) -> Path | None:
-        try:
-            model_path = Path(model_path)
-            if not model_path.exists(): return None
-            st = model_path.stat()
-            sig = (int(st.st_mtime_ns), int(st.st_size))
-            if self._last_snap_sig == sig: return None
-            self._last_snap_sig = sig
-            
-            dst = snapshot_checkpoint(self._model_root(), model_path, run=int(run_i))
-            self._write_snapshot_meta(dst, src=model_path, run_i=run_i)
-            self._prune_model_snapshots(dst.parent, snap_keep)
-            return dst
-        except Exception: return None
+        """Snapshot *model_path* after run *run_i* when it is a multiple of *snap_every* (and the file changed).
+
+        ``None`` when no snapshot is due; I/O errors propagate (the caller logs them).
+        """
+        if snap_every < 1 or run_i % snap_every != 0: return None
+        model_path = Path(model_path)
+        if not model_path.exists(): return None
+        st = model_path.stat()
+        sig = (int(st.st_mtime_ns), int(st.st_size))
+        if self._last_snap_sig == sig: return None
+        dst = snapshot_checkpoint(self._model_root(), model_path, run=int(run_i))
+        self._last_snap_sig = sig  # only after the copy exists: a failed snapshot is retried next run
+        self._write_snapshot_meta(dst, src=model_path, run_i=run_i)
+        self._prune_model_snapshots(dst.parent, snap_keep)
+        return dst
 
     def _write_snapshot_meta(self, snapshot_path: Path, *, src: Path, run_i: int) -> None:
         meta = {
@@ -425,48 +435,20 @@ class PipelineLogic:
         atomic_write_json(Path(str(snapshot_path) + ".meta.json"), meta)
 
     def _prune_model_snapshots(self, dst_root: Path, snap_keep: int) -> None:
+        """Keep the newest *snap_keep* snapshots in *dst_root* (0: all); a removed one takes its ``.meta.json``."""
         if snap_keep == 0: return
         try:
             snaps = sorted([p for p in dst_root.glob("*.pt") if p.is_file()], key=lambda p: p.stat().st_mtime, reverse=True)
-            for p in snaps[snap_keep:]: p.unlink()
+            for p in snaps[snap_keep:]:
+                p.unlink()
+                Path(str(p) + ".meta.json").unlink(missing_ok=True)
         except Exception: pass
-
-    def start_dataset_size_calc(self, ds: Path, update_callback: Callable[[int], None]) -> None:
-        def worker() -> None:
-            update_callback(path_size_bytes(ds))
-        threading.Thread(target=worker, daemon=True).start()
 
     def get_dataset_profile_id(self, ds: Path) -> str | None:
-        if not ds: return None
-        manifest = read_json(ds / DATASET_MANIFEST)
-        if manifest is None: return None
-        try:
-            mver = int(manifest.get("manifest_version", 1) or 1)
-            if mver == 1: return manifest.get("component_profile", {}).get("profile_id")
-            if mver == 2: return "multi"
-            return None
-        except Exception: return None
+        return manifest_profile(ds)[0]
 
     def get_dataset_profile_hash(self, ds: Path) -> str | None:
-        if not ds: return None
-        manifest = read_json(ds / DATASET_MANIFEST)
-        if manifest is None: return None
-        try:
-            mver = int(manifest.get("manifest_version", 1) or 1)
-            if mver == 1: return manifest.get("component_profile", {}).get("profile_hash")
-            return None
-        except Exception: return None
-
-    def load_model_profile(self, model_path: Path) -> tuple[str | None, str | None]:
-        try:
-            if model_path.is_dir(): return "multi", None
-        except Exception: pass
-        try:
-            meta = self.read_checkpoint_meta(model_path)
-            if isinstance(comp := meta.get("component_profile"), dict):
-                return comp.get("profile_id"), comp.get("profile_hash")
-        except Exception: pass
-        return None, None
+        return manifest_profile(ds)[1]
 
     def cached_checkpoint_meta(self, p: Path) -> dict[str, Any] | None:
         """Cached metadata for a checkpoint file, or None if not cached (or the file changed)."""
@@ -540,20 +522,15 @@ class PipelineLogic:
 
         cfg_data, run_block = (load_yaml(config_path) or {}), {}
         if isinstance(cfg_data, dict): run_block = cfg_data.get("run") or {}
-        run_id, classes = str(run_block.get("run_id") or out_dir.name), run_block.get("classes", {})
-        
-        profiles_dir = self.sim_root / "configs" / "profiles"
-        profile_path = profiles_dir / f"{profile_id}.yaml"
-        profile_hash = hash_profile(profile_path) if profile_path.exists() else ""
+        run_id = str(run_block.get("run_id") or out_dir.name)
 
-        manifest = {
-            "manifest_version": 1, "created_at": now_iso(utc=True), "run_id": run_id,
-            "component_profile": {"profile_id": profile_id, "profile_hash": profile_hash, "profile_path": str(profile_path) if profile_path.exists() else ""},
-            "generator": {"version": "1.0.1", "git_commit": None, "script": "gui.profile_placeholder"},
-            "dataset_stats": {"total_samples": 0, "splits": {"train": 0, "val": 0, "test": 0}, "classes": {str(k): 0 for k in classes}},
-            "extend_history": [],
-        }
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        profile_path = self.sim_root / "configs" / "profiles" / f"{profile_id}.yaml"
+        has_profile = profile_path.exists()
+        # The regular v1 manifest writer (an empty dataset: no rows, empty splits).
+        write_dataset_manifest(out_dir, run_id, profile_id=profile_id,
+                               profile_hash=hash_profile(profile_path) if has_profile else "",
+                               profile_path=str(profile_path) if has_profile else "", meta_rows=[], label_rows=[],
+                               splits={"train": [], "val": [], "test": []}, script_name="gui.profile_placeholder")
         log_callback(f"[profile] created placeholder dataset manifest for {out_dir.name}\n")
         return True
 
@@ -632,186 +609,59 @@ class PipelineLogic:
         try: return (model_path.exists() and model_path.is_dir()) or str(model_path).endswith(".bundle")
         except Exception: return False
 
-    def _prepare_merge_sources(
-        self,
-        sources: list[Path],
-    ) -> tuple[str, dict[str, dict[str, str]], dict[str, dict[str, str]], dict, str, tuple[str, ...], int, int]:
-        cfg0_path = sources[0] / CONFIG_YAML
-        if not cfg0_path.exists():
-            raise FileNotFoundError(f"Missing config.yaml in {sources[0]}")
-        cfg0_text = cfg0_path.read_text(encoding="utf-8")
+    def merge_mixed_outputs(self, src_dirs: list[Path], log_callback: Callable[[str], None], *, final_out: Path,
+                            tmp_root: Path, extend: bool, replace: bool) -> bool:
+        """Merge per-profile temp datasets into *final_out* (worker thread); temp data is kept on failure.
+
+        With ``replace`` an existing *final_out* is only swapped out once the merge succeeded (with
+        ``extend`` it is a merge source as well), so a failed merge leaves it untouched.
+        """
+        ok = True
+        src_dirs = [Path(p).resolve() for p in src_dirs]
         try:
-            cfg0 = yaml.safe_load(cfg0_text) or {}
-        except Exception:
-            cfg0 = {}
-        class_keys0, roi0_w, roi0_h = _config_classes_and_roi(cfg0)
-
-        src_default_profiles: dict[str, dict[str, str]] = {}
-        all_profiles: dict[str, dict[str, str]] = {}
-        run_id = sources[0].name
-        for ds in sources:
-            manifest_path = ds / DATASET_MANIFEST
-            if not manifest_path.exists():
-                raise FileNotFoundError(f"Missing dataset_manifest.json in {ds}")
-            manifest = read_dataset_manifest(manifest_path)
-            if ds is sources[0]:
-                run_id = str(manifest.get("run_id") or run_id)
-            profiles = _manifest_profiles(ds, manifest)
-            if int(manifest.get("manifest_version", 1) or 1) == 1:
-                src_default_profiles[str(ds.resolve())] = profiles[0]
-            all_profiles.update({prof["profile_id"]: prof for prof in profiles})
-
-        target_w, target_h = (roi0_w if roi0_w > 0 else None), (roi0_h if roi0_h > 0 else None)
-        for ds in sources[1:]:
-            cfg_path = ds / CONFIG_YAML
-            if not cfg_path.exists():
-                raise FileNotFoundError(f"Missing config.yaml in {ds}")
-            try:
-                cfg = load_yaml(cfg_path) or {}
-            except Exception:
-                cfg = {}
-            class_keys, w, h = _config_classes_and_roi(cfg)
-            if class_keys != class_keys0:
-                raise ValueError(f"Cannot merge datasets with different class sets.\n  first: {class_keys0}\n  {ds.name}: {class_keys}")
-            if w > 0:
-                target_w = w if target_w is None else min(target_w, w)
-            if h > 0:
-                target_h = h if target_h is None else min(target_h, h)
-
-        if target_w is None or target_h is None or target_w <= 0 or target_h <= 0:
-            raise ValueError("Cannot determine target ROI size for merged dataset (missing roi.width_px/height_px).")
-        return str(run_id), src_default_profiles, all_profiles, cfg0, cfg0_text, class_keys0, int(target_w), int(target_h)
-
-    def _merge_source_rows(
-        self,
-        *,
-        sources: list[Path],
-        run_id: str,
-        src_default_profiles: dict[str, dict[str, str]],
-        images_dir: Path,
-        target_w: int,
-        target_h: int,
-    ) -> tuple[list[MetaRow], list[LabelRow], dict[str, list[str]]]:
-        import cv2  # lazy: only the merge resize needs OpenCV
-
-        meta_out: list[MetaRow] = []
-        label_out: list[LabelRow] = []
-        split_counters: dict[str, int] = {}
-        splits: dict[str, list[str]] = {"train": [], "val": [], "test": []}
-
-        def link_or_copy(src: Path, dst: Path) -> None:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                os.link(src, dst)
-            except Exception:
-                shutil.copy2(src, dst)
-
-        for ds in sources:
-            meta_rows = read_jsonl(ds / META_JSONL, MetaRow)
-            label_map = {row.id: row for row in read_jsonl(ds / LABELS_JSONL, LabelRow)}
-            prof = src_default_profiles.get(str(ds.resolve())) or {}
-            default_pid = str(prof.get("profile_id") or "")
-
-            for row in meta_rows:
-                label_row = label_map.get(row.id)
-                if label_row is None:
-                    continue
-                class_name = str(label_row.class_name)
-                split = row.split
-                idx = split_counters.setdefault(split, 0)
-                new_id = f"{run_id}/{row.domain}/{split}/{idx:06d}"
-                split_counters[split] = idx + 1
-                new_image_name = f"{split}_{idx:06d}.png"
-                dst_image, src_image = Path(images_dir) / new_image_name, ds / row.image_path
-                try:
-                    img = cv2.imread(str(src_image))
-                    if img is None:
-                        raise ValueError("imread returned None")
-                    h_src, w_src = img.shape[:2]
-                    if w_src != target_w or h_src != target_h:
-                        img = cv2.resize(
-                            img,
-                            (target_w, target_h),
-                            interpolation=cv2.INTER_AREA if (w_src > target_w or h_src > target_h) else cv2.INTER_LINEAR,
-                        )
-                        dst_image.parent.mkdir(parents=True, exist_ok=True)
-                        if not cv2.imwrite(str(dst_image), img):
-                            raise OSError("imwrite failed")
-                    else:
-                        link_or_copy(src_image, dst_image)
-                except Exception:
-                    link_or_copy(src_image, dst_image)
-
-                meta_out.append(
-                    MetaRow(
-                        schema_version=int(row.schema_version),
-                        id=new_id,
-                        run_id=str(run_id),
-                        domain=row.domain,
-                        split=split,
-                        seed=int(row.seed),
-                        image_path=str(Path("images") / new_image_name),
-                        render_backend=row.render_backend,
-                        footprint=row.footprint,
-                        nominal=row.nominal,
-                        defect=row.defect,
-                        augment=row.augment,
-                        render_meta=getattr(row, "render_meta", {}) or {},
-                    )
-                )
-                pid = str(getattr(label_row, "profile_id", "") or default_pid)
-                label_out.append(LabelRow(schema_version=2, id=new_id, class_name=class_name, profile_id=pid))
-                splits.setdefault(split, []).append(new_id)
-
-        return meta_out, label_out, splits
-
-    def merge_datasets_for_training(self, sources: list[Path], out_dir: Path, log_callback: Callable[[str], None], log_error_callback: Callable[[str], None]) -> None:
-        out_dir = Path(out_dir)
-        if out_dir.exists(): raise FileExistsError(f"Output directory already exists: {out_dir}")
+            sources = list(src_dirs)
+            if replace and final_out.exists():
+                if extend:
+                    sources = [final_out, *sources]
+                    log_callback(f"[mixed] extend mode: including existing dataset as merge source: {final_out}\n")
+                tmp_target = final_out.parent / f"{final_out.name}.__merge_tmp_{int(time.time())}_{os.getpid()}"
+                shutil.rmtree(tmp_target, ignore_errors=True)
+                log_callback(f"[mixed] merging {len(sources)} source datasets into: {tmp_target}\n")
+                self.merge_datasets_for_training(sources, tmp_target, log_callback, log_callback)
+                replace_dir(tmp_target, final_out)
+                log_callback(f"[mixed] replaced target dataset with merged result: {final_out}\n")
+            else:
+                log_callback(f"[mixed] merging {len(sources)} source datasets into: {final_out}\n")
+                self.merge_datasets_for_training(sources, final_out, log_callback, log_callback)
+            log_callback(f"[mixed] merged dataset ready: {final_out}\n")
+        except Exception as e:
+            log_callback(f"[mixed] merge failed: {e}\n")
+            ok = False
+        if not ok:
+            # Keep freshly generated samples so a failed merge can be retried manually.
+            log_callback(f"[mixed] temp generation data kept after failed merge: {tmp_root}\n")
+            return False
         try:
-            self._merge_datasets_into(sources, out_dir, log_callback, log_error_callback)
-        except BaseException:
-            # Do not leave a half-built dataset behind (it would show up in the list and block a retry).
-            shutil.rmtree(out_dir, ignore_errors=True)
-            raise
+            for p in src_dirs:
+                shutil.rmtree(p, ignore_errors=True)
+            shutil.rmtree(tmp_root, ignore_errors=True)
+            log_callback(f"[mixed] cleaned temp generation data: {tmp_root}\n")
+        except Exception as e:
+            log_callback(f"[mixed] temp cleanup warning: {e}\n")
+        return True
 
-    def _merge_datasets_into(self, sources: list[Path], out_dir: Path, log_callback: Callable[[str], None], log_error_callback: Callable[[str], None]) -> None:
-        out_dir.mkdir(parents=True, exist_ok=False)
-        images_dir = out_dir / "images"
-        images_dir.mkdir(parents=True, exist_ok=False)
-        (out_dir / SPLITS_DIR).mkdir(parents=True, exist_ok=False)
+    def merge_datasets_for_training(self, sources: list[Path], out_dir: Path, log_callback: Callable[[str], None],
+                                    log_error_callback: Callable[[str], None]) -> MergeResult:
+        """Merge *sources* into the new dataset *out_dir* (:func:`simple_sim.dataset_merge.merge_datasets`).
 
-        if not sources: raise ValueError("No sources provided")
-
-        run_id, src_default_profiles, all_profiles, cfg0, cfg0_text, _class_keys0, target_w, target_h = self._prepare_merge_sources(sources)
-        meta_out, label_out, splits = self._merge_source_rows(
-            sources=sources,
-            run_id=run_id,
-            src_default_profiles=src_default_profiles,
-            images_dir=images_dir,
-            target_w=target_w,
-            target_h=target_h,
-        )
-
-        write_jsonl(out_dir / META_JSONL, meta_out)
-        write_jsonl(out_dir / LABELS_JSONL, label_out)
-        for split in ["train", "val", "test"]: Path(out_dir / SPLITS_DIR / f"{split}.txt").write_text("\n".join(splits[split]) + "\n", encoding="utf-8")
-        
-        try:
-            cfg_out = dict(cfg0) if isinstance(cfg0, dict) else {}
-            roi_out = dict(cfg_out.get("roi") or {})
-            roi_out["width_px"], roi_out["height_px"] = target_w, target_h
-            cfg_out["roi"] = roi_out
-            Path(out_dir / CONFIG_YAML).write_text(yaml.safe_dump(cfg_out, sort_keys=False), encoding="utf-8")
-        except Exception: Path(out_dir / CONFIG_YAML).write_text(cfg0_text, encoding="utf-8")
-
-        uniq_profiles: dict[str, dict[str, str]] = dict(all_profiles)
-        for row in label_out:
-            pid = str(getattr(row, "profile_id", "") or "").strip()
-            if pid and pid not in uniq_profiles:
-                uniq_profiles[pid] = {"profile_id": pid, "profile_hash": "", "profile_path": ""}
-        if len(uniq_profiles) == 1:
-            only = next(iter(uniq_profiles.values()))
-            write_dataset_manifest(out_dir, run_id=str(run_id), profile_id=str(only["profile_id"]), profile_hash=str(only["profile_hash"]), profile_path=str(only["profile_path"]), meta_rows=meta_out, label_rows=label_out, splits=splits, extend=False)
-        else:
-            write_multi_profile_manifest(out_dir, run_id=str(run_id), profiles=[{"profile_id": p["profile_id"], "profile_hash": p["profile_hash"], "profile_path": p["profile_path"]} for p in sorted(uniq_profiles.values(), key=lambda x: x["profile_id"])], meta_rows=meta_out, label_rows=label_out, splits=splits, script_name="gui.merge_datasets")
+        Equal class sets required, images resized to the smallest ROI and hard-linked when unchanged,
+        tolerant (``strict=False``) about the rows. Raises ``MergeError`` (a ``ValueError``),
+        ``FileNotFoundError`` or ``FileExistsError``; a failed merge leaves no *out_dir* behind.
+        """
+        result = merge_datasets(
+            [Path(p) for p in sources], Path(out_dir), require_same_classes=True, resize_to_common_roi=True,
+            link_images=True, include_unused_profiles=True, script_name="gui.merge_datasets",
+            on_warning=lambda msg: log_error_callback(f"[merge] warning: {msg}\n"), strict=False)
+        log_callback(f"[merge] {len(result.meta_rows)} samples from {len(sources)} dataset(s) -> {result.out_dir}"
+                     + (f" (ROI {result.roi[0]}x{result.roi[1]})" if result.roi else "") + "\n")
+        return result

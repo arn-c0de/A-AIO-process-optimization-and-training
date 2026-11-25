@@ -7,11 +7,12 @@ Mixin of :class:`gui.tabs.pipeline.tab.PipelineControlTab`; it relies on the att
 from __future__ import annotations
 import logging
 import os
-import threading
 from pathlib import Path
 import shutil
 
 
+from gui.utils.dataset_catalog import dataset_display_name, dataset_kind, sim_data_roots
+from gui.utils.paths import default_model_path, model_root
 from gui import dialogs
 from gui.utils.dataset_ops import delete_samples, list_dataset_samples, move_samples, DatasetSampleInfo
 from gui.utils.pipeline_helpers import (
@@ -166,7 +167,7 @@ class PipelineDatasetActionsMixin:
         try:
             if self.logic.ensure_dataset_skeleton(profile_id, config_candidate, out_dir, self._append_log):
                 self.ui.var_dataset_mode.set("new"); self.ui.var_out.set(str(out_dir)); self.ui.var_name.set(new_name)
-                model_path = (self.sim_root / "outputs" / "models" / f"{new_name}.pt").resolve()
+                model_path = default_model_path(self.sim_root, new_name).resolve()
                 self.ui.var_model.set(str(model_path)); self._refresh_models()
                 self._refresh_datasets(); self._select_dataset(out_dir)
                 self._append_log(f"[create dataset] {out_dir}\n")
@@ -203,28 +204,13 @@ class PipelineDatasetActionsMixin:
                     for fn in filenames: link_or_copy_file(Path(dirpath) / fn, dst / rel / fn, link=is_images)
                 self.log_q.put(f"[snapshot dataset] done: {dst}\n")
             except Exception as e: self.log_q.put(f"[snapshot dataset] failed: {e}\n"); shutil.rmtree(dst, ignore_errors=True)
-            finally: self.post(self._refresh_datasets)
-        threading.Thread(target=worker, daemon=True).start()
+        self._run_background(worker, name="Snapshot dataset", on_finally=self._refresh_datasets)
 
     def _rename_dataset_selected(self) -> None:
         if not (ds := self._selected_dataset_dir()): return
         if self.logic.is_busy(): self.ui.show_messagebox("warning", "Busy", "Stop the running process before renaming datasets."); return
-
-        sim_data = (self.sim_root / "outputs" / "sim_data").resolve()
-        runs = (sim_data / "runs").resolve()
-        versions = (sim_data / "versions").resolve()
-        rp = ds.resolve()
-        kind, old_name, parent = "", rp.name, rp.parent
-        if str(rp).startswith(str(runs) + os.sep): kind = "run"
-        elif str(rp).startswith(str(versions) + os.sep): kind = "snapshot"
-        else: self.ui.show_messagebox("error", "Error", f"Can only rename datasets under:\n{runs}\n{versions}\n\nSelected:\n{ds}"); return
-
-        if not (new_name := self.ui.ask_string("Rename dataset", f"New folder name for this {kind} dataset:", initialvalue=old_name)): return
-        if not (new_name := new_name.strip()) or "/" in new_name or "\\" in new_name: self.ui.show_messagebox("error", "Error", "Name must not contain path separators."); return
-        
-        dst = parent / new_name
-        if dst.exists(): self.ui.show_messagebox("error", "Error", f"Target already exists:\n{dst}"); return
-        if not self.ui.ask_yes_no("Rename dataset", f"Rename?\n\nFrom:\n{rp}\n\nTo:\n{dst}"): return
+        if not (target := self._ask_dataset_rename(ds)): return
+        rp, dst, kind = target
 
         # The catalog is keyed by relative path: carry category / archive flag over to the new name.
         old_category, was_archived = self._dataset_catalog.category_for(rp), self._dataset_catalog.is_archived(rp)
@@ -234,34 +220,50 @@ class PipelineDatasetActionsMixin:
             self._dataset_catalog.set_category([dst], old_category)
             if was_archived: self._dataset_catalog.set_archived([dst], True)
             self._dataset_catalog.save(self.frame)
-        except Exception: pass
+        except Exception as e: _LOG.warning("Failed to carry the dataset category over to %s: %s", dst, e)
 
         self.state.dataset_dir = dst; self._refresh_datasets()
-        try:
-            label = self._display_for_dataset(dst, runs=runs, versions=versions)
-            for k, v in self._dataset_by_label.items():
-                if v == dst or k == label: self.ui.var_dataset.set(k); break
-        except Exception: pass
+        runs, versions = sim_data_roots(self.sim_root, create=False)
+        label = dataset_display_name(dst, runs_root=runs, versions_root=versions)
+        for k, v in self._dataset_by_label.items():
+            if v == dst or k == label: self.ui.var_dataset.set(k); break
         self._on_dataset_selected()
-
-        cur_model_str = self.ui.var_model.get().strip(); cur_resolved_model_path = str(self.logic._resolve_model_path(cur_model_str))
-        old_default_model_path = str((self.sim_root / "outputs" / "models" / f"{old_name}.pt").resolve())
-        if cur_resolved_model_path == old_default_model_path: self.ui.var_model.set(str(self.sim_root / "outputs" / "models" / f"{new_name}.pt"))
-        
-        cur_out_str = self.ui.var_out.get().strip()
-        try:
-            cur_resolved_out_path = str(self.logic._resolve_out_dir(cur_out_str))
-            old_out_path = str((self.sim_root / "outputs" / "sim_data" / "runs" / old_name).resolve())
-            if cur_resolved_out_path == old_out_path: self.ui.var_out.set(str(self.sim_root / "outputs" / "sim_data" / "runs" / new_name))
-        except Exception: pass
+        self._retarget_fields_after_rename(rp.name, dst.name)
 
         # Models are named after run datasets only; a snapshot folder name (e.g. "v1") is not a model name.
-        if kind == "run": self._rename_models_for_dataset(old_name, new_name)
+        if kind == "run": self._rename_models_for_dataset(rp.name, dst.name)
         self._append_log(f"[rename dataset] {rp} -> {dst}\n")
         with quiet(): self.parent.event_generate("<<DatasetChanged>>", when="tail")
 
+    def _ask_dataset_rename(self, ds: Path) -> tuple[Path, Path, str] | None:
+        """Ask for the new name of *ds* (and confirm): ``(resolved ds, target, "run" | "snapshot")`` or ``None``."""
+        rp = ds.resolve()
+        if not (kind := dataset_kind(self.sim_root, rp)):
+            runs, versions = (r.resolve() for r in sim_data_roots(self.sim_root, create=False))
+            self.ui.show_messagebox("error", "Error", f"Can only rename datasets under:\n{runs}\n{versions}\n\nSelected:\n{ds}")
+            return None
+        new_name = self.ui.ask_string("Rename dataset", f"New folder name for this {kind} dataset:", initialvalue=rp.name)
+        if not new_name: return None
+        if not (new_name := new_name.strip()) or "/" in new_name or "\\" in new_name:
+            self.ui.show_messagebox("error", "Error", "Name must not contain path separators.")
+            return None
+        dst = rp.parent / new_name
+        if dst.exists():
+            self.ui.show_messagebox("error", "Error", f"Target already exists:\n{dst}")
+            return None
+        if not self.ui.ask_yes_no("Rename dataset", f"Rename?\n\nFrom:\n{rp}\n\nTo:\n{dst}"): return None
+        return rp, dst, kind
+
+    def _retarget_fields_after_rename(self, old_name: str, new_name: str) -> None:
+        """Model / Output fields that still show the old dataset's default paths follow the rename."""
+        if str(self.logic.resolve_path(self.ui.var_model.get().strip())) == str(default_model_path(self.sim_root, old_name).resolve()):
+            self.ui.var_model.set(str(default_model_path(self.sim_root, new_name)))
+        runs = self.sim_root / "outputs" / "sim_data" / "runs"
+        if str(self.logic.resolve_path(self.ui.var_out.get().strip())) == str((runs / old_name).resolve()):
+            self.ui.var_out.set(str(runs / new_name))
+
     def _rename_models_for_dataset(self, old_name: str, new_name: str) -> None:
-        models_root = self.sim_root / "outputs" / "models"
+        models_root = model_root(self.sim_root)
         for suffix in ["", "_last"]:
             old, new = models_root / f"{old_name}{suffix}.pt", models_root / f"{new_name}{suffix}.pt"
             old_meta, new_meta = models_root / f"{old_name}{suffix}.pt.meta.json", models_root / f"{new_name}{suffix}.pt.meta.json"
@@ -308,7 +310,7 @@ class PipelineDatasetActionsMixin:
     def _train_model_target(self, default_stem: str) -> Path:
         """Model path from the UI, else ``outputs/models/<default_stem>.pt``."""
         model_s = self.ui.var_model.get().strip()
-        return self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{default_stem}.pt").resolve()
+        return self.logic.resolve_path(model_s) if model_s else default_model_path(self.sim_root, default_stem).resolve()
 
     def _train_merged(self, dss: list[Path], strat: str) -> None:
         """Merge *dss* in a worker thread, then train on the result (``merge_temp``: removed afterwards)."""
@@ -333,34 +335,32 @@ class PipelineDatasetActionsMixin:
         self._append_log("\n")
 
         self.logic.loop_running = True; self.logic.stop_evt.clear()  # keep Busy guards closed until training starts
-        def worker() -> None:
-            try:
-                self.log_q.put(f"[merge] building merged dataset: {out_ds}\n")
-                self.logic.merge_datasets_for_training(dss, out_ds, self.log_q.put, self.log_q.put)
-                self.log_q.put(f"[merge] done: {out_ds}\n")
 
-                def kick_off_train() -> None:
-                    self.logic.loop_running = False
-                    if self.logic.stop_evt.is_set():
-                        self._append_log("[merge] stopped by user; training not started\n")
-                        if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
-                        self._refresh_datasets(); return
-                    try:
-                        if strat == "merge_keep": self._select_dataset(out_ds)
-                        else: self._refresh_datasets()
-                    except Exception: pass
+        def merge() -> None:  # worker; logs go through log_q
+            self.log_q.put(f"[merge] building merged dataset: {out_ds}\n")
+            self.logic.merge_datasets_for_training(dss, out_ds, self.log_q.put, self.log_q.put)
+            self.log_q.put(f"[merge] done: {out_ds}\n")
 
-                    cmd = chain_commands([train_argv(out_ds, model_out)])
-                    self._run_simple_cmd([cmd], cleanup_dir=out_ds if delete_after else None)
-
-                self.post(kick_off_train)
-            except Exception as e:
-                self.log_q.put(f"[merge] failed: {e}\n")
+        def kick_off_train(_result: object) -> None:
+            self.logic.loop_running = False
+            if self.logic.stop_evt.is_set():
+                self._append_log("[merge] stopped by user; training not started\n")
                 if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
-                def _merge_failed_ui() -> None: self.logic.loop_running = False
-                self.post(_merge_failed_ui)
+                self._refresh_datasets(); return
+            try:
+                if strat == "merge_keep": self._select_dataset(out_ds)
+                else: self._refresh_datasets()
+            except Exception as e: _LOG.warning("Dataset list refresh after merge failed: %s", e)
+            self._run_simple_cmd([chain_commands([train_argv(out_ds, model_out)])],
+                                 cleanup_dir=out_ds if delete_after else None)
+
+        def merge_failed(e: BaseException) -> None:
+            self.logic.loop_running = False
+            self._append_log(f"[merge] failed: {e}\n")
+            if delete_after: shutil.rmtree(out_ds, ignore_errors=True)
+
         self.ui.set_run_buttons_state(True)
-        try: threading.Thread(target=worker, daemon=True).start()
+        try: self._run_background(merge, name=f"Merge {len(dss)} datasets", on_done=kick_off_train, on_error=merge_failed)
         except Exception: self.logic.loop_running = False; raise
 
     def _train_sequential(self, dss: list[Path], model_out: Path) -> None:
@@ -394,7 +394,7 @@ class PipelineDatasetActionsMixin:
         if not dss: return
         
         model_s = self.ui.var_model.get().strip()
-        model_in = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
+        model_in = self.logic.resolve_path(model_s) if model_s else default_model_path(self.sim_root, dss[0].name).resolve()
         if not model_in.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found:\n{model_in}\n\nRun Train first."); return
         if len(dss) == 1: self._run_simple_cmd(eval_argv(dss[0], model_in)); return
 
@@ -411,7 +411,7 @@ class PipelineDatasetActionsMixin:
         if not dss: return
 
         model_s = self.ui.var_model.get().strip()
-        model_path = self.logic._resolve_model_path(model_s) if model_s else (self.sim_root / "outputs" / "models" / f"{dss[0].name}.pt").resolve()
+        model_path = self.logic.resolve_path(model_s) if model_s else default_model_path(self.sim_root, dss[0].name).resolve()
         if not model_path.exists(): self.ui.show_messagebox("error", "Missing model", f"Model not found to resume from:\n{model_path}\n\nRun Train first."); return
 
         extra_s = self.ui.var_continue_epochs.get().strip() or "10"

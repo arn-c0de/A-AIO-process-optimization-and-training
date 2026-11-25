@@ -8,24 +8,8 @@ from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.geometry import pad_positions
 import itertools
 
-TOL = {"ok_shift_px": 3.0, "ok_rotation_deg": 5.0, "tombstone_tilt_deg": 75.0}
-CFG = {"component_color": [20, 20, 20], "substrate_color": [40, 90, 40], "copper_color": [60, 120, 180]}
-FOOTPRINTS = {
-    "chip_2pad": {},
-    "sot23": {"pad_spacing_y": [36.0, 50.0]},
-    "qfn_32": {"pad_width": [15.0, 18.0], "pad_spacing": [173.0, 187.0], "pad_spacing_y": [173.0, 187.0],
-               "component_length": [162.0, 172.0], "component_width": [162.0, 172.0]},
-    "soic_16": {"pad_width": [10.0, 12.0], "pad_spacing": [120.0, 130.0], "component_length": [90.0, 100.0],
-                "component_width": [70.0, 80.0]},
-}
-CLASSES = ["OK", "MISSING", "MISALIGNED", "TOMBSTONE", "SOLDER_BRIDGE", "CORNER_LIFT", "SOLDER_BALL", "EXCESS_SOLDER"]
-
-
-def _render(footprint, defect_type, seed=1, **cfg):
-    rng = np.random.default_rng(seed)
-    nominal = sample_nominal_geometry({}, rng, FOOTPRINTS[footprint])
-    defect = sample_defect_params(defect_type, rng, TOL)
-    return render_roi(nominal, defect, {"rotation_deg": 0.0}, (128, 128), {**CFG, **cfg}, TOL, rng, footprint=footprint)
+from tests.helpers import CFG, CLASSES, FOOTPRINTS, TOL  # noqa: F401 - CFG/TOL used by some tests
+from tests.helpers import render_photoreal as _render
 
 
 @pytest.mark.parametrize("footprint", list(FOOTPRINTS))
@@ -369,3 +353,34 @@ def test_power_inductor_and_led_look():
     assert 110 < ind.mean() < 200 and (ind.max(axis=1) - ind.min(axis=1)).mean() < 25  # grey, unsaturated
     led = render("chip_0603_led@1")[120:136, 116:140].reshape(-1, 3).astype(int)
     assert (led[:, 2] - led[:, 0]).mean() > 20  # yellowish lens: red well above blue
+
+
+def test_corner_lift_and_sot23_gap_scale_with_the_supersampling():
+    import cv2
+
+    from simple_sim.board.footprints import footprint_pads
+    from simple_sim.generators.opencv2d.geometry import lifted_corner_geometry
+
+    lifts = []
+    for ss in (1, 2, 4):
+        box = cv2.boxPoints(((200.0 * ss, 200.0 * ss), (120.0 * ss, 60.0 * ss), 0.0))
+        geo = lifted_corner_geometry(box, (200 * ss, 200 * ss), 60 * ss, 50.0, 0, scale=ss)
+        lifts.append(float(np.linalg.norm(geo["lifted"][0] - box[0])) / ss)
+    assert lifts[0] == pytest.approx(lifts[1]) == pytest.approx(lifts[2])  # was 8.3 / 4.1 / 2.1 camera px
+
+    nominal = {"pad_width": 20, "pad_height": 30, "pad_spacing": 80, "pad_spacing_y": 30}
+    gaps = []
+    for ss in (1, 2):
+        scaled = {k: v * ss for k, v in nominal.items()}
+        p1, p2, _p3 = footprint_pads("sot23", scaled, (256 * ss, 256 * ss), scale=ss)
+        gaps.append((p2.y - (p1.y + p1.h)) / ss)
+    assert gaps[0] == pytest.approx(gaps[1]) == pytest.approx(10.0)
+
+
+def test_body_geometry_keeps_the_sub_pixel_shift():
+    from simple_sim.generators.opencv2d.geometry import body_geometry
+
+    defect = {"type": "MISALIGNED", "shift_x": 1.6, "shift_y": -1.6, "rotation_deg": 0.0, "tilt_deg": 0.0}
+    geo = body_geometry({"component_length": 60, "component_width": 30}, defect, None, (256, 256))
+    assert geo["center"] == (130, 126)                     # whole pixels: moved by hypot(2, 2) = 2.83
+    assert geo["center_f"] == pytest.approx((129.6, 126.4))  # what the label saw: hypot(1.6, 1.6) = 2.26

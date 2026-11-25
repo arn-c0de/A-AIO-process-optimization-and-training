@@ -10,26 +10,21 @@ import cv2
 import numpy as np
 import yaml
 
-from simple_sim.config import load_config
 from simple_sim.filter_settings import normalize_image_filters
 from simple_sim.generation.dataset import generate_dataset, plan_records, resolve_run
 
-ROOT = Path(__file__).resolve().parent.parent
+from tests.helpers import ROOT, small_run_config
 
 
 def _small_config() -> dict:
-    cfg = load_config(ROOT / "configs" / "run_0001.yaml")
-    cfg["classes"] = {"OK": 2, "MISSING": 1, "TOMBSTONE": 1}
-    cfg["roi"].update(width_px=96, height_px=96)
-    return cfg
+    return small_run_config({"OK": 2, "MISSING": 1, "TOMBSTONE": 1}, 96)
 
 
 def _images(ds: Path) -> dict[str, bytes]:
     return {p.name: cv2.imread(str(p), cv2.IMREAD_UNCHANGED).tobytes() for p in sorted((ds / "images").glob("*.png"))}
 
 
-def test_config_mapping_equals_config_file(tmp_path, monkeypatch):
-    monkeypatch.delenv("IMAGE_FILTERS", raising=False)
+def test_config_mapping_equals_config_file(tmp_path):
     cfg = _small_config()
     before = json.dumps(cfg, sort_keys=True, default=str)
     path = tmp_path / "cfg.yaml"
@@ -65,13 +60,12 @@ def test_plan_records_is_pure_and_deterministic():
     assert run.config["render"]["component_type"]  # profile defaults merged into the render section
 
 
-def test_extend_refuses_other_look_options(tmp_path, monkeypatch):
+def test_extend_refuses_other_look_options(tmp_path):
     """``--extend`` compares the resolved look options with the dataset's config.yaml."""
     import pytest
 
     from simple_sim.manifest import RendererMismatchError
 
-    monkeypatch.delenv("IMAGE_FILTERS", raising=False)
     cfg = _small_config()
     ds = tmp_path / "ds"
     generate_dataset(cfg, ds, project_root=ROOT)

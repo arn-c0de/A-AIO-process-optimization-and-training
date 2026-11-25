@@ -12,6 +12,7 @@ from typing import Any
 
 from tqdm import tqdm
 
+from simple_sim.cli_utils import log_banner, RULE
 from simple_sim.config import load_config, validate_config
 from simple_sim.dataset_store import atomic_dataset_dir, write_dataset_files
 from simple_sim.generation.common import (
@@ -150,16 +151,14 @@ def generate_profile_dataset(
     )
 
     total_s = max(1e-9, time.perf_counter() - t_total0)
-    log.info("\n" + "=" * 60)
-    log.info("PROFILE DATASET GENERATION COMPLETE")
-    log.info("=" * 60)
+    log_banner(log, "PROFILE DATASET GENERATION COMPLETE")
     log.info(f"Output directory: {output_dir}")
     log.info(f"Total samples: {len(meta_rows)}")
     log.info(f"Profiles: {profile_ids}")
     log.info(f"Generation rate: {len(meta_rows) / total_s:.1f} samples/s  (time: {total_s:.1f}s)")
     for split_name, sample_ids in splits.items():
         log.info(f"  {split_name}: {len(sample_ids)} samples")
-    log.info("=" * 60)
+    log.info(RULE)
 
     result = summarize(output_dir, label_rows, splits, new_samples=len(meta_rows), elapsed_s=total_s)
     result.update(run_id=run_id, profile_ids=list(profile_ids), backend=backend)

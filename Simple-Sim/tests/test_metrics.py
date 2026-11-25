@@ -12,6 +12,7 @@ from simple_sim.metrics import (
     evaluate_success_criteria,
     format_success_criteria,
 )
+from simple_sim import reports
 
 
 def test_macro_f1_ignores_zero_support_classes():
@@ -133,3 +134,16 @@ def test_calibration_metrics_hand_computed():
         calibration_metrics(p, [0, 1, 1])
     with pytest.raises(ValueError):
         calibration_metrics(p, [0, 2, 0, 0])
+
+
+def test_critical_fn_rate_is_absent_for_a_class_without_samples():
+    m = compute_metrics(np.array([0, 0, 1]), np.array([0, 1, 1]), ["OK", "MISSING", "MISALIGNED"],
+                        critical_classes=["MISSING", "MISALIGNED"])
+    assert m["critical_fn_rates"] == {"MISSING": 0.0}  # MISALIGNED: support 0 -> no rate, not a perfect 0.0
+    assert reports.metric_value({"metrics": m}, "critical_fn_rate", "MISALIGNED") is None
+
+
+def test_success_criteria_skip_the_val_check_without_a_stored_val_accuracy():
+    metrics = {"accuracy": 0.95, "per_class": {"OK": {"recall": 1.0, "support": 3}}}
+    assert evaluate_success_criteria(None, metrics).passed
+    assert not evaluate_success_criteria(0.5, metrics).passed

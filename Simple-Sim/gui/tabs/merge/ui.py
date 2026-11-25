@@ -221,7 +221,7 @@ class MergeUI(LogViewHost):
                     tags = ("selected_weight", "success") if is_selected else ()
                     marker = " *" if is_selected else ""
 
-                    fav_s = "★" if self.tab.logic._rel(p) in favorites else ""
+                    fav_s = "★" if self.tab.logic.rel_path(p) in favorites else ""
                     display_name = f"{fav_s} {disp}{marker}".strip()
 
                     self.tree.insert(

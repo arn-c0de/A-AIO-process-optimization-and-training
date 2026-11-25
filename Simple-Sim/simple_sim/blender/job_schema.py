@@ -19,6 +19,8 @@ DEFAULT_BLENDER_EXECUTABLE = "blender"
 DEFAULT_CYCLES_SAMPLES = 64
 DEFAULT_DEVICE = "CPU"
 DEFAULT_ENGINE = "BLENDER_EEVEE"
+#: Environment variable naming the Blender executable when the config does not set one.
+BLENDER_ENV_VAR = "SIMPLE_SIM_BLENDER"
 # ``component.nominal_dims_mm.height`` of a profile when unset: a 0603 chip.
 DEFAULT_COMPONENT_HEIGHT_MM = 0.45
 # The baked board covers at least this many ROIs per side, so global rotations never reveal its edge.
@@ -142,7 +144,7 @@ class PreparedJob(JobFields, BakeOptions):
 
 
 __all__ = [
-    "BOARD_SCALE", "DEFAULT_BLENDER_EXECUTABLE", "DEFAULT_CAMERA_POSE", "DEFAULT_COMPONENT_HEIGHT_MM",
+    "BLENDER_ENV_VAR", "BOARD_SCALE", "DEFAULT_BLENDER_EXECUTABLE", "DEFAULT_CAMERA_POSE", "DEFAULT_COMPONENT_HEIGHT_MM",
     "DEFAULT_CYCLES_SAMPLES", "DEFAULT_DEVICE", "DEFAULT_ENGINE",
     "BakeOptions", "BlenderJob", "BoardScene", "CameraPose", "JobFields", "PreparedJob", "SceneBody",
     "SceneMarking", "ScenePart", "ThtLayout",

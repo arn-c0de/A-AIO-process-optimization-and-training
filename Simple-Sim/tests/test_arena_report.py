@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -10,75 +9,13 @@ from pathlib import Path
 from simple_sim.arena import load_arena, write_arena_report
 from simple_sim.cli_utils import parse_result
 
+from tests.helpers import build_sim_root
+from tests.helpers import write_report as _report
+from simple_sim.arena import best_rows_by_model
+import json
+from simple_sim import reports
+
 SIM_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _report(path: Path, *, model: str, dataset: str, acc: float, f1: float, split: str = "test", ts: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "timestamp": ts,
-                "model_path": model,
-                "dataset_path": dataset,
-                "split": split,
-                "seen_samples": 40,
-                "checkpoint_epoch": 3,
-                "checkpoint_val_accuracy": 0.9,
-                "img_per_s": 123.4,
-                "metrics": {"accuracy": acc, "macro_f1": f1, "critical_fn_rates": {"MISSING": 0.1}},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-def build_sim_root(root: Path) -> Path:
-    """Create a small fake Simple-Sim tree with tracked models, a bundle and reports."""
-    models = root / "outputs" / "models"
-    (root / "scripts").mkdir(parents=True, exist_ok=True)
-    models.mkdir(parents=True, exist_ok=True)
-    (models / "a.pt").write_bytes(b"x" * 3000)
-    (models / "b.pt").write_bytes(b"x" * 1500)
-    bundle = models / "multi.bundle"
-    bundle.mkdir(exist_ok=True)
-    (bundle / "chip@1.pt").write_bytes(b"x" * 500)
-    (bundle / "bundle.json").write_text(
-        json.dumps({"bundle_version": 1, "created_at": "2026-01-01", "checkpoints": {"chip@1": "chip@1.pt"}}),
-        encoding="utf-8",
-    )
-    for name in ("ds_one", "ds_two"):
-        ds = root / "outputs" / "sim_data" / "runs" / name
-        (ds / "predictions").mkdir(parents=True, exist_ok=True)
-        (ds / "meta.jsonl").write_text("{}\n" * 10, encoding="utf-8")
-    (models / "arena.json").write_text(
-        json.dumps(
-            {
-                "arena_models": [
-                    {"path": "outputs/models/a.pt"},
-                    {"path": "outputs/models/b.pt"},
-                    {"path": "outputs/models/multi.bundle"},
-                    {"path": "outputs/models/gone.pt"},
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    ds1 = "outputs/sim_data/runs/ds_one"
-    ds2 = "outputs/sim_data/runs/ds_two"
-    hist = models / "history"
-    _report(models / "report_a.json", model="outputs/models/a.pt", dataset=ds1, acc=0.91, f1=0.90, ts="2026-01-02T10:00:00")
-    _report(hist / "batch_report_a_test_1.json", model="outputs/models/a.pt", dataset=ds2, acc=0.71, f1=0.70, ts="2026-01-03T10:00:00")
-    # Train-split report must not win over the test one.
-    _report(hist / "batch_report_a_train_1.json", model="outputs/models/a.pt", dataset=ds2, acc=0.99, f1=0.99, split="train", ts="2026-01-03T11:00:00")
-    _report(hist / "batch_report_b_test_1.json", model="outputs/models/b.pt", dataset=ds1, acc=0.95, f1=0.94, ts="2026-01-04T10:00:00")
-    _report(
-        root / "outputs" / "sim_data" / "runs" / "ds_one" / "predictions" / "batch_report_chip_test_1.json",
-        model="outputs/models/multi.bundle/chip@1.pt", dataset=ds1, acc=0.5, f1=0.4, ts="2026-01-05T10:00:00",
-    )
-    # Untracked model: ignored.
-    _report(hist / "batch_report_z_test_1.json", model="outputs/models/z.pt", dataset=ds1, acc=1.0, f1=1.0, ts="2026-01-05T10:00:00")
-    return root
 
 
 def test_load_arena_reports_missing(tmp_path: Path) -> None:
@@ -123,3 +60,20 @@ def test_cli_json(tmp_path: Path) -> None:
     res = parse_result(proc.stdout)
     assert res["ok"] is True and res["command"] == "arena-report"
     assert res["n_models"] == 3 and out.exists()
+
+
+def test_arena_prefers_a_full_run_over_a_quick_check(tmp_path):
+    root = build_sim_root(tmp_path)
+    hist = root / "outputs" / "models" / "history"
+    ds1 = "outputs/sim_data/runs/ds_one"
+    _report(hist / "batch_report_a_test_quick.json", model="outputs/models/a.pt", dataset=ds1, acc=1.0, f1=1.0,
+            ts="2026-01-06T10:00:00")
+    quick = hist / "batch_report_a_test_quick.json"
+    data = json.loads(quick.read_text())
+    data.update(max_samples=16, seen_samples=16)
+    quick.write_text(json.dumps(data))
+
+    tracked, _missing = load_arena(root)
+    rows = best_rows_by_model(root, tracked, reports.load_reports(reports.report_search_dirs(root)))
+    a_rows = {r.dataset_name: r for r in rows[str((root / "outputs" / "models" / "a.pt").resolve())]}
+    assert a_rows["ds_one"].accuracy == 0.91

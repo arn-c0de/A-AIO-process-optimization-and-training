@@ -18,6 +18,8 @@ from simple_sim.generators.opencv2d import render_roi, sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal import apply_view, camera_model, view_canvas
 from simple_sim.schema import LabelRow, MetaRow
 from simple_sim.splits import generate_splits
+from tests.helpers import tiny_run_config as _config
+from simple_sim.generation.dataset import generate_dataset
 
 ROOT = Path(__file__).resolve().parent.parent
 NOMINAL = {"pad_width": 30, "pad_height": 35, "pad_spacing": 55, "component_length": 60, "component_width": 30}
@@ -528,3 +530,51 @@ def test_pretrained_download_failure_is_an_error(monkeypatch):
     with pytest.raises(RuntimeError, match="train.pretrained: false"):
         build_resnet18(3, pretrained=True)
     assert build_resnet18(3, pretrained=False).fc.out_features == 3
+
+
+def test_resume_best_score_only_counts_for_the_same_dataset(tmp_path):
+    from simple_sim.training import _other_dataset, _require_samples, hash_file
+
+    ds = tmp_path / "A"
+    ds.mkdir()
+    manifest = ds / "dataset_manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    same = {"trained_on_dataset": str(ds), "dataset_manifest_hash": hash_file(manifest)}
+    assert not _other_dataset(same, ds, manifest)
+    assert not _other_dataset({}, ds, manifest)  # old checkpoints: no entries, treated as the same dataset
+    assert _other_dataset({**same, "trained_on_dataset": str(tmp_path / "B")}, ds, manifest)
+    manifest.write_text('{"extended": true}', encoding="utf-8")
+    assert _other_dataset(same, ds, manifest)  # extended since: the val split is another one
+
+    _require_samples(ds, train=3, val=1)
+    with pytest.raises(ValueError, match="val"):
+        _require_samples(ds, train=3, val=0)
+
+
+def test_resume_into_a_new_out_keeps_the_best_epoch_of_this_run(tmp_path, monkeypatch):
+    from simple_sim import training
+    from simple_sim.models import load_checkpoint
+
+    cfg = _config(OK=4, MISSING=4, MISALIGNED=4)
+    cfg["train"].update({"epochs": 1, "batch_size": 4, "pretrained": False, "num_workers": 0})
+    data = tmp_path / "ds"
+    generate_dataset(cfg, data, project_root=ROOT)
+
+    scores = iter([0.9, 0.6, 0.8, 0.7])
+    real_fit = training.fit_epoch
+
+    def fit(run, epoch):
+        stats = real_fit(run, epoch)
+        stats["val_macro_f1"] = next(scores)
+        return stats
+
+    monkeypatch.setattr(training, "fit_epoch", fit)
+    first = tmp_path / "first.pt"
+    training.train_model(data, first, device="cpu")
+    second = tmp_path / "second.pt"
+    res = training.train_model(data, second, resume=first, extra_epochs=3, device="cpu", out_mode="best")
+    # Same dataset: the resumed 0.9 stays the best score of the lineage, but the new file holds the
+    # best epoch of this run (0.8, epoch 3), not just the first one written (0.6).
+    assert res["best_val_f1"] == pytest.approx(0.9)
+    assert load_checkpoint(second)["epoch"] == 3
+    assert load_checkpoint(first)["epoch"] == 1

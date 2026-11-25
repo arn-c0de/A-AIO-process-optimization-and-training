@@ -1,0 +1,15 @@
+usage: parts.py [-h] {list,lookup,check,add} ...
+
+Part catalog (datasheet geometry shared by all tools)
+
+positional arguments:
+  {list,lookup,check,add}
+    list                all entries (local catalogs first, then the built-in
+                        one)
+    lookup              best entry for a part
+    check               which parts of a board3d the catalog covers
+    add                 add / replace an entry (JSON file) in the local
+                        catalog
+
+options:
+  -h, --help            show this help message and exit

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import tkinter as tk
 import traceback
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from collections.abc import Sequence
 from typing import Any
 
@@ -134,6 +134,31 @@ def confirm(parent: tk.Misc | None, title: str, message: str, *, danger: bool = 
 
 def ask_string(parent: tk.Misc | None, title: str, prompt: str, initial: str = "") -> str | None:
     return simpledialog.askstring(title, prompt, initialvalue=initial, parent=_toplevel(parent))
+
+
+def ask_yes_no_cancel(parent: tk.Misc | None, title: str, message: str) -> bool | None:
+    """Yes / No / Cancel question: ``True`` / ``False`` / ``None``."""
+    return messagebox.askyesnocancel(title, message, parent=_toplevel(parent))
+
+
+# ---------------------------------------------------------------- file pickers ("" / None -> None)
+def ask_open_file(parent: tk.Misc | None, title: str, *, filetypes: Sequence[tuple[str, str]] = (),
+                  initialdir: str | None = None) -> str | None:
+    path = filedialog.askopenfilename(parent=_toplevel(parent), title=title, filetypes=list(filetypes),
+                                      initialdir=initialdir)
+    return path or None
+
+
+def ask_save_file(parent: tk.Misc | None, title: str, *, filetypes: Sequence[tuple[str, str]] = (),
+                  initialfile: str = "", defaultextension: str = "") -> str | None:
+    path = filedialog.asksaveasfilename(parent=_toplevel(parent), title=title, filetypes=list(filetypes),
+                                        initialfile=initialfile, defaultextension=defaultextension)
+    return path or None
+
+
+def ask_dir(parent: tk.Misc | None, title: str, *, initialdir: str | None = None) -> str | None:
+    path = filedialog.askdirectory(parent=_toplevel(parent), title=title, initialdir=initialdir)
+    return path or None
 
 
 def show_error(parent: tk.Misc | None, title: str, error: BaseException | str, *, hint: str | None = None) -> None:

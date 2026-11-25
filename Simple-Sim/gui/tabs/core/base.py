@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from collections.abc import Callable
 
-from gui.core.tasks import DispatchQueue, TaskRunner, UiDispatcher, dispatcher_for
+from gui.core.tasks import DispatchQueue, TaskHandle, TaskRunner, UiDispatcher, as_task_fn, dispatcher_for, runner_for
 from gui.utils.settings_store import SettingsStore, wire_vars_autosave
 
 if TYPE_CHECKING:
@@ -49,6 +49,16 @@ class BaseTab:
         if runner is None:
             runner = self._quiet_tasks = TaskRunner(self.dispatcher.post)
         return runner
+
+    def _run_background(self, fn: Callable[..., Any], *, name: str, on_done: Callable[[Any], None] | None = None,
+                        on_error: Callable[[BaseException], None] | None = None,
+                        on_finally: Callable[[], None] | None = None) -> TaskHandle:
+        """Run ``fn()`` / ``fn(task)`` off the UI thread via ``ctx.tasks`` (status-bar progress).
+
+        ``on_done`` / ``on_error`` / ``on_finally`` run on the UI thread.
+        """
+        return runner_for(self.state, self.frame).run(as_task_fn(fn), name=name, on_done=on_done,
+                                                      on_error=on_error, on_finally=on_finally)
 
     def bind_queue(self, q: DispatchQueue, handler: Callable[[list[Any]], None], *, max_items: int = 200) -> DispatchQueue:
         """Drain ``q`` on the Tk thread whenever producers ``put`` (replaces an ``after()`` poll loop).

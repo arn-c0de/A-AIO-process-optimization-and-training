@@ -25,6 +25,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from simple_sim.cli_utils import log_banner, RULE
 from simple_sim.data_loader import ProfileDataset, ROIDataset, build_train_transform, make_loader_kwargs
 from simple_sim.dataset_files import CONFIG_YAML, LABELS_JSONL
 from simple_sim.devices import resolve_device
@@ -73,15 +74,6 @@ log = logging.getLogger(__name__)
 PROFILE_CLASSIFIER = "profile_classifier"
 
 LR_FLOOR = 0.02  # cosine schedule ends at this fraction of train.lr
-
-_RULE = "=" * 60
-
-
-def _banner(title: str) -> None:
-    log.info("\n" + _RULE)
-    log.info(title)
-    log.info(_RULE)
-
 
 # ---------------------------------------------------------------------------
 # One epoch
@@ -142,10 +134,11 @@ def train_epoch(
 
         bs = int(images.shape[0])
         ema_ips = meter.update(bs, time.perf_counter() - t0)
-        total_loss += loss.item() * bs  # sample-weighted: the last, smaller batch counts proportionally
+        loss_value = float(loss.item())  # one device sync per batch, reused below
+        total_loss += loss_value * bs  # sample-weighted: the last, smaller batch counts proportionally
         num_samples += bs
 
-        postfix = {'loss': f'{loss.item():.4f}', 'img/s': f'{ema_ips:.1f}'}
+        postfix = {'loss': f'{loss_value:.4f}', 'img/s': f'{ema_ips:.1f}'}
         if last_seen_id is not None:
             postfix['last_id'] = str(last_seen_id).split('/')[-1]
         if last_seen_img is not None:
@@ -154,7 +147,7 @@ def train_epoch(
         # Keep this lightweight; GUIs can compute their own smoothing.
         emit(
             "train_batch",
-            loss=float(loss.item()),
+            loss=loss_value,
             img_per_s=float(ema_ips),
             last_id=str(last_seen_id) if last_seen_id is not None else None,
             last_image_path=str(last_seen_img) if last_seen_img is not None else None,
@@ -393,6 +386,70 @@ def _resolve_device(device: str | torch.device, amp: bool) -> tuple[torch.device
     return dev, bool(amp and dev.type == "cuda")
 
 
+@dataclass
+class _TrainSetup:
+    """What both trainers prepare before building loaders: device, seeded config and the dataset manifest."""
+
+    data_dir: Path
+    device: torch.device
+    use_amp: bool
+    config: dict[str, Any]
+    train_seed: int
+    manifest_path: Path
+    manifest: dict[str, Any]
+
+    @property
+    def train_config(self) -> dict[str, Any]:
+        return self.config['train']
+
+    def loader_kwargs(self) -> dict[str, Any]:
+        return make_loader_kwargs(self.train_config.get('num_workers', 0), self.device)
+
+
+def _prepare_training(data_dir: Path, device: str | torch.device, amp: bool, threads: int | None) -> _TrainSetup:
+    """Resolve the device, set the torch threads, seed everything from the dataset config, read the manifest."""
+    data_dir = Path(data_dir)
+    dev, use_amp = _resolve_device(device, amp)
+    set_torch_threads(threads)
+    config, train_seed = _seed_and_config(data_dir)
+    # GUARD: the dataset must have a manifest (profile metadata of the checkpoint).
+    manifest_path = require_manifest(data_dir)
+    return _TrainSetup(data_dir, dev, use_amp, config, train_seed, manifest_path, read_dataset_manifest(manifest_path))
+
+
+def _seeded_loaders(train_dataset: Any, val_dataset: Any, batch_size: int, train_seed: int,
+                    loader_kwargs: dict[str, Any]) -> tuple[DataLoader, DataLoader]:
+    """Train loader (shuffled) and val loader (in order).
+
+    Shuffle order from its own seeded generator: independent of how much of the global torch RNG
+    the model init / augmentation consumed, so a run is reproducible for a given train seed.
+    """
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                              generator=torch.Generator().manual_seed(train_seed), **loader_kwargs)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
+    return train_loader, val_loader
+
+
+def _logged_scheduler(optimizer: optim.Optimizer, train_config: dict[str, Any], total_epochs: int,
+                      start_epoch: int = 0) -> optim.lr_scheduler.LambdaLR | None:
+    """:func:`build_scheduler`, logged and advanced to *start_epoch* (resume continues the schedule)."""
+    scheduler = build_scheduler(optimizer, train_config, total_epochs)
+    if scheduler is not None:
+        log.info(f"  Scheduler: {train_config.get('scheduler')} (warmup {int(train_config.get('warmup_epochs', 0) or 0)} epochs)")
+        for _ in range(start_epoch):  # LambdaLR sets lr = base_lr * factor(epoch) on each step
+            scheduler.step()
+    return scheduler
+
+
+def _log_training_done(title: str, best_epoch: int, best_val_f1: float, output_path: Path, last_path: Path | None = None) -> None:
+    log_banner(log, title)
+    log.info(f"Best model: Epoch {best_epoch}, Val F1: {best_val_f1:.4f}")
+    log.info(f"Model saved to: {output_path}")
+    if last_path is not None:
+        log.info(f"Last checkpoint: {last_path}")
+    log.info(RULE)
+
+
 def set_torch_threads(threads: int | None) -> None:
     """``torch.set_num_threads(threads)`` for a positive *threads* (``--threads``); ``None`` keeps torch's choice."""
     if threads is None:
@@ -450,12 +507,7 @@ def _defect_loaders(data_dir: Path, class_names: list[str], train_config: dict[s
     _require_samples(data_dir, train=len(train_dataset), val=len(val_dataset))
     log.info(format_distribution("Train class distribution", train_dataset.get_class_distribution()))
 
-    # Shuffle order from its own seeded generator: independent of how much of the global torch RNG
-    # the model init / augmentation consumed, so a run is reproducible for a given train seed.
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                              generator=torch.Generator().manual_seed(train_seed), **loader_kwargs)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
-    return train_loader, val_loader
+    return _seeded_loaders(train_dataset, val_dataset, batch_size, train_seed, loader_kwargs)
 
 
 def _require_samples(data_dir: Path, **split_sizes: int) -> None:
@@ -576,17 +628,11 @@ def train_model(
     :class:`simple_sim.manifest.ProfileMismatchError` unless *allow_profile_mismatch*.
     Returns a summary dict (checkpoint paths, best epoch / val metrics, epochs run).
     """
-    data_dir = Path(data_dir)
+    setup = _prepare_training(data_dir, device, amp, threads)
+    data_dir, device, use_amp, config, train_seed = setup.data_dir, setup.device, setup.use_amp, setup.config, setup.train_seed
+    manifest_path, manifest = setup.manifest_path, setup.manifest
     output_path_arg = Path(out)
     resume_path_arg = Path(resume) if resume else None
-    device, use_amp = _resolve_device(device, amp)
-    set_torch_threads(threads)
-
-    config, train_seed = _seed_and_config(data_dir)
-
-    # GUARD: Load and validate dataset manifest
-    manifest_path = require_manifest(data_dir)
-    manifest = read_dataset_manifest(manifest_path)
     # Multi-profile (v2) datasets map to the logical profile "multi" for checkpoint metadata.
     dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
     if dataset_profile_id != "multi":
@@ -597,10 +643,10 @@ def train_model(
 
     bundle_dir, output_path, resume_path = _checkpoint_targets(output_path_arg, resume_path_arg, dataset_profile_id)
 
-    train_config = config['train']
+    train_config = setup.train_config
     epochs = train_config['epochs']
     batch_size = train_config['batch_size']
-    loader_kwargs = make_loader_kwargs(train_config.get('num_workers', 0), device)
+    loader_kwargs = setup.loader_kwargs()
 
     # Class names (sorted for consistency)
     class_names = sorted(config['classes'].keys())
@@ -647,15 +693,11 @@ def train_model(
         out_f1 = best_val_f1
 
     # LR schedule over the whole run (resume continues it at start_epoch).
-    scheduler = build_scheduler(optimizer, train_config, total_epochs)
-    if scheduler is not None:
-        log.info(f"  Scheduler: {train_config.get('scheduler')} (warmup {int(train_config.get('warmup_epochs', 0) or 0)} epochs)")
-        for _ in range(start_epoch):  # LambdaLR sets lr = base_lr * factor(epoch) on each step
-            scheduler.step()
+    scheduler = _logged_scheduler(optimizer, train_config, total_epochs, start_epoch)
     if float(train_config.get('label_smoothing', 0.0) or 0.0) > 0:
         log.info(f"  Label smoothing: {train_config['label_smoothing']}")
 
-    _banner("TRAINING")
+    log_banner(log, "TRAINING")
     emit("train_start", dataset_dir=str(data_dir), out_model=str(output_path), epochs=int(total_epochs), batch_size=int(batch_size))
 
     summary: dict[str, Any] = {
@@ -725,11 +767,7 @@ def train_model(
             except Exception as e:  # noqa: BLE001 - index is best-effort, never fail training
                 log.warning(f"Failed to update bundle index in {bundle_dir}: {e}")
 
-    _banner("TRAINING COMPLETE")
-    log.info(f"Best model: Epoch {best_epoch}, Val F1: {best_val_f1:.4f}")
-    log.info(f"Model saved to: {output_path}")
-    log.info(f"Last checkpoint: {last_path}")
-    log.info(_RULE)
+    _log_training_done("TRAINING COMPLETE", best_epoch, best_val_f1, output_path, last_path)
     return {**summary, "epochs_run": total_epochs - start_epoch, "best_epoch": best_epoch,
             "best_val_f1": best_val_f1, "best_val_accuracy": best_val_acc, "last_epoch": stats}
 
@@ -755,15 +793,10 @@ def train_profile_model(
     Uses the same ``train`` section as :func:`train_model` (including ``train.scheduler`` /
     ``train.warmup_epochs`` / ``train.label_smoothing``); *threads* as there.
     """
-    data_dir = Path(data_dir)
+    setup = _prepare_training(data_dir, device, amp, threads)
+    data_dir, device, use_amp, config, train_seed = setup.data_dir, setup.device, setup.use_amp, setup.config, setup.train_seed
+    manifest_path, manifest = setup.manifest_path, setup.manifest
     output_path = Path(out)
-    device, use_amp = _resolve_device(device, amp)
-    set_torch_threads(threads)
-
-    config, train_seed = _seed_and_config(data_dir)
-
-    manifest_path = require_manifest(data_dir)
-    manifest = read_dataset_manifest(manifest_path)
     profile_names = dataset_profile_names(data_dir, manifest)
     if len(profile_names) < 2:
         raise ValueError(f"Profile classifier requires 2+ profiles, found: {profile_names}")
@@ -776,10 +809,10 @@ def train_profile_model(
     log.info(f"  AMP: {use_amp}")
     log.info(f"  Seed: {train_seed}")
 
-    train_config = config['train']
+    train_config = setup.train_config
     epochs = int(train_config['epochs'])
     batch_size = train_config['batch_size']
-    loader_kwargs = make_loader_kwargs(train_config.get('num_workers', 0), device)
+    loader_kwargs = setup.loader_kwargs()
 
     log.info("\nLoading datasets...")
     train_dataset = ProfileDataset(data_dir, 'train', profile_names, return_id=True)
@@ -794,9 +827,7 @@ def train_profile_model(
         if count == 0:
             raise ValueError(f"Profile '{name}' has 0 training samples. Check dataset generation.")
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                              generator=torch.Generator().manual_seed(train_seed), **loader_kwargs)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
+    train_loader, val_loader = _seeded_loaders(train_dataset, val_dataset, batch_size, train_seed, loader_kwargs)
 
     model, criterion, optimizer, scaler, frozen = build_training(len(profile_names), train_config, device, use_amp)
 
@@ -804,11 +835,9 @@ def train_profile_model(
     best_val_acc: float | None = None
     best_epoch = 0
     last_path = last_checkpoint_path(output_path)
-    scheduler = build_scheduler(optimizer, train_config, epochs)
-    if scheduler is not None:
-        log.info(f"  Scheduler: {train_config.get('scheduler')} (warmup {int(train_config.get('warmup_epochs', 0) or 0)} epochs)")
+    scheduler = _logged_scheduler(optimizer, train_config, epochs)
 
-    _banner("PROFILE CLASSIFIER TRAINING")
+    log_banner(log, "PROFILE CLASSIFIER TRAINING")
     emit("train_profile_start", dataset_dir=str(data_dir), out_model=str(output_path),
          epochs=epochs, profiles=profile_names)
 
@@ -840,10 +869,7 @@ def train_profile_model(
             log.info(f"  New best model (F1: {best_val_f1:.4f})")
             torch.save(ckpt, output_path)
 
-    _banner("PROFILE CLASSIFIER TRAINING COMPLETE")
-    log.info(f"Best model: Epoch {best_epoch}, Val F1: {best_val_f1:.4f}")
-    log.info(f"Model saved to: {output_path}")
-    log.info(_RULE)
+    _log_training_done("PROFILE CLASSIFIER TRAINING COMPLETE", best_epoch, best_val_f1, output_path)
     return {
         "dataset_path": str(data_dir),
         "best_checkpoint": str(output_path),

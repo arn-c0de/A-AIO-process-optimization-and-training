@@ -13,6 +13,7 @@ from gui.tabs.core.base import BaseTab
 from gui.state import UiState
 from gui.utils.dataset_catalog import DatasetCatalog
 
+from simple_sim.classes import STANDARD_CLASSES
 from simple_sim.config import DEFAULT_COMPONENT_PROFILE
 from simple_sim.file_cache import FileCache
 from simple_sim.schema import MetaRow
@@ -45,7 +46,6 @@ class PipelineControlTab(PipelineSettingsMixin, PipelineRunMixin, PipelineMonito
 
         self.ui = PipelineUI(self, self.frame)
         self.logic = PipelineLogic(sim_root, self.log_q, self.event_q, self.event_log_path)
-        self.logic.ui_call = self.post  # thread-safe hop onto the Tk loop
 
         self._thumb_refs = []  # keep PhotoImage references
         self._recent_imgs: list[str] = []
@@ -64,7 +64,7 @@ class PipelineControlTab(PipelineSettingsMixin, PipelineRunMixin, PipelineMonito
         self._precise_settings: dict[str, Any] = {
             "total": 100,
             "per_class": False,
-            "class_names": ["OK", "MISSING", "MISALIGNED", "TOMBSTONE"],
+            "class_names": list(STANDARD_CLASSES),
             "classes": {},
             "multi_profiles": [],
             "multi_totals": {},

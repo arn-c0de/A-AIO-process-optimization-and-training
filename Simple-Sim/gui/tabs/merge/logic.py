@@ -27,7 +27,7 @@ class MergeLogic:
     def _model_root(self) -> Path:
         return model_root(self.sim_root)
 
-    def _rel(self, p: Path) -> str:
+    def rel_path(self, p: Path) -> str:
         return rel_to(self.sim_root, p)
             
     def scan_models(self) -> dict[str, list[tuple[str, Path]]]:

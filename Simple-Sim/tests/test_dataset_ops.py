@@ -7,42 +7,13 @@ import pytest
 
 from gui.utils.dataset_ops import delete_samples, list_dataset_samples, move_samples
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, write_jsonl
+from tests.helpers import meta_row
 
 
 def _meta(sample_id: str, image_path: str, split: str = "train") -> MetaRow:
-    return MetaRow(
-        schema_version=2,
-        id=sample_id,
-        run_id="run_a",
-        domain="sim",
-        split=split,
-        seed=1,
-        image_path=image_path,
-        render_backend="opencv_2d",
-        footprint="chip_2pad",
-        nominal={
-            "pad_width": 10.0,
-            "pad_height": 10.0,
-            "pad_spacing": 20.0,
-            "component_length": 30.0,
-            "component_width": 15.0,
-        },
-        defect={
-            "type": "OK",
-            "shift_x": 0.0,
-            "shift_y": 0.0,
-            "rotation_deg": 0.0,
-            "tilt_deg": 0.0,
-        },
-        augment={
-            "blur_sigma": 0.0,
-            "noise_stddev": 0.0,
-            "brightness_factor": 1.0,
-            "contrast_factor": 1.0,
-            "rotation_deg": 0.0,
-        },
-        render_meta={},
-    )
+    return meta_row(sample_id, image_path, split=split, run_id="run_a", domain="sim", footprint="chip_2pad",
+                    nominal={"pad_width": 10.0, "pad_height": 10.0, "pad_spacing": 20.0, "component_length": 30.0,
+                             "component_width": 15.0}, render_meta={})
 
 
 def _label(sample_id: str, class_name: str = "OK") -> LabelRow:
@@ -252,3 +223,33 @@ def test_move_samples_without_destination_splits_dir_does_not_create_it(tmp_path
 
     assert not (dst / "splits").exists()
     assert _read_splits(src) == {"train": [], "val": [], "test": []}
+
+
+def test_move_samples_failure_while_writing_restores_both_datasets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import gui.utils.dataset_ops as ops
+
+    src = tmp_path / "runs" / "src"
+    dst = tmp_path / "runs" / "dst"
+    a, b = "run_a/sim/train/0001", "run_a/sim/val/0002"
+    _write_dataset(src, [(a, "OK", "train"), (b, "OK", "val")])
+    _write_splits(src, {"train": [a], "val": [b], "test": []})
+    d = "run_b/sim/train/1001"
+    _write_dataset(dst, [(d, "OK", "train")])
+    _write_splits(dst, {"train": [d], "val": [], "test": []})
+    files = [ds / name for ds in (src, dst) for name in ("meta.jsonl", "labels.jsonl", "dataset_manifest.json",
+                                                          "splits/train.txt", "splits/val.txt")]
+    before = {p: p.read_bytes() for p in files}
+
+    real_recompute = ops.recompute_manifest_stats
+
+    def fail_on_target(ds: Path) -> None:
+        if Path(ds) == dst:
+            raise OSError("disk full")
+        real_recompute(ds)
+
+    monkeypatch.setattr(ops, "recompute_manifest_stats", fail_on_target)  # after every row file was rewritten
+    with pytest.raises(OSError, match="disk full"):
+        move_samples(src, dst, [b])
+
+    assert {p: p.read_bytes() for p in files} == before
+    assert (src / "images" / "0002.png").is_file() and not (dst / "images" / "0002.png").exists()

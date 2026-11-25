@@ -88,7 +88,7 @@ def apply_vignetting(img: np.ndarray, strength: float) -> np.ndarray:
     dist = np.sqrt((xgrid - center_x) ** 2 + (ygrid - center_y) ** 2)
     dist = dist / np.sqrt(center_x**2 + center_y**2)
     vignette = np.clip(1.0 - (dist * strength * 0.7), 0.2, 1.0)
-    return (img.astype(np.float32) * np.stack([vignette] * 3, axis=-1)).astype(np.uint8)
+    return (img.astype(np.float32) * vignette[..., None]).astype(np.uint8)
 
 
 def apply_saturation(img: np.ndarray, factor: float) -> np.ndarray:
@@ -146,7 +146,7 @@ def apply_shadow(img: np.ndarray, strength: float, size: float, rng: np.random.G
     mask = np.ones((h, w), dtype=np.float32)
     y1, x1 = min(y_pos + shadow_h, h), min(x_pos + shadow_w, w)
     mask[y_pos:y1, x_pos:x1] = np.minimum(mask[y_pos:y1, x_pos:x1], patch_mask[: y1 - y_pos, : x1 - x_pos])
-    return (img.astype(np.float32) * np.stack([mask] * 3, axis=-1)).astype(np.uint8)
+    return (img.astype(np.float32) * mask[..., None]).astype(np.uint8)
 
 
 def apply_reflection(img: np.ndarray, strength: float, size: float, rng: np.random.Generator) -> np.ndarray:
@@ -164,7 +164,7 @@ def apply_reflection(img: np.ndarray, strength: float, size: float, rng: np.rand
     reflection = np.zeros((h, w), dtype=np.float32)
     y1, x1 = min(y_pos + refl_h, h), min(x_pos + refl_w, w)
     reflection[y_pos:y1, x_pos:x1] = patch[: y1 - y_pos, : x1 - x_pos]
-    return clip8(img.astype(np.float32) + np.stack([reflection] * 3, axis=-1))
+    return clip8(img.astype(np.float32) + reflection[..., None])
 
 
 def apply_dust_particles(img: np.ndarray, density: float, size: float, rng: np.random.Generator) -> np.ndarray:

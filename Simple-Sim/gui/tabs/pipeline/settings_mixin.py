@@ -5,14 +5,14 @@ Mixin of :class:`gui.tabs.pipeline.tab.PipelineControlTab`; it relies on the att
 """
 
 from __future__ import annotations
-import json
+import logging
 from pathlib import Path
 from typing import Any
 
 
 from gui.components.filter_popup import open_filter_popup
 from gui.components.precise_popup import open_precise_popup
-from gui.utils.settings_store import SettingsStore, restore_persisted_vars, wire_vars_autosave
+from gui.utils.settings_store import SettingsStore, parse_json, restore_persisted_vars, wire_vars_autosave
 from gui.utils.filter_profile_store import (
     extract_filter_popup_extras,
     float_or_default,
@@ -34,6 +34,8 @@ from gui.utils.pipeline_helpers import (
 from simple_sim.io_utils import load_yaml
 from gui.utils.tk_safe import quiet
 
+_LOG = logging.getLogger(__name__)
+
 
 class PipelineSettingsMixin:
     def _load_persisted_settings(self) -> None:
@@ -42,21 +44,14 @@ class PipelineSettingsMixin:
 
         bindings = self._iter_setting_bindings()
         restore_persisted_vars(st, bindings, skip_empty_strings=True)
-        try:
-            raw = str(st.get("pipeline.precise_settings_json", "") or "").strip()
-            if raw:
-                loaded = json.loads(raw)
-                if isinstance(loaded, dict):
-                    for k, v in loaded.items():
-                        # multi_profiles follows the (not persisted) multi-profile checkbox, see
-                        # _refresh_precise_classes; a stale list would drive single-profile counts.
-                        if k in self._precise_settings and k != "multi_profiles":
-                            self._precise_settings[k] = v
-        except Exception:
-            pass
+        for k, v in st.get_json("pipeline.precise_settings_json", want=dict, fallback={}).items():
+            # multi_profiles follows the (not persisted) multi-profile checkbox, see
+            # _refresh_precise_classes; a stale list would drive single-profile counts.
+            if k in self._precise_settings and k != "multi_profiles":
+                self._precise_settings[k] = v
 
         try: self._refresh_datasets(); self._on_dataset_multi_toggle(); self._on_dataset_selected()
-        except Exception: pass
+        except Exception as e: _LOG.warning("Restoring the dataset selection failed: %s", e)
         # _on_dataset_selected() -> _apply_dataset_settings() derives these from the dataset;
         # put the persisted values back on top.
         restore_persisted_vars(st, [b for b in bindings if b[0] in DATASET_DERIVED_KEYS], skip_empty_strings=True)
@@ -101,15 +96,9 @@ class PipelineSettingsMixin:
             raw_active = str(st.get("pipeline.filter_profile_active", "") or "").strip()
             if raw_active:
                 active = raw_active
-            if raw_profiles:
-                try:
-                    obj = json.loads(raw_profiles)
-                    if isinstance(obj, dict):
-                        for k, v in obj.items():
-                            if isinstance(k, str) and isinstance(v, dict):
-                                profiles[k] = v
-                except Exception:
-                    pass
+            for k, v in parse_json(raw_profiles, want=dict, fallback={}).items():
+                if isinstance(k, str) and isinstance(v, dict):
+                    profiles[k] = v
             current_live = normalized_filter_settings(lambda k, d: st.get(f"pipeline.filter.{k}", d))
             current_live.update(self._filter_popup_extras)
         if not profiles:
@@ -123,7 +112,7 @@ class PipelineSettingsMixin:
         st = self._store()
         if st is None:
             return
-        st.set("pipeline.filter_profiles_json", json.dumps(profiles, ensure_ascii=True))
+        st.set_json("pipeline.filter_profiles_json", profiles)
         st.set("pipeline.filter_profile_active", str(active))
         st.schedule_save(self.frame)
 
@@ -189,7 +178,7 @@ class PipelineSettingsMixin:
     def _save_precise_settings(self) -> None:
         st = self._store()
         if st is not None:
-            st.set("pipeline.precise_settings_json", json.dumps(self._precise_settings, ensure_ascii=True))
+            st.set_json("pipeline.precise_settings_json", self._precise_settings)
             st.schedule_save(self.frame)
 
     def _get_precise_counts(self) -> dict[str, Any] | None:

@@ -33,6 +33,7 @@ import numpy as np
 if not __package__:  # run as a script (python tools/x.py): make the checkout importable
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from simple_sim.image_sampling import read_bgr_or_exit, resize_to, sample_subset  # noqa: E402
 from simple_sim.io_utils import iter_json_lines  # noqa: E402
 from tools.eval_real import class_folders  # noqa: E402
 
@@ -40,11 +41,7 @@ STAT_KEYS = ("L_std", "b_std", ">200", ">150", "p90", "p99", "metal")
 
 
 def load_tile(path: Path, size: int) -> np.ndarray:
-    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if img is None:
-        raise SystemExit(f"Failed to read {path}")
-    interp = cv2.INTER_CUBIC if img.shape[1] < size else cv2.INTER_AREA
-    return cv2.resize(img, (size, size), interpolation=interp)
+    return resize_to(read_bgr_or_exit(path), size)
 
 
 def dataset_images(data: Path) -> dict[str, list[Path]]:
@@ -72,9 +69,7 @@ def dataset_images(data: Path) -> dict[str, list[Path]]:
 
 
 def pick(files: list[Path], n: int, rng: np.random.Generator) -> list[Path]:
-    if len(files) <= n:
-        return files
-    return [files[i] for i in sorted(rng.choice(len(files), n, replace=False))]
+    return sample_subset(files, n, rng)
 
 
 def image_stats(imgs: list[np.ndarray]) -> dict[str, Any]:

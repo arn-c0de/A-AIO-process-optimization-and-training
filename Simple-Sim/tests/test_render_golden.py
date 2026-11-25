@@ -21,11 +21,11 @@ from pathlib import Path
 from typing import Any
 
 import cv2
-import numpy as np
 import pytest
 import yaml
 
 from simple_sim.generators.version import RENDERER_VERSION
+from tests.helpers import lib_versions
 
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = Path(__file__).resolve().parent / "golden" / "render_2d.json"
@@ -35,10 +35,6 @@ CASES = {
     "run_qfn32.yaml": ["OK", "MISSING"],
     "run_sot23.yaml": ["OK", "MISALIGNED"],
 }
-
-
-def _versions() -> dict[str, str]:
-    return {"opencv": cv2.__version__, "numpy": np.__version__}
 
 
 def render_hashes(tmp_dir: Path) -> dict[str, str]:
@@ -63,15 +59,14 @@ def _load() -> dict[str, Any]:
     return json.loads(GOLDEN.read_text(encoding="utf-8"))
 
 
-def test_default_2d_render_matches_golden(tmp_path, monkeypatch):
+def test_default_2d_render_matches_golden(tmp_path):
     if not GOLDEN.exists():
         pytest.fail(f"missing {GOLDEN}; create it with: python -m tests.test_render_golden --update")
     golden = _load()
-    if golden.get("versions") != _versions():
-        pytest.skip(f"golden hashes were written with {golden.get('versions')}, running {_versions()}")
+    if golden.get("versions") != lib_versions():
+        pytest.skip(f"golden hashes were written with {golden.get('versions')}, running {lib_versions()}")
     assert golden["renderer_version"] == RENDERER_VERSION, (
         "RENDERER_VERSION changed: regenerate the golden hashes (python -m tests.test_render_golden --update)")
-    monkeypatch.delenv("IMAGE_FILTERS", raising=False)
     got = render_hashes(tmp_path)
     changed = sorted(k for k in golden["hashes"] if got.get(k) != golden["hashes"][k])
     assert set(got) == set(golden["hashes"]), "the set of rendered images changed"
@@ -91,7 +86,7 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         hashes = render_hashes(Path(tmp))
     GOLDEN.parent.mkdir(parents=True, exist_ok=True)
-    GOLDEN.write_text(json.dumps({"renderer_version": RENDERER_VERSION, "versions": _versions(), "hashes": hashes},
+    GOLDEN.write_text(json.dumps({"renderer_version": RENDERER_VERSION, "versions": lib_versions(), "hashes": hashes},
                                  indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"wrote {len(hashes)} hashes to {GOLDEN}")
     return 0

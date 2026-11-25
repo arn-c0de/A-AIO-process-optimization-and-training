@@ -7,8 +7,7 @@ from pathlib import Path
 from gui import dialogs
 from gui.tabs.core.base import BaseTab
 from gui.state import UiState
-from gui.utils.dataset_catalog import dataset_sort_key, sim_data_roots, unique_dataset_labels
-from gui.core.tasks import runner_for
+from gui.utils.dataset_catalog import label_for_dataset, sorted_dataset_labels
 from .ui import ValidationUI
 from .logic import ValidationLogic
 from gui.utils.tk_safe import quiet
@@ -35,21 +34,15 @@ class ValidationTab(BaseTab):
             self._refresh_flag_tree()
 
     def _refresh_datasets(self) -> None:
-        cand = self.logic.get_datasets()
-        cand.sort(key=lambda p: dataset_sort_key(self.sim_root, p))
-
-        runs, versions = sim_data_roots(self.sim_root)
-        self._dataset_by_label = unique_dataset_labels(cand, runs_root=runs, versions_root=versions)
+        self._dataset_by_label = sorted_dataset_labels(self.sim_root)
         self.ui.dataset_combo["values"] = list(self._dataset_by_label)
         self._sync_combo_to_state()
 
     def _sync_combo_to_state(self) -> None:
         if not hasattr(self.ui, "dataset_combo"): return
-        if self.state.dataset_dir:
-            for label, p in self._dataset_by_label.items():
-                if p == self.state.dataset_dir:
-                    self.ui.var_dataset.set(label)
-                    return
+        if (label := label_for_dataset(self._dataset_by_label, self.state.dataset_dir)) is not None:
+            self.ui.var_dataset.set(label)
+            return
         cur = (self.ui.var_dataset.get() or "").strip()
         if not cur and self.ui.dataset_combo["values"]:
             self.ui.var_dataset.set(self.ui.dataset_combo["values"][0])
@@ -91,7 +84,7 @@ class ValidationTab(BaseTab):
             self.ui.set_running(False)
 
         self.ui.set_running(True)
-        runner_for(self.state, self.frame).run(
+        self._run_background(
             lambda h: self.logic.run_validation(dataset_dir, checks, cancelled=h.cancelled),
             name="Validation", on_done=on_done, on_error=on_error, on_finally=on_finally)
 

@@ -5,6 +5,8 @@ import os
 
 from simple_sim import io_utils, reports
 from simple_sim.cli_utils import RESULT_JSON_PREFIX, emit_result, parse_result
+import threading
+import pytest
 
 
 def test_atomic_write_and_read_json(tmp_path):
@@ -66,3 +68,34 @@ def test_result_line_roundtrip(capsys):
     assert out.splitlines()[-1].startswith(RESULT_JSON_PREFIX)
     assert parse_result(out) == {"ok": True, "command": "demo", "value": 3}
     assert parse_result("nothing") is None
+
+
+def test_atomic_writes_use_unique_temp_files_and_leave_none(tmp_path):
+    target = tmp_path / "state.json"
+    errors: list[BaseException] = []
+
+    def write(i: int) -> None:
+        try:
+            for _ in range(50):
+                io_utils.atomic_write_json(target, {"writer": i, "pad": "x" * 2000})
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=write, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors  # a shared "<name>.tmp" made concurrent writers fail on the rename
+    assert json.loads(target.read_text())["pad"] == "x" * 2000
+    assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
+
+
+def test_atomic_write_removes_its_temp_file_on_failure(tmp_path):
+    def rows():
+        yield {"a": 1}
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        io_utils.atomic_write_jsonl(tmp_path / "rows.jsonl", rows())
+    assert list(tmp_path.iterdir()) == []

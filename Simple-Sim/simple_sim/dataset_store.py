@@ -109,16 +109,3 @@ def write_image(path: Path, image: np.ndarray) -> None:
     if not cv2.imwrite(str(path), image):
         raise OSError(f"Failed to write image: {path}")
 
-
-def write_dataset(
-    output_dir: Path,
-    images: dict[str, np.ndarray],
-    meta_rows: list[MetaRow],
-    label_rows: list[LabelRow],
-    config: dict[str, Any],
-) -> None:
-    """Write a complete dataset (images keyed by relative path + rows + config) atomically."""
-    with atomic_dataset_dir(output_dir) as temp_dir:
-        for image_path, image_array in images.items():
-            write_image(temp_dir / image_path, image_array)
-        write_dataset_files(temp_dir, meta_rows, label_rows, config)

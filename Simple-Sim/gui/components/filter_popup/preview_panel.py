@@ -1,4 +1,9 @@
-"""Preview panel helpers for the filter popup."""
+"""Component preview panels of the filter popup.
+
+The popup shows two of them (inline next to the filter controls, and a compact one below the
+filter-profile list). Both are :class:`ProfilePreviewPanel` instances that differ only in layout
+and texts; each renders the selected component profile with the popup's *current* filter values.
+"""
 
 from __future__ import annotations
 
@@ -6,20 +11,27 @@ import queue
 import sys
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
 from typing import Any
-from simple_sim.io_utils import load_yaml
+
+from simple_sim.preview.render import BACKEND_2D, BACKEND_3D, discover_profiles
 from gui.utils.tk_safe import quiet
 
+_HEADER_PREFIX = "──"
+_HEADER_2D = "── 2D ──"
+_HEADER_3D = "── 3D ──"
+_NO_PIL = "Pillow not installed.\nRun: pip install Pillow"
 
-def _open_zoom_image_popup(popup: Any, pil_img: Any, title: str) -> None:
+
+def _open_zoom_image_popup(popup: Any, pil_img: Any, title: str, on_error: Callable[[str], None]) -> None:
     """Open a modal-ish window with a larger version of the selected preview image."""
     try:
         from PIL import Image, ImageTk  # type: ignore
     except ImportError:
-        popup._preview_status_var.set("Pillow not installed.\nRun: pip install Pillow")
+        on_error(_NO_PIL)
         return
 
     if pil_img is None:
@@ -65,110 +77,6 @@ def _open_zoom_image_popup(popup: Any, pil_img: Any, title: str) -> None:
     win.after_idle(_safe_grab)
 
 
-def build_preview_panel(popup: Any, parent: ttk.Frame) -> None:
-    """Build the live filter preview panel."""
-    lf = ttk.LabelFrame(parent, text="Filter Preview", padding=8)
-    lf.pack(fill="both", expand=True)
-
-    sel_row = ttk.Frame(lf)
-    sel_row.pack(fill="x", pady=(0, 4))
-
-    ttk.Label(sel_row, text="Profile:").pack(side="left")
-    popup._preview_profile_var = tk.StringVar()
-    popup._preview_profile_combo = ttk.Combobox(
-        sel_row,
-        textvariable=popup._preview_profile_var,
-        width=30,
-        state="readonly",
-    )
-    popup._preview_profile_combo.pack(side="left", padx=(6, 0), fill="x", expand=True)
-    popup._preview_profile_combo.bind("<<ComboboxSelected>>", popup._on_preview_profile_selected)
-
-    btn_row = ttk.Frame(lf)
-    btn_row.pack(fill="x", pady=(4, 4))
-    ttk.Button(btn_row, text="Render Preview", command=popup._render_preview).pack(side="left")
-
-    popup._preview_status_var = tk.StringVar(value="")
-    ttk.Label(lf, textvariable=popup._preview_status_var, style="Muted.TLabel", wraplength=310, justify="left"
-              ).pack(anchor="w", pady=(0, 6))
-
-    popup._preview_img_label = ttk.Label(lf, text="No preview yet", anchor="center")
-    popup._preview_img_label.pack(fill="both", expand=True)
-
-    populate_preview_profiles(popup)
-
-
-def populate_preview_profiles(popup: Any) -> None:
-    """Scan configs/profiles/ and populate the profile combobox."""
-    if not getattr(popup, "_sim_root", None):
-        popup._preview_status_var.set("Preview unavailable: sim_root not provided.")
-        popup._preview_profile_combo["values"] = ()
-        return
-
-    try:
-        import yaml  # noqa: F401 - availability check (load_yaml imports it lazily)
-    except ImportError:
-        popup._preview_status_var.set("PyYAML not installed – cannot load profiles.")
-        return
-
-    profiles_dir = Path(popup._sim_root) / "configs" / "profiles"
-    if not profiles_dir.exists():
-        popup._preview_status_var.set("profiles dir not found.")
-        return
-
-    vals_2d: list = []
-    vals_3d: list = []
-    for p in sorted(profiles_dir.glob("*.yaml")):
-        try:
-            data = load_yaml(p) or {}
-            backends = list((data.get("profile") or {}).get("supported_render_backends") or [])
-            pid = p.stem
-            if "opencv_2d" in backends:
-                vals_2d.append(pid)
-            if "blender_3d" in backends:
-                vals_3d.append(pid)
-        except Exception:
-            continue
-
-    popup._preview_profiles_2d = set(vals_2d)
-    popup._preview_profiles_3d = set(vals_3d)
-
-    combo_vals: list = []
-    if vals_2d:
-        combo_vals.append("── 2D ──")
-        combo_vals.extend(vals_2d)
-    if vals_3d:
-        combo_vals.append("── 3D ──")
-        combo_vals.extend(vals_3d)
-
-    popup._preview_profile_combo["values"] = combo_vals
-
-    if vals_2d:
-        popup._preview_profile_var.set(vals_2d[0])
-        popup._preview_status_var.set("Click 'Render Preview' to see the current filter effect.")
-    elif combo_vals:
-        popup._preview_profile_var.set(combo_vals[0])
-    else:
-        popup._preview_status_var.set("No component profiles found.")
-
-
-def on_preview_profile_selected(popup: Any, _evt: tk.Event | None = None) -> None:
-    """Skip separator header items in the combobox."""
-    v = popup._preview_profile_var.get()
-    if not v.startswith("──"):
-        return
-    vals = list(popup._preview_profile_combo["values"])
-    try:
-        idx = vals.index(v)
-        for nxt in vals[idx + 1:]:
-            if not nxt.startswith("──"):
-                popup._preview_profile_var.set(nxt)
-                return
-    except ValueError:
-        pass
-    popup._preview_profile_var.set("")
-
-
 def get_preview_filter_values(popup: Any) -> dict[str, Any]:
     """Collect current filter values directly from the popup's internal vars."""
     result: dict[str, Any] = {}
@@ -184,8 +92,11 @@ def get_preview_filter_values(popup: Any) -> dict[str, Any]:
 
 
 def _run_in_background(popup: Any, work: Callable[[], Any], on_ok: Callable[[Any], None],
-                       on_error: Callable[[str], None], busy_attr: str) -> None:
-    """Run *work* in a thread; deliver its result on the Tk thread (polled, no Tk calls from the worker)."""
+                       on_error: Callable[[str], None], on_settled: Callable[[], None]) -> None:
+    """Run *work* in a thread; deliver its result on the Tk thread (polled, no Tk calls from the worker).
+
+    The popup is also opened from the standalone viewer, which has no app dispatcher, hence the poll.
+    """
     results: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
     def target() -> None:
@@ -205,36 +116,11 @@ def _run_in_background(popup: Any, work: Callable[[], Any], on_ok: Callable[[Any
         except queue.Empty:
             popup.top.after(50, poll)
             return
-        setattr(popup, busy_attr, False)
+        on_settled()
         (on_ok if kind == "ok" else on_error)(value)
 
-    setattr(popup, busy_attr, True)
     threading.Thread(target=target, daemon=True).start()
     popup.top.after(50, poll)
-
-
-def render_preview(popup: Any) -> None:
-    """Start a background render with the current filter settings."""
-    if popup._preview_is_rendering:
-        return
-
-    pid = popup._preview_profile_var.get().strip()
-    if not pid or pid.startswith("──"):
-        popup._preview_status_var.set("Select a valid profile first.")
-        return
-
-    is_3d_only = pid in popup._preview_profiles_3d and pid not in popup._preview_profiles_2d
-    backend = "3D" if is_3d_only else "2D"
-    popup._preview_status_var.set(f"Rendering ({backend})…")
-    filter_vals = get_preview_filter_values(popup)
-    work = (lambda: do_render_3d_preview(popup, pid, filter_vals)) if is_3d_only else (
-        lambda: do_render_2d_preview(popup, pid, filter_vals))
-    _run_in_background(
-        popup, work,
-        lambda res: show_preview_image(popup, res[0], pid, backend=backend, source=res[1]),
-        lambda err: popup._preview_status_var.set(f"Render error: {err}"),
-        "_preview_is_rendering",
-    )
 
 
 def do_render_2d_preview(popup: Any, profile_id: str, filter_vals: dict[str, Any]) -> tuple[Any, str]:
@@ -274,212 +160,170 @@ def _to_photo(popup: Any, img_bgr: Any, max_px: int) -> tuple[Any, Any]:
     return pil_img, ImageTk.PhotoImage(thumb, master=popup.top)
 
 
-def show_preview_image(popup: Any, img_bgr: Any, profile_id: str = "", backend: str = "2D", source: str = "") -> None:
-    """Display a rendered BGR numpy array in the preview label."""
-    try:
-        popup._preview_full_pil, popup._preview_photo = _to_photo(popup, img_bgr, 300)
-        popup._preview_img_label.configure(image=popup._preview_photo, text="", cursor="hand2")
-        popup._preview_img_label.bind(
-            "<Button-1>",
-            lambda _evt: _open_zoom_image_popup(
-                popup,
-                getattr(popup, "_preview_full_pil", None),
-                f"Filter Preview - {profile_id} ({backend})",
-            ),
-        )
-        src = f"\n{source}" if source else ""
-        popup._preview_status_var.set(f"Profile: {profile_id}  ·  defect: OK  ·  {backend}{src}")
-
-    except ImportError:
-        popup._preview_status_var.set("Pillow not installed.\nRun: pip install Pillow")
-    except Exception as exc:
-        popup._preview_status_var.set(f"Display error: {exc}")
+def scan_preview_profiles(sim_root: Path) -> tuple[list[str], list[str]]:
+    """``(2D profile ids, 3D profile ids)`` under ``configs/profiles`` (a profile may be in both)."""
+    entries = discover_profiles(Path(sim_root) / "configs" / "profiles", backend_mode="both")
+    return ([pid for pid, _prof, b in entries if BACKEND_2D in b],
+            [pid for pid, _prof, b in entries if BACKEND_3D in b])
 
 
-
-# ---------------------------------------------------------------------------
-# Left-column profile preview panel
-# ---------------------------------------------------------------------------
-
-def build_left_preview_panel(popup: Any, parent: ttk.Frame) -> None:
-    """Build a compact preview panel below the filter-profiles listbox.
-
-    The dropdown lists all real component profiles from configs/profiles/ (both
-    2D and 3D).  Render always uses the currently active filter settings from
-    the popup's filter_vars – not any stored profile dict.
-    """
-    lf = ttk.LabelFrame(parent, text="Component Preview", padding=6)
-    lf.pack(fill="x", pady=(8, 0))
-
-    sel_row = ttk.Frame(lf)
-    sel_row.pack(fill="x", pady=(0, 4))
-    ttk.Label(sel_row, text="Profile:").pack(side="left")
-    popup._left_preview_profile_var = tk.StringVar()
-    popup._left_preview_profile_combo = ttk.Combobox(
-        sel_row,
-        textvariable=popup._left_preview_profile_var,
-        width=16,
-        state="readonly",
-    )
-    popup._left_preview_profile_combo.pack(side="left", padx=(4, 0), fill="x", expand=True)
-    popup._left_preview_profile_combo.bind(
-        "<<ComboboxSelected>>", popup._on_left_preview_profile_selected
-    )
-
-    ttk.Button(lf, text="Render", command=popup._render_left_preview).pack(anchor="w", pady=(0, 4))
-
-    popup._left_preview_status_var = tk.StringVar(value="")
-    ttk.Label(
-        lf,
-        textvariable=popup._left_preview_status_var,
-        style="Muted.TLabel",
-        wraplength=170,
-        justify="left",
-    ).pack(anchor="w", pady=(0, 4))
-
-    popup._left_preview_img_label = ttk.Label(lf, text="No preview yet", anchor="center")
-    popup._left_preview_img_label.pack(fill="both", expand=True)
-
-    popup._left_preview_is_rendering = False
-    popup._left_preview_photo = None
-    popup._left_preview_profiles_2d: set = set()
-    popup._left_preview_profiles_3d: set = set()
-
-    populate_left_filter_profiles(popup)
-
-
-def populate_left_filter_profiles(popup: Any) -> None:
-    """Scan configs/profiles/ and fill the left combo with all component profiles (2D + 3D)."""
-    combo = getattr(popup, "_left_preview_profile_combo", None)
-    if combo is None:
-        return
-    status = getattr(popup, "_left_preview_status_var", None)
-
-    if not getattr(popup, "_sim_root", None):
-        if status:
-            status.set("Preview unavailable: sim_root not set.")
-        combo["values"] = ()
-        return
-
-    try:
-        import yaml  # noqa: F401 - availability check (load_yaml imports it lazily)
-    except ImportError:
-        if status:
-            status.set("PyYAML not installed.")
-        return
-
-    profiles_dir = Path(popup._sim_root) / "configs" / "profiles"
-    if not profiles_dir.exists():
-        if status:
-            status.set(f"profiles dir not found:\n{profiles_dir}")
-        return
-
-    vals_2d: list = []
-    vals_3d: list = []
-    for p in sorted(profiles_dir.glob("*.yaml")):
-        try:
-            data = load_yaml(p) or {}
-            backends = list((data.get("profile") or {}).get("supported_render_backends") or [])
-            pid = p.stem
-            if "opencv_2d" in backends:
-                vals_2d.append(pid)
-            if "blender_3d" in backends:
-                vals_3d.append(pid)
-        except Exception:
-            continue
-
-    popup._left_preview_profiles_2d = set(vals_2d)
-    popup._left_preview_profiles_3d = set(vals_3d)
-
-    combo_vals: list = []
+def combo_values(vals_2d: list[str], vals_3d: list[str]) -> list[str]:
+    """Combobox entries: each backend group under a (non-selectable) header line."""
+    out: list[str] = []
     if vals_2d:
-        combo_vals.append("── 2D ──")
-        combo_vals.extend(vals_2d)
+        out += [_HEADER_2D, *vals_2d]
     if vals_3d:
-        combo_vals.append("── 3D ──")
-        combo_vals.extend(vals_3d)
-
-    combo["values"] = combo_vals
-
-    current = popup._left_preview_profile_var.get()
-    if current not in combo_vals or current.startswith("──"):
-        if vals_2d:
-            popup._left_preview_profile_var.set(vals_2d[0])
-        elif vals_3d:
-            popup._left_preview_profile_var.set(vals_3d[0])
-
-    if status:
-        if combo_vals:
-            status.set("Click 'Render' to preview with current filter settings.")
-        else:
-            status.set("No component profiles found.")
+        out += [_HEADER_3D, *vals_3d]
+    return out
 
 
-def on_left_preview_profile_selected(popup: Any, _evt: tk.Event | None = None) -> None:
-    """Skip separator header items in the left combo."""
-    v = popup._left_preview_profile_var.get()
-    if not v.startswith("──"):
-        return
-    vals = list(popup._left_preview_profile_combo["values"])
+def skip_header(value: str, values: list[str]) -> str:
+    """*value*, or the first real entry after it when it is a group header ("" if there is none)."""
+    if not value.startswith(_HEADER_PREFIX):
+        return value
     try:
-        idx = vals.index(v)
-        for nxt in vals[idx + 1:]:
-            if not nxt.startswith("──"):
-                popup._left_preview_profile_var.set(nxt)
-                return
+        idx = values.index(value)
     except ValueError:
-        pass
-    popup._left_preview_profile_var.set("")
+        return ""
+    return next((v for v in values[idx + 1:] if not v.startswith(_HEADER_PREFIX)), "")
 
 
+@dataclass(frozen=True)
+class PreviewPanelSpec:
+    """Layout and texts of one preview panel."""
+
+    title: str
+    combo_width: int
+    wraplength: int
+    max_px: int
+    button_text: str
+    zoom_title: str  # "{profile_id}"/"{backend}" placeholders
+    ready_text: str
+    invalid_text: str
+    out_subdir_3d: str = "filter_preview_3d"
+    show_details: bool = False  # status line with "defect: OK" and the config source
+    fill_y: bool = True
 
 
-def render_left_preview(popup: Any) -> None:
-    """Render the selected component profile with the CURRENT active filter settings."""
-    if getattr(popup, "_left_preview_is_rendering", False):
-        return
+INLINE_PANEL = PreviewPanelSpec(
+    title="Filter Preview", combo_width=28, wraplength=330, max_px=300, button_text="Render Preview",
+    zoom_title="Filter Preview - {profile_id} ({backend})",
+    ready_text="Click 'Render Preview' to see the current filter effect.",
+    invalid_text="Select a valid profile first.", show_details=True)
 
-    pid = popup._left_preview_profile_var.get().strip()
-    if not pid or pid.startswith("──"):
-        popup._left_preview_status_var.set("Select a valid component profile first.")
-        return
-
-    # Always use the live filter settings currently shown in the UI controls.
-    filter_vals = get_preview_filter_values(popup)
-
-    profiles_2d = getattr(popup, "_left_preview_profiles_2d", set())
-    profiles_3d = getattr(popup, "_left_preview_profiles_3d", set())
-    is_3d_only = pid in profiles_3d and pid not in profiles_2d
-    backend = "3D" if is_3d_only else "2D"
-    popup._left_preview_status_var.set(f"Rendering ({backend})…")
-    work = (lambda: do_render_3d_preview(popup, pid, filter_vals, "filter_preview_left")) if is_3d_only else (
-        lambda: do_render_2d_preview(popup, pid, filter_vals))
-    _run_in_background(
-        popup, work,
-        lambda res: _show_left_preview_image(popup, res[0], pid, backend),
-        lambda err: popup._left_preview_status_var.set(f"Render error: {err}"),
-        "_left_preview_is_rendering",
-    )
+LEFT_PANEL = PreviewPanelSpec(
+    title="Component Preview", combo_width=16, wraplength=170, max_px=180, button_text="Render",
+    zoom_title="Component Preview - {profile_id} ({backend})",
+    ready_text="Click 'Render' to preview with current filter settings.",
+    invalid_text="Select a valid component profile first.", out_subdir_3d="filter_preview_left", fill_y=False)
 
 
-def _show_left_preview_image(
-    popup: Any, img_bgr: Any, profile_id: str, backend: str = "2D"
-) -> None:
-    """Display a rendered image in the left preview label."""
-    try:
-        popup._left_preview_full_pil, popup._left_preview_photo = _to_photo(popup, img_bgr, 180)
-        popup._left_preview_img_label.configure(image=popup._left_preview_photo, text="", cursor="hand2")
-        popup._left_preview_img_label.bind(
-            "<Button-1>",
-            lambda _evt: _open_zoom_image_popup(
-                popup,
-                getattr(popup, "_left_preview_full_pil", None),
-                f"Component Preview - {profile_id} ({backend})",
-            ),
-        )
-        popup._left_preview_status_var.set(f"Profile: {profile_id}  ·  {backend}")
+class ProfilePreviewPanel:
+    """Profile combobox + Render button + status line + image (click to zoom)."""
 
-    except ImportError:
-        popup._left_preview_status_var.set("Pillow not installed.\nRun: pip install Pillow")
-    except Exception as exc:
-        popup._left_preview_status_var.set(f"Display error: {exc}")
+    def __init__(self, popup: Any, parent: ttk.Frame, spec: PreviewPanelSpec) -> None:
+        self.popup = popup
+        self.spec = spec
+        self.profiles_2d: set[str] = set()
+        self.profiles_3d: set[str] = set()
+        self.is_rendering = False
+        self.photo: Any = None
+        self.full_pil: Any = None
+
+        lf = ttk.LabelFrame(parent, text=spec.title, padding=8 if spec.fill_y else 6)
+        if spec.fill_y:
+            lf.pack(fill="both", expand=True)
+        else:
+            lf.pack(fill="x", pady=(8, 0))
+
+        sel_row = ttk.Frame(lf)
+        sel_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(sel_row, text="Profile:").pack(side="left")
+        self.profile_var = tk.StringVar()
+        self.combo = ttk.Combobox(sel_row, textvariable=self.profile_var, width=spec.combo_width, state="readonly")
+        self.combo.pack(side="left", padx=(6 if spec.fill_y else 4, 0), fill="x", expand=True)
+        self.combo.bind("<<ComboboxSelected>>", self._on_selected)
+
+        ttk.Button(lf, text=spec.button_text, command=self.render).pack(anchor="w", pady=(4, 4))
+
+        self.status_var = tk.StringVar(value="")
+        ttk.Label(lf, textvariable=self.status_var, style="Muted.TLabel", wraplength=spec.wraplength,
+                  justify="left").pack(anchor="w", pady=(0, 6 if spec.fill_y else 4))
+
+        self.img_label = ttk.Label(lf, text="No preview yet", anchor="center")
+        self.img_label.pack(fill="both", expand=True)
+
+        try:
+            self.populate()
+        except Exception as exc:  # noqa: BLE001 - shown in the panel
+            self.status_var.set(f"Preview init error: {exc}")
+
+    def populate(self) -> None:
+        """Scan configs/profiles/ and fill the combobox with all component profiles (2D + 3D)."""
+        if not getattr(self.popup, "_sim_root", None):
+            self.status_var.set("Preview unavailable: sim_root not set.")
+            self.combo["values"] = ()
+            return
+        profiles_dir = Path(self.popup._sim_root) / "configs" / "profiles"
+        if not profiles_dir.exists():
+            self.status_var.set(f"profiles dir not found:\n{profiles_dir}")
+            return
+
+        vals_2d, vals_3d = scan_preview_profiles(Path(self.popup._sim_root))
+        self.profiles_2d, self.profiles_3d = set(vals_2d), set(vals_3d)
+        values = combo_values(vals_2d, vals_3d)
+        self.combo["values"] = values
+
+        current = self.profile_var.get()
+        if current not in values or current.startswith(_HEADER_PREFIX):
+            if vals_2d:
+                self.profile_var.set(vals_2d[0])
+            elif vals_3d:
+                self.profile_var.set(vals_3d[0])
+        self.status_var.set(self.spec.ready_text if values else "No component profiles found.")
+
+    def _on_selected(self, _evt: tk.Event | None = None) -> None:
+        """Skip separator header items in the combobox."""
+        self.profile_var.set(skip_header(self.profile_var.get(), list(self.combo["values"])))
+
+    def render(self) -> None:
+        """Start a background render with the current filter settings."""
+        if self.is_rendering:
+            return
+        pid = self.profile_var.get().strip()
+        if not pid or pid.startswith(_HEADER_PREFIX):
+            self.status_var.set(self.spec.invalid_text)
+            return
+
+        filter_vals = get_preview_filter_values(self.popup)
+        is_3d_only = pid in self.profiles_3d and pid not in self.profiles_2d
+        backend = "3D" if is_3d_only else "2D"
+        self.status_var.set(f"Rendering ({backend})…")
+        popup, out_subdir = self.popup, self.spec.out_subdir_3d
+        work = (lambda: do_render_3d_preview(popup, pid, filter_vals, out_subdir)) if is_3d_only else (
+            lambda: do_render_2d_preview(popup, pid, filter_vals))
+
+        def settled() -> None:
+            self.is_rendering = False
+
+        self.is_rendering = True
+        _run_in_background(popup, work, lambda res: self.show_image(res[0], pid, backend, res[1]),
+                           lambda err: self.status_var.set(f"Render error: {err}"), settled)
+
+    def show_image(self, img_bgr: Any, profile_id: str, backend: str = "2D", source: str = "") -> None:
+        """Display a rendered BGR numpy array in the panel."""
+        try:
+            self.full_pil, self.photo = _to_photo(self.popup, img_bgr, self.spec.max_px)
+            self.img_label.configure(image=self.photo, text="", cursor="hand2")
+            title = self.spec.zoom_title.format(profile_id=profile_id, backend=backend)
+            self.img_label.bind("<Button-1>", lambda _evt: _open_zoom_image_popup(
+                self.popup, self.full_pil, title, self.status_var.set))
+            if self.spec.show_details:
+                src = f"\n{source}" if source else ""
+                self.status_var.set(f"Profile: {profile_id}  ·  defect: OK  ·  {backend}{src}")
+            else:
+                self.status_var.set(f"Profile: {profile_id}  ·  {backend}")
+        except ImportError:
+            self.status_var.set(_NO_PIL)
+        except Exception as exc:  # noqa: BLE001 - shown in the panel
+            self.status_var.set(f"Display error: {exc}")

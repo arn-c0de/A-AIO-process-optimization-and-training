@@ -13,9 +13,11 @@ import os
 import queue
 import signal
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from collections.abc import Callable, Sequence
+from typing import Any
 
 
 def _is_group_leader(proc: subprocess.Popen) -> bool:
@@ -143,7 +145,16 @@ def _abort(proc: subprocess.Popen) -> None:
     except Exception:
         pass
 
-__all__: list[str] = ["run_streaming", "terminate_process"]
+def open_path(path: Path | str) -> None:
+    """Open *path* (file or folder) with the OS default application; raises ``OSError`` on failure."""
+    if sys.platform.startswith("win"):
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        return
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    subprocess.Popen([opener, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+__all__: list[str] = ["open_path", "run_streaming", "terminate_process"]
 
 
 class StreamingProcessLogic:
@@ -170,6 +181,20 @@ class StreamingProcessLogic:
         """``run_streaming`` in ``sim_root``, tracked as ``self.proc`` so ``stop()`` reaches it."""
         return run_streaming(cmd, cwd=self.sim_root, log_q=self.log_q, stop_evt=self.stop_evt,
                              on_line=on_line, on_start=self._set_proc)
+
+    def _stream_result(self, cmd: Sequence[str]) -> tuple[int | None, dict[str, Any] | None]:
+        """``_stream(cmd)`` of a ``--json`` CLI command: ``(exit code, last JSON result line or None)``."""
+        from simple_sim.cli_utils import parse_result_line
+
+        result: dict[str, Any] | None = None
+
+        def on_line(line: str) -> None:
+            nonlocal result
+            if (res := parse_result_line(line)) is not None:
+                result = res
+
+        rc = self._stream(cmd, on_line=on_line)
+        return rc, result
 
     def resolve_path(self, s: str) -> Path:
         """``s`` as an absolute path; relative paths are resolved against ``sim_root``."""

@@ -35,6 +35,8 @@ if not __package__:  # run as a script (python tools/x.py): make the checkout im
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.classes import VALID_CLASSES  # noqa: E402
+from simple_sim.generators.opencv2d.augment import clean_augment  # noqa: E402
+from simple_sim.image_sampling import read_bgr_or_exit, resize_to, sample_subset  # noqa: E402
 from simple_sim.io_utils import load_yaml, now_iso  # noqa: E402
 from simple_sim.manifest import record_added_samples  # noqa: E402
 from simple_sim.schema import LabelRow, MetaRow, append_jsonl_rows, read_jsonl  # noqa: E402
@@ -42,8 +44,6 @@ from tools.eval_real import class_folders  # noqa: E402
 
 SPLITS = ("train", "val", "test")
 _NO_DEFECT = {"shift_x": 0.0, "shift_y": 0.0, "rotation_deg": 0.0, "tilt_deg": 0.0}
-_NEUTRAL_AUGMENT = {"blur_sigma": 0.0, "noise_stddev": 0.0, "brightness_factor": 1.0, "contrast_factor": 1.0,
-                    "rotation_deg": 0.0}
 
 
 def dataset_info(data: Path) -> dict[str, Any]:
@@ -89,22 +89,18 @@ def mix_real(data: Path, real: Path, *, split: str = "train", limit: int = 200, 
     start = int(info["real_next"])
     metas, labels, added = [], [], Counter()
     for group, cls, files in folders:
-        if 0 < limit < len(files):  # limit <= 0: all, as in real_crops / dv_crops
-            files = [files[i] for i in sorted(rng.choice(len(files), limit, replace=False))]
+        files = sample_subset(files, limit, rng)  # limit <= 0: all, as in real_crops / dv_crops
         for path in files:
-            img = cv2.imread(str(path), cv2.IMREAD_COLOR)
-            if img is None:
-                raise SystemExit(f"Failed to read {path}")
+            img = read_bgr_or_exit(path)
             n = start + len(metas)
             sample_id = f"real/{domain}/{split}/{n:06d}"
             rel = f"images/real/{n:06d}.png"
-            interp = cv2.INTER_CUBIC if img.shape[1] < info["size"][0] else cv2.INTER_AREA
-            if not cv2.imwrite(str(data / rel), cv2.resize(img, info["size"], interpolation=interp)):
+            if not cv2.imwrite(str(data / rel), resize_to(img, info["size"])):
                 raise OSError(f"Failed to write {data / rel}")
             metas.append(MetaRow(schema_version=2, id=sample_id, run_id=info["run_id"], domain=domain, split=split,
                                  seed=0, image_path=rel, render_backend="real", footprint=info["footprint"],
                                  nominal=dict(info["nominal"]), defect={**_NO_DEFECT, "type": cls},
-                                 augment=dict(_NEUTRAL_AUGMENT),
+                                 augment=clean_augment(),
                                  render_meta={"real": True, "source": str(path), "group": group}))
             labels.append(LabelRow(schema_version=info["label_schema"], id=sample_id, class_name=cls,
                                    profile_id=info["profile_id"]))

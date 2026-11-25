@@ -41,3 +41,19 @@ def test_recovers_blur_and_noise_of_a_known_camera():
     lo, hi = result["camera"]["blur_sigma"]
     assert (lo + hi) / 2 == pytest.approx(1.4, abs=0.15)
     assert result["stats"]["noise_variance_ratio"] == pytest.approx(4.0, rel=0.3)
+
+
+def test_calibrate_camera_converts_the_blur_offset_to_sensor_pixels(monkeypatch):
+    from tools import calibrate_camera as cc
+
+    assert cc.capture_scale({"sensor_px_per_mm": [15.5, 16.5], "capture_scale": [1.0, 1.0]}, 0.01613) == pytest.approx(0.258, abs=1e-3)
+    assert cc.capture_scale({"sensor_px_per_mm": [0.0, 0.0], "capture_scale": [0.4, 0.6]}, 0.01) == pytest.approx(0.5)
+    assert cc.capture_scale({}, None) == 1.0
+
+    monkeypatch.setattr(cc, "blur_offset", lambda _r, _s: 1.0)
+    monkeypatch.setattr(cc, "noise_sigma", lambda _i: 1.0)
+    monkeypatch.setattr(cc, "sharpness", lambda _i: 1.0)
+    img = [np.zeros((8, 8), np.float32)]
+    cur = {"blur_sigma": [0.5, 0.5]}
+    assert cc.fit_camera(img, img, cur)["camera"]["blur_sigma"][0] == pytest.approx(np.hypot(0.5, 1.0), abs=1e-3)
+    assert cc.fit_camera(img, img, cur, scale=0.25)["camera"]["blur_sigma"][0] == pytest.approx(np.hypot(0.5, 0.25), abs=1e-3)

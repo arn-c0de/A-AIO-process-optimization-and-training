@@ -1,6 +1,7 @@
 import os
 
 from simple_sim.generators.opencv2d.augment import apply_image_filter_overrides
+import numpy as np
 
 
 def _base_augment() -> dict:
@@ -133,3 +134,13 @@ def test_realism_presets_as_a_parameter(tmp_path) -> None:
     bad = tmp_path / "bad.yaml"
     bad.write_text("profiles: [unclosed", encoding="utf-8")
     assert load_realism_presets(bad) == BUILTIN_PRESETS  # logged, not raised
+
+
+def test_realism_tail_is_two_sided_for_signed_ranges_only():
+    from simple_sim.generators.opencv2d.realism import _tri_sample
+
+    rng = np.random.default_rng(0)
+    signed = np.array([_tri_sample(rng, -4.0, 0.0, 4.0) for _ in range(40000)])
+    assert abs(signed.mean()) < 0.05 and signed.min() < -3.5 and signed.max() > 3.5
+    magnitude = np.array([_tri_sample(rng, 0.0, 1.0, 3.0) for _ in range(20000)])
+    assert magnitude.min() >= 0.55 and magnitude.max() == 3.0  # the tail of a magnitude still goes up

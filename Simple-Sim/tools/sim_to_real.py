@@ -32,6 +32,7 @@ if not __package__:  # run as a script (python tools/x.py): make the checkout im
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.data_loader import preprocess_bgr  # noqa: E402
+from simple_sim.image_sampling import read_bgr_or_exit, sample_subset  # noqa: E402
 from simple_sim.images import list_images, list_synthetic_images  # noqa: E402
 from simple_sim.models import build_resnet18, load_checkpoint_model  # noqa: E402
 
@@ -43,15 +44,8 @@ def load_images(folder: Path, limit: int, size: int, rng: np.random.Generator, *
     files = list_synthetic_images(folder) if synthetic else list_images(folder)
     if not files:
         raise SystemExit(f"No images found in {folder}")
-    if len(files) > limit:
-        files = [files[i] for i in sorted(rng.choice(len(files), limit, replace=False))]
-    images = []
-    for p in files:
-        img = cv2.imread(str(p), cv2.IMREAD_COLOR)
-        if img is None:
-            raise SystemExit(f"Failed to read {p}")
-        images.append(cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA))
-    return images
+    return [cv2.resize(read_bgr_or_exit(p), (size, size), interpolation=cv2.INTER_AREA)
+            for p in sample_subset(files, limit, rng)]
 
 
 def build_embedder(weights: Path | None) -> torch.nn.Module:

@@ -28,6 +28,7 @@ from typing import Any
 
 from simple_sim.cli_utils import add_json_flag, add_out_arg, run_cli
 from simple_sim.config import load_config, validate_config
+from simple_sim import paths
 from simple_sim.filter_profiles import load_shared_filter_profiles, shared_settings_path
 from simple_sim.preview.render import (
     BACKEND_2D,
@@ -49,7 +50,7 @@ from simple_sim.preview.render import (
 COMMAND = "render_debug_previews"
 SUPPORTS_JSON = True
 #: The checkout root (``--profiles-dir``, ``--configs-dir`` and ``--out`` are relative to it).
-SIM_ROOT = Path(__file__).resolve().parents[2]
+SIM_ROOT = paths.SIM_ROOT
 
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:

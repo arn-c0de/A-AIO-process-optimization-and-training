@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from simple_sim.generators.opencv2d.photoreal import meniscus as solder
-from tests.test_photoreal import CLASSES, FOOTPRINTS, _render
+from tests.helpers import CLASSES, FOOTPRINTS
+from tests.helpers import render_photoreal as _render
 
 
 def test_default_style_is_legacy():

@@ -3,10 +3,8 @@
 import tempfile
 import yaml
 from pathlib import Path
-import sys
 
 # Add parent to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from simple_sim.generation.dataset import generate_dataset
 from simple_sim.dataset_validation import validate_dataset

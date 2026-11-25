@@ -132,11 +132,6 @@ class CollapsibleSection(ttk.Frame):
             with quiet():
                 self._store.schedule_save(self)
 
-    def set_open(self, opened: bool) -> None:
-        self._open.set(bool(opened))
-        self._apply()
-
-
 class Toolbar(ttk.Frame):
     """Horizontal bar of controls with uniform spacing (``add`` packs left, ``add_right`` right)."""
 
