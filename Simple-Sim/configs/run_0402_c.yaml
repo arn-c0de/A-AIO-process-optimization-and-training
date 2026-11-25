@@ -1,4 +1,4 @@
-# 0402 MLCCs (CAPC1005): profile chip_0402_capacitor@1, real proportions measured against the DeepVision xpa PnP data and crops.
+# 0402 MLCCs (CAPC1005): profile chip_0402_capacitor@1, real proportions measured against the DeepVision PnP data and crops.
 # roi.mm_per_px = 1 / 62 px/mm (the profile's pixel scale).
 run:
   run_id: run_0402_c

@@ -1,6 +1,6 @@
 # Component Profile (Schema v1)
 #
-# 0603 MLCC (CAPC1608, DeepVision xpa: 54 parts) for the DeepVision BOTTOM exports (round 2). Pixel geometry copied
+# 0603 MLCC (CAPC1608, DeepVision) for the DeepVision BOTTOM exports (round 2). Pixel geometry copied
 # from chip_0603_resistor@2 (body 55-65 px): at roi.mm_per_px 0.02667 (37.5 px/mm) that is the physical 1.6 mm body.
 # component.type chip_capacitor -> family "capacitor": the renderer draws the ceramic body in the look's measured
 # MLCC colour (dv_bottom: BGR (85, 106, 113), real bottom CAPC1608 centre (88, 108, 124)); the dark default

@@ -5,7 +5,7 @@
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~45 px/mm.
 #
 # Body length runs across the two pad columns (1.0 mm), width along them (2.0 mm). Real crops:
-# black body, bright C-shaped terminal wraps, white value code (DeepVision xpa, 42 parts).
+# black body, bright C-shaped terminal wraps, white value code (DeepVision).
 
 profile:
   profile_id: chip_array_8_resistor@1

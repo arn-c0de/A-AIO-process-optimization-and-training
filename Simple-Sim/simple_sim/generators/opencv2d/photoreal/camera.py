@@ -45,7 +45,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
     "phone": {"tilt_deg": [5.0, 40.0], "zoom": [1.0, 1.5], "blur_sigma": [0.5, 1.2], "defocus": [0.5, 2.5],
               "read_noise": [4.0, 16.0], "shot_noise": 0.08, "sharpen": [0.3, 0.9], "jpeg_quality": [70, 92],
               "capture_scale": [0.2, 0.7], "chroma_shift": [0.0, 0.8]},
-    # QUINS AOI flatbed scans (DeepVision xpa, 23.7 px/mm, see .look): low resolution, very little
+    # QUINS AOI flatbed scans (DeepVision, 23.7 px/mm, see .look): low resolution, very little
     # noise (flat-area high-pass std ~0.9 levels on the crops), slight RGB misregistration at edges.
     "quins": {"sensor_px_per_mm": [22.0, 25.5], "blur_sigma": [0.6, 0.95], "read_noise": [0.3, 1.5],
               "shot_noise": 0.015, "channel_shift": [1.6, 3.2], "channel_axis": "x",

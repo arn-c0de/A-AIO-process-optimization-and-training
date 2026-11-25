@@ -141,8 +141,8 @@ other look options, see `generation/render_options.py`) with the dataset's `conf
 ## Target look (`render.look`)
 
 `render.look` picks the domain the renderer imitates. `legacy` (default) is the palette above,
-bit-identical to earlier output. `quins` imitates the **QUINS AOI flatbed scans of the DeepVision xpa
-production boards** (`DeepVision-Web/data/store/datasets/xpa-top/quins/crops`, 23.7 px/mm). It was
+bit-identical to earlier output. `quins` imitates the **QUINS AOI flatbed scans of the DeepVision
+production boards** (`DeepVision-Web/data/store/datasets/<product>-top/quins/crops`, 23.7 px/mm). It was
 tuned by measuring ~20 000 good crops (median colour of each part form, centre patch of the part)
 and comparing whole-image statistics with `tools/look_stats.py`:
 
@@ -218,7 +218,7 @@ draw, so other presets render as before):
   `[3, 3]`; for the 0402 profiles that magnifies the view (zoom 0.73), for 0603 at 100 px/mm it zooms out.
 
 `render.look: quins` sets the defaults `camera.preset: quins`, `mask_gloss: 0`, `rework_artifacts: 0.03`
-and `solder: meniscus`, and packs the neighbour parts densely (`Look.packing`: `look.DENSE_PACKING`; the xpa boards are densely
+and `solder: meniscus`, and packs the neighbour parts densely (`Look.packing`: `look.DENSE_PACKING`; the first product's boards are densely
 populated); anything set explicitly in `render` wins. Look-specific randomness is drawn from the
 meniscus side stream only, so `quins` shares part placement and labels of a seed with `legacy`. Code:
 `simple_sim/generators/opencv2d/photoreal/look.py`.
@@ -348,15 +348,15 @@ top-down camera, cuts one crop per part and lets reviewers judge it. `render.loo
 
 ### The real crops (`tools/dv_crops.py`)
 
-`tools/dv_crops.py` exports the reviewed app crops (`.../products/xpa/aoi/labels/<side>.ndjson`, newest
+`tools/dv_crops.py` exports the reviewed app crops (`.../products/<product>/aoi/labels/<side>.ndjson`, newest
 review per `(board, id)`, retracted reviews and reviews without a colour crop skipped) into the class
 folders of `tools/eval_real.py` / `tools/look_montage.py`, with the package of each crop from the
 product's `pnp.csv` (nearest placement; TOP centres match within 0.02 mm, BOTTOM within 0.3 mm median,
 0.6 mm p90):
 
 ```bash
-python tools/dv_crops.py --labels .../products/xpa/aoi/labels --side top --out outputs/dv_real/top \
-    --pnp .../products/xpa/pnp.csv --limit-ok 500                        # all packages
+python tools/dv_crops.py --labels .../products/<product>/aoi/labels --side top --out outputs/dv_real/top \
+    --pnp .../products/<product>/pnp.csv --limit-ok 500                        # all packages
 python tools/dv_crops.py ... --out outputs/dv_real_pkg/top/CAPC1005 --packages CAPC1005 --limit-ok 300
 ```
 
@@ -388,7 +388,7 @@ Per-image medians of 300 good 0402 crops per side (centre patch of the part, bar
 | MLCC body (centre) | (114, 138, 143) | (85, 106, 113) | (86, 108, 121) | `Look.cap_body` (110, 134, 142) / (85, 106, 113) |
 | 0402 resistor body (centre, blurred) | (80, 82, 59) | (68, 80, 65) | ~(44, 47, 44) | (48, 52, 42) / (40, 44, 38) before shading |
 | Metal (median of pixels > 200, share) | (209, 219, 215), 7.3 % | (207, 220, 221), 2.9 % | (209, 228, 214), 1.0 % | flat tin caps (205, 214, 210) / (196, 206, 204); meniscus joints under a flash lobe (`meniscus.sample_flash_look`: one wide lobe at 50-72 deg, bright overhead) / a diffuse ring (`sample_flatbed_look`) |
-| p1 grey (dark gaps, bodies) | 32 | 34 | 51 | `Look.shadow` 1.0, `DV_PACKING` with 50 % resistor neighbours (xpa pnp: 278 R vs 272 C 0402) |
+| p1 grey (dark gaps, bodies) | 32 | 34 | 51 | `Look.shadow` 1.0, `DV_PACKING` with 50 % resistor neighbours (PnP: about as many 0402 R as C) |
 | Laplacian variance (256 px) | 4.8 | 3.8 (CAPC1005) / 4.7 (RESC1005) | 4.7 | camera presets `dv_top` / `dv_bottom` |
 | Flat-area noise (`calibrate_camera`) | 0.28 | 0.26 | ~0.9 | read noise 0.5-3 / 0.3-2 |
 | Mask glare, silkscreen | flash glare in most crops, little print | hardly any glare | none | `mask_gloss` 0.6 / 0.15, `silkscreen_skip` 0.8 |
@@ -622,7 +622,7 @@ shimmering through the mask, white silkscreen, bright concave fillets, black 060
 white codes, tan MLCCs, black SOT/SOIC/QFN with grey markings). Mask colours, the copper-under-mask
 brightness ratio, copper pours, tented vias and the density of neighbour parts come from 7 photos
 (JPEG and raw) of the production boards. Mask, MLCC and solder colours were re-measured on the real
-per-part crops of the DeepVision xpa boards (top: phone photo, bottom: flatbed-like capture): median
+per-part crops of the DeepVision boards (top: phone photo, bottom: flatbed-like capture): median
 bare mask BGR (64, 89, 58) / (68, 86, 50), MLCC ~(120, 152, 170), joints ~(187, 196, 196). The earlier
 palette (hue 150-170°, saturation ~150) plus the default ±15° hue jitter rendered a lime/cyan mask
 that no real board shows; the default hue jitter is now ±5°, saturation 0.85-1.1.

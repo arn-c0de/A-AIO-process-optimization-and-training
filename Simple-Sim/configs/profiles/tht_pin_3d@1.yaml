@@ -1,6 +1,6 @@
 # Component Profile (Schema v1, 3D only)
 #
-# Through-hole pin row seen from the solder side (BOTTOM of the xpa boards: the connectors' pins, e.g. the
+# Through-hole pin row seen from the solder side (BOTTOM of the first product's boards: the connectors' pins, e.g. the
 # 2.54 mm JST / pin headers): N = 3 round plated pads (annular rings, 1.7 mm) with a hole, a pin in each and a
 # conical solder meniscus around the pin. No body is visible from the solder side. Rendered by the Blender
 # backend only (board.footprints.BLENDER_ONLY_FOOTPRINTS): the 2D backend has no model of a through-hole joint

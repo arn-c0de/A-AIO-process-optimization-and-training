@@ -4,7 +4,7 @@
 # Geometry in pixels; scale chosen so the footprint fills ~1/3 of a 256 px ROI, like the real
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~32 px/mm.
 #
-# Black body with a part code along its long side (DeepVision xpa, 10 parts; SOT-23-5 uses the same land pattern).
+# Black body with a part code along its long side (DeepVision; SOT-23-5 uses the same land pattern).
 
 profile:
   profile_id: sot23_6_ic@1

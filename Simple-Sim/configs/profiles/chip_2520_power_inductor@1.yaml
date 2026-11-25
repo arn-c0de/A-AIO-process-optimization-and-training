@@ -5,7 +5,7 @@
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~26 px/mm.
 #
 # Matte light-grey iron-powder block with an embossed coil ring; the terminals are under the body,
-# only the joints at both ends are visible (DeepVision xpa 1 uH, 5 parts).
+# only the joints at both ends are visible (DeepVision 1 uH).
 
 profile:
   profile_id: chip_2520_power_inductor@1

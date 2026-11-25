@@ -35,8 +35,8 @@ Crops are copied unchanged as ``<board>_<id>.png``; only counts and aggregate st
 written (``summary.json``), so the production images stay on the machine.
 
 Usage:
-    python tools/dv_crops.py --labels .../products/xpa/aoi/labels --side top --out outputs/dv_real/top \\
-        --pnp .../products/xpa/pnp.csv --limit-ok 500 [--packages CAPC1005] [--dry-run]
+    python tools/dv_crops.py --labels .../products/<product>/aoi/labels --side top --out outputs/dv_real/top \\
+        --pnp .../products/<product>/pnp.csv --limit-ok 500 [--packages CAPC1005] [--dry-run]
 """
 
 from __future__ import annotations

@@ -11,7 +11,7 @@ Real rows use ``domain: real`` (``--domain``), ``render_backend: real``, ``seed:
 median nominal geometry (the true one is unknown), zero defect offsets, neutral augment values and
 ``render_meta: {real: true, source: <original file>, group: <sub-folder>}``.
 
-Why: on the DeepVision xpa QUINS crops, models trained on synthetic images alone reject every real good
+Why: on the DeepVision QUINS crops, models trained on synthetic images alone reject every real good
 part, and real crops in only one class teach "real = that class". Real good parts *and* real empty
 pads (both plentiful in production) fixed both (docs/guides/PHOTOREAL_RENDERING.md, "Classifier test
 on real crops"). Keep the crops you evaluate on (``tools/eval_real.py``) out of the mix.

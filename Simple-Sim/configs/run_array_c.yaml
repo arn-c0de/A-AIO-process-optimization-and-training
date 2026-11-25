@@ -1,4 +1,4 @@
-# 4-element MLCC arrays (CAPCAF50P200X125-8): profile chip_array_8_capacitor@1, real proportions measured against the DeepVision xpa PnP data and crops.
+# 4-element MLCC arrays (CAPCAF50P200X125-8): profile chip_array_8_capacitor@1, real proportions measured against the DeepVision PnP data and crops.
 # roi.mm_per_px = 1 / 45 px/mm (the profile's pixel scale).
 run:
   run_id: run_array_c

@@ -50,6 +50,7 @@ mkdir -p outputs/board3d && printf '%s\n' "${PRODUCT}" > outputs/board3d/.produc
 PHOTOS="${PHOTOS:-}"
 SIDE="${SIDE:-top}"
 DV="${DV:-${SCRIPT_DIR}/../../DeepVision-Web}"
+export SIMPLE_SIM_DV_ROOT="${SIMPLE_SIM_DV_ROOT:-$(cd -- "${DV}" 2>/dev/null && pwd || echo "${DV}")}"   # board3d.json paths follow it (machine-independent)
 SOURCE="${SOURCE:-photos}"
 PORT="${PORT:-8765}"
 SAMPLES="${SAMPLES:-128}"

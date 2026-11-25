@@ -4,7 +4,7 @@
 # Geometry in pixels; scale chosen so the footprint fills ~1/3 of a 256 px ROI, like the real
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~22 px/mm.
 #
-# Large brown-tan MLCCs (DeepVision xpa, 18 parts; CAPC3216/2012 are the same shape, smaller).
+# Large brown-tan MLCCs (DeepVision; CAPC3216/2012 are the same shape, smaller).
 
 profile:
   profile_id: chip_1210_capacitor@1

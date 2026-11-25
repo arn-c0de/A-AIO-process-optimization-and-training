@@ -1,4 +1,4 @@
-# 1210 MLCCs (CAPC3225): profile chip_1210_capacitor@1, real proportions measured against the DeepVision xpa PnP data and crops.
+# 1210 MLCCs (CAPC3225): profile chip_1210_capacitor@1, real proportions measured against the DeepVision PnP data and crops.
 # roi.mm_per_px = 1 / 22 px/mm (the profile's pixel scale).
 run:
   run_id: run_1210_c

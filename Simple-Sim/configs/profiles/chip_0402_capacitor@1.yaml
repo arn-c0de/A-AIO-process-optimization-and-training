@@ -4,7 +4,7 @@
 # Geometry in pixels; scale chosen so the footprint fills ~1/3 of a 256 px ROI, like the real
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~62 px/mm.
 #
-# Second most common part on the xpa boards (272 capacitors). Tan ceramic, silver end caps.
+# Second most common part on the first product's boards. Tan ceramic, silver end caps.
 
 profile:
   profile_id: chip_0402_capacitor@1

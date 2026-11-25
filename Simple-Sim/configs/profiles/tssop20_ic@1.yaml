@@ -5,7 +5,7 @@
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~15 px/mm.
 #
 # Black body, 3 laser-marked lines along the long side (e.g. 74LVC245A), fine leads
-# (DeepVision xpa, 6 parts; motorboards SOP50P640-38: 4).
+# (DeepVision; also SOP50P640-38).
 
 profile:
   profile_id: tssop20_ic@1

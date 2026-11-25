@@ -147,6 +147,14 @@ excluded runs in `outputs/board3d/<product>/<side>/photos/exclude.txt`). Before 
 `git status --untracked-files=all` and `git diff --cached` for such content; earlier local commits are checked too
 before a push (`git log origin/<branch>..`).
 
+Forbidden words (company, customer and product names) are blocked mechanically: `python tools/forbidden_words.py
+--install-hooks` installs pre-commit / commit-msg / pre-push hooks that refuse any commit or push whose added lines,
+file names, messages or author fields contain one of them; `--tree` scans all tracked files. The word list is
+`<repo>/.forbidden-words` (git-ignored, one word per line) or `$FORBIDDEN_WORDS_FILE` - never write the words into
+tracked files, not even into this guide or a test. Without the list the hooks refuse, so create it on every clone.
+`board3d.json` paths into the DeepVision store follow `$SIMPLE_SIM_DV_ROOT` (default: `../../DeepVision-Web` next to
+the checkout), so a board3d folder copied to another machine still finds its sources.
+
 ## Commits and pull requests
 
 Never add AI attribution: no `Co-Authored-By: Claude ...` trailer, no "Generated with Claude Code" line, no

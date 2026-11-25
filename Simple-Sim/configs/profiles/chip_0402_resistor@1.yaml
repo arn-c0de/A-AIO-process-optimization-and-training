@@ -4,7 +4,7 @@
 # Geometry in pixels; scale chosen so the footprint fills ~1/3 of a 256 px ROI, like the real
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~62 px/mm.
 #
-# Most common part on the xpa boards (278 resistors). Black body, white code (often none at 0402 size).
+# Most common part on the first product's boards. Black body, white code (often none at 0402 size).
 
 profile:
   profile_id: chip_0402_resistor@1

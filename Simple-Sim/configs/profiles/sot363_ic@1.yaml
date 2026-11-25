@@ -4,7 +4,7 @@
 # Geometry in pixels; scale chosen so the footprint fills ~1/3 of a 256 px ROI, like the real
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~45 px/mm.
 #
-# Black body with a 3-5 character code along its long side, tiny gull-wing leads (DeepVision xpa, 21 parts;
+# Black body with a 3-5 character code along its long side, tiny gull-wing leads (DeepVision;
 # motorboards: 20).
 
 profile:

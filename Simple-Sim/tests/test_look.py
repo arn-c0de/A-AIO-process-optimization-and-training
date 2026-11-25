@@ -305,7 +305,7 @@ def test_dv_look_defaults_and_materials():
     assert mask_gloss({"look": "dv_top", "mask_gloss": 0.0}) == 0.0
     assert rework_probability({"look": "dv_bottom"}) == DV_BOTTOM_LOOK.rework < LEGACY_LOOK.rework
     # Dark 0402 resistor bodies (the dark 1 % of the real crops), bright flat tin terminals, dense rows of parts
-    # with as many resistors as MLCCs (the xpa pnp: 278 RESC1005 vs 272 CAPC1005).
+    # with as many resistors as MLCCs (as in the first product's PnP).
     dark = np.array((20, 20, 20), np.float32)
     for look in DV_LOOKS.values():
         assert float(look.body_colour("resistor", dark).mean()) < 60 and float(look.end_cap.mean()) > 190

@@ -4,7 +4,7 @@
 # Geometry in pixels; scale chosen so the footprint fills ~1/3 of a 256 px ROI, like the real
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~37.5 px/mm.
 #
-# Dark grey ferrite body, large silver end caps, no marking (DeepVision xpa MPZ1608, 10 parts;
+# Dark grey ferrite body, large silver end caps, no marking (DeepVision MPZ1608;
 # motorboards: INDC1608/2012/3216, 32 parts).
 
 profile:

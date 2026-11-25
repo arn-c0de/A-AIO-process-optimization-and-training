@@ -4,7 +4,7 @@
 # Geometry in pixels; scale chosen so the footprint fills ~1/3 of a 256 px ROI, like the real
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~17 px/mm.
 #
-# Black body, laser marking along the long side (e.g. 74AHCT125), fine leads (DeepVision xpa, 3 parts).
+# Black body, laser marking along the long side (e.g. 74AHCT125), fine leads (DeepVision).
 
 profile:
   profile_id: tssop14_ic@1

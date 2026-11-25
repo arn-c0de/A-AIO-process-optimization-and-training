@@ -149,3 +149,15 @@ def test_overlays_and_cli(tmp_path):
     saved = json.loads((out / "board3d.json").read_text())
     assert saved["schema"] == SCHEMA and saved["sources"]["pnp"]["sha256"] is None
     assert json.loads((out / "inventory.json").read_text())["components"] == 7
+
+
+def test_rebase_dv_root(tmp_path, monkeypatch):
+    from simple_sim.board3d import DV_ROOT_ENV, rebase_dv_root
+    new = tmp_path / "dv"
+    new.mkdir()
+    monkeypatch.setenv(DV_ROOT_ENV, str(new))
+    b = {"sources": {"dvRoot": "/elsewhere/dv", "scan": {"path": "/elsewhere/dv/store/x.png"}, "other": "/elsewhere/dvx/y"}}
+    rebase_dv_root(b)
+    assert b["sources"]["dvRoot"] == str(new.resolve())
+    assert b["sources"]["scan"]["path"] == f"{new.resolve()}/store/x.png"
+    assert b["sources"]["other"] == "/elsewhere/dvx/y"            # only whole path components

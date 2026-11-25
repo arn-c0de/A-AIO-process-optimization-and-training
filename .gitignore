@@ -34,6 +34,8 @@ Simple-Sim/outputs/
 # The board data itself (scan, photos, mosaic, GLB, board3d.json, renders) lives in Simple-Sim/outputs/ above.
 BACKLOG-Sim/board3d-plan.md
 BACKLOG-Sim/board-twin-plan.md
+# Words that must never reach GitHub (Simple-Sim/tools/forbidden_words.py): the list itself stays local.
+/.forbidden-words
 # Real board photos cut for render.texture_dir (production images stay local; tools/board_backgrounds.py)
 Simple-Sim/data/board_textures/
 Simple-Sim/wheelhouse/

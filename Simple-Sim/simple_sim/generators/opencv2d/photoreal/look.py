@@ -3,9 +3,9 @@
 ``legacy`` (default) is the material set of :mod:`.palette` exactly as before; every hook below
 returns the legacy constant for it, so ``render.look: legacy`` renders bit-identical images.
 
-``quins`` imitates the QUINS AOI scans of the DeepVision xpa production boards (flatbed line
+``quins`` imitates the QUINS AOI scans of the DeepVision production boards (flatbed line
 scanner, ~23.7 px/mm, diffuse ring illumination). Measured on ~20 000 good crops of
-``DeepVision-Web/data/store/datasets/xpa-top/quins/crops`` (median BGR per form, centre patch of
+``DeepVision-Web/data/store/datasets/<product>-top/quins/crops`` (median BGR per form, centre patch of
 the part; see ``docs/guides/PHOTOREAL_RENDERING.md``):
 
 =====================  ====================  =================================================
@@ -108,7 +108,7 @@ class Look:
 LEGACY_LOOK = Look(name="legacy", mask_palette=MASK_PALETTE, mask_mottle=0.03, mask_weave=0.03,
                    copper_under_mask=COPPER_UNDER_MASK, cap_body=CAP_BODY, end_cap=END_CAP, lead=LEAD, flat_caps=False)
 
-# Neighbour layout of the quins look (DeepVision xpa QUINS scans): rows of passives almost touching,
+# Neighbour layout of the quins look (DeepVision QUINS scans): rows of passives almost touching,
 # mostly MLCCs, 4-10 neighbours in a crop of 3x the part length.
 DENSE_PACKING = Packing(array_probability=0.9, pitch=(1.12, 1.3), clearance=0.18, spacing=0.05, parts=10.0,
                         capacitor_share=0.75, tries=24)
@@ -131,7 +131,7 @@ QUINS_LOOK = Look(
     bodies={"resistor": _RESISTOR, "array_r": _RESISTOR, "inductor": _bgr(58, 61, 59),
             "power_inductor": _bgr(99, 105, 104), "led": _bgr(200, 207, 209), "*": _MOULD},
     cap_len={"capacitor": 0.16, "resistor": 0.16},  # scans: narrow bright terminals, the joint shows around them
-    packing=DENSE_PACKING,                        # xpa boards: rows of almost touching passives, mostly MLCCs, 4-10 per 3x crop
+    packing=DENSE_PACKING,                        # the first product's boards: rows of almost touching passives, mostly MLCCs, 4-10 per 3x crop
     mask_gloss=0.0,                               # diffuse scanner light: no glare on the mask
     rework=0.03,                                  # good production boards: patch wires and flux are rare
     camera_preset="quins",
@@ -142,7 +142,7 @@ QUINS_LOOK = Look(
 )
 
 # DeepVision inspection app (``tools/dv_crops.py`` exports its crops): phone photos of the TOP side and a
-# flatbed-like capture of the BOTTOM side of the xpa boards, per-part crops at ~16 px/mm. Measured on 300
+# flatbed-like capture of the BOTTOM side of the first product's boards, per-part crops at ~16 px/mm. Measured on 300
 # good 0402 crops per side and package (per-image medians, 256 px; see the "DeepVision app looks" section
 # of docs/guides/PHOTOREAL_RENDERING.md):
 #
@@ -159,7 +159,7 @@ QUINS_LOOK = Look(
 # is the dark olive of the scans with strong red/blue fringes (camera preset). Both sides are densely
 # populated like the scans. The joints get a flash (TOP) or diffuse ring (BOTTOM) light with bright flat
 # tops, as the terminals read as white blobs in both captures. Legacy and quins are untouched.
-# The xpa boards carry as many 0402 resistors as MLCCs (pnp: 278 RESC1005, 272 CAPC1005), so half the
+# the first product's boards carry as many 0402 resistors as MLCCs (PnP), so half the
 # packed neighbours are black resistors: their bodies and side walls are the dark 1 % of the real crops.
 DV_PACKING = Packing(array_probability=0.9, pitch=(1.12, 1.3), clearance=0.18, spacing=0.05, parts=10.0,
                      capacitor_share=0.5, tries=24)

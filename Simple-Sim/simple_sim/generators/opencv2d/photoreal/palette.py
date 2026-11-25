@@ -32,7 +32,7 @@ HALF /= np.linalg.norm(HALF)
 
 
 # Solder-mask colours (BGR). Median mask pixels of the real crops of the production boards
-# (DeepVision xpa top: (64, 89, 58), bottom: (68, 86, 50); hue ~135-150 deg, HSV saturation ~90-110)
+# (DeepVision top: (64, 89, 58), bottom: (68, 86, 50); hue ~135-150 deg, HSV saturation ~90-110)
 # plus a few darker/lighter and slightly teal variants. The earlier palette (red ~30, saturation ~150)
 # rendered a far too saturated, cyan-lime mask.
 MASK_PALETTE = ((64, 89, 58), (68, 86, 50), (58, 80, 46), (72, 96, 56), (54, 78, 50), (76, 98, 60), (70, 92, 44),

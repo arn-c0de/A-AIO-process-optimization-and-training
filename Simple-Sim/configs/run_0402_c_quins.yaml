@@ -1,4 +1,4 @@
-# 0402 MLCCs (CAPC1005) in the look of the QUINS AOI scans of the DeepVision xpa boards (render.look: quins:
+# 0402 MLCCs (CAPC1005) in the look of the QUINS AOI scans of the DeepVision boards (render.look: quins:
 # scanner materials, 23.7 px/mm sensor, RGB misregistration, meniscus joints under a ring light).
 # Same profile and seed as run_0402_c.yaml.
 # roi.mm_per_px = 1 / 62 px/mm (the profile's pixel scale).

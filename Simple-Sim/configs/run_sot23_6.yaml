@@ -1,4 +1,4 @@
-# SOT-23-6 (SOT95P280-6): profile sot23_6_ic@1, real proportions measured against the DeepVision xpa PnP data and crops.
+# SOT-23-6 (SOT95P280-6): profile sot23_6_ic@1, real proportions measured against the DeepVision PnP data and crops.
 # roi.mm_per_px = 1 / 32 px/mm (the profile's pixel scale).
 run:
   run_id: run_sot23_6

@@ -4,7 +4,7 @@
 # Geometry in pixels; scale chosen so the footprint fills ~1/3 of a 256 px ROI, like the real
 # per-part crops of the inspection pipeline (crop = 3x part extent). Scale ~45 px/mm.
 #
-# Light grey-beige ceramic body, small terminal wraps on the long sides, no marking (DeepVision xpa, 12 parts).
+# Light grey-beige ceramic body, small terminal wraps on the long sides, no marking (DeepVision).
 
 profile:
   profile_id: chip_array_8_capacitor@1
