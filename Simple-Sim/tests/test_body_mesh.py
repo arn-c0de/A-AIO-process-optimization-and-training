@@ -159,3 +159,12 @@ def test_tht_joint_and_dsub_standoffs():
     xs = sorted(sum(v[0] for v in p.mesh.verts) / len(p.mesh.verts) for p in bolts)
     assert xs == pytest.approx([-12.5, 12.5], abs=0.01)                                # DE-9 jackscrews, 25 mm apart
     assert len([p for p in a.pieces if p.name.startswith("socket_")]) == 9
+
+
+def test_battery_holder_is_empty_unless_the_catalog_says_cell():
+    # holders are placed empty (the cell goes in at final assembly): an always-present cell rendered as a saturated disc
+    kw = dict(pins=3, rows=1, pitch=2.54, total_h=None, front=(0.0, -1.0))
+    empty = bm.connector("battery_holder", "horizontal", 21.9, 18.2, 5.0, **kw)
+    assert [p.name for p in empty.pieces] == ["body"]
+    full = bm.connector("battery_holder", "horizontal", 21.9, 18.2, 5.0, cell=True, **kw)
+    assert {"body", "cell", "clip"} <= {p.name for p in full.pieces}

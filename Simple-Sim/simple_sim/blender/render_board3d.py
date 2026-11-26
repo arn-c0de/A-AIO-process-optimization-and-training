@@ -175,8 +175,10 @@ ROLE_MATERIALS = {
     "white": ((0.85, 0.84, 0.80), 0.5, 0.0), "ball": ((0.72, 0.72, 0.74), 0.25, 1.0),
     "natural": ((0.78, 0.72, 0.58), 0.6, 0.0), "insert": ((0.015, 0.015, 0.015), 0.8, 0.0),
 }
-#: names of the meshes that carry the photo on their top faces (``_apply_photo_uvs``)
-PHOTO_PREFIXES = ("body", "endcap", "lead_", "term_", "lid")
+#: names of the meshes that carry the photo on their top faces (``_apply_photo_uvs``). ``cavity`` / ``pin_``: the floor
+#: and pins of an open-top connector, which the top-down scan sees (dark floor, thin pin tips); untextured they rendered
+#: as a grey slab with saturated pin squares.
+PHOTO_PREFIXES = ("body", "endcap", "lead_", "term_", "lid", "cavity", "pin_")
 
 
 def _role_material(role: str):
@@ -245,7 +247,8 @@ def _assembly(kind: str, c: dict, h: float, standoff: float, pads: list, board: 
         spec = part["connector"]
         total = spec.get("totalHeightMm")
         return bm.connector(spec["kind"], spec.get("orientation", ""), l, w, h, pins=int(spec["pins"]), rows=int(spec["rows"]),
-                            pitch=float(spec["pitch"]), total_h=None if total is None else float(total), front=_front(c, board))
+                            pitch=float(spec["pitch"]), total_h=None if total is None else float(total), front=_front(c, board),
+                            cell=bool(spec.get("cell", False)))
     if kind == "box":
         return bm.Assembly([bm.Piece("body", bm.shape_at(bm.molded_shape(l, w, h, leads=False)), "mold", photo_sides=True)])
     return None
@@ -735,10 +738,15 @@ def _apply_photo_uvs(pending: list, job: dict, mats: dict) -> None:
         clean = (atlas or {}).get("look") == "clean"
         for o in [*_descendants(part_root), *leads]:
             if o.type != "MESH" or not o.name.startswith(PHOTO_PREFIXES):
-                continue                     # openings, pins, inserts, shells keep their material
+                continue                     # openings, inserts, shells keep their material
             if clean and (not o.name.startswith(("body", "lid")) or o.name.startswith(("body_shell", "body_flange"))
                           or c["part"].get("body") == "can" and o.name.startswith("body_can")):
                 continue                     # clean look: caps, leads, terminals, shields, cans stay metal
+            if o.name.startswith(("cavity", "pin_")) and mats.get("photo_joint") is not None:
+                # down an open connector's shaft the scan already holds the shaft's shading: lit again under the
+                # steep light the floor came out ~4 L* too dark. The unlit scan, as for the joints.
+                _photo_on_top(o, mats["photo_joint"], raster, to_nominal)
+                continue
             if entry is not None:
                 # per-part face textures from all photos (board3d.parttex)
                 _atlas_uv(o, entry, atlas["size"], mats["atlas"], to_nominal)
@@ -750,7 +758,9 @@ def _lights(job: dict) -> None:
     """``flatbed``: a disc light straight above, invisible to the camera, seen from the board under a cone of
     ``coneDeg`` half-angle (the scanner lights steeply from above: little occlusion next to tall parts, flat metal
     facing up turns bright), plus a dim white surround (``world``). The disc's strength makes a flat diffuse surface
-    render at its texture colour: irradiance = pi * L * (sin^2(cone) + world). ``aoi``: the ring + top rig of
+    render at its texture colour: irradiance = pi * (L * sin^2(cone) + world * cos^2(cone)) (the disc hides the
+    part of the sky it covers; the old ``L = (1 - world) / sin^2`` rendered 2 % too dark at 20 deg / 0.15, more at
+    wider cones or more ambient). ``aoi``: the ring + top rig of
     ``render_batch``."""
     light = job.get("light") or {}
     world = bpy.context.scene.world
@@ -771,13 +781,14 @@ def _lights(job: dict) -> None:
     bg.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
     bg.inputs["Strength"].default_value = ambient * gain
     cone = math.radians(float(light.get("coneDeg", 20.0)))
-    height = 4.0 * max(win["widthMm"], win["heightMm"]) + 100.0
+    # far above: a whole-board window lost ~1.5 % irradiance towards its corners (off-axis view of the disc) at 4x
+    height = 12.0 * max(win["widthMm"], win["heightMm"]) + 100.0
     radius = height * math.tan(cone)
     bpy.ops.mesh.primitive_circle_add(vertices=64, radius=radius, fill_type="NGON", location=(cx, cy, height),
                                       rotation=(math.pi, 0.0, 0.0))
     disc = bpy.context.active_object
     disc.name = "flatbed_light"
-    strength = gain * (1.0 - ambient) / max(math.sin(cone) ** 2, 1e-4)
+    strength = gain * (1.0 - ambient * math.cos(cone) ** 2) / max(math.sin(cone) ** 2, 1e-4)
     disc.data.materials.append(rb._material("mat_flatbed_light", (0, 0, 0), roughness=1.0, emission=strength))
     disc.visible_camera = False
     disc.visible_shadow = False

@@ -600,7 +600,7 @@ def hex_prism(cx: float, cz: float, y0: float, y1: float, across_flats: float, s
 
 
 def connector(kind: str, orientation: str, l: float, w: float, h: float, *, pins: int, rows: int, pitch: float,
-              total_h: float | None, front: tuple[float, float]) -> Assembly:
+              total_h: float | None, front: tuple[float, float], cell: bool = False) -> Assembly:
     """Connector / socket body from the part catalog's ``kind`` (datasheet height *h* above the board):
 
     * ``wire_to_board`` / ``terminal_strip`` / ``power_header`` vertical: open-top shrouded housing, pins standing in
@@ -608,7 +608,8 @@ def connector(kind: str, orientation: str, l: float, w: float, h: float, *, pins
     * ``pin_header``: black insulator (*h*) with square posts to ``total_h``.
     * ``usb_b`` (vertical) / ``usb_a_dual`` / ``rj45`` / ``card_socket``: nickel shield; the mating opening dark.
     * ``dsub``: black body, nickel flange and D shell on the mating face.
-    * ``screw_terminal``: metal block with the screw head; ``battery_holder``: black base, coin cell, spring clip.
+    * ``screw_terminal``: metal block with the screw head; ``battery_holder``: the holder's base, empty as assembled
+      (the cell goes in at final assembly); with *cell* (catalog ``"cell": true``) also the coin cell and its clip.
     Anything else: a plain housing (``plastic`` black / ``metal`` shield)."""
     vertical = orientation == "vertical" and kind in TOP_MATING
     if vertical:
@@ -774,6 +775,8 @@ def connector(kind: str, orientation: str, l: float, w: float, h: float, *, pins
                               z0=0.55 * h), "lid")
     elif kind == "battery_holder":
         add("body", box(-e / 2, e / 2, -d / 2, d / 2, 0, 0.3 * h), "mold")
+        if not cell:
+            return Assembly(pieces)
         r = 0.42 * min(e, d)
         add("cell", shape_at(BodyShape(2 * r, 2 * r, 0.5 * h, r_corner=r, r_top=0.03, corner_segments=12, top_segments=1),
                              z0=0.3 * h), "alu")
