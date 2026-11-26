@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import mimetypes
+import os
 import re
 import sys
 from http import HTTPStatus
@@ -45,6 +45,10 @@ MAX_BODY = 1 << 20
 #: 3: datasheet-like part bodies (sharp bottom edges, mould draft, bent leads, SOT-23-6 leads, array / QFN
 #: terminals, crystal lid, BGA, electrolytic bead and terminals), photo on top faces only, top at the catalog height)
 GLB_VERSION = "glb3"
+#: Content-Type per suffix; fixed strings only, so no request data ever reaches a header
+CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json",
+          ".jsonl": "application/x-ndjson", ".glb": "model/gltf-binary", ".png": "image/png", ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8"}
 
 
 def board3d_summary(board3d: dict, source: str) -> dict:
@@ -56,8 +60,14 @@ def board3d_summary(board3d: dict, source: str) -> dict:
 
 
 def inside(base: Path, rel: str) -> Path | None:
-    p = (base / rel).resolve()
-    return p if p.is_file() and base.resolve() in p.parents else None
+    """``base/rel`` if that is a file below ``base`` (symlinks resolved), else None; rejects ``..``, absolute paths, NUL."""
+    if "\0" in rel:
+        return None
+    root = os.path.realpath(base)
+    full = os.path.realpath(os.path.join(root, rel))
+    if not full.startswith(root + os.sep) or not os.path.isfile(full):
+        return None
+    return Path(full)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -85,9 +95,7 @@ class Handler(BaseHTTPRequestHandler):
         if path is None:
             self._json({"error": "not found"}, 404)
             return
-        ctype = mimetypes.guess_type(path.name)[0] or ("model/gltf-binary" if path.suffix == ".glb" else "application/octet-stream")
-        if path.suffix == ".js":
-            ctype = "text/javascript"
+        ctype = CTYPES.get(path.suffix.lower(), "application/octet-stream")
         self._send(200, path.read_bytes(), ctype)
 
     def do_GET(self) -> None:  # noqa: N802

@@ -153,6 +153,16 @@ def test_viewer_server(viewer):
     assert _req(f"{base}/")[0] == 200 and _req(f"{base}/app.js")[0] == 200
     assert _req(f"{base}/data/../../etc/passwd")[0] == 404
     assert _req(f"{base}/../tools/board3d_viewer.py")[0] == 404
+    assert _req(f"{base}/data/%2e%2e/%2e%2e/etc/passwd")[0] == 404          # encoded ..
+    assert _req(f"{base}/data/%2Fetc%2Fpasswd")[0] == 404                   # absolute path joins away from the base
+    assert _req(f"{base}/data/viewer/board.glb%00")[0] == 404               # NUL
+    (folder / "x.png\r\nX-Evil: 1").write_bytes(b"png")
+    with urllib.request.urlopen(f"{base}/data/x.png%0D%0AX-Evil:%201") as r:   # CR/LF in a file name stays out of the headers
+        assert r.headers["Content-Type"] == "application/octet-stream" and r.headers.get("X-Evil") is None
+    with urllib.request.urlopen(f"{base}/data/viewer/board.glb") as r:
+        assert r.headers["Content-Type"] == "model/gltf-binary"
+    with urllib.request.urlopen(f"{base}/app.js") as r:
+        assert r.headers["Content-Type"] == "text/javascript"
     status, body = _req(f"{base}/api/defects", {"name": "t1", "ops": [{"op": "move", "refdes": "C1", "dx": 0.1}]})
     assert status == 200 and json.loads((folder / "defects" / "t1.json").read_text())[0]["dx"] == 0.1
     assert _req(f"{base}/api/defects", {"name": "../x", "ops": []})[0] == 400
