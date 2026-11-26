@@ -373,3 +373,21 @@ def test_residual_homography_recovers_a_shift():
     warp, cc = residual_homography(img, shifted, mask)        # render(W x) ~ real(x): the render is the real one moved by (4, -3)
     assert cc > 0.9
     assert warp[0, 2] / warp[2, 2] == pytest.approx(4.0, abs=0.3) and warp[1, 2] / warp[2, 2] == pytest.approx(-3.0, abs=0.3)
+
+
+def test_sample_variants_picks_units(tmp_path):
+    import random
+    from simple_sim.board3d.footprints import connector_spec
+    from simple_sim.board3d.scene import sample_variants
+    board3d = _board3d(tmp_path)
+    c = board3d["components"][0]
+    c["body"]["catalog"] = {"kind": "dsub", "variants": [{"weight": 1, "set": {"topCover": "metal"}}, {"weight": 1, "set": {}}]}
+    board3d["sheets"] = [{"x0": 0, "x1": 1, "y0": 0, "y1": 1, "zTopMm": -1.6, "p": 0.5}]
+    rng = random.Random(3)
+    units = [sample_variants(board3d, rng) for _ in range(200)]
+    covers = sum(u["components"][0]["body"]["catalog"].get("topCover") == "metal" for u in units)
+    sheets = sum(len(u["sheets"]) for u in units)
+    assert 70 < covers < 130 and 70 < sheets < 130                      # both about half
+    assert all("variants" not in u["components"][0]["body"]["catalog"] for u in units)
+    assert "variants" in c["body"]["catalog"] and len(board3d["sheets"]) == 1   # the input is untouched
+    assert connector_spec("CONTDSU277P-9", {"kind": "dsub", "topCover": "metal"})["topCover"] == "metal"

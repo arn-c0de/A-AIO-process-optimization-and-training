@@ -15,7 +15,7 @@ from simple_sim.parts import PartCatalog
 
 
 #: catalog fields copied to ``body.catalog`` (and into the digest: a changed kind re-exports the viewer's GLB)
-SHAPE_KEYS = ("kind", "orientation", "material", "totalHeightMm", "rows")
+SHAPE_KEYS = ("kind", "orientation", "material", "totalHeightMm", "rows", "cell", "topCover", "variants")
 
 
 def _texts(c: dict[str, Any]) -> list[str]:

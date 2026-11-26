@@ -168,3 +168,12 @@ def test_battery_holder_is_empty_unless_the_catalog_says_cell():
     assert [p.name for p in empty.pieces] == ["body"]
     full = bm.connector("battery_holder", "horizontal", 21.9, 18.2, 5.0, cell=True, **kw)
     assert {"body", "cell", "clip"} <= {p.name for p in full.pieces}
+
+
+def test_dsub_top_cover_variant():
+    kw = dict(pins=9, rows=1, pitch=2.77, total_h=None, front=(0.0, -1.0))
+    plain = bm.connector("dsub", "right_angle", 21.98, 12.9, 12.5, **kw)
+    cover = bm.connector("dsub", "right_angle", 21.98, 12.9, 12.5, top_cover="metal", **kw)
+    assert "cover" not in {p.name for p in plain.pieces}
+    lid = next(p for p in cover.pieces if p.name == "cover")
+    assert lid.role == "lid" and min(v[2] for v in lid.mesh.verts) == pytest.approx(0.75 * 12.5)

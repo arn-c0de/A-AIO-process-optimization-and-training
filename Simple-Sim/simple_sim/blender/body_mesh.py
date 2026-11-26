@@ -600,7 +600,7 @@ def hex_prism(cx: float, cz: float, y0: float, y1: float, across_flats: float, s
 
 
 def connector(kind: str, orientation: str, l: float, w: float, h: float, *, pins: int, rows: int, pitch: float,
-              total_h: float | None, front: tuple[float, float], cell: bool = False) -> Assembly:
+              total_h: float | None, front: tuple[float, float], cell: bool = False, top_cover: str | None = None) -> Assembly:
     """Connector / socket body from the part catalog's ``kind`` (datasheet height *h* above the board):
 
     * ``wire_to_board`` / ``terminal_strip`` / ``power_header`` vertical: open-top shrouded housing, pins standing in
@@ -739,6 +739,9 @@ def connector(kind: str, orientation: str, l: float, w: float, h: float, *, pins
         # body behind a nickel flange; the D shell sticks out of the mating face, hollow, with the insert and its 9
         # contact holes (female) recessed in it
         add("body", box(-e / 2, e / 2, -d / 2 + 1.0, d / 2, 0, 0.75 * h), "mold")
+        if top_cover == "metal":
+            # some makers wrap the body's top in a tin-plated sheet (with the print), others leave the black moulding
+            add("cover", box(-e / 2, e / 2, -d / 2 + 1.0, d / 2, 0.75 * h, 0.75 * h + 0.3), "lid")
         # the nickel flange (DE-9: 30.8 mm wide, the jackscrew holes 25 mm apart) with the two hex standoffs
         fw = max(e, DSUB_FLANGE_MM)
         add("body_flange", box(-fw / 2, fw / 2, -d / 2 + 0.6, -d / 2 + 1.0, 0, h), "lid")

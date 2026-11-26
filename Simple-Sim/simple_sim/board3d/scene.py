@@ -155,6 +155,30 @@ def bracket_job(bracket: dict[str, Any], board3d: dict[str, Any]) -> dict[str, A
             "topMm": float(bracket["topMm"]), "holes": holes}
 
 
+def sample_variants(board3d: dict[str, Any], rng: Any) -> dict[str, Any]:
+    """A copy of *board3d* as one random unit of the product (datasets: units differ, e.g. a D-sub with or without a metal
+    top cover, an insulating sheet fitted or not). Part catalog ``variants`` (``[{"weight": w, "set": {...}}]``, applied
+    to ``body.catalog``) pick one by weight, ``brackets`` / ``sheets`` with ``p`` are kept with that probability. The
+    choices are in ``board3d["variants"]`` ({refdes: index, "brackets": [...], "sheets": [...]}). *rng*: random.Random."""
+    out = copy.deepcopy(board3d)
+    chosen: dict[str, Any] = {}
+    for c in out.get("components", []):
+        cat = (c.get("body") or {}).get("catalog") or {}
+        vs = cat.get("variants") or []
+        if not vs:
+            continue
+        k = rng.choices(range(len(vs)), weights=[float(v.get("weight", 1.0)) for v in vs])[0]
+        c["body"]["catalog"] = {**{kk: vv for kk, vv in cat.items() if kk != "variants"}, **(vs[k].get("set") or {})}
+        chosen[c["refdes"]] = k
+    for key in ("brackets", "sheets"):
+        keep = [rng.random() < float(x.get("p", 1.0)) for x in out.get(key, [])]
+        out[key] = [x for x, k in zip(out.get(key, []), keep) if k]
+        if keep:
+            chosen[key] = keep
+    out["variants"] = chosen
+    return out
+
+
 def sheet_job(sheet: dict[str, Any]) -> dict[str, Any]:
     """A flat plate parallel to the board (``mechanics.json`` ``sheets[]``: an insulating foil or base plate under the
     board): ``x0..x1`` x ``y0..y1`` (board mm), top face at ``zTopMm`` (board top = 0; under the board <= -1.6),

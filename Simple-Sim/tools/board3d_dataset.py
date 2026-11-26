@@ -31,7 +31,7 @@ from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
 from simple_sim.board3d import load_board3d  # noqa: E402
 from simple_sim.board3d.dataset import crop_part, plan_sheet  # noqa: E402
 from simple_sim.board3d.render import SOURCES, crop_real, prepare_substrate, render_window  # noqa: E402
-from simple_sim.board3d.scene import apply_defects  # noqa: E402
+from simple_sim.board3d.scene import apply_defects, sample_variants  # noqa: E402
 from simple_sim.board3d.substrate import BoardRaster  # noqa: E402
 
 
@@ -46,6 +46,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--size", type=int, default=128, help="crop size in px")
     ap.add_argument("--samples", type=int, default=64)
     ap.add_argument("--device", default="GPU")
+    ap.add_argument("--variants", action="store_true",
+                    help="each render a random unit: part catalog variants and mechanics with a presence probability p")
+    ap.add_argument("--all-rendered", action="store_true",
+                    help="render every part (bare board under the parts, every part lit): by default a part at its "
+                         "nominal place shows the scan, so OK crops would be real pixels and defect crops rendered, "
+                         "a shortcut a classifier can learn instead of the defect")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--name", default="run")
     ap.add_argument("--out", type=Path)
@@ -75,8 +81,10 @@ def main(argv: list[str] | None = None) -> int:
         if not plan:
             continue
         ops = [p["op"] for p in plan if p["op"]]
-        scene = apply_defects(board3d, ops) if ops else board3d
-        res = render_window(scene, a.board3d, window, f"sheet_{a.name}_{s:04d}", samples=a.samples, device=a.device)
+        unit = sample_variants(board3d, rng) if a.variants else board3d
+        scene = apply_defects(unit, ops) if ops else unit
+        look = {"light": {"preset": "flatbed", "scanNominal": False}, "under_parts": "bare"} if a.all_rendered else {}
+        res = render_window(scene, a.board3d, window, f"sheet_{a.name}_{s:04d}", samples=a.samples, device=a.device, **look)
         render, real = cv2.imread(res["image"], cv2.IMREAD_COLOR), crop_real(board3d, window)
         for k, p in enumerate(plan):
             sid = f"{a.name}_{s:04d}_{k:02d}"
@@ -87,11 +95,12 @@ def main(argv: list[str] | None = None) -> int:
             c = p["component"]
             rows.append({"id": sid, "image": f"images/{sid}.png", "real": f"real/{sid}.png", "label": str(p["class"]),
                          "op": p["op"], "refdes": c["refdes"], "package": c["package"], "family": c["family"],
-                         "sheet": s, "source": a.source, **geo})
+                         "sheet": s, "source": a.source, **({"variants": unit.get("variants", {})} if a.variants else {}), **geo})
         print(f"sheet {s + 1}/{a.sheets}: {len(plan)} parts, {res['seconds']} s", flush=True)
     (out / "labels.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
     summary = {"crops": len(rows), "byClass": dict(Counter(x["label"] for x in rows)), "byFamily": dict(Counter(x["family"] for x in rows)),
-               "seconds": round(time.monotonic() - t0, 1), "source": a.source, "samples": a.samples, "size": a.size, "seed": a.seed}
+               "seconds": round(time.monotonic() - t0, 1), "source": a.source, "samples": a.samples, "size": a.size, "seed": a.seed,
+               "allRendered": a.all_rendered}
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary))
     if a.json:

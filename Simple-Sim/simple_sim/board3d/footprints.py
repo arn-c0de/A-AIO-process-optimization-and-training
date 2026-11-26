@@ -190,8 +190,11 @@ def connector_spec(package: str, catalog: dict[str, Any]) -> dict[str, Any]:
     m = re.search(r"-(\d+)", n)
     pins = int(m[1]) if m else 2
     rows = int(catalog.get("rows") or (2 if re.search(r"IDC|PHD|-D-", n) else 1))
-    return {"kind": str(catalog["kind"]), "orientation": str(catalog.get("orientation") or ""), "pins": pins, "rows": rows,
+    spec = {"kind": str(catalog["kind"]), "orientation": str(catalog.get("orientation") or ""), "pins": pins, "rows": rows,
             "pitch": pitch, "totalHeightMm": catalog.get("totalHeightMm")}
+    # optional build options of one unit (catalog or a sampled variant, scene.sample_variants): coin cell, D-sub top cover
+    spec.update({k: catalog[k] for k in ("cell", "topCover") if k in catalog})
+    return spec
 
 
 def footprint_for(c: dict[str, Any]) -> dict[str, Any]:

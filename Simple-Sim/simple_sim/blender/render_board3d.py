@@ -262,7 +262,7 @@ def _assembly(kind: str, c: dict, h: float, standoff: float, pads: list, board: 
         total = spec.get("totalHeightMm")
         return bm.connector(spec["kind"], spec.get("orientation", ""), l, w, h, pins=int(spec["pins"]), rows=int(spec["rows"]),
                             pitch=float(spec["pitch"]), total_h=None if total is None else float(total), front=_front(c, board),
-                            cell=bool(spec.get("cell", False)))
+                            cell=bool(spec.get("cell", False)), top_cover=spec.get("topCover"))
     if kind == "box":
         return bm.Assembly([bm.Piece("body", bm.shape_at(bm.molded_shape(l, w, h, leads=False)), "mold", photo_sides=True)])
     return None
