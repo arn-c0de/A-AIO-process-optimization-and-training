@@ -123,6 +123,77 @@ def _generic_part(standoff: float = 0.0) -> dict[str, Any]:
             "leads": False, "lead_width": [0.6, 0.1], "marking": None}
 
 
+#: chip-type families without their own render_batch end caps: (end cap length / L, body material)
+_CHIP_LIKE = {"inductor": (0.25, "mold"), "led": (0.16, "mold"), "filter": (0.22, "ceramic"), "diode": (0.2, "mold")}
+#: moulded two-terminal parts (SOD / SMA diodes, shielded power inductors) rest on their terminal sheet (mm)
+TAB_SHEET_MM = 0.1
+
+
+def _chip_package(package: str) -> bool:
+    """IPC chip-style name (``DIOC1608``, ``LEDSC2012``, ...): two end caps, not a moulded body."""
+    return re.match(r"^(?:RES|CAP|IND|LED|DIO|FUS|FIL)S?C\d{4}", package.upper()) is not None
+
+
+def _bga_pitch(package: str) -> float:
+    m = re.match(r"^BGA\d*C(\d+)P", package.upper()) or re.search(r"(\d+)P\d", package.upper())
+    return int(m[1]) / 100 if m else 0.8
+
+
+def board_part(fam: str, package: str, height: float, catalog: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Scene ``part`` of a board3d component: render_batch's fields plus ``board``, the body the board renderer
+    (``render_board3d.py`` / ``blender.body_mesh``) builds: ``chip`` (end caps), ``gullwing`` (drafted mould + bent
+    leads), ``qfn`` (sawn, terminals on the walls), ``array`` (side terminations), ``crystal`` (alumina base + lid),
+    ``bga`` (substrate, mould, balls), ``tabs`` (moulded body on bent terminals), ``can`` (electrolytic), ``connector``
+    (from the part catalog's ``kind``: housings, shields, pins; *catalog* = ``body.catalog``) or ``box``.
+
+    Families without a render_batch row used to fall back to a plain moulded box: SOT-23-6 had no leads, chip
+    inductors / LEDs / filters no end caps, arrays no terminations."""
+    if fam in ("resistor", "capacitor"):
+        part, kind = scene_part(fam), "chip"
+    elif fam in _CHIP_LIKE and (fam != "diode" or _chip_package(package)):
+        cap, material = _CHIP_LIKE[fam]
+        part = scene_part("capacitor")
+        part.update({"cap_len": cap, "body_material": material})
+        kind = "chip"
+    elif fam in ("sot", "sot6", "soic"):
+        part, kind = scene_part("sot" if fam == "sot6" else fam), "gullwing"
+    elif fam == "qfn":
+        part, kind = scene_part("qfn"), "qfn"
+    elif fam in ("diode", "power_inductor"):
+        part, kind = _generic_part(standoff=TAB_SHEET_MM / max(height, 0.2)), "tabs"
+        part["body_material"] = "mold" if fam == "diode" else "ferrite"
+    elif fam == "electrolytic":
+        part, kind = {**_generic_part(), "body": "can"}, "can"   # built by render_board3d, not render_batch
+    elif fam == "bga":
+        part, kind = _generic_part(standoff=0.3 / max(height, 0.3)), "bga"
+        part["pitch"] = _bga_pitch(package)
+    elif fam in ("array_r", "array_c", "crystal"):
+        part, kind = _generic_part(), "array" if fam.startswith("array") else "crystal"
+        if fam == "array_c":
+            part["body_material"] = "ceramic"
+    elif catalog and catalog.get("kind"):
+        part, kind = _generic_part(), "connector"
+        part["connector"] = connector_spec(package, catalog)
+    else:
+        part, kind = _generic_part(), "box"
+    part.update({"height_ratio": _HEIGHT_RATIO_EXACT, "marking": None, "board": kind})
+    return part
+
+
+def connector_spec(package: str, catalog: dict[str, Any]) -> dict[str, Any]:
+    """Connector parameters for ``body_mesh.connector``: the catalog's kind / orientation / total height, pins, rows
+    and pitch from the package name (``...250P...-4``: 2.50 mm, 4 pins; ``IDC`` / ``PHD``: two rows); the catalog's
+    ``rows`` wins over the name (a dual-row header whose package name does not say so)."""
+    n = package.upper()
+    m = re.search(r"(\d{3})P", n)
+    pitch = int(m[1]) / 100 if m else 2.54
+    m = re.search(r"-(\d+)", n)
+    pins = int(m[1]) if m else 2
+    rows = int(catalog.get("rows") or (2 if re.search(r"IDC|PHD|-D-", n) else 1))
+    return {"kind": str(catalog["kind"]), "orientation": str(catalog.get("orientation") or ""), "pins": pins, "rows": rows,
+            "pitch": pitch, "totalHeightMm": catalog.get("totalHeightMm")}
+
+
 def footprint_for(c: dict[str, Any]) -> dict[str, Any]:
     """``{"pads": [...], "thermal": idx|None, "part": ScenePart, "height": mm, "heightGuess": bool}`` of a component."""
     fam, pkg = c["family"], str(c.get("package", ""))
@@ -149,11 +220,11 @@ def footprint_for(c: dict[str, Any]) -> dict[str, Any]:
         pads = [(0.0, 0.0, l, w)]
     else:
         pads = []                     # bga (hidden balls), connectors, holes, pads_only, generic: no SMD lands yet
-    if fam in FAMILIES and fam != "tht_pin":
-        part = scene_part(fam)
-        part.update({"height_ratio": _HEIGHT_RATIO_EXACT, "marking": None})
-    elif fam == "electrolytic":
-        part = {**_generic_part(), "body": "can"}       # built by render_board3d (base + aluminium can), not render_batch
-    else:
-        part = _generic_part(standoff=0.3 / max(height, 0.3) if fam == "bga" else 0.0)
+    lands = c.get("lands")
+    if lands and len(lands) == len(pads) and c.get("pose"):
+        # lands measured on bare-board photos (simple_sim.board3d.barepads), fixed to the board: placed relative to
+        # the current pose, so a fitted (offset) part sits off its real lands; unmeasured pads keep the estimate
+        from simple_sim.board3d.barepads import land_in_part
+        pads = [land_in_part(m, c["pose"]) if m else p for p, m in zip(pads, lands)]
+    part = board_part(fam, pkg, height, body.get("catalog"))
     return {"pads": pads, "thermal": thermal, "part": part, "height": height, "heightGuess": guess}

@@ -45,6 +45,7 @@ from simple_sim.blender.bpy_kit import configure_render as _configure_render  # 
 from simple_sim.blender.bpy_kit import enable_cycles_gpu as _enable_cycles_gpu  # noqa: E402,F401  (re-exported)
 from simple_sim.blender.bpy_kit import look_at as _look_at  # noqa: E402
 from simple_sim.blender.bpy_kit import material as _material  # noqa: E402
+from simple_sim.blender import body_mesh as _bm  # noqa: E402  (stdlib-only geometry)
 
 PadMm = tuple[float, float, float, float]  # (cx, cy, w, h) in mm, Blender axes
 
@@ -52,6 +53,12 @@ PadMm = tuple[float, float, float, float]  # (cx, cy, w, h) in mm, Blender axes
 # (``board.footprints.PartFamily.blender``, baked by ``photoreal.scene.render_board``; D35).
 # Reflowed paste dome |u|^3 + |v|^3; the 2D meniscus uses 2.5 (``photoreal/meniscus.py``): known difference (X12).
 _PASTE_DOME_EXPONENT = 3
+#: gull-wing lead sheet thickness: LEAD_THICKNESS x lead width, at most LEAD_T_MAX mm. Relative on purpose: ROI scenes
+#: show ICs scaled down into a few-mm field, an absolute floor would make the sheet thicker than the lead is wide.
+LEAD_THICKNESS, LEAD_T_MAX = 0.32, 0.2
+#: solder surface slope limit at the land edge (tan of a 45 deg wetting angle): the height field used to drop from
+#: its full height to zero over 12 % of the land width, a vertical curtain of solder beside wide lands
+MENISCUS_SLOPE = 1.0
 
 
 def _parse_args() -> argparse.Namespace:
@@ -90,20 +97,37 @@ def _mesh_object(name: str, verts, faces, mat: bpy.types.Material, *, smooth: bo
     return obj
 
 
-def _box(name: str, size, loc, mat: bpy.types.Material, *, parent=None, bevel: float = 0.0) -> bpy.types.Object:
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc)
-    obj = bpy.context.active_object
-    obj.name = name
-    obj.scale = tuple(float(s) for s in size)
-    obj.data.materials.append(mat)
-    if bevel > 0:
-        mod = obj.modifiers.new("Bevel", "BEVEL")
-        mod.width = bevel
-        mod.segments = 3
-        bpy.ops.object.shade_smooth()
+def _mesh(name: str, body: "_bm.BodyMesh", loc, mat: bpy.types.Material, *, parent=None) -> bpy.types.Object:
+    """A ``body_mesh`` mesh in mm (object scale 1): only its curved bands smooth-shaded."""
+    me = bpy.data.meshes.new(name)
+    me.from_pydata(body.verts, [], body.faces)
+    me.uv_layers.new(name="UVMap")
+    me.polygons.foreach_set("use_smooth", body.smooth)
+    me.update()
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(obj)
+    obj.location = tuple(float(v) for v in loc)
+    me.materials.append(mat)
     if parent is not None:
         obj.parent = parent
     return obj
+
+
+def _box(name: str, size, loc, mat: bpy.types.Material, *, parent=None, bevel: float = 0.0) -> bpy.types.Object:
+    """Box of *size* (mm) centred on *loc*. *bevel* is an edge radius in mm, capped (``body_mesh.box_shape``), on the
+    vertical and top edges only: a bevel modifier on a scaled unit cube rounded in the unscaled cube (~1 mm along a
+    10 mm body) and on every edge, the bottom included."""
+    return _mesh(name, _bm.body_mesh(_bm.box_shape(size, bevel)), loc, mat, parent=parent)
+
+
+def _body(name: str, shape: "_bm.BodyShape", loc, mat: bpy.types.Material, *, parent=None) -> bpy.types.Object:
+    """Part body / end cap of a datasheet-like *shape* centred on *loc* (``body_mesh``)."""
+    return _mesh(name, _bm.body_mesh(shape), loc, mat, parent=parent)
+
+
+def _strip(name: str, path, thickness: float, width: float, origin, direction, mat) -> bpy.types.Object:
+    """Bent sheet-metal lead (``body_mesh.strip_mesh``): centre line *path* [(s, z)] from *origin* along *direction*."""
+    return _mesh(name, _bm.strip_mesh(path, thickness, width, origin, direction), (0.0, 0.0, 0.0), mat)
 
 
 def _box_between(name: str, p0: Vector, p1: Vector, width: float, thickness: float, mat) -> bpy.types.Object:
@@ -157,7 +181,10 @@ def _fillet(name: str, pad, contact: dict[str, float] | None, h_term: float, big
                 v = ((j / n * ny) % 1.0) * 2 - 1
                 z = dome_h * max(0.0, 1.0 - (abs(u) ** _PASTE_DOME_EXPONENT + abs(v) ** _PASTE_DOME_EXPONENT)
                                    * (0.85 if nx * ny == 1 else 1.2))
-            verts.append((x, y, 0.001 + z * rim))
+            z *= rim
+            if not excess:          # a concave meniscus runs out flat at the land edge; too much solder bulges
+                z = min(z, MENISCUS_SLOPE * min(x - xs[0], xs[-1] - x, y - ys[0], ys[-1] - y))
+            verts.append((x, y, 0.001 + z))
     faces = [(j * (n + 1) + i, j * (n + 1) + i + 1, (j + 1) * (n + 1) + i + 1, (j + 1) * (n + 1) + i)
              for j in range(n) for i in range(n)]
     return _mesh_object(name, verts, faces, mat)
@@ -225,7 +252,7 @@ def part_params(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
         t = 0.0
         for _, _, pw, ph in pads:
             lw = min(a * min(pw, ph), b * max(L, W))
-            t = 0.25 * lw
+            t = min(LEAD_THICKNESS * lw, LEAD_T_MAX)
             p["leads"].append({"width": lw, "thickness": t})
         p["contacts"], p["solder_height"] = "leads", 0.9 * t
     elif part["leads"]:
@@ -279,7 +306,11 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
     else:
         m_body = _cfg_material("mat_body", mats.get("body") or {}, (0.02, 0.02, 0.02), 0.5, 0.0, bump=0.03)
     objs: list[bpy.types.Object] = [root]
-    objs.append(_box("body", (L, W, H), (offset, 0.0, H / 2), m_body, parent=root, bevel=0.06 * min(W, H)))
+    if p["end_caps"]:
+        body_shape = _bm.chip_body_shape(L, W, H)
+    else:
+        body_shape = _bm.molded_shape(L, W, H, leads=p["contacts"] in ("leads", "none") and bool(board["part"]["leads"]))
+    objs.append(_body("body", body_shape, (offset, 0.0, H / 2), m_body, parent=root))
 
     if p["end_caps"]:
         # Tin plating is satin, not a mirror: it must catch the ring light when it faces the camera.
@@ -288,9 +319,8 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
         for s in (-1, 1):
             # Caps wrap slightly beyond the body, so their end faces never coincide with the body's
             # (an upright tombstone shows the cap's end face to the camera).
-            objs.append(_box(f"endcap_{s}", (cap + 0.02 * H, W * 1.02, H * 1.02),
-                             (offset + s * ((L - cap) / 2 + 0.01 * H), 0.0, H / 2), m_cap,
-                             parent=root, bevel=0.1 * min(W, H)))
+            objs.append(_body(f"endcap_{s}", _bm.chip_cap_shape(cap + 0.02 * H, W * 1.02, H * 1.02),
+                              (offset + s * ((L - cap) / 2 + 0.01 * H), 0.0, H / 2), m_cap, parent=root))
         if p["marking"]:
             m_ink = _material("mat_ink", (0.85, 0.85, 0.82), roughness=0.8)
             _text("marking", p["marking"][0], p["marking_size"], (offset, 0.0, H + 0.0005), m_ink, root)
@@ -323,14 +353,17 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
             edge = Vector((max(-L / 2, min(L / 2, loc.x)), max(-W / 2, min(W / 2, loc.y)), 0.0))
             start, foot = to_world(edge * 0.98), to_world(loc)
             lw, t = lead["width"], lead["thickness"]
-            shoulder = start + Vector((0, 0, standoff + 0.45 * H))
-            knee = start + (foot - start) * 0.3 + Vector((0, 0, standoff + 0.45 * H))
-            ankle = start + (foot - start) * 0.55 + Vector((0, 0, t / 2))
-            for seg, (a, b) in enumerate(((shoulder, knee), (knee, ankle), (ankle, foot + Vector((0, 0, t / 2))))):
-                objs.append(_box_between(f"lead_{k}_{seg}", a, b, lw, t, m_lead))
-            d = foot - ankle
-            mid = (foot + ankle) / 2
-            contacts.append({"cx": mid.x, "cy": mid.y, "hl": d.length / 2, "hw": lw / 2, "angle": math.atan2(d.y, d.x)})
+            # one bent strip: out of the parting line (45 % of H), a round bend down (inner radius 1.5 t), the
+            # foot flat on the land up to 20 % of the land beyond its centre (the toe fillet forms past it)
+            d = foot - start
+            reach = math.hypot(d.x, d.y)
+            ux, uy = (d.x / reach, d.y / reach) if reach > 1e-9 else (axis.x, axis.y)
+            p_len = abs(_pw * ux) + abs(_ph * uy)
+            path, s_leg, s_end = _bm.lead_path(reach, p_len, t, standoff + 0.45 * H, 0.0)
+            objs.append(_strip(f"lead_{k}", path, t, lw, (start.x, start.y), (ux, uy), m_lead))
+            mid = (s_leg + s_end) / 2
+            contacts.append({"cx": start.x + ux * mid, "cy": start.y + uy * mid, "hl": (s_end - s_leg) / 2, "hw": lw / 2,
+                             "angle": math.atan2(uy, ux)})
         return objs, contacts, p["solder_height"]
     if p["contacts"] == "none":
         return objs, [None] * len(pads), 0.0  # tombstoned leaded part: leads lifted, paste only

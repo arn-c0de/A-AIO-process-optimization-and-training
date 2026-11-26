@@ -42,17 +42,23 @@ def pad_world(c: dict[str, Any], index: int, pose: dict[str, Any] | None = None)
 
 def apply_fit(board3d: dict[str, Any]) -> dict[str, Any]:
     """*board3d* with every accepted measured fit (``component["fit"]``, :mod:`simple_sim.board3d.fit`) made the part's
-    pose and body size: the board3d then shows the board as it really is, defects are relative to that. Idempotent
-    (``fitApplied``); returns *board3d* itself when there is nothing to apply, else a copy."""
-    if board3d.get("fitApplied") or not any((c.get("fit") or {}).get("accepted") for c in board3d["components"]):
+    pose and body size, then the photo outline fit (``component["photoFit"]``, :func:`simple_sim.board3d.parttex.photo_fit`):
+    the board3d then shows the board as it really is, defects are relative to that. Idempotent (``fitApplied``);
+    returns *board3d* itself when there is nothing to apply, else a copy."""
+    if board3d.get("fitApplied") or not any((c.get("fit") or {}).get("accepted") or c.get("photoFit") for c in board3d["components"]):
         return board3d
     out = copy.deepcopy(board3d)
     for c in out["components"]:
-        f = c.get("fit") or {}
-        if not f.get("accepted") or c.get("pose") is None or c.get("body") is None:
+        if c.get("pose") is None or c.get("body") is None:
             continue
-        c["pose"].update({"x": f["x"], "y": f["y"], "rotDeg": f["rotDeg"]})
-        c["body"].update({"l": f["l"], "w": f["w"]})
+        f = c.get("fit") or {}
+        if f.get("accepted"):
+            c["pose"].update({"x": f["x"], "y": f["y"], "rotDeg": f["rotDeg"]})
+            c["body"].update({"l": f["l"], "w": f["w"]})
+        if pf := c.get("photoFit"):
+            # the photos' outline (parttex.photo_fit): edges trimmed where the photos show board inside the body
+            c["pose"].update({"x": pf["x"], "y": pf["y"]})
+            c["body"].update({"l": pf["l"], "w": pf["w"]})
     out["fitApplied"] = True
     return out
 

@@ -106,6 +106,15 @@ parts from public datasheets only, e.g. JST series and 2.54 mm headers); match b
 then package name, then regex. `load_board3d` applies it (`board3d["partCatalog"]`); the viewer re-exports its GLB when
 the applied heights change. Use `PartCatalog.load().lookup(texts=[value, part], package=pkg)` in generators too.
 
+Real SMD lands (`python -m simple_sim board3d-bare --board3d <dir> --photo <bare photo or run dir> ...`,
+`simple_sim/board3d/barepads.py`): without CAD footprints the pads are rule-of-thumb estimates; a phone photo of the
+unpopulated board side is registered to board mm (mounting holes -> land ICP -> dense match against
+`substrate/scan_rgb.png`) and the land under every estimated pad is measured (marker watershed, half-contrast edge).
+Writes `<dir>/bare/lands.json` (board frame `[x, y, w, h, rotDeg]` per pad index, `null` = keep the estimate),
+`registration.json`, `bare_rgb.png`, `lands_mask.png`. `load_board3d` puts the lands on the components (`c["lands"]`)
+and `footprint_for` places them relative to the current, possibly fitted pose: lands belong to the board, not the
+part. A photo of the other board side, or one that registers worse than `--max-residual`, is dropped.
+
 Other commands: `generate-profile-dataset` / `train-profile` / `eval-profile` (component
 type classifier), `predict` (single image), `predict-two-stage`, `sample-check`,
 `create-multi-dataset` (merge datasets), `backfill-manifest` / `backfill-labels` (legacy

@@ -126,8 +126,8 @@ function lookOf(mat) {
     out = metal(new THREE.MeshStandardMaterial({ name: n, map: mat.emissiveMap }), 0.32);
   } else if (n.startsWith('mat_photo')) {
     out = new THREE.MeshStandardMaterial({ name: n, map: mat.map, roughness: 0.62, metalness: 0 });  // moulded epoxy
-  } else if (/^mat_(lead|solder|can|endcap|tin|pin|metal)/.test(n)) {
-    metal(mat, n.startsWith('mat_can') ? 0.22 : 0.3);
+  } else if (/^mat_(lead|solder|can|endcap|tin|pin|metal|role_(metal|alu|lid|ball))/.test(n)) {
+    metal(mat, n.startsWith('mat_can') || n.startsWith('mat_role_alu') ? 0.22 : 0.3);
   } else if (n.startsWith('mat_fr4_edge')) {
     Object.assign(mat, { roughness: 0.8, metalness: 0 });
   }

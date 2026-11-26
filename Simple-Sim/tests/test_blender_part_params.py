@@ -5,8 +5,9 @@ marking vocabulary and layout) from the baked scene's ``part`` entry (``board.fo
 instead of its own tables. Without ``bpy`` (not installed) the script is loaded against a recording
 stub: :func:`trace` records every body, end cap, lead segment, pin-1 mark and marking text that
 ``_build_part`` creates, the contacts, the solder height and the rng state, for every family and
-several bodies / footprints. ``tests/golden/blender_part_params.json`` holds those traces as captured
-on the script before D35 (HEAD ab592ad, which ignored ``part``).
+several bodies / footprints. ``tests/golden/blender_part_params.json`` holds those traces, first captured on
+the script before D35 (HEAD ab592ad, which ignored ``part``), regenerated for renderer v5 (real-size body meshes,
+bent lead strips, SOT-23-6 leads, chip inductor / LED end caps: ``simple_sim/generators/version.py``).
 
 Regenerate only for an intended Blender geometry change:
 ``.venv/bin/python -m tests.test_blender_part_params --update [--script PATH]``.

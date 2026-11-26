@@ -17,6 +17,8 @@ ENV/
 
 # Packaging / builds
 build/
+# ...but the viewer's vendored three.js lives in a build/ folder (three.js 0.170.0, see Simple-Sim/THIRD_PARTY_LICENSES.md)
+!Simple-Sim/web/board3d/vendor/three/build/
 dist/
 *.egg-info/
 

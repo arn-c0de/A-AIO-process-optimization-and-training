@@ -67,3 +67,15 @@ def test_apply_to_board3d(tmp_path):
     assert j1["body"]["h"] == 9.5 and j1["body"]["heightSource"] == "catalog" and j1["body"]["catalog"]["id"] == "conn"
     assert j3["body"]["h"] == 4.0                                   # measured stays
     assert res["unmatched"] == ["OTHER"] and list(res["applied"]) == ["J1"]
+
+
+def test_catalog_rows_reach_connector_spec(tmp_path):
+    from simple_sim.board3d.footprints import connector_spec
+    cat = PartCatalog.load(local=[_cat(tmp_path, [{"id": "dual", "packages": ["CONTEDG300PXY-8"], "kind": "wire_to_board",
+                                                   "rows": 2, "body": {"h": 9.9}}])])
+    b = {"components": [{"refdes": "J1", "package": "CONTEDG300PXY-8", "value": "",
+                         "body": {"l": 15, "w": 7, "h": None, "heightSource": None}}]}
+    apply_part_catalog(b, cat)
+    spec = connector_spec("CONTEDG300PXY-8", b["components"][0]["body"]["catalog"])
+    assert spec["rows"] == 2 and spec["pins"] == 8 and spec["pitch"] == 3.0
+    assert connector_spec("CONTEDG300PXY-8", {"kind": "wire_to_board"})["rows"] == 1   # name alone: one row

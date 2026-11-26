@@ -94,11 +94,12 @@ def test_blender_part_table():
     for gone in ("_HEIGHT_RATIO", "_RESISTOR_CODES", "_MARK_CHARS", '"capacitor"', '"sot"', '"soic"'):
         assert gone not in src
     ratios = {n: f.blender.height_ratio for n, f in FAMILIES.items() if f.blender is not BLENDER_GENERIC}
-    assert ratios == {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18, "tht_pin": 0.0}
+    assert ratios == {"resistor": 0.56, "capacitor": 0.56, "sot": 0.75, "soic": 0.38, "qfn": 0.18, "sot6": 0.69,
+                      "inductor": 0.56, "led": 0.56, "tht_pin": 0.0}      # sot6 / inductor / led: renderer v5
     assert {n for n, f in FAMILIES.items() if f.blender.body == "tht"} == {"tht_pin"}
     # X12: the Blender chip height (0.56) differs from the 2D tombstone thickness ratio (0.55) on purpose.
     from simple_sim.generators.opencv2d.photoreal.parts import THICKNESS_RATIO
     assert THICKNESS_RATIO == 0.55 and FAMILIES["resistor"].blender.height_ratio == 0.56
-    assert {n for n, f in FAMILIES.items() if f.blender.body == BLENDER_CHIP} == {"resistor", "capacitor"}
-    assert {n for n, f in FAMILIES.items() if f.blender.leads} == {"sot", "soic"}
-    assert scene_part("unknown") == scene_part("sot6")  # generic moulded IC
+    assert {n for n, f in FAMILIES.items() if f.blender.body == BLENDER_CHIP} == {"resistor", "capacitor", "inductor", "led"}
+    assert {n for n, f in FAMILIES.items() if f.blender.leads} == {"sot", "soic", "sot6"}
+    assert scene_part("unknown") == scene_part("array_r")  # generic moulded IC

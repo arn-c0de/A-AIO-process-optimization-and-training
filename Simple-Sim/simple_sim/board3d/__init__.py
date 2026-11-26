@@ -23,12 +23,28 @@ BOARD3D_FILE = "board3d.json"
 
 def load_board3d(folder: Path, *, part_catalog: bool = True) -> dict[str, Any]:
     """``<folder>/board3d.json`` (written by ``tools/board3d_import.py``), with the part catalog's body heights applied
-    (:func:`simple_sim.board3d.parts.apply_part_catalog`; the result is in ``board3d["partCatalog"]``)."""
+    (:func:`simple_sim.board3d.parts.apply_part_catalog`; the result is in ``board3d["partCatalog"]``), the lands
+    measured on bare-board photos (``bare/lands.json``, ``tools/board3d_bare.py``) as ``c["lands"]`` and the photo
+    outline fits (``parttex/photofit.json``) as ``c["photoFit"]``."""
     board3d = load_json(Path(folder) / BOARD3D_FILE)
     rebase_dv_root(board3d)
     if part_catalog:
         from simple_sim.board3d.parts import apply_part_catalog
         board3d["partCatalog"] = apply_part_catalog(board3d)
+    lf = Path(folder) / "bare" / "lands.json"
+    if lf.is_file():
+        # SMD lands measured on bare-board photos (tools/board3d_bare.py), board frame, one entry per pad index
+        lands = load_json(lf).get("lands", {})
+        for c in board3d.get("components", []):
+            if c.get("refdes") in lands:
+                c["lands"] = lands[c["refdes"]]
+    pf = Path(folder) / "parttex" / "photofit.json"
+    if pf.is_file():
+        # body outlines measured on the photos (simple_sim.board3d.parttex.photo_fit): applied after the scan fit
+        fits = load_json(pf).get("parts", {})
+        for c in board3d.get("components", []):
+            if c.get("refdes") in fits:
+                c["photoFit"] = fits[c["refdes"]]
     return board3d
 
 

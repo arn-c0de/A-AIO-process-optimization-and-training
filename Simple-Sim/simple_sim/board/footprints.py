@@ -62,9 +62,9 @@ class BlenderPart:
 
     * ``height_ratio`` 0.56 for chips vs ``photoreal.parts.THICKNESS_RATIO`` 0.55 (2D tombstone
       end face: thickness / width).
-    * Only resistors and capacitors get end caps; inductors and LEDs (2D: chips with ``cap_len``
-      0.25 / 0.16), arrays and power inductors are built as moulded ICs.
-    * Gull-wing leads only for ``sot`` / ``soic`` (2D also ``sot6``); lead width
+    * Resistors, capacitors, inductors and LEDs get end caps (``cap_len`` as in 2D); arrays and power
+      inductors are built as moulded ICs (renderer v5; before, inductors / LEDs were moulded too).
+    * Gull-wing leads for ``sot`` / ``soic`` / ``sot6`` (``sot6`` since v5); lead width
       ``min(a * min(pad w, h), b * max(L, W))`` vs 2D ``0.6 * min(pad extent, 0.3 * L)``.
     * Markings ignore ``render.marking_probability``; arrays, inductors and LEDs carry laser marking
       (2D: array codes or unmarked).
@@ -133,12 +133,15 @@ FAMILIES: Mapping[str, PartFamily] = MappingProxyType({f.name: f for f in (
     PartFamily("soic", KIND_IC, "U", MARK_LASER, leaded=True, fine_pitch=True, edge_inset=0.035,
                blender=BlenderPart(height_ratio=0.38, standoff=0.08, leads=True)),
     PartFamily("qfn", KIND_IC, "U", MARK_LASER, fine_pitch=True, edge_inset=0.012, blender=BlenderPart(height_ratio=0.18)),
-    PartFamily("sot6", KIND_IC, "U", MARK_LASER, leaded=True, fine_pitch=True, edge_inset=0.05),
+    PartFamily("sot6", KIND_IC, "U", MARK_LASER, leaded=True, fine_pitch=True, edge_inset=0.05,
+               blender=BlenderPart(height_ratio=0.69, standoff=0.08, leads=True, marking_lines=1, marking_size=(0.32, None))),
     PartFamily("array_r", KIND_ARRAY, "RN", MARK_ARRAY_CODE, fine_pitch=True, edge_inset=0.05),
     PartFamily("array_c", KIND_ARRAY, "CN", None, fine_pitch=True, edge_inset=0.05),
-    PartFamily("inductor", KIND_CHIP, "L", None, chip=True, cap_len=0.25, grain_sd=0.05),
+    PartFamily("inductor", KIND_CHIP, "L", None, chip=True, cap_len=0.25, grain_sd=0.05,
+               blender=BlenderPart(BLENDER_CHIP, 0.56, cap_len=0.25, marking=None)),
     PartFamily("power_inductor", KIND_POWER_INDUCTOR, "L", None, chip=True, grain_sd=0.07),
-    PartFamily("led", KIND_CHIP, "D", None, chip=True, cap_len=0.16, grain_sd=0.015),
+    PartFamily("led", KIND_CHIP, "D", None, chip=True, cap_len=0.16, grain_sd=0.015,
+               blender=BlenderPart(BLENDER_CHIP, 0.56, cap_len=0.16, marking=None)),
     # Through-hole pin row seen from the solder side: round plated pads with a hole, a pin in each, a conical
     # solder meniscus around the pin; no body. Blender only (BLENDER_ONLY_FOOTPRINTS): the 2D drawer kind is a
     # placeholder, ``opencv2d.render_roi`` refuses the footprint.

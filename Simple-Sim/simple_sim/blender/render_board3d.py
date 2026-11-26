@@ -29,6 +29,7 @@ from mathutils import Matrix, Vector
 _PACKAGE_ROOT = str(Path(__file__).resolve().parents[2])
 if _PACKAGE_ROOT not in sys.path:
     sys.path.insert(0, _PACKAGE_ROOT)
+from simple_sim.blender import body_mesh as bm  # noqa: E402
 from simple_sim.blender import render_batch as rb  # noqa: E402
 
 
@@ -139,31 +140,171 @@ def _shadow_catcher(job: dict) -> None:
     scene.render.image_settings.color_mode = "RGBA"
 
 
-# Unit cube of ``bpy.ops.mesh.primitive_cube_add(size=1)``: same vertices, outward quads, a UV layer.
-_CUBE_V = [(-.5, -.5, -.5), (.5, -.5, -.5), (.5, .5, -.5), (-.5, .5, -.5), (-.5, -.5, .5), (.5, -.5, .5), (.5, .5, .5), (-.5, .5, .5)]
-_CUBE_F = [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
-
-
-def _fast_box(name: str, size, loc, mat, *, parent=None, bevel: float = 0.0):
-    """``render_batch._box`` through the data API: ``bpy.ops`` re-evaluates the scene on every call (77 ms per box
-    with ~1000 objects, 20 of 22 s of a 97-part build). Same geometry, scale, bevel and smooth shading."""
+def _shape_mesh(name: str, shape: bm.BodyShape):
+    """Mesh of a :class:`body_mesh.BodyShape` in mm (centred, scale 1): flat walls, smooth curved bands only."""
+    body = bm.body_mesh(shape)
     me = bpy.data.meshes.new(name)
-    me.from_pydata(_CUBE_V, [], _CUBE_F)
+    me.from_pydata(body.verts, [], body.faces)
     me.uv_layers.new(name="UVMap")
+    me.polygons.foreach_set("use_smooth", body.smooth)
     me.update()
-    obj = bpy.data.objects.new(name, me)
+    return me
+
+
+#: render_batch's box builds through the data API in real mm now (it used ``bpy.ops`` and a bevel modifier on a scaled
+#: unit cube: 77 ms per box in a full board scene, and the bevel stretched with the body)
+_fast_box = rb._box
+
+
+def _set_mesh(obj, shape: bm.BodyShape) -> None:
+    """Swap *obj*'s mesh for *shape* (materials kept)."""
+    old = obj.data
+    me = _shape_mesh(old.name, shape)
+    for m in old.materials:
+        me.materials.append(m)
+    obj.data = me
+    bpy.data.meshes.remove(old)
+
+
+#: material per piece role (``body_mesh.ROLES``): (rgb, roughness, metallic)
+ROLE_MATERIALS = {
+    "mold": ((0.03, 0.03, 0.03), 0.55, 0.0), "ceramic": ((0.42, 0.26, 0.14), 0.55, 0.0),
+    "ferrite": ((0.07, 0.07, 0.075), 0.75, 0.0), "metal": ((0.75, 0.75, 0.74), 0.35, 1.0),
+    "alu": ((0.78, 0.78, 0.8), 0.3, 1.0), "base": ((0.03, 0.03, 0.03), 0.6, 0.0),
+    "substrate": ((0.10, 0.14, 0.07), 0.6, 0.0), "lid": ((0.70, 0.70, 0.72), 0.35, 1.0),
+    "white": ((0.85, 0.84, 0.80), 0.5, 0.0), "ball": ((0.72, 0.72, 0.74), 0.25, 1.0),
+    "natural": ((0.78, 0.72, 0.58), 0.6, 0.0), "insert": ((0.015, 0.015, 0.015), 0.8, 0.0),
+}
+#: names of the meshes that carry the photo on their top faces (``_apply_photo_uvs``)
+PHOTO_PREFIXES = ("body", "endcap", "lead_", "term_", "lid")
+
+
+def _role_material(role: str):
+    mat = bpy.data.materials.get(f"mat_role_{role}")
+    if mat is None:
+        rgb, rough, metal = ROLE_MATERIALS[role]
+        mat = rb._material(f"mat_role_{role}", rgb, roughness=rough, metallic=metal, bump=0.02 if metal else 0.0)
+    return mat
+
+
+def _piece_object(piece: bm.Piece, parent, loc) -> object:
+    me = bpy.data.meshes.new(piece.name)
+    me.from_pydata(piece.mesh.verts, [], piece.mesh.faces)
+    me.uv_layers.new(name="UVMap")
+    me.polygons.foreach_set("use_smooth", piece.mesh.smooth)
+    me.update()
+    me.materials.append(_role_material(piece.role))
+    obj = bpy.data.objects.new(piece.name, me)
     bpy.context.collection.objects.link(obj)
-    obj.location = tuple(float(v) for v in loc)
-    obj.scale = tuple(float(v) for v in size)
-    me.materials.append(mat)
-    if bevel > 0:
-        mod = obj.modifiers.new("Bevel", "BEVEL")
-        mod.width = bevel
-        mod.segments = 3
-        me.shade_smooth()
-    if parent is not None:
-        obj.parent = parent
+    obj.location = loc
+    obj.parent = parent
+    obj["photo_sides"] = piece.photo_sides
     return obj
+
+
+def _board_kind(part: dict) -> str:
+    if part.get("board"):
+        return str(part["board"])
+    if part.get("body") in ("chip", "can"):
+        return str(part["body"])
+    return "gullwing" if part.get("leads") else "box"
+
+
+def _front(c: dict, board: dict | None) -> tuple[float, float]:
+    """Part-frame axis (unit +-x / +-y) towards the nearest board edge: where a horizontal connector's mating face
+    looks (the job has no mating side; connectors sit at the edge they are plugged from)."""
+    pose = c["nominal"]
+    bw, bh = float((board or {}).get("widthMm", 0.0)), float((board or {}).get("heightMm", 0.0))
+    if bw <= 0 or bh <= 0:
+        return (0.0, -1.0)
+    x, y = float(pose["x"]), float(pose["y"])
+    dist = {(-1.0, 0.0): x, (1.0, 0.0): bw - x, (0.0, -1.0): y, (0.0, 1.0): bh - y}
+    wx, wy = min(dist, key=dist.get)
+    a = -math.radians(float(pose["rotDeg"]))
+    px, py = wx * math.cos(a) - wy * math.sin(a), wx * math.sin(a) + wy * math.cos(a)
+    return (1.0 if px > 0 else -1.0, 0.0) if abs(px) >= abs(py) else (0.0, 1.0 if py > 0 else -1.0)
+
+
+def _assembly(kind: str, c: dict, h: float, standoff: float, pads: list, board: dict | None = None) -> bm.Assembly | None:
+    l, w, part = float(c["l"]), float(c["w"]), c["part"]
+    if kind == "gullwing":
+        return bm.gullwing(l, w, h, standoff, pads)
+    if kind == "qfn":
+        return bm.qfn(l, w, h, standoff, pads, c.get("thermal"))
+    if kind == "array":
+        return bm.array(l, w, h, pads, role="ceramic" if part.get("body_material") == "ceramic" else "mold")
+    if kind == "crystal":
+        return bm.crystal(l, w, h)
+    if kind == "bga":
+        return bm.bga(l, w, h, standoff, float(part.get("pitch", 0.8)))
+    if kind == "tabs":
+        # flat-lead diodes (SOD-123F / SMAF) are near vertical: a drafted wall showed as a dark rim in the scan match
+        return bm.molded_tabs(l, w, h, standoff, pads, draft=False,
+                              role="ferrite" if part.get("body_material") == "ferrite" else "mold")
+    if kind == "connector":
+        spec = part["connector"]
+        total = spec.get("totalHeightMm")
+        return bm.connector(spec["kind"], spec.get("orientation", ""), l, w, h, pins=int(spec["pins"]), rows=int(spec["rows"]),
+                            pitch=float(spec["pitch"]), total_h=None if total is None else float(total), front=_front(c, board))
+    if kind == "box":
+        return bm.Assembly([bm.Piece("body", bm.shape_at(bm.molded_shape(l, w, h, leads=False)), "mold", photo_sides=True)])
+    return None
+
+
+def _to_part_frame(contact: dict, lx: float, ly: float, drot: float) -> dict:
+    """A body-frame contact (``body_mesh``) in the nominal part frame of the fillets."""
+    a = math.radians(drot)
+    x, y = contact["cx"], contact["cy"]
+    return {"cx": lx + x * math.cos(a) - y * math.sin(a), "cy": ly + x * math.sin(a) + y * math.cos(a),
+            "hl": contact["hl"], "hw": contact["hw"], "angle": contact["angle"] + a}
+
+
+def _reshape_part(objs: list, c: dict, kind: str, h: float, standoff: float, pads: list, lx: float, ly: float,
+                  drot: float, tomb: bool, board: dict | None = None):
+    """Datasheet-like geometry on render_batch's part root: chips keep render_batch's end caps (reshaped), every
+    other kind is rebuilt from a ``body_mesh`` assembly (render_batch's plain body box becomes its first piece).
+    Returns (contacts, solder height) overriding render_batch's, or None."""
+    body = next((o for o in objs if o.type == "MESH" and o.name.startswith("body")), None)
+    if body is None:
+        return None
+    if kind == "chip":
+        role = "ceramic" if c["part"].get("body_material") == "ceramic" else "mold"
+        for o in objs:
+            if o.type != "MESH" or not o.name.startswith(("body", "endcap")):
+                continue
+            co = [v.co for v in o.data.vertices]
+            l, w, hh = (max(q[i] for q in co) - min(q[i] for q in co) for i in range(3))
+            if o.name.startswith("endcap"):
+                _set_mesh(o, bm.chip_cap_shape(l, w, hh))
+            else:
+                _set_mesh(o, bm.chip_body_shape(l, w, hh))
+                o.data.materials.clear()
+                o.data.materials.append(_role_material(role))
+                o["photo_sides"] = True
+        return None
+    asm = _assembly(kind, c, h, standoff, pads, board)
+    if asm is None:
+        return None
+    loc = (body.location.x, body.location.y, 0.0)        # body frame: bottom face of the (tombstone-offset) body
+    parent = body.parent
+    first, *rest = asm.pieces
+    old = body.data
+    me = bpy.data.meshes.new(first.name)
+    me.from_pydata(first.mesh.verts, [], first.mesh.faces)
+    me.uv_layers.new(name="UVMap")
+    me.polygons.foreach_set("use_smooth", first.mesh.smooth)
+    me.update()
+    me.materials.append(_role_material(first.role))
+    body.data = me
+    bpy.data.meshes.remove(old)
+    body.location = loc
+    body["photo_sides"] = first.photo_sides
+    for piece in rest:
+        _piece_object(piece, parent, loc)
+    if tomb or asm.contacts is None:
+        return None
+    rb_like = [None if k is None else _to_part_frame(k, lx, ly, drot) for k in asm.contacts]
+    return rb_like, asm.solder_height
 
 
 def _cylinder_mesh(name: str, radius: float, depth: float, segments: int = 32):
@@ -212,7 +353,6 @@ class _BpyBoardMode:
 #: too much solder: land grown by this factor, blob this many times as high as the nominal fillet
 EXCESS_GROW, EXCESS_HEIGHT = 1.3, 2.2
 
-rb._box = _fast_box   # board mode only; render_batch's own ROI renders keep the operator versions
 rb.bpy = _BpyBoardMode()
 
 
@@ -243,6 +383,156 @@ def _uv_from_board(obj, raster: dict, to_nominal: Matrix | None = None) -> None:
     me.uv_layers.active.data.foreach_set("uv", uv.ravel())
 
 
+#: faces whose (nominal-frame) normal points up more than this take the photo; the rest keep their own material
+PHOTO_UP = 0.5
+#: walls tilted up more than this (normal z) are mould draft seen from above (``_photo_on_top``: slope_photo)
+SLOPE_MIN = 0.05
+#: side faces of moulded / ceramic bodies take the photo inside the outline, at SIDE_INSET x the smaller half size, at
+#: most SIDE_INSET_MAX_MM, one colour per wall face: a column of edge pixels per wall showed the marking (inset 30 %)
+#: or the leads' highlights bleeding into the body edge (0.2 mm) as vertical streaks
+SIDE_INSET, SIDE_INSET_MAX_MM = 0.3, 0.4
+
+
+def _photo_on_top(obj, photo, raster: dict, to_nominal: Matrix, slope_photo=None) -> None:
+    """The scan on the faces that look up (slot 1), the piece's own material on the walls (slot 0): the photo of the
+    top edge stretched down the walls made vertical streaks (the whole can of an electrolytic). Walls of moulded /
+    ceramic bodies (``photo_sides``) take the photo too, sampled inside the outline: their own colour, no streaks.
+    With *slope_photo* (the unlit scan, flatbed / room presets) the sloped walls seen from above (mould draft) show
+    the scan as scanned: the scanner lights them from the side at ~45 deg, the steep render disc left them as a dark
+    rim. Vertical walls stay lit (the unlit scan on every wall measured worse)."""
+    import numpy as np
+    me = obj.data
+    if not me.materials:
+        me.materials.append(_role_material("mold"))
+    while len(me.materials) > 1:
+        me.materials.pop(index=len(me.materials) - 1)
+    me.materials.append(photo)
+    if slope_photo is not None:
+        me.materials.append(slope_photo)
+    m = np.array(to_nominal @ obj.matrix_world, np.float64)
+    n = np.empty(len(me.polygons) * 3, np.float32)
+    me.polygons.foreach_get("normal", n)
+    nz = (n.reshape(-1, 3) @ m[:3, :3].T)
+    nz = nz[:, 2] / np.maximum(np.linalg.norm(nz, axis=1), 1e-9)
+    up = nz > PHOTO_UP
+    sides = bool(obj.get("photo_sides", False))
+    index = np.where(up | sides, 1, 0)
+    slope = (nz > SLOPE_MIN) & ~up
+    if slope_photo is not None:
+        index[slope] = 2          # a draft slope shows the scan at its own place: what the scanner saw there
+    me.polygons.foreach_set("material_index", index.astype(np.int32))
+    if not me.uv_layers:
+        me.uv_layers.new(name="UVMap")
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3).astype(np.float64)
+    idx = np.empty(len(me.loops), np.int32)
+    me.loops.foreach_get("vertex_index", idx)
+    lco = co[idx]
+    if sides:
+        starts = np.empty(len(me.polygons), np.int32)
+        totals = np.empty(len(me.polygons), np.int32)
+        me.polygons.foreach_get("loop_start", starts)
+        me.polygons.foreach_get("loop_total", totals)
+        loop_up = np.zeros(len(me.loops), bool)
+        for k in np.nonzero(up | slope)[0]:
+            loop_up[starts[k]:starts[k] + totals[k]] = True
+        side = ~loop_up
+        d = min(SIDE_INSET * float(np.abs(co[:, :2]).max(axis=0).min()), SIDE_INSET_MAX_MM)
+        lco[side, :2] = np.sign(lco[side, :2]) * np.maximum(np.abs(lco[side, :2]) - d, 0.0)
+        face_of = np.repeat(np.arange(len(me.polygons)), totals)
+        for k in range(2):                                   # one point per wall face: its loops' mean
+            mean = np.bincount(face_of, lco[:, k]) / np.maximum(totals, 1)
+            lco[side, k] = mean[face_of[side]]
+    world = lco @ m[:3, :3].T + m[:3, 3]
+    uv = np.empty((len(me.loops), 2), np.float32)
+    uv[:, 0] = (world[:, 0] - raster["x0"]) / raster["widthMm"]
+    uv[:, 1] = (world[:, 1] - raster["y0"]) / raster["heightMm"]
+    me.uv_layers.active.data.foreach_set("uv", uv.ravel())
+
+
+def _atlas_uv(obj, entry: dict, atlas_size, mat, to_nominal: Matrix) -> None:
+    """Per-part face atlas (``board3d.parttex``): every face of *obj* on its part's tile by its normal (in the part's
+    nominal frame): up -> ``top`` (x, y), else the dominant wall ``+x`` / ``-x`` (y, z) or ``+y`` / ``-y`` (x, z),
+    clamped to the tile (walls of a drafted body sit a little inside the tile's plane)."""
+    import numpy as np
+    me = obj.data
+    if not me.materials:
+        me.materials.append(_role_material("mold"))
+    while len(me.materials) > 1:
+        me.materials.pop(index=len(me.materials) - 1)
+    me.materials.append(mat)
+    if not me.uv_layers:
+        me.uv_layers.new(name="UVMap")
+    m = np.array(to_nominal @ obj.matrix_world, np.float64)
+    px, py, rot = (float(v) for v in entry["pose"])
+    a = -math.radians(rot)
+    ca, sa = math.cos(a), math.sin(a)
+    n = np.empty(len(me.polygons) * 3, np.float32)
+    me.polygons.foreach_get("normal", n)
+    n = n.reshape(-1, 3) @ m[:3, :3].T
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
+    nx, ny = n[:, 0] * ca - n[:, 1] * sa, n[:, 0] * sa + n[:, 1] * ca
+    faces = entry["faces"]
+    names = np.where(n[:, 2] > 0.5, "top", np.where(np.abs(nx) >= np.abs(ny), np.where(nx > 0, "+x", "-x"),
+                                                     np.where(ny > 0, "+y", "-y")))
+    # a wall no photo saw (the stills are near-frontal: each sees the walls facing away from its centre) takes the
+    # opposite wall, else any seen wall (parts are mostly symmetric), else its own material; never the top stretched
+    walls = [f for f in ("+x", "-x", "+y", "-y") if f in faces]
+    opposite = {"+x": "-x", "-x": "+x", "+y": "-y", "-y": "+y"}
+
+    def _wall(f):
+        if f in faces:
+            return f
+        if f == "top":
+            return "top"
+        return opposite[f] if opposite[f] in faces else (walls[0] if walls else "")
+    own_x = np.isin(names, ("+x", "-x"))       # the face's own wall axis (before the fallback below)
+    names = np.array([_wall(f) for f in names])
+    l_, w_ = (float(v) for v in entry["size"][:2])
+    half_l, half_w = max(l_ / 2, 1e-6), max(w_ / 2, 1e-6)
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    world = co.reshape(-1, 3).astype(np.float64) @ m[:3, :3].T + m[:3, 3]
+    lx = (world[:, 0] - px) * ca - (world[:, 1] - py) * sa
+    ly = (world[:, 0] - px) * sa + (world[:, 1] - py) * ca
+    lz = world[:, 2]
+    idx = np.empty(len(me.loops), np.int32)
+    me.loops.foreach_get("vertex_index", idx)
+    starts = np.empty(len(me.polygons), np.int32)
+    totals = np.empty(len(me.polygons), np.int32)
+    me.polygons.foreach_get("loop_start", starts)
+    me.polygons.foreach_get("loop_total", totals)
+    face_of = np.repeat(np.arange(len(me.polygons)), totals)
+    fname = names[face_of]
+    uv = np.zeros((len(me.loops), 2), np.float32)
+    aw, ah = (float(v) for v in atlas_size)
+    for f, info in faces.items():
+        sel = fname == f
+        if not sel.any() or "rect" not in info:
+            continue
+        u0, u1, v0, v1 = info["bounds"]
+        rx, ry, rw, rh = info["rect"]
+        vi = idx[sel]
+        if f == "top":
+            u, v = lx[vi], ly[vi]
+        else:
+            # along the loop's own wall (a borrowed tile of the other axis is stretched over this wall's length)
+            on_x = own_x[face_of[sel]]
+            half = np.where(on_x, half_w, half_l)
+            along = np.where(on_x, ly[vi], lx[vi])
+            u = u0 + (along + half) / (2 * half) * (u1 - u0)
+            v = lz[vi]
+        s = np.clip((u - u0) / max(u1 - u0, 1e-6), 0.0, 1.0)
+        t = np.clip((v - v0) / max(v1 - v0, 1e-6), 0.0, 1.0)
+        col = rx + 0.5 + s * (rw - 1.0)
+        row = ry + 0.5 + (1.0 - t) * (rh - 1.0)
+        uv[sel, 0] = col / aw
+        uv[sel, 1] = 1.0 - row / ah
+    me.uv_layers.active.data.foreach_set("uv", uv.ravel())
+    me.polygons.foreach_set("material_index", (names != "").astype(np.int32))
+
+
 def _local_offset(nominal: dict, pose: dict) -> tuple[float, float, float]:
     """Body displacement in the nominal part frame: (dx, dy) in mm, dRot in degrees (CCW)."""
     a = math.radians(nominal["rotDeg"])
@@ -268,16 +558,29 @@ def _build_component(c: dict, job: dict, mats: dict, rng: random.Random, pending
     previous = layer.active_layer_collection
     layer.active_layer_collection = layer.layer_collection.children[coll.name]
     contacts, h_solder = [None] * len(fp_pads), 0.0
-    if height > 0.0 and not c.get("missing") and c["part"].get("body") == "can":
-        contacts, h_solder = _build_can(c, lx, ly, drot, height, mats, len(fp_pads))
+    kind = _board_kind(c["part"])
+    if height > 0.0 and not c.get("missing") and kind == "can":
+        contacts, h_solder = _build_can(c, lx, ly, drot, height)
     elif height > 0.0 and not c.get("missing"):
         tomb = c.get("tombstone")
+        # The catalog height is the top above the board: the body is that minus its standoff (render_batch stacks
+        # the body height on top of the standoff, every part stood a standoff too tall).
+        standoff = float(c["part"].get("standoff", 0.0)) * height
+        h_body = max(height - standoff, 0.05)
+        part = {**c["part"], "standoff": standoff / h_body}
+        if kind == "gullwing" and not tomb:
+            part["leads"] = False            # the bent leads come from body_mesh.gullwing
         # render_batch scene convention: image axes (y down), rotation in image degrees (clockwise positive)
         board = {"body": {"center": [lx, -ly], "length": float(c["l"]), "width": float(c["w"]), "rotation_deg": -drot,
                           "lead_frame_deg": 0.0, "tilt_deg": float(tomb["tiltDeg"]) if tomb else 0.0,
                           "is_tombstone": bool(tomb), "raised_sign": float(tomb["raisedSign"]) if tomb else 1.0},
-                 "part": c["part"], "pads": [], "thermal_pad": c.get("thermal")}
-        _objs, contacts, h_solder = rb._build_part(fp_pads, board, 1.0, height, {}, rng)
+                 "part": part, "pads": [], "thermal_pad": c.get("thermal")}
+        _objs, contacts, h_solder = rb._build_part(fp_pads, board, 1.0, h_body, {}, rng)
+        override = _reshape_part(_objs, c, kind, h_body, standoff, fp_pads, lx, ly, drot, bool(tomb), job.get("board"))
+        if override is not None:
+            new_contacts, new_h = override
+            contacts = [n if n is not None else o for n, o in zip(new_contacts, contacts)]
+            h_solder = new_h if new_h is not None else h_solder
     excess = set(c.get("excess") or [])
     joints = []
     for i, (pad, contact) in enumerate(zip(fp_pads, contacts)):
@@ -336,27 +639,18 @@ def _blob(name: str, cx: float, cy: float, w: float, h: float, height: float, ma
     return obj
 
 
-def _build_can(c: dict, lx: float, ly: float, drot: float, height: float, mats: dict, n_pads: int):
-    """SMD aluminium electrolytic: square plastic base plate + round can (``part.body == "can"``). Names start
-    with ``body`` so the photo texture lands on them (the can's top shows the real print and vent)."""
-    l, w = float(c["l"]), float(c["w"])
+def _build_can(c: dict, lx: float, ly: float, drot: float, height: float):
+    """SMD aluminium electrolytic (``part.body == "can"``, :func:`body_mesh.electrolytic`): base plate with the
+    polarity chamfers on two flat terminals, the can with its bead and curled rim. The photo lands on the top faces
+    (the can's print and vent), the walls keep aluminium / black plastic."""
     root = bpy.data.objects.new("part_root", None)
     bpy.context.collection.objects.link(root)
     root.location = (lx, ly, 0.0)
     root.rotation_euler = (0.0, 0.0, math.radians(drot))
-    base_h = 0.16 * height
-    m_base = rb._material("mat_can_base", (0.03, 0.03, 0.03), roughness=0.6)
-    m_can = rb._material("mat_can", (0.78, 0.78, 0.8), roughness=0.3, metallic=1.0)
-    _fast_box("body_base", (l, w, base_h), (0.0, 0.0, base_h / 2), m_base, parent=root, bevel=0.04 * min(l, w))
-    r = 0.49 * min(l, w)
-    can = bpy.data.objects.new("body_can", _cylinder_mesh("body_can", r, height - base_h, segments=64))
-    bpy.context.collection.objects.link(can)
-    can.location = (0.0, 0.0, base_h + (height - base_h) / 2)
-    can.data.materials.append(m_can)
-    can.data.shade_smooth()
-    can.parent = root
-    contact = {"cx": lx, "cy": ly, "hl": l / 2, "hw": w / 2, "angle": math.radians(drot)}
-    return [contact] * n_pads, 0.25
+    asm = bm.electrolytic(float(c["l"]), float(c["w"]), height, c["pads"])
+    for piece in asm.pieces:
+        _piece_object(piece, root, (0.0, 0.0, 0.0))
+    return [_to_part_frame(k, lx, ly, drot) for k in asm.contacts], asm.solder_height
 
 
 def _bridge_mesh(name: str, p0: Vector, p1: Vector, width: float, height: float, n: int = 16):
@@ -390,6 +684,20 @@ def _bridge_mesh(name: str, p0: Vector, p1: Vector, width: float, height: float,
     return obj
 
 
+def _build_tht_joints(job: dict, mats: dict) -> None:
+    """The top side of every soldered through-hole pin of the job (``thtJoints``, the scan's plated holes under the
+    populated THT parts): solder meniscus and pin end, in tin."""
+    for k, h in enumerate(job.get("thtJoints") or []):
+        for piece in bm.tht_joint(float(h["x"]), float(h["y"]), float(h["r"])):
+            me = bpy.data.meshes.new(f"{piece.name}_{k}")
+            me.from_pydata(piece.mesh.verts, [], piece.mesh.faces)
+            me.polygons.foreach_set("use_smooth", piece.mesh.smooth)
+            me.update()
+            me.materials.append(mats["solder"] if piece.name == "tht_solder" else _role_material("metal"))
+            obj = bpy.data.objects.new(f"{piece.name}_{h.get('refdes', '')}_{k}", me)
+            bpy.context.collection.objects.link(obj)
+
+
 def _build_bridges(job: dict, mats: dict) -> None:
     """Solder bars between two lands (op ``bridge``): land centre to land centre, as wide as 85 % of the narrower
     land, 0.2 mm high, in shiny tin."""
@@ -402,9 +710,12 @@ def _build_bridges(job: dict, mats: dict) -> None:
 def _apply_photo_uvs(pending: list, job: dict, mats: dict) -> None:
     bpy.context.view_layer.update()
     raster = job["photo"]["raster"]
+    atlas = job.get("partAtlas") if "atlas" in mats else None
     for c, root, part_root, joints, z in pending:
         # Solder stays on the lands: the joints show the scan pixels where they are. Defect solder keeps the metal.
         for o in joints:
+            if (job.get("partAtlas") or {}).get("look") == "clean":
+                break                        # clean look: the joints keep the solder metal
             o.data.materials.clear()
             o.data.materials.append(mats.get("photo_joint") or mats["photo"])
             _uv_from_board(o, raster)
@@ -418,11 +729,21 @@ def _apply_photo_uvs(pending: list, job: dict, mats: dict) -> None:
         to_nominal = nominal_frame @ part_root.matrix_world.inverted()
         # gull-wing leads are rigid with the body (render_batch builds them at the displaced pose): same mapping
         leads = [o for o in root.children if o.name.startswith("lead_")]
+        entry = (atlas or {}).get("parts", {}).get(c["refdes"])
+        if entry is not None and "top" not in entry["faces"]:
+            entry = None                     # gated off (tall part whose top predicts badly): the board photo as before
+        clean = (atlas or {}).get("look") == "clean"
         for o in [*_descendants(part_root), *leads]:
-            if o.type == "MESH" and (o.name.startswith(("body", "endcap", "lead_"))):
-                o.data.materials.clear()
-                o.data.materials.append(mats["photo"])
-                _uv_from_board(o, raster, to_nominal)
+            if o.type != "MESH" or not o.name.startswith(PHOTO_PREFIXES):
+                continue                     # openings, pins, inserts, shells keep their material
+            if clean and (not o.name.startswith(("body", "lid")) or o.name.startswith(("body_shell", "body_flange"))
+                          or c["part"].get("body") == "can" and o.name.startswith("body_can")):
+                continue                     # clean look: caps, leads, terminals, shields, cans stay metal
+            if entry is not None:
+                # per-part face textures from all photos (board3d.parttex)
+                _atlas_uv(o, entry, atlas["size"], mats["atlas"], to_nominal)
+            else:
+                _photo_on_top(o, mats["photo"], raster, to_nominal, mats.get("photo_joint"))
 
 
 def _lights(job: dict) -> None:
@@ -500,6 +821,12 @@ def main() -> None:
             # light, while the scanner made them bright). Other presets light them (T4).
             gain = _room_gain(job) if (job.get("light") or {}).get("preset") == "room" else (1.0, 1.0, 1.0)
             mats["photo_joint"] = _unlit_texture_material("mat_photo_joint", job["photo"]["path"], gain)
+    if job.get("photo") and job.get("partAtlas"):
+        if job["partAtlas"].get("look") == "clean":
+            # clean look: a real moulded / ceramic surface (glossy, specular) coloured by the atlas
+            mats["atlas"] = _texture_material("mat_photo_atlas_clean", job["partAtlas"]["path"], roughness=0.42, specular=0.5)
+        else:
+            mats["atlas"] = _texture_material("mat_photo_atlas", job["partAtlas"]["path"], roughness=0.9, specular=0.0)
     rng = random.Random(int(job.get("seed", 0)))
     mats["solder_excess"] = rb._material("mat_solder_excess", (0.72, 0.72, 0.73), roughness=0.5, metallic=0.55, bump=0.02)
     pending: list = []
@@ -508,6 +835,7 @@ def main() -> None:
     if pending:
         _apply_photo_uvs(pending, job, mats)
     _build_bridges(job, mats)
+    _build_tht_joints(job, mats)
 
     if job.get("exportGlb"):
         _export_glb(job["exportGlb"])

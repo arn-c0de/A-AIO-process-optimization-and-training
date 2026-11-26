@@ -10,6 +10,7 @@ Files in the board3d folder (``outputs/board3d/<product>/<side>/``):
 
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import subprocess
@@ -154,8 +155,11 @@ def prepare_substrate(board3d: dict[str, Any], folder: Path, px_per_mm: float | 
     meta = load_json(meta_path) if meta_path.is_file() else None
     mosaic = folder / "photos" / "mosaic.png"
     stamp = int(mosaic.stat().st_mtime_ns) if source == "photos" and mosaic.is_file() else None   # rebuilt mosaic -> rebuild
+    lands = folder / "bare" / "lands.json"
+    lands_stamp = int(lands.stat().st_mtime_ns) if lands.is_file() else None      # measured lands -> pad mask changes
     if (force or meta is None or meta.get("raster") != raster.meta() or meta.get("method") != BARE_METHOD
-            or meta.get("sourceStamp") != stamp or not all(p.is_file() for p in paths.values())):
+            or meta.get("sourceStamp") != stamp or meta.get("landsStamp") != lands_stamp
+            or not all(p.is_file() for p in paths.values())):
         rect = rectify(image, to_image.ravel().tolist(), raster)
         parts, pads = part_mask(board3d, raster, set(cfg["stages"]))
         colour = pad_colour(rect, pads, parts)
@@ -163,9 +167,29 @@ def prepare_substrate(board3d: dict[str, Any], folder: Path, px_per_mm: float | 
         for key, img in (("scan_rgb", rect), ("bare_rgb", bare), ("parts_mask", parts), ("pads_mask", pads)):
             cv2.imwrite(str(paths[key]), img)
         meta = {"raster": raster.meta(), "padColourBgr": list(colour), "source": source, "stages": list(cfg["stages"]),
-                "method": BARE_METHOD, "sourceStamp": stamp}
+                "method": BARE_METHOD, "sourceStamp": stamp, "landsStamp": lands_stamp}
         atomic_write_json(meta_path, meta, indent=1)
-    board3d["substrate"] = {"raster": meta["raster"], "maps": {k: str(p) for k, p in paths.items()}, "padColourBgr": meta["padColourBgr"],
+    maps = {k: str(p) for k, p in paths.items()}
+    if source in ("photos", "mounted"):
+        # the clean look's board (substrate.clean_board): built once from the bare board, rebuilt with it
+        clean = d / "clean_rgb.png"
+        scan_dir = folder / SOURCES["scan"]["folder"]
+        sources = [paths["bare_rgb"], scan_dir / "bare_rgb.png"]
+        newest = max(q.stat().st_mtime for q in sources if q.is_file())
+        if not clean.is_file() or clean.stat().st_mtime < newest:
+            from simple_sim.board3d.substrate import clean_board, scan_board
+            bare = cv2.imread(str(paths["bare_rgb"]), cv2.IMREAD_COLOR)
+            if (scan_dir / "bare_rgb.png").is_file() and (scan_dir / "substrate.json").is_file():
+                # the flatbed scan is the sharpest view of the bare board: colour-matched to the photos
+                sr = load_json(scan_dir / "substrate.json")["raster"]
+                img, _st = scan_board(bare, raster, cv2.imread(str(scan_dir / "bare_rgb.png"), cv2.IMREAD_COLOR),
+                                      BoardRaster(sr["x0"], sr["y0"], sr["widthMm"], sr["heightMm"], sr["pxPerMm"]),
+                                      cv2.imread(str(paths["parts_mask"]), cv2.IMREAD_GRAYSCALE))
+            else:
+                img, _st = clean_board(bare, cv2.imread(str(paths["pads_mask"]), cv2.IMREAD_GRAYSCALE))
+            cv2.imwrite(str(clean), img)
+        maps["clean_rgb"] = str(clean)
+    board3d["substrate"] = {"raster": meta["raster"], "maps": maps, "padColourBgr": meta["padColourBgr"],
                          "method": meta["method"], "source": source, "stages": list(cfg["stages"])}
     return board3d["substrate"]
 
@@ -201,6 +225,78 @@ def texture_interpolation(window: BoardRaster, raster: dict[str, Any], camera: d
     return "Linear"
 
 
+#: how parts are textured from the photos: ``clean`` (default: their own materials, the body colour per part and its
+#: print as a crisp mask, ``atlas_clean.png``) or ``photo`` (the fused photo texture on every face, ``atlas.png``)
+PART_LOOK = "clean"
+
+
+def tht_joints(board3d: dict[str, Any], folder: Path, window: BoardRaster, stages: set[str], margin_mm: float = 3.0) -> list[dict[str, float]]:
+    """Solder joints of the populated through-hole parts in *window*: the plated holes of the flatbed scan (cached in
+    ``substrate/holes.json``, :func:`substrate.find_holes`) inside a THT part's outline (+1.5 mm: shield and latch
+    pins), for parts the photos show (not ``absentInPhotos``) and not mounting holes. ``[{x, y, r, refdes}]``."""
+    if "tht" not in stages:
+        return []
+    scan_dir = folder / SOURCES["scan"]["folder"]
+    cache = scan_dir / "holes.json"
+    if cache.is_file():
+        holes = load_json(cache)["holes"]
+    elif (scan_dir / "scan_rgb.png").is_file() and (scan_dir / "substrate.json").is_file():
+        from simple_sim.board3d.substrate import find_holes
+        sr = load_json(scan_dir / "substrate.json")["raster"]
+        holes = find_holes(cv2.imread(str(scan_dir / "scan_rgb.png"), cv2.IMREAD_COLOR),
+                           BoardRaster(sr["x0"], sr["y0"], sr["widthMm"], sr["heightMm"], sr["pxPerMm"]))
+        atomic_write_json(cache, {"holes": holes}, indent=1)
+    else:
+        return []
+    pf = folder / "parttex" / "photofit.json"
+    absent = set(load_json(pf).get("absentInPhotos", [])) if pf.is_file() else set()
+    parts = [c for c in board3d["components"] if c.get("stage") == "tht" and c.get("pose") and c.get("body") and not c.get("dnp")
+             and c["family"] != "mounting_hole" and c["refdes"] not in absent]
+    out = []
+    for x, y, r in holes:
+        if not (window.x0 - margin_mm <= x <= window.x0 + window.w + margin_mm and window.y0 - margin_mm <= y <= window.y0 + window.h + margin_mm):
+            continue
+        for c in parts:
+            p = c["pose"]
+            a = -math.radians(p["rotDeg"])
+            dx, dy = x - p["x"], y - p["y"]
+            lx, ly = dx * math.cos(a) - dy * math.sin(a), dx * math.sin(a) + dy * math.cos(a)
+            if abs(lx) <= c["body"]["l"] / 2 + 1.5 and abs(ly) <= c["body"]["w"] / 2 + 1.5:
+                out.append({"x": x, "y": y, "r": r, "refdes": c["refdes"]})
+                break
+    return out
+
+
+def _substrate_path(sub: dict[str, Any], look: str | None = None) -> str:
+    """The board texture: the clean board (substrate.clean_board) in the clean look when there is one, else the bare
+    board."""
+    if (look or PART_LOOK) == "clean" and sub["maps"].get("clean_rgb"):
+        return sub["maps"]["clean_rgb"]
+    return sub["maps"]["bare_rgb"]
+
+
+def part_atlas(folder: Path, sub: dict[str, Any], look: str | None = None) -> dict[str, Any] | None:
+    """The per-part face texture atlas (``tools/board3d_parttex.py``, :mod:`simple_sim.board3d.parttex`) for the job, when
+    the substrate comes from the phone photos (the atlas is built from the same stills; the flatbed scan keeps its
+    own pixels)."""
+    if sub.get("source") not in ("photos", "mounted"):
+        return None
+    look = look or PART_LOOK
+    atlas, rep = folder / "parttex" / "atlas.png", folder / "parttex" / "parttex.json"
+    clean = folder / "parttex" / "atlas_clean.png"
+    if not atlas.is_file() or not rep.is_file():
+        return None
+    r = load_json(rep)
+    if look == "clean" and clean.is_file():
+        from simple_sim.board3d.parttex import CLEAN_SCALE
+        parts = {k: {"pose": v["pose"], "size": v["size"], "kind": v.get("kind"),
+                     "faces": {f: {**i, "rect": [c * CLEAN_SCALE for c in i["rect"]]} for f, i in v["faces"].items() if "rect" in i}}
+                 for k, v in r["parts"].items()}
+        return {"path": str(clean), "size": [c * CLEAN_SCALE for c in r["atlasSize"]], "look": "clean", "parts": parts}
+    return {"path": str(atlas), "size": r["atlasSize"], "look": "photo",
+            "parts": {k: {"pose": v["pose"], "size": v["size"], "faces": v["faces"]} for k, v in r["parts"].items()}}
+
+
 def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, name: str, *, stages: set[str] | None = None,
                   samples: int = 64, device: str = "GPU", photo: bool = True, light: dict[str, Any] | None = None,
                   timeout: float = 1800.0, camera: dict[str, Any] | None = None, size_px: tuple[int, int] | None = None,
@@ -210,9 +306,12 @@ def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, na
     sub = board3d.get("substrate") or prepare_substrate(board3d, folder)
     stages = stages or set(sub.get("stages", ["smd"]))
     out = folder / "renders" / f"{name}.png"
-    job = build_job(board3d, window, out=str(out), substrate={"path": sub["maps"]["bare_rgb"], "raster": sub["raster"]},
+    job = build_job(board3d, window, out=str(out), substrate={"path": _substrate_path(sub), "raster": sub["raster"]},
                     photo={"path": sub["maps"]["scan_rgb"], "raster": sub["raster"]} if photo else None,
                     stages=stages, light=light, samples=samples, device=device)
+    if photo and (atlas := part_atlas(folder, sub)):
+        job["partAtlas"] = atlas
+    job["thtJoints"] = tht_joints(board3d, folder, window, stages)
     if camera is not None:
         job["camera"] = camera
     if size_px is not None:
@@ -248,9 +347,12 @@ def export_glb(board3d: dict[str, Any], folder: Path, name: str = "board", *, st
     window = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], 1.0)
     glb = folder / "viewer" / f"{name}.glb"
     job = build_job(board3d, window, out=str(folder / "viewer" / f"{name}.png"),
-                    substrate={"path": sub["maps"]["bare_rgb"], "raster": r}, photo={"path": sub["maps"]["scan_rgb"], "raster": r},
+                    substrate={"path": _substrate_path(sub), "raster": r}, photo={"path": sub["maps"]["scan_rgb"], "raster": r},
                     stages=stages or set(sub.get("stages", ["smd"])), samples=1, device="CPU", margin_mm=50.0)
     job.update({"exportGlb": str(glb), "render": False})
+    if atlas := part_atlas(folder, sub):
+        job["partAtlas"] = atlas
+    job["thtJoints"] = tht_joints(board3d, folder, window, stages or set(sub.get("stages", ["smd"])))
     job["board"]["clip"] = True          # the viewer shows the board as a laminate on a desk, not the photo's frame
     job_path = folder / "viewer" / f"{name}.job.json"
     job_path.parent.mkdir(parents=True, exist_ok=True)

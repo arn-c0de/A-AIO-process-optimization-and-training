@@ -106,6 +106,17 @@ def trace(mod: types.ModuleType, case: dict[str, Any]) -> dict[str, Any]:
         log.append(["box", name, _plain(size), _plain(loc), mat, getattr(parent, "name", None), bevel])
         return _Obj(name)
 
+    def body(name, shape, loc, mat, *, parent=None):
+        log.append(["body", name, [round(shape.l, 9), round(shape.w, 9), round(shape.h, 9), round(shape.r_corner, 9),
+                                   round(shape.r_top, 9), shape.draft_deg, shape.parting], _plain(loc), mat,
+                    getattr(parent, "name", None)])
+        return _Obj(name)
+
+    def strip(name, path, thickness, width, origin, direction, mat):
+        log.append(["strip", name, [[round(a, 9), round(b, 9)] for a, b in path], thickness, width, _plain(list(origin)),
+                    _plain(list(direction)), mat])
+        return _Obj(name)
+
     def box_between(name, p0, p1, width, thickness, mat):
         log.append(["lead", name, _plain(p0), _plain(p1), width, thickness, mat])
         return _Obj(name)
@@ -116,7 +127,7 @@ def trace(mod: types.ModuleType, case: dict[str, Any]) -> dict[str, Any]:
     mod.bpy.data = SimpleNamespace(objects=SimpleNamespace(new=new_empty))
     mod.bpy.context = ctx
     mod.bpy.ops = SimpleNamespace(mesh=SimpleNamespace(primitive_cylinder_add=cylinder))
-    with mock.patch.multiple(mod, _material=material, _cfg_material=cfg_material, _box=box,
+    with mock.patch.multiple(mod, _material=material, _cfg_material=cfg_material, _box=box, _body=body, _strip=strip,
                              _box_between=box_between, _text=text):
         mmpp = case["mm_per_px"]
         pads = [(*mod._mm_xy(p[0], p[1], mmpp), mod._mm(p[2], mmpp), mod._mm(p[3], mmpp)) for p in case["board"]["pads"]]

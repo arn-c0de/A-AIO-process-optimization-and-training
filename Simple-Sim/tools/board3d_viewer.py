@@ -41,8 +41,10 @@ ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web" / "board3d"
 NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MAX_BODY = 1 << 20
-#: bump when the exported scene changes (2: board clipped to its outline + 1.6 mm laminate, push-pull bare board)
-GLB_VERSION = "glb2"
+#: bump when the exported scene changes (2: board clipped to its outline + 1.6 mm laminate, push-pull bare board;
+#: 3: datasheet-like part bodies (sharp bottom edges, mould draft, bent leads, SOT-23-6 leads, array / QFN
+#: terminals, crystal lid, BGA, electrolytic bead and terminals), photo on top faces only, top at the catalog height)
+GLB_VERSION = "glb3"
 
 
 def board3d_summary(board3d: dict, source: str) -> dict:
@@ -160,7 +162,10 @@ def main(argv: list[str] | None = None) -> int:
     prepare_substrate(board3d, folder, source=a.source)
     glb = folder / "viewer" / "board.glb"
     meta = folder / "viewer" / "board.source"
-    stamp = f"{a.source} {GLB_VERSION} parts:{board3d['partCatalog']['digest']}"   # catalog edit -> re-export
+    # new part textures (board3d_parttex.py, also a --clean-only rebuild) -> re-export
+    tex = max((int(f.stat().st_mtime) for f in [*(folder / "parttex").glob("atlas*.png"), *folder.glob("substrate*/clean_rgb.png")]),
+              default=0)
+    stamp = f"{a.source} {GLB_VERSION} parts:{board3d['partCatalog']['digest']} tex:{tex}"   # catalog edit -> re-export
     if a.reexport or not glb.is_file() or not meta.is_file() or meta.read_text() != stamp:
         print(f"exporting GLB ({a.source}) ...", flush=True)
         res = export_glb(board3d, folder)

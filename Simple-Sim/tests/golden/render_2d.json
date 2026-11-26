@@ -8,7 +8,7 @@
     "run_sot23/000000.png": "0620aa936b002e92ca2a82185955bcda",
     "run_sot23/000001.png": "c9bd3708647bb628b325395afacdc62d"
   },
-  "renderer_version": "4",
+  "renderer_version": "5",
   "versions": {
     "numpy": "2.5.2",
     "opencv": "5.0.0"

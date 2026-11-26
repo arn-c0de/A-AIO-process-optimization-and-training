@@ -19,8 +19,13 @@ History:
              of the geometry), corner-lift cap and SOT-23 pad gap scale with the supersampling, the
              realism sampler's tail is two-sided for signed ranges, flat style and Blender body keep
              the sub-pixel placement of the label.
+  5          Blender bodies (``blender_3d``): real-size meshes instead of a bevel modifier on a scaled unit cube (the
+             rounding stretched with the body and covered every edge, the bottom included); datasheet-like shapes
+             (near-sharp chip ceramic, dipped end caps, drafted gull-wing mould, sawn QFN); one bent lead strip
+             instead of three boxes, sheet 0.32 x lead width; solder meniscus capped at 45 deg at the land edge;
+             SOT-23-6 gets leads, chip inductors and LEDs get end caps. The 2D renderer is unchanged.
 """
 
 from __future__ import annotations
 
-RENDERER_VERSION = "4"
+RENDERER_VERSION = "5"

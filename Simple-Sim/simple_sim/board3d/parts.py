@@ -14,6 +14,10 @@ from typing import Any
 from simple_sim.parts import PartCatalog
 
 
+#: catalog fields copied to ``body.catalog`` (and into the digest: a changed kind re-exports the viewer's GLB)
+SHAPE_KEYS = ("kind", "orientation", "material", "totalHeightMm", "rows")
+
+
 def _texts(c: dict[str, Any]) -> list[str]:
     return [str(c[k]) for k in ("value", "part", "mpn") if c.get(k)]
 
@@ -37,8 +41,11 @@ def apply_part_catalog(board3d: dict[str, Any], catalog: PartCatalog | None = No
             continue
         body["h"] = m.entry.height_mm
         body["heightSource"] = "catalog"
-        body["catalog"] = {"id": m.entry.id, "how": m.how, "source": m.entry.source_kind}
-        applied[c["refdes"]] = [m.entry.id, m.entry.height_mm]
+        # kind / orientation / material / totalHeightMm: the board renderer builds connectors and other parts
+        # without a family builder from them (``board3d.footprints.board_part``)
+        shape = {k: m.entry.data[k] for k in SHAPE_KEYS if k in m.entry.data}
+        body["catalog"] = {"id": m.entry.id, "how": m.how, "source": m.entry.source_kind, **shape}
+        applied[c["refdes"]] = [m.entry.id, m.entry.height_mm, *[shape.get(k) for k in SHAPE_KEYS]]
     digest = hashlib.sha1(json.dumps(applied, sort_keys=True).encode()).hexdigest()[:12]
     return {"applied": applied, "unmatched": sorted(unmatched), "digest": digest}
 
