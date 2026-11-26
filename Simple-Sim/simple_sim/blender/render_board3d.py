@@ -820,7 +820,16 @@ def main() -> None:
     sub = job["substrate"]["raster"]
     # The scan already holds the scanner's sheen: photo-textured surfaces get no extra specular (else the steep
     # light's reflection is counted twice).
-    _board_plane(sub, job.get("board"), _texture_material("mat_substrate", job["substrate"]["path"], roughness=0.9, specular=0.0))
+    light = job.get("light") or {}
+    if light.get("preset", "flatbed") == "flatbed" and not light.get("boardShadows", False):
+        # The substrate is the scan outside the parts: it already holds the scanner's shading next to every part.
+        # Lit again, the parts' shadows were counted twice (-5..-7 L* at a tall part's edge). The unlit scan is a lit
+        # board without shadows (same radiance onto the parts' walls); a moved / removed part keeps the shading of its
+        # nominal place (``boardShadows: true``: the lit board, as before).
+        board_mat = _unlit_texture_material("mat_substrate", job["substrate"]["path"], _room_gain(job))
+    else:
+        board_mat = _texture_material("mat_substrate", job["substrate"]["path"], roughness=0.9, specular=0.0)
+    _board_plane(sub, job.get("board"), board_mat)
     if job.get("board"):
         _board_slab(job["board"])
 
