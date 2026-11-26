@@ -316,6 +316,21 @@ def board_texture(board3d: dict[str, Any], folder: Path, sub: dict[str, Any], na
     return str(out)
 
 
+_PAD_COLOUR: dict[str, tuple[int, int, int]] = {}
+
+
+def scan_pad_colour(sub: dict[str, Any]) -> tuple[int, int, int]:
+    """The lands' finish as scanned (:func:`substrate.pad_colour` on the substrate's scan and masks, BGR), once per
+    scan: the solder left on the lands of a removed part (the scan shows the part's body there)."""
+    key = sub["maps"]["scan_rgb"]
+    if key not in _PAD_COLOUR:
+        read = lambda k: cv2.imread(sub["maps"][k], cv2.IMREAD_UNCHANGED)  # noqa: E731
+        pads, parts = read("pads_mask"), read("parts_mask")
+        pads, parts = (m if m.ndim == 2 else m[..., 0] for m in (pads, parts))
+        _PAD_COLOUR[key] = pad_colour(read("scan_rgb"), pads & ~parts, parts)
+    return _PAD_COLOUR[key]
+
+
 def part_atlas(folder: Path, sub: dict[str, Any], look: str | None = None) -> dict[str, Any] | None:
     """The per-part face texture atlas (``tools/board3d_parttex.py``, :mod:`simple_sim.board3d.parttex`) for the job, when
     the substrate comes from the phone photos (the atlas is built from the same stills; the flatbed scan keeps its
@@ -355,6 +370,8 @@ def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, na
     if photo and (atlas := part_atlas(folder, sub)):
         job["partAtlas"] = atlas
     job["thtJoints"] = tht_joints(board3d, folder, window, stages)
+    if any(c.get("missing") for c in job["components"]):
+        job["padBgr"] = scan_pad_colour(sub)
     if camera is not None:
         job["camera"] = camera
     if size_px is not None:

@@ -155,6 +155,43 @@ def bracket_job(bracket: dict[str, Any], board3d: dict[str, Any]) -> dict[str, A
             "topMm": float(bracket["topMm"]), "holes": holes}
 
 
+def trim_to_brackets(comps: list[dict[str, Any]], brackets: list[dict[str, Any]], through: set[str]) -> list[str]:
+    """Shorten in place every job component (axis-aligned, not in *through*) whose body reaches past a bracket's inner
+    face: a plate lets nothing pass but its cut-outs (a top-view outline that took in the panel stuck out of its front).
+    The body keeps its far side and ends at the face; pose / nominal move by half the cut, the pads move back in the
+    part frame, so the lands stay where they are. Returns the trimmed refdes."""
+    trimmed = []
+    for jc in comps:
+        if jc["refdes"] in through or jc.get("missing"):
+            continue
+        r = jc["pose"]["rotDeg"] % 90.0
+        if min(r, 90.0 - r) > 1.0:
+            continue
+        for b in brackets:
+            axis = 1 if b["edge"][0] == "y" else 0
+            sign = 1.0 if b["edge"].endswith("+") else -1.0
+            key = ("x", "y")[axis]
+            along = jc["pose"][("y", "x")[axis]]
+            quarter = round(jc["pose"]["rotDeg"] / 90.0) % 2
+            dim = ("w", "l")[quarter] if axis == 1 else ("l", "w")[quarter]  # body size along the bracket's normal
+            if not b["fromMm"] <= along <= b["toMm"] or float(jc["height"]) <= b["bottomMm"]:
+                continue
+            ext = float(jc[dim])
+            over = sign * (jc["pose"][key] + sign * ext / 2 - b["innerMm"])
+            if over <= 0 or over >= ext:
+                continue
+            shift = -sign * over / 2
+            a = math.radians(jc["pose"]["rotDeg"])
+            d = (shift, 0.0) if axis == 0 else (0.0, shift)
+            px, py = d[0] * math.cos(a) + d[1] * math.sin(a), -d[0] * math.sin(a) + d[1] * math.cos(a)   # board -> part frame
+            jc["pose"] = {**jc["pose"], key: jc["pose"][key] + shift}
+            jc["nominal"] = {**jc["nominal"], key: jc["nominal"][key] + shift}
+            jc["pads"] = [[p[0] - px, p[1] - py, *p[2:]] for p in jc["pads"]]
+            jc[dim] = ext - over
+            trimmed.append(jc["refdes"])
+    return trimmed
+
+
 def build_job(board3d: dict[str, Any], window: BoardRaster, *, out: str, substrate: dict[str, Any], photo: dict[str, Any] | None,
               stages: set[str], light: dict[str, Any] | None = None, samples: int = 64, device: str = "GPU",
               engine: str = "CYCLES", seed: int = 0, margin_mm: float = 3.0) -> dict[str, Any]:
@@ -168,6 +205,9 @@ def build_job(board3d: dict[str, Any], window: BoardRaster, *, out: str, substra
             # the coin cell goes in at final assembly: in the holder once the mount stage is shown (the SMD scan shows
             # it empty, the photos of the mounted board with the cell); the catalog's ``cell`` overrides
             jc["part"] = {**jc["part"], "connector": {**spec, "cell": "mount" in stages}}
+    brackets = [bracket_job(b, board3d) for b in board3d.get("brackets", [])] if "mount" in stages else []
+    if brackets:
+        trim_to_brackets(comps, brackets, {r for b in board3d["brackets"] for r in b.get("holesFor", [])})
     bridges = [b for b in board3d.get("bridges", []) if any(
         window.x0 - margin_mm <= p[0] <= window.x0 + window.w + margin_mm and window.y0 - margin_mm <= p[1] <= window.y0 + window.h + margin_mm
         for p in (b["a"], b["b"]))]
@@ -175,6 +215,6 @@ def build_job(board3d: dict[str, Any], window: BoardRaster, *, out: str, substra
             "device": device, "engine": engine, "seed": seed, "substrate": substrate, "photo": photo,
             "light": light or {"preset": "flatbed"}, "components": comps, "bridges": bridges,
             # mechanics are fitted at final assembly: only with the mount stage
-            "brackets": [bracket_job(b, board3d) for b in board3d.get("brackets", [])] if "mount" in stages else [],
+            "brackets": brackets,
             "board": {"widthMm": float(board3d.get("widthMm", window.w)), "heightMm": float(board3d.get("heightMm", window.h)),
                       "thicknessMm": BOARD_THICKNESS_MM}}

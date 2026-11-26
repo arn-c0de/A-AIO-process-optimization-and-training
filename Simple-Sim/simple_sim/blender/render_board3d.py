@@ -84,6 +84,20 @@ def _unlit_texture_material(name: str, image_path: str, gain=(1.0, 1.0, 1.0)):
     return mat
 
 
+def _unlit_colour_material(name: str, bgr, gain=(1.0, 1.0, 1.0)):
+    """Emission of one 8-bit sRGB colour (BGR, as OpenCV measured it) x *gain*: like :func:`_unlit_texture_material`."""
+    lin = lambda v: ((v / 255.0 + 0.055) / 1.055) ** 2.4 if v / 255.0 > 0.04045 else v / 255.0 / 12.92  # noqa: E731
+    rgb = [lin(float(v)) * float(g) for v, g in zip(reversed(list(bgr)), gain)]
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    nodes.clear()
+    emit, out = nodes.new("ShaderNodeEmission"), nodes.new("ShaderNodeOutputMaterial")
+    emit.inputs["Color"].default_value = (*rgb, 1.0)
+    mat.node_tree.links.new(emit.outputs["Emission"], out.inputs["Surface"])
+    return mat
+
+
 def _room_gain(job: dict) -> tuple[float, float, float]:
     g = (job.get("light") or {}).get("gainRgb")
     if g:
@@ -750,6 +764,13 @@ def _apply_photo_uvs(pending: list, job: dict, mats: dict) -> None:
         for o in joints:
             if (job.get("partAtlas") or {}).get("look") == "clean":
                 break                        # clean look: the joints keep the solder metal
+            if c.get("missing"):
+                # removed part: the scan shows its body over the lands (an electrolytic's can came back as strips on
+                # the pads); the lands' scanned finish, unlit (the solder metal under the steep light saturated)
+                if "pad_unlit" in mats:
+                    o.data.materials.clear()
+                    o.data.materials.append(mats["pad_unlit"])
+                continue
             o.data.materials.clear()
             o.data.materials.append(mats.get("photo_joint") or mats["photo"])
             _uv_from_board(o, raster)
@@ -880,6 +901,8 @@ def main() -> None:
             # light, while the scanner made them bright). Other presets light them (T4).
             gain = _room_gain(job) if (job.get("light") or {}).get("preset") == "room" else (1.0, 1.0, 1.0)
             mats["photo_joint"] = _unlit_texture_material("mat_photo_joint", job["photo"]["path"], gain)
+            if job.get("padBgr"):
+                mats["pad_unlit"] = _unlit_colour_material("mat_pad_unlit", job["padBgr"], gain)
     if job.get("photo") and job.get("partAtlas"):
         if job["partAtlas"].get("look") == "clean":
             # clean look: a real moulded / ceramic surface (glossy, specular) coloured by the atlas

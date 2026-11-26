@@ -326,3 +326,18 @@ def test_battery_cell_in_the_holder_with_the_mount_stage(tmp_path):
         assert cell({"smd"}) is False and cell({"smd", "mount"}) is True
     finally:
         scene.job_component = orig
+
+
+def test_trim_to_brackets_keeps_the_lands_in_place():
+    from simple_sim.board3d.scene import trim_to_brackets
+    pose = {"x": 10.0, "y": 18.0, "rotDeg": 90.0, "z": 0.0, "tiltDeg": [0, 0]}
+    jc = {"refdes": "X1", "l": 6.0, "w": 4.0, "height": 5.0, "pose": dict(pose), "nominal": dict(pose), "pads": [[1.0, 0.5, 1, 1]]}
+    keep = {"refdes": "J1", "l": 6.0, "w": 4.0, "height": 5.0, "pose": dict(pose), "nominal": dict(pose), "pads": []}
+    br = {"edge": "y+", "innerMm": 20.0, "fromMm": 0, "toMm": 30, "bottomMm": -5, "topMm": 12}
+    land = lambda c: (c["pose"]["x"] - c["pads"][0][1], c["pose"]["y"] + c["pads"][0][0])   # noqa: E731  part -> board at 90 deg
+    before = land(jc)
+    assert trim_to_brackets([jc, keep], [br], {"J1"}) == ["X1"]
+    assert jc["pose"]["y"] + jc["l"] / 2 == pytest.approx(20.0)                 # rotated 90: l lies along y, ends at the face
+    assert jc["pose"]["y"] - jc["l"] / 2 == pytest.approx(15.0)                 # far side unchanged
+    assert jc["nominal"] == jc["pose"] and land(jc) == pytest.approx(before)
+    assert keep["pose"]["y"] == 18.0 and keep["l"] == 6.0                       # goes through its cut-out
