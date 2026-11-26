@@ -165,7 +165,10 @@ def main(argv: list[str] | None = None) -> int:
     # new part textures (board3d_parttex.py, also a --clean-only rebuild) -> re-export
     tex = max((int(f.stat().st_mtime) for f in [*(folder / "parttex").glob("atlas*.png"), *folder.glob("substrate*/clean_rgb.png")]),
               default=0)
-    stamp = f"{a.source} {GLB_VERSION} parts:{board3d['partCatalog']['digest']} tex:{tex}"   # catalog edit -> re-export
+    # outlines fixed where bodies collided (tools/board3d_collide.py) -> re-export
+    cf = folder / "parttex" / "collide.json"
+    collide = int(cf.stat().st_mtime) if cf.is_file() else 0
+    stamp = f"{a.source} {GLB_VERSION} parts:{board3d['partCatalog']['digest']} tex:{tex} collide:{collide}"   # catalog edit -> re-export
     if a.reexport or not glb.is_file() or not meta.is_file() or meta.read_text() != stamp:
         print(f"exporting GLB ({a.source}) ...", flush=True)
         res = export_glb(board3d, folder)

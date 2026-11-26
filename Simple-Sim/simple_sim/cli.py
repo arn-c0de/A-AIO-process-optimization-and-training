@@ -97,6 +97,7 @@ _SPECS = [
     _tool("export-deepvision", "tools/export_deepvision.py"),
     # 3D-Board-Renderer (BACKLOG-Sim/board3d-plan.md)
     _tool("board3d-import", "tools/board3d_import.py"),
+    _tool("board3d-collide", "tools/board3d_collide.py"),
     _tool("board3d-render", "tools/board3d_render.py"),
     _tool("board3d-viewer", "tools/board3d_viewer.py"),
     _tool("board3d-dataset", "tools/board3d_dataset.py"),

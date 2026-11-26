@@ -118,8 +118,9 @@ function lookOf(mat) {
   const n = mat.name || '';
   for (const t of [mat.map, mat.emissiveMap]) if (t) { t.anisotropy = maxAniso; t.needsUpdate = true; }
   if (n.startsWith('mat_substrate')) {
-    // solder mask: glossy lacquer over the photo (clearcoat), the photo already holds the copper/silkscreen detail
-    out = new THREE.MeshPhysicalMaterial({ name: n, map: mat.map, roughness: 0.6, metalness: 0, clearcoat: 0.3,
+    // solder mask: glossy lacquer over the photo (clearcoat), the photo already holds the copper/silkscreen detail.
+    // Blender exports the board as the unlit scan (emission only, black base colour) -> take the scan from there
+    out = new THREE.MeshPhysicalMaterial({ name: n, map: mat.map ?? mat.emissiveMap, roughness: 0.6, metalness: 0, clearcoat: 0.3,
       clearcoatRoughness: 0.45, side: THREE.FrontSide });
   } else if (n.startsWith('mat_photo_joint')) {
     // solder joints: the scanned tin as the metal's colour, shiny

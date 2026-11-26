@@ -42,10 +42,12 @@ def pad_world(c: dict[str, Any], index: int, pose: dict[str, Any] | None = None)
 
 def apply_fit(board3d: dict[str, Any]) -> dict[str, Any]:
     """*board3d* with every accepted measured fit (``component["fit"]``, :mod:`simple_sim.board3d.fit`) made the part's
-    pose and body size, then the photo outline fit (``component["photoFit"]``, :func:`simple_sim.board3d.parttex.photo_fit`):
-    the board3d then shows the board as it really is, defects are relative to that. Idempotent (``fitApplied``);
-    returns *board3d* itself when there is nothing to apply, else a copy."""
-    if board3d.get("fitApplied") or not any((c.get("fit") or {}).get("accepted") or c.get("photoFit") for c in board3d["components"]):
+    pose and body size, then the photo outline fit (``component["photoFit"]``, :func:`simple_sim.board3d.parttex.photo_fit`),
+    then the outlines fixed where bodies collided (``board3d["collide"]``, :mod:`simple_sim.board3d.collide`): the board3d
+    then shows the board as it really is, defects are relative to that. Idempotent (``fitApplied``); returns *board3d*
+    itself when there is nothing to apply, else a copy."""
+    if board3d.get("fitApplied") or not (board3d.get("collide") or any(
+            (c.get("fit") or {}).get("accepted") or c.get("photoFit") for c in board3d["components"])):
         return board3d
     out = copy.deepcopy(board3d)
     for c in out["components"]:
@@ -59,6 +61,9 @@ def apply_fit(board3d: dict[str, Any]) -> dict[str, Any]:
             # the photos' outline (parttex.photo_fit): edges trimmed where the photos show board inside the body
             c["pose"].update({"x": pf["x"], "y": pf["y"]})
             c["body"].update({"l": pf["l"], "w": pf["w"]})
+    if out.get("collide"):
+        from simple_sim.board3d.collide import apply_collide
+        apply_collide(out, out["collide"])
     out["fitApplied"] = True
     return out
 

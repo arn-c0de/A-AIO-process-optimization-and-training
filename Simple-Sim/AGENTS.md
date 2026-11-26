@@ -120,6 +120,12 @@ panel) with `edge` (`x-|x+|y-|y+`), `innerMm` (plane of the inner face), `thickn
 `bottomMm`/`topMm` (z, board top = 0) and `holesFor` (connectors whose body gets a cut-out). Rendered with the `mount`
 stage only (`scene.bracket_job`). Measure them on the calibrated phone photos (a front and a back view separate depth
 from height). A battery holder gets its coin cell with the `mount` stage too (catalog `"cell"` overrides).
+Bodies that run into each other (`python -m simple_sim board3d-collide --board3d <dir> [--dry-run] [--check] [--render]`,
+`simple_sim/board3d/collide.py`): every pair of bodies is tested as boxes; connector / box outlines from the app (often
+the courtyard) and fits grown past their package name are fixed (datasheet size from the part catalog, slid onto the
+plated holes and the photo mosaic; else cut on the side the photo shows as board or neighbour), two measured bodies are
+only reported. Writes `<dir>/parttex/collide.json`, applied in `apply_fit` after the photo fit (renders and the
+viewer's GLB, which re-exports when the file changes); `--check` draws before / after onto the mosaic (`<dir>/collide/`).
 Top-down `board3d-render`: parts at their nominal place show the scan (board under them, unlit tops), so the metrics
 then mostly measure the defect parts; `--model-check` renders the bare board with every part lit.
 
