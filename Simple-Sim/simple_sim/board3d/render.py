@@ -24,7 +24,7 @@ import numpy as np
 from simple_sim.blender.job_schema import BLENDER_ENV_VAR, DEFAULT_BLENDER_EXECUTABLE
 from simple_sim.io_utils import atomic_write_json, load_json
 from simple_sim.board3d.scene import apply_defects, build_job
-from simple_sim.board3d.substrate import BoardRaster, bare_board, pad_colour, part_mask, rectify
+from simple_sim.board3d.substrate import BoardRaster, bare_board, component_polygons, pad_colour, part_mask, rectify
 
 SCRIPT = Path(__file__).resolve().parents[1] / "blender" / "render_board3d.py"
 DEFAULT_PX_PER_MM = 24.0     # the 600 dpi scan has 23.6 px/mm
@@ -275,6 +275,47 @@ def _substrate_path(sub: dict[str, Any], look: str | None = None) -> str:
     return sub["maps"]["bare_rgb"]
 
 
+#: what the board texture shows under the parts (``render_window(under_parts=...)``): ``auto`` = ``scan`` for a top-down
+#: view without the clean board, else ``bare``
+UNDER_PARTS = ("auto", "scan", "bare")
+#: ops after which the part no longer covers its nominal place (the board goes bare there)
+UNCOVERING_OPS = ("move", "remove", "tombstone", "lift")
+#: margin (mm) around such a part's nominal body that goes back to the bare board
+DEFECT_BARE_MARGIN_MM = 0.5
+
+
+def board_texture(board3d: dict[str, Any], folder: Path, sub: dict[str, Any], name: str, *, camera: dict[str, Any] | None = None,
+                  under_parts: str = "auto") -> str:
+    """The board texture of a job. ``bare``: the bare board (parts inpainted). ``scan``: the scan itself, the bare board
+    only around the nominal place of every part an op uncovers (:data:`UNCOVERING_OPS`): a part at its nominal place
+    hides the board under it except for the 1-2 px between its modelled outline and the scan's soft edge, which the
+    bare board filled with green (top 0402 window: parts Delta E 4.04 -> 1.31, SSIM 0.974 -> 0.995). The parts'
+    metrics then no longer show outline errors: check geometry with ``bare``. ``auto``: ``scan`` for a top-down view,
+    ``bare`` under an oblique camera (it would see the scan's part pixels under leads / standoffs) or with the clean
+    board. A mixed texture is written to ``renders/<name>.substrate.png`` (removed after the render)."""
+    if under_parts not in UNDER_PARTS:
+        raise ValueError(f"under_parts must be one of {', '.join(UNDER_PARTS)}, not {under_parts!r}")
+    bare = _substrate_path(sub)
+    if under_parts == "bare" or (under_parts == "auto" and (camera is not None or bare == sub["maps"].get("clean_rgb"))):
+        return bare
+    hit = [c for c in board3d["components"]
+           if c.get("pose") and any(d.get("op") in UNCOVERING_OPS for d in c.get("defects", []))]
+    if not hit:
+        return sub["maps"]["scan_rgb"]
+    scan, bare_img = cv2.imread(sub["maps"]["scan_rgb"], cv2.IMREAD_COLOR), cv2.imread(bare, cv2.IMREAD_COLOR)
+    r = sub["raster"]
+    raster = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"])
+    mask = np.zeros(scan.shape[:2], np.uint8)
+    for c in hit:
+        bodies, _ = component_polygons({**c, "pose": c.get("nominalPose") or c["pose"]}, DEFECT_BARE_MARGIN_MM)
+        for poly in bodies:
+            cv2.fillPoly(mask, [raster.to_px(poly).round().astype(np.int32)], 255)
+    out = folder / "renders" / f"{name}.substrate.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out), np.where(mask[..., None] > 0, bare_img, scan))
+    return str(out)
+
+
 def part_atlas(folder: Path, sub: dict[str, Any], look: str | None = None) -> dict[str, Any] | None:
     """The per-part face texture atlas (``tools/board3d_parttex.py``, :mod:`simple_sim.board3d.parttex`) for the job, when
     the substrate comes from the phone photos (the atlas is built from the same stills; the flatbed scan keeps its
@@ -300,13 +341,15 @@ def part_atlas(folder: Path, sub: dict[str, Any], look: str | None = None) -> di
 def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, name: str, *, stages: set[str] | None = None,
                   samples: int = 64, device: str = "GPU", photo: bool = True, light: dict[str, Any] | None = None,
                   timeout: float = 1800.0, camera: dict[str, Any] | None = None, size_px: tuple[int, int] | None = None,
-                  job_extra: dict[str, Any] | None = None) -> dict[str, Any]:
+                  job_extra: dict[str, Any] | None = None, under_parts: str = "auto") -> dict[str, Any]:
     """Render *window* of the board3d; returns ``{"image", "job", "seconds", "components"}``. *job_extra* is merged into
-    the Blender job last (``board``, ``shadowCatcher``, ...)."""
+    the Blender job last (``board``, ``shadowCatcher``, ...). *under_parts*: the board texture under the parts
+    (:func:`board_texture`)."""
     sub = board3d.get("substrate") or prepare_substrate(board3d, folder)
     stages = stages or set(sub.get("stages", ["smd"]))
     out = folder / "renders" / f"{name}.png"
-    job = build_job(board3d, window, out=str(out), substrate={"path": _substrate_path(sub), "raster": sub["raster"]},
+    substrate = board_texture(board3d, folder, sub, name, camera=camera, under_parts=under_parts)
+    job = build_job(board3d, window, out=str(out), substrate={"path": substrate, "raster": sub["raster"]},
                     photo={"path": sub["maps"]["scan_rgb"], "raster": sub["raster"]} if photo else None,
                     stages=stages, light=light, samples=samples, device=device)
     if photo and (atlas := part_atlas(folder, sub)):
@@ -332,6 +375,8 @@ def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, na
         job["device"] = "CPU"
         atomic_write_json(job_path, job, indent=1)
         proc = _run_blender_job(job_path, timeout)
+    if substrate.endswith(".substrate.png"):
+        Path(substrate).unlink(missing_ok=True)   # per-job mix (board_texture): 12 MB a whole-board raster, one per sheet
     if proc.returncode != 0 or not out.is_file():
         raise _blender_failure("Blender failed", proc)
     timing = next((ln.split("|", 1)[1].strip() for ln in proc.stdout.splitlines() if ln.startswith("[render_board3d]") and "|" in ln), None)
@@ -367,7 +412,7 @@ def export_glb(board3d: dict[str, Any], folder: Path, name: str = "board", *, st
 
 def probe(board3d: dict[str, Any], folder: Path, window: BoardRaster, name: str, *, ops: list[dict[str, Any]] | None = None,
           source: str = "scan", stages: set[str] | None = None, samples: int = 64, device: str = "GPU", photo: bool = True,
-          light: dict[str, Any] | None = None) -> dict[str, Any]:
+          light: dict[str, Any] | None = None, under_parts: str = "auto") -> dict[str, Any]:
     """Render *window* (with the defect *ops* applied) and compare it with the real image of the substrate *source*.
 
     Writes ``renders/<name>.png``, ``<name>_compare.png`` (real | render | Delta E) and ``<name>.json`` (the
@@ -376,7 +421,8 @@ def probe(board3d: dict[str, Any], folder: Path, window: BoardRaster, name: str,
     """
     ops = list(ops or [])
     scene = apply_defects(board3d, ops) if ops else board3d
-    res = render_window(scene, folder, window, name, stages=stages, samples=samples, device=device, photo=photo, light=light)
+    res = render_window(scene, folder, window, name, stages=stages, samples=samples, device=device, photo=photo, light=light,
+                        under_parts=under_parts)
     render = cv2.imread(res["image"], cv2.IMREAD_COLOR)
     real = crop_real(board3d, window)
     masks = {"parts": crop_real(board3d, window, "parts_mask")[..., 0]}
@@ -384,6 +430,7 @@ def probe(board3d: dict[str, Any], folder: Path, window: BoardRaster, name: str,
     metrics = compare(real, render, masks)
     compare_image(real, render, folder / "renders" / f"{name}_compare.png")
     report = {**res, "source": source, "window": window.meta(), "defects": ops, "samples": samples, "light": light, "photo": photo,
+              "underParts": under_parts,
               "metrics": metrics}
     atomic_write_json(folder / "renders" / f"{name}.json", report, indent=1)
     return report

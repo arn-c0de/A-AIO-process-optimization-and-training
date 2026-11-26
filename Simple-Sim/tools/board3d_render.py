@@ -56,6 +56,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--light", default="flatbed", choices=["flatbed", "aoi"])
     ap.add_argument("--line-strength", type=float, default=0.0, help="flatbed: scanner line light (W)")
     ap.add_argument("--rebuild-substrate", action="store_true")
+    ap.add_argument("--under-parts", choices=["auto", "scan", "bare"], default="auto",
+                    help="board texture under the parts: the scan (top-down default; the bare board only where a defect "
+                         "uncovers a part's place) or the bare board (use it to check body outlines)")
+    ap.add_argument("--model-check", action="store_true",
+                    help="check the body and light model: the bare board under the parts and every part lit (by default "
+                         "a part at its nominal place shows the scan, so the metrics measure only the defect parts)")
     ap.add_argument("--name", default="probe")
     add_json_flag(ap)
     return ap.parse_args(argv)
@@ -89,8 +95,12 @@ def main(argv: list[str] | None = None) -> int:
         x0, y0, w, h = a.window
         window = BoardRaster(x0, y0, w, h, px)
     light = {"preset": a.light, "lineStrength": a.line_strength}
+    under_parts = a.under_parts
+    if a.model_check:
+        light["scanNominal"] = False
+        under_parts = "bare"
     res = probe(board3d, a.board3d, window, a.name, ops=ops, source=a.source, stages=set(a.stages.split(",")) if a.stages else None,
-                samples=a.samples, device=a.device, photo=not a.no_photo, light=light)
+                samples=a.samples, device=a.device, photo=not a.no_photo, light=light, under_parts=under_parts)
     metrics = res["metrics"]
     print(f"{a.name}: {res['components']} components, {res['seconds']} s, SSIM {metrics['ssim']}, "
           f"Delta E mean {metrics['deltaE']['mean']} (parts {metrics.get('deltaE_parts', {}).get('mean')}, "

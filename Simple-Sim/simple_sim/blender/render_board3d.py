@@ -390,19 +390,24 @@ def _uv_from_board(obj, raster: dict, to_nominal: Matrix | None = None) -> None:
 PHOTO_UP = 0.5
 #: walls tilted up more than this (normal z) are mould draft seen from above (``_photo_on_top``: slope_photo)
 SLOPE_MIN = 0.05
+#: photo faces flatter than this (normal z) are lit; the curved / sloped ones below it (a can's curled rim, rounded end
+#: caps) take the unlit scan too: the scan holds their slope's shading, lit again they rendered as a dark ring
+#: (electrolytic -1.8 L*)
+FLAT_UP = 0.97
 #: side faces of moulded / ceramic bodies take the photo inside the outline, at SIDE_INSET x the smaller half size, at
 #: most SIDE_INSET_MAX_MM, one colour per wall face: a column of edge pixels per wall showed the marking (inset 30 %)
 #: or the leads' highlights bleeding into the body edge (0.2 mm) as vertical streaks
 SIDE_INSET, SIDE_INSET_MAX_MM = 0.3, 0.4
 
 
-def _photo_on_top(obj, photo, raster: dict, to_nominal: Matrix, slope_photo=None) -> None:
+def _photo_on_top(obj, photo, raster: dict, to_nominal: Matrix, slope_photo=None, flat_up: float | None = None) -> None:
     """The scan on the faces that look up (slot 1), the piece's own material on the walls (slot 0): the photo of the
     top edge stretched down the walls made vertical streaks (the whole can of an electrolytic). Walls of moulded /
     ceramic bodies (``photo_sides``) take the photo too, sampled inside the outline: their own colour, no streaks.
     With *slope_photo* (the unlit scan, flatbed / room presets) the sloped walls seen from above (mould draft) show
     the scan as scanned: the scanner lights them from the side at ~45 deg, the steep render disc left them as a dark
-    rim. Vertical walls stay lit (the unlit scan on every wall measured worse)."""
+    rim. Vertical walls stay lit (the unlit scan on every wall measured worse). *flat_up*: faces flatter than this stay
+    lit (default :data:`FLAT_UP`; above 1: every face that looks up takes the unlit scan)."""
     import numpy as np
     me = obj.data
     if not me.materials:
@@ -420,7 +425,7 @@ def _photo_on_top(obj, photo, raster: dict, to_nominal: Matrix, slope_photo=None
     up = nz > PHOTO_UP
     sides = bool(obj.get("photo_sides", False))
     index = np.where(up | sides, 1, 0)
-    slope = (nz > SLOPE_MIN) & ~up
+    slope = (nz > SLOPE_MIN) & (nz < (FLAT_UP if flat_up is None else flat_up))
     if slope_photo is not None:
         index[slope] = 2          # a draft slope shows the scan at its own place: what the scanner saw there
     me.polygons.foreach_set("material_index", index.astype(np.int32))
@@ -736,6 +741,14 @@ def _apply_photo_uvs(pending: list, job: dict, mats: dict) -> None:
         if entry is not None and "top" not in entry["faces"]:
             entry = None                     # gated off (tall part whose top predicts badly): the board photo as before
         clean = (atlas or {}).get("look") == "clean"
+        # Flatbed: a part at its nominal place shows the scan unlit on every face that looks up: lit, its top took the
+        # shadows of the tall parts next to it (an electrolytic's can on its own base: -10 L*), which the scan holds
+        # already. A part a defect moves, lifts or tips stays lit: its shading has to change. ``light.scanNominal: false``
+        # lights every part (checks the body / light model, ``board3d_render.py --model-check``).
+        light = job.get("light") or {}
+        nominal = (c["pose"] == c["nominal"] and not c.get("tombstone")
+                   and light.get("preset", "flatbed") == "flatbed" and light.get("scanNominal", True))
+        flat_up = 2.0 if nominal else None
         for o in [*_descendants(part_root), *leads]:
             if o.type != "MESH" or not o.name.startswith(PHOTO_PREFIXES):
                 continue                     # openings, inserts, shells keep their material
@@ -751,7 +764,7 @@ def _apply_photo_uvs(pending: list, job: dict, mats: dict) -> None:
                 # per-part face textures from all photos (board3d.parttex)
                 _atlas_uv(o, entry, atlas["size"], mats["atlas"], to_nominal)
             else:
-                _photo_on_top(o, mats["photo"], raster, to_nominal, mats.get("photo_joint"))
+                _photo_on_top(o, mats["photo"], raster, to_nominal, mats.get("photo_joint"), flat_up=flat_up)
 
 
 def _lights(job: dict) -> None:

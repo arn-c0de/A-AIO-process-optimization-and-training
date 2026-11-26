@@ -261,3 +261,25 @@ def test_part_mask_keeps_lands_by_default(tmp_path):
     parts_all, _ = part_mask(board3d, r, {"smd"}, keep_lands=False)
     assert (parts_all > 0).sum() > (parts > 0).sum() > 0
     assert ((pads > 0) & (parts == 0)).any()                              # some land area is kept as real pixels
+
+
+def test_board_texture_scan_under_nominal_parts_bare_where_a_defect_uncovers(tmp_path):
+    from simple_sim.board3d.render import board_texture
+    board3d = _board3d(tmp_path)
+    sub = prepare_substrate(board3d, tmp_path, px_per_mm=10)
+    board3d["substrate"] = sub
+    assert board_texture(board3d, tmp_path, sub, "t") == sub["maps"]["scan_rgb"]                  # nothing uncovered
+    assert board_texture(board3d, tmp_path, sub, "t", under_parts="bare") == sub["maps"]["bare_rgb"]
+    assert board_texture(board3d, tmp_path, sub, "t", camera={"f": 1}) == sub["maps"]["bare_rgb"]  # oblique view
+    excess = apply_defects(board3d, [{"op": "excess", "refdes": "C1"}])
+    assert board_texture(excess, tmp_path, sub, "t") == sub["maps"]["scan_rgb"]                   # part still in place
+    moved = apply_defects(board3d, [{"op": "move", "refdes": "C1", "dx": 3.0}])
+    path = board_texture(moved, tmp_path, sub, "t")
+    assert path.endswith("t.substrate.png")
+    mix, scan, bare = (cv2.imread(p) for p in (path, sub["maps"]["scan_rgb"], sub["maps"]["bare_rgb"]))
+    r = sub["raster"]
+    u, v = np.round(BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"]).to_px(np.array([[10.0, 10.0]]))[0]).astype(int)
+    assert mix[v, u].tolist() == bare[v, u].tolist() != scan[v, u].tolist()   # the nominal place goes bare
+    assert mix[5, 5].tolist() == scan[5, 5].tolist()                            # the rest stays the scan
+    with pytest.raises(ValueError):
+        board_texture(board3d, tmp_path, sub, "t", under_parts="nope")
