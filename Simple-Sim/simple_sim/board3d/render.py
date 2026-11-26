@@ -566,6 +566,12 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
             real_r = cv2.warpPerspective(still_full, to_photo_full, (raster.cols, raster.rows), flags=cv2.INTER_AREA | cv2.WARP_INVERSE_MAP)
             flat = cv2.erode(board, np.ones((15, 15), np.uint8)) & ~cv2.dilate(parts_r, np.ones((25, 25), np.uint8))
             light["gainRgb"] = photofx.colour_gain(scan_tex, real_r, flat)
+            # the desk around the board (linear RGB of the photo outside the board's neighbourhood): the lower sky
+            out_m = cv2.warpPerspective(cv2.dilate(board, np.ones((61, 61), np.uint8)), np.diag([scale, scale, 1.0]) @ to_photo_full,
+                                        size, flags=cv2.INTER_NEAREST) == 0
+            if out_m.sum() > 1000:
+                light["groundRgb"] = [round(float(photofx.srgb_to_linear(np.float32(np.median(real[..., ch][out_m])))), 4)
+                                      for ch in (2, 1, 0)]
         extra: dict[str, Any] = {"board": {"clip": True}}
         if backplate:
             extra["shadowCatcher"] = True

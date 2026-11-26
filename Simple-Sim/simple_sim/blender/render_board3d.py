@@ -820,6 +820,10 @@ def _apply_photo_uvs(pending: list, job: dict, mats: dict) -> None:
             if clean and (not o.name.startswith(("body", "lid")) or o.name.startswith(("body_shell", "body_flange"))
                           or c["part"].get("body") == "can" and o.name.startswith("body_can")):
                 continue                     # clean look: caps, leads, terminals, shields, cans stay metal
+            if clean and o.name.startswith(("body_wall", "body_key")):
+                # an open-top connector's shroud keeps its nylon: seen from above its "top" is the dark opening, so the
+                # atlas's body colour came out grey (white JST rows rendered 12 L* too dark on the phone views)
+                continue
             if o.name.startswith(("cavity", "pin_")) and mats.get("photo_joint") is not None:
                 # down an open connector's shaft the scan already holds the shaft's shading: lit again under the
                 # steep light the floor came out ~4 L* too dark. The unlit scan, as for the joints.
@@ -850,6 +854,22 @@ def _lights(job: dict) -> None:
         # white surround renders flat diffuse surfaces at their texture colour from any viewpoint
         bg.inputs["Color"].default_value = (*_room_gain(job), 1.0)
         bg.inputs["Strength"].default_value = 1.0
+        if light.get("groundRgb"):
+            # below the horizon the desk (its colour measured on the photo): flat surfaces facing up never see it, so
+            # the texture calibration holds; walls and metal now mirror the desk instead of a white sky (RJ45 / USB
+            # shields, the coin cell rendered 10-30 L* too bright)
+            nodes, links = world.node_tree.nodes, world.node_tree.links
+            coord, sep = nodes.new("ShaderNodeTexCoord"), nodes.new("ShaderNodeSeparateXYZ")
+            ramp = nodes.new("ShaderNodeMapRange")
+            ramp.inputs["From Min"].default_value, ramp.inputs["From Max"].default_value = -0.05, 0.05
+            mix = nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.inputs["A"].default_value = (*[float(v) for v in light["groundRgb"]], 1.0)
+            mix.inputs["B"].default_value = (*_room_gain(job), 1.0)
+            links.new(coord.outputs["Generated"], sep.inputs["Vector"])
+            links.new(sep.outputs["Z"], ramp.inputs["Value"])
+            links.new(ramp.outputs["Result"], mix.inputs["Factor"])
+            links.new(mix.outputs["Result"], bg.inputs["Color"])
         return
     if light.get("preset", "flatbed") != "flatbed":
         rb._aoi_lights({}, max(win["widthMm"], win["heightMm"]))
