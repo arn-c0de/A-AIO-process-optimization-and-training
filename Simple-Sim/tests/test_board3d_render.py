@@ -341,3 +341,16 @@ def test_trim_to_brackets_keeps_the_lands_in_place():
     assert jc["pose"]["y"] - jc["l"] / 2 == pytest.approx(15.0)                 # far side unchanged
     assert jc["nominal"] == jc["pose"] and land(jc) == pytest.approx(before)
     assert keep["pose"]["y"] == 18.0 and keep["l"] == 6.0                       # goes through its cut-out
+
+
+def test_sheet_job_and_mount_stage_only(tmp_path):
+    from simple_sim.board3d.scene import sheet_job
+    sh = sheet_job({"x0": 5, "x1": 25, "y0": -3, "y1": 10, "zTopMm": -1.6, "cornerMm": 2, "rgb": [0.1, 0.2, 0.1]})
+    assert sh["thicknessMm"] == 0.3 and sh["specular"] == 0.5 and sh["rgb"] == [0.1, 0.2, 0.1]
+    with pytest.raises(ValueError):
+        sheet_job({"x0": 5, "x1": 5, "y0": 0, "y1": 1, "zTopMm": -1.6})
+    board3d = _board3d(tmp_path)
+    board3d["sheets"] = [{"x0": 5, "x1": 25, "y0": -3, "y1": 10, "zTopMm": -1.6}]
+    win, sub = BoardRaster(0, 0, 30, 20, 10), {"path": "x", "raster": {}}
+    assert build_job(board3d, win, out="o", substrate=sub, photo=None, stages={"smd"})["sheets"] == []
+    assert len(build_job(board3d, win, out="o", substrate=sub, photo=None, stages={"smd", "mount"})["sheets"]) == 1

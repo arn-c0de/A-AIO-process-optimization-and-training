@@ -706,10 +706,10 @@ def _bridge_mesh(name: str, p0: Vector, p1: Vector, width: float, height: float,
     return obj
 
 
-#: zinc-plated steel of an edge bracket (linear RGB), fitted to the first product's bracket on two calibrated phone photos
-#: (mean colour within +-4 sRGB levels on both; a metal under the uniform room sky reflects it, so the base colour is
-#: darker and warmer than the plate looks)
-BRACKET_RGB = (0.43, 0.17, 0.11)
+#: zinc-plated steel of an edge bracket (linear RGB): neutral. Fitted to the front photos it came out warm (0.43, 0.17,
+#: 0.11), but that tint is the wooden table mirrored in the plate, which the scene does not have: the plate's back then
+#: rendered copper. Neutral 0.30 costs the front views 0.26 Delta E and gives the back views as much.
+BRACKET_RGB = (0.30, 0.30, 0.30)
 
 
 def _build_brackets(job: dict) -> None:
@@ -731,6 +731,23 @@ def _build_brackets(job: dict) -> None:
             me.update()
             me.materials.append(mat)
             bpy.context.collection.objects.link(bpy.data.objects.new(f"bracket_{k}_{i}", me))
+
+
+def _build_sheets(job: dict) -> None:
+    """Flat plates parallel to the board (``job["sheets"]``, :func:`simple_sim.board3d.scene.sheet_job`): an insulating
+    foil or base plate under the board, a rounded rectangle of its thickness."""
+    for k, sh in enumerate(job.get("sheets") or []):
+        l, w, t = sh["x1"] - sh["x0"], sh["y1"] - sh["y0"], sh["thicknessMm"]
+        r = min(sh["cornerMm"], 0.49 * min(l, w))
+        m = bm.shape_at(bm.BodyShape(l, w, t, r_corner=r, corner_segments=6 if r > 0 else 1, top_segments=1),
+                        (sh["x0"] + sh["x1"]) / 2, (sh["y0"] + sh["y1"]) / 2, sh["zTopMm"] - t)
+        me = bpy.data.meshes.new(f"sheet_{k}")
+        me.from_pydata(m.verts, [], m.faces)
+        me.update()
+        mat = rb._material(f"mat_sheet_{k}", tuple(sh["rgb"]), roughness=sh["roughness"], metallic=sh["metallic"])
+        mat.node_tree.nodes["Principled BSDF"].inputs["Specular IOR Level"].default_value = sh["specular"]
+        me.materials.append(mat)
+        bpy.context.collection.objects.link(bpy.data.objects.new(f"sheet_{k}", me))
 
 
 def _build_tht_joints(job: dict, mats: dict) -> None:
@@ -920,6 +937,7 @@ def main() -> None:
     _build_bridges(job, mats)
     _build_tht_joints(job, mats)
     _build_brackets(job)
+    _build_sheets(job)
 
     if job.get("exportGlb"):
         _export_glb(job["exportGlb"])

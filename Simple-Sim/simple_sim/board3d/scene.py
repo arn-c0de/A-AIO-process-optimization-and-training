@@ -155,6 +155,19 @@ def bracket_job(bracket: dict[str, Any], board3d: dict[str, Any]) -> dict[str, A
             "topMm": float(bracket["topMm"]), "holes": holes}
 
 
+def sheet_job(sheet: dict[str, Any]) -> dict[str, Any]:
+    """A flat plate parallel to the board (``mechanics.json`` ``sheets[]``: an insulating foil or base plate under the
+    board): ``x0..x1`` x ``y0..y1`` (board mm), top face at ``zTopMm`` (board top = 0; under the board <= -1.6),
+    ``thicknessMm``, ``cornerMm`` radius, colour ``rgb`` (linear), ``roughness`` / ``metallic`` / ``specular`` (Principled IOR level)."""
+    x0, x1, y0, y1 = (float(sheet[k]) for k in ("x0", "x1", "y0", "y1"))
+    if x1 <= x0 or y1 <= y0:
+        raise ValueError(f"sheet needs x0 < x1 and y0 < y1, got {sheet}")
+    return {"x0": x0, "x1": x1, "y0": y0, "y1": y1, "zTopMm": float(sheet["zTopMm"]), "thicknessMm": float(sheet.get("thicknessMm", 0.3)),
+            "cornerMm": float(sheet.get("cornerMm", 0.0)), "rgb": [float(v) for v in sheet.get("rgb", (0.5, 0.5, 0.5))],
+            "roughness": float(sheet.get("roughness", 0.6)), "metallic": float(sheet.get("metallic", 0.0)),
+            "specular": float(sheet.get("specular", 0.5))}
+
+
 def trim_to_brackets(comps: list[dict[str, Any]], brackets: list[dict[str, Any]], through: set[str]) -> list[str]:
     """Shorten in place every job component (axis-aligned, not in *through*) whose body reaches past a bracket's inner
     face: a plate lets nothing pass but its cut-outs (a top-view outline that took in the panel stuck out of its front).
@@ -216,5 +229,6 @@ def build_job(board3d: dict[str, Any], window: BoardRaster, *, out: str, substra
             "light": light or {"preset": "flatbed"}, "components": comps, "bridges": bridges,
             # mechanics are fitted at final assembly: only with the mount stage
             "brackets": brackets,
+            "sheets": [sheet_job(x) for x in board3d.get("sheets", [])] if "mount" in stages else [],
             "board": {"widthMm": float(board3d.get("widthMm", window.w)), "heightMm": float(board3d.get("heightMm", window.h)),
                       "thicknessMm": BOARD_THICKNESS_MM}}
