@@ -14,7 +14,8 @@ One catalog is a JSON file ``{"schema": 1, "parts": [entry, ...]}``. An entry::
 
 Catalogs are layered: the **local** ones, which hold the actual part data and stay off GitHub (git-ignored):
 ``$SIMPLE_SIM_PARTS_DB`` (one or more files, ``os.pathsep``-separated) or ``outputs/parts/catalog.json``, then the
-**built-in** ``builtin.json`` next to this module (empty in the repo: only the code is published). Within a layer an MPN hit wins over a package hit, which wins over a regex hit.
+**built-in** ``builtin.json`` next to this module (published: generic parts from public datasheets only, e.g. JST series
+and 2.54 mm pin headers). Within a layer an MPN hit wins over a package hit, which wins over a regex hit.
 
 Used by the 3D-Board-Renderer (:func:`simple_sim.board3d.parts.apply_part_catalog`) and meant for the AOI generators.
 """

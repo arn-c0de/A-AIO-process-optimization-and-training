@@ -18,8 +18,10 @@ def _cat(tmp_path: Path, parts: list[dict]) -> Path:
 
 
 def test_builtin_catalog_is_valid_and_regex_match(tmp_path):
-    cat = PartCatalog.load(local=[])                     # built-in layer only (empty in the repo)
-    assert all(not validate_entry(e.data) for e in cat.entries)
+    cat = PartCatalog.load(local=[])                     # built-in layer only (generic public parts)
+    assert cat.entries and all(not validate_entry(e.data) for e in cat.entries)
+    m = cat.lookup(texts=["B13B-XH-A(LF)(SN)"])
+    assert m is not None and m.entry.id == "jst-xh-top" and m.entry.origin == "builtin"
     cat = PartCatalog.load(local=[_cat(tmp_path, [{"id": "series", "match": ["\\bB\\d{1,2}B-XY-A"], "body": {"h": 6.0}}])])
     m = cat.lookup(texts=["Maker B4B-XY-A(LF)(SN)"])
     assert m is not None and m.entry.id == "series" and m.how == "regex" and m.entry.height_mm == 6.0

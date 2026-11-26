@@ -1,5 +1,191 @@
 {
  "schema": 1,
- "_comment": "Built-in layer of the part catalog: empty in the repo on purpose. Part data lives in the local, git-ignored catalog (outputs/parts/catalog.json or $SIMPLE_SIM_PARTS_DB).",
- "parts": []
+ "parts": [
+  {
+   "id": "jst-eh-top",
+   "match": [
+    "\\bB\\d{1,2}B-EH-A"
+   ],
+   "manufacturer": "JST",
+   "series": "EH",
+   "kind": "wire_to_board",
+   "mount": "tht",
+   "orientation": "vertical",
+   "pitchMm": 2.5,
+   "lengthAddMm": 5.0,
+   "body": {
+    "w": 3.8,
+    "h": 6.0
+   },
+   "totalHeightMm": 8.1,
+   "material": "plastic",
+   "source": {
+    "kind": "datasheet",
+    "url": "https://www.jst-mfg.com/product/pdf/eng/eEH.pdf",
+    "mirror": "https://store.comet.bg/download-file.php?id=28249",
+    "page": 3,
+    "checked": "2026-11-26",
+    "note": "EH-A header (top entry): insulator 6 mm above board, depth 3.8 mm; table B = A + 5.0 (2 circuits: A 2.5, B 7.5). totalHeightMm (mated) from the intro text, p.1: \"8.1 mm in height after mounting\""
+   }
+  },
+  {
+   "id": "jst-ph-top",
+   "match": [
+    "\\bB\\d{1,2}B-PH-K"
+   ],
+   "manufacturer": "JST",
+   "series": "PH",
+   "kind": "wire_to_board",
+   "mount": "tht",
+   "orientation": "vertical",
+   "pitchMm": 2.0,
+   "lengthAddMm": 3.9,
+   "body": {
+    "w": 4.5,
+    "h": 6.0
+   },
+   "totalHeightMm": 8.0,
+   "material": "plastic",
+   "source": {
+    "kind": "datasheet",
+    "url": "https://www.jst-mfg.com/product/pdf/eng/ePH.pdf",
+    "mirror": "https://cdn.sparkfun.com/assets/0/e/f/7/2/ePH.pdf",
+    "page": 22,
+    "checked": "2026-11-26",
+    "note": "through-hole shrouded header, top entry: 6.0 mm above board, depth 4.5 mm; table B = A + 3.9 (2 circuits: A 2.0, B 5.9). totalHeightMm (mated) from the intro text, PDF p.1: \"8.0mm in height after mounting\""
+   }
+  },
+  {
+   "id": "jst-phd-top",
+   "match": [
+    "\\bB\\d{1,2}B-PHDSS"
+   ],
+   "manufacturer": "JST",
+   "series": "PHD",
+   "kind": "wire_to_board",
+   "mount": "tht",
+   "orientation": "vertical",
+   "rows": 2,
+   "pitchMm": 2.0,
+   "lengthAddMm": 3.9,
+   "body": {
+    "w": 5.0,
+    "h": 6.5
+   },
+   "totalHeightMm": 8.8,
+   "material": "plastic",
+   "source": {
+    "kind": "datasheet",
+    "url": "https://www.jst-mfg.com/product/pdf/eng/ePHD.pdf",
+    "mirror": "https://datasheet.sic-components.com/ePHD.pdf",
+    "page": 3,
+    "checked": "2026-11-26",
+    "note": "header top entry: 6.5 mm above board, depth 5 mm; table B = A + 3.9 (8 circuits: A 6.0, B 9.9). totalHeightMm (mated) from the intro text, p.1: \"mounting height of 8.8 mm\""
+   }
+  },
+  {
+   "id": "jst-vh-top",
+   "match": [
+    "\\bB\\d{1,2}P-VH\\b"
+   ],
+   "manufacturer": "JST",
+   "series": "VH",
+   "kind": "wire_to_board",
+   "mount": "tht",
+   "orientation": "vertical",
+   "pitchMm": 3.96,
+   "lengthAddMm": 3.9,
+   "body": {
+    "w": 8.5,
+    "h": 9.4
+   },
+   "totalHeightMm": 10.9,
+   "material": "plastic",
+   "source": {
+    "kind": "datasheet",
+    "url": "https://www.jst-mfg.com/product/pdf/eng/eVH.pdf",
+    "mirror": "https://www.farnell.com/datasheets/2322788.pdf",
+    "page": 3,
+    "checked": "2026-11-26",
+    "note": "locking header top entry (side view drawn lying): wafer 3.2 + post 7.7 = 10.9 post tip, lock wall (9.4) above board, depth 8.5; table B = A + 3.9 (2 circuits: A 3.96, B 7.86)"
+   }
+  },
+  {
+   "id": "jst-xa-top",
+   "match": [
+    "\\bB\\d{2}B-XASK-1"
+   ],
+   "manufacturer": "JST",
+   "series": "XA",
+   "kind": "wire_to_board",
+   "mount": "tht",
+   "orientation": "vertical",
+   "pitchMm": 2.5,
+   "lengthAddMm": 5.0,
+   "body": {
+    "w": 6.4,
+    "h": 8.8
+   },
+   "material": "plastic",
+   "source": {
+    "kind": "datasheet",
+    "url": "https://www.jst-mfg.com/product/pdf/eng/eXA.pdf",
+    "mirror": "https://www.farnell.com/datasheets/2322660.pdf",
+    "page": "3-4",
+    "checked": "2026-11-26",
+    "note": "through-hole shrouded header top entry: 8.8 mm above board, depth 6.4 mm; table B = A + 5.0 (3 circuits: A 5.0, B 10.0)"
+   }
+  },
+  {
+   "id": "jst-xh-top",
+   "match": [
+    "\\bB\\d{1,2}B-XH-A"
+   ],
+   "manufacturer": "JST",
+   "series": "XH",
+   "kind": "wire_to_board",
+   "mount": "tht",
+   "orientation": "vertical",
+   "pitchMm": 2.5,
+   "lengthAddMm": 4.9,
+   "body": {
+    "w": 5.75,
+    "h": 7.0
+   },
+   "material": "plastic",
+   "source": {
+    "kind": "datasheet",
+    "url": "https://www.jst-mfg.com/product/pdf/eng/eXH.pdf",
+    "mirror": "https://pcb.mit.edu/labs/lab_01_Altium/eXH.pdf",
+    "page": 3,
+    "checked": "2026-11-26",
+    "note": "header top entry: 7 mm above board, depth 5.75 mm; table B = A + 4.9 (2 circuits: A 2.5, B 7.4) - lengthAddMm was 2.4 before (wrong)"
+   }
+  },
+  {
+   "id": "pin-header-2.54",
+   "match": [
+    "\\bPIN ?HEADER.*2[.,]54",
+    "\\bHDR.*2[.,]54"
+   ],
+   "kind": "pin_header",
+   "mount": "tht",
+   "orientation": "vertical",
+   "pitchMm": 2.54,
+   "lengthAddMm": 2.54,
+   "body": {
+    "w": 2.54,
+    "h": 2.54
+   },
+   "totalHeightMm": 8.54,
+   "material": "plastic",
+   "source": {
+    "kind": "datasheet",
+    "url": "https://www.we-online.com/components/products/datasheet/61300211121.pdf",
+    "page": 1,
+    "checked": "2026-11-26",
+    "note": "reference part Wuerth WR-PHD 61300211121 (rev 003.000, 2023-01-08): insulator 2.54 mm high / 2.54 mm wide, post 6.0 mm above it (8.54 total), L = n x 2.54"
+   }
+  }
+ ]
 }

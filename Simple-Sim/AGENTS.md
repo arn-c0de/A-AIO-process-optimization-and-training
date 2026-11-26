@@ -100,8 +100,9 @@ of performance cores).
 
 Part catalog (`simple_sim.parts`, `python -m simple_sim parts list|lookup|check|add`): datasheet geometry of real
 parts (body l / w / **height above the board**, kind, orientation, material, source url + `datasheet|distributor|estimate`),
-shared by every tool. Only the code is published. Layers: local files (`$SIMPLE_SIM_PARTS_DB`, `os.pathsep`-separated, else `outputs/parts/catalog.json`;
-all part data lives there and stays off GitHub) over `simple_sim/parts/builtin.json` (empty in the repo); match by MPN,
+shared by every tool. Layers: local files (`$SIMPLE_SIM_PARTS_DB`, `os.pathsep`-separated, else `outputs/parts/catalog.json`;
+board- and library-specific data lives there and stays off GitHub) over `simple_sim/parts/builtin.json` (published: generic
+parts from public datasheets only, e.g. JST series and 2.54 mm headers); match by MPN,
 then package name, then regex. `load_board3d` applies it (`board3d["partCatalog"]`); the viewer re-exports its GLB when
 the applied heights change. Use `PartCatalog.load().lookup(texts=[value, part], package=pkg)` in generators too.
 
@@ -125,7 +126,7 @@ judge). Each also runs as `python tools/<name>.py`.
 | Batch-predict reports | `<model_dir>/history/batch_report_<stem>_<split>_<timestamp>.json` (or `--out-dir`) |
 | Arena | `outputs/models/arena.json` -> `ARENA_REPORT.md` |
 | Telemetry (optional) | JSONL events at `$SIMPLE_SIM_EVENT_LOG` if set |
-| Part catalog (local) | `outputs/parts/catalog.json` or `$SIMPLE_SIM_PARTS_DB` (git-ignored; `simple_sim/parts/builtin.json` is an empty scaffold) |
+| Part catalog (local) | `outputs/parts/catalog.json` or `$SIMPLE_SIM_PARTS_DB` (git-ignored); generic public parts in `simple_sim/parts/builtin.json` |
 
 The exact report path is also in the command's result line.
 
