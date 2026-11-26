@@ -25,7 +25,8 @@ def load_board3d(folder: Path, *, part_catalog: bool = True) -> dict[str, Any]:
     """``<folder>/board3d.json`` (written by ``tools/board3d_import.py``), with the part catalog's body heights applied
     (:func:`simple_sim.board3d.parts.apply_part_catalog`; the result is in ``board3d["partCatalog"]``), the lands
     measured on bare-board photos (``bare/lands.json``, ``tools/board3d_bare.py``) as ``c["lands"]`` and the photo
-    outline fits (``parttex/photofit.json``) as ``c["photoFit"]``."""
+    outline fits (``parttex/photofit.json``) as ``c["photoFit"]`` and the mechanics measured next to the data
+    (``mechanics.json``: ``brackets``, :func:`simple_sim.board3d.scene.bracket_job`) as ``board3d["brackets"]``."""
     board3d = load_json(Path(folder) / BOARD3D_FILE)
     rebase_dv_root(board3d)
     if part_catalog:
@@ -45,6 +46,10 @@ def load_board3d(folder: Path, *, part_catalog: bool = True) -> dict[str, Any]:
         for c in board3d.get("components", []):
             if c.get("refdes") in fits:
                 c["photoFit"] = fits[c["refdes"]]
+    mf = Path(folder) / "mechanics.json"
+    if mf.is_file():
+        # product mechanics not in the PnP (front bracket, ...), measured on the photos: stays with the data
+        board3d["brackets"] = load_json(mf).get("brackets", [])
     return board3d
 
 

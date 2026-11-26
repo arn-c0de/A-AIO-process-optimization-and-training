@@ -123,6 +123,38 @@ def job_component(c: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: clearance (mm) of a bracket's cut-out around the connector body that passes through it
+BRACKET_HOLE_MARGIN_MM = 0.3
+BRACKET_EDGES = ("x-", "x+", "y-", "y+")
+
+
+def bracket_job(bracket: dict[str, Any], board3d: dict[str, Any]) -> dict[str, Any]:
+    """A front / edge bracket (``mechanics.json`` ``brackets[]``) for the Blender job: a plate perpendicular to the board
+    along its ``edge`` (``y+``: the plane y = ``innerMm`` .. + ``thicknessMm``), from ``fromMm`` to ``toMm`` along the edge,
+    ``bottomMm`` .. ``topMm`` in z (board top = 0), with a cut-out around the body of every connector in ``holesFor``
+    (its extent along the edge, z from the board to its height, + ``holeMarginMm``)."""
+    edge = str(bracket["edge"])
+    if edge not in BRACKET_EDGES:
+        raise ValueError(f"bracket edge must be one of {', '.join(BRACKET_EDGES)}, not {edge!r}")
+    margin = float(bracket.get("holeMarginMm", BRACKET_HOLE_MARGIN_MM))
+    along = 0 if edge[0] == "y" else 1
+    by = {c["refdes"]: c for c in apply_fit(board3d)["components"]}
+    holes = []
+    for ref in bracket.get("holesFor", []):
+        c = by.get(ref)
+        if c is None or not c.get("pose") or not c.get("body"):
+            raise ValueError(f"bracket: no placed component {ref!r} for a cut-out")
+        jc = job_component(c)
+        p, a = c["pose"], math.radians(c["pose"]["rotDeg"])
+        ext = [(p["x"] + dx * math.cos(a) - dy * math.sin(a), p["y"] + dx * math.sin(a) + dy * math.cos(a))
+               for dx in (-jc["l"] / 2, jc["l"] / 2) for dy in (-jc["w"] / 2, jc["w"] / 2)]
+        vals = [e[along] for e in ext]
+        holes.append([min(vals) - margin, max(vals) + margin, -margin, float(jc["height"]) + margin])
+    return {"edge": edge, "innerMm": float(bracket["innerMm"]), "thicknessMm": float(bracket.get("thicknessMm", 1.0)),
+            "fromMm": float(bracket["fromMm"]), "toMm": float(bracket["toMm"]), "bottomMm": float(bracket["bottomMm"]),
+            "topMm": float(bracket["topMm"]), "holes": holes}
+
+
 def build_job(board3d: dict[str, Any], window: BoardRaster, *, out: str, substrate: dict[str, Any], photo: dict[str, Any] | None,
               stages: set[str], light: dict[str, Any] | None = None, samples: int = 64, device: str = "GPU",
               engine: str = "CYCLES", seed: int = 0, margin_mm: float = 3.0) -> dict[str, Any]:
@@ -130,11 +162,19 @@ def build_job(board3d: dict[str, Any], window: BoardRaster, *, out: str, substra
     fits applied, :func:`apply_fit`)."""
     board3d = apply_fit(board3d)
     comps = [job_component(c) for c in board3d["components"] if c["stage"] in stages and _in_window(c, window, margin_mm)]
+    for jc in comps:
+        spec = jc["part"].get("connector")
+        if spec and spec.get("kind") == "battery_holder" and "cell" not in spec:
+            # the coin cell goes in at final assembly: in the holder once the mount stage is shown (the SMD scan shows
+            # it empty, the photos of the mounted board with the cell); the catalog's ``cell`` overrides
+            jc["part"] = {**jc["part"], "connector": {**spec, "cell": "mount" in stages}}
     bridges = [b for b in board3d.get("bridges", []) if any(
         window.x0 - margin_mm <= p[0] <= window.x0 + window.w + margin_mm and window.y0 - margin_mm <= p[1] <= window.y0 + window.h + margin_mm
         for p in (b["a"], b["b"]))]
     return {"out": out, "window": window.meta(), "widthPx": window.cols, "heightPx": window.rows, "samples": samples,
             "device": device, "engine": engine, "seed": seed, "substrate": substrate, "photo": photo,
             "light": light or {"preset": "flatbed"}, "components": comps, "bridges": bridges,
+            # mechanics are fitted at final assembly: only with the mount stage
+            "brackets": [bracket_job(b, board3d) for b in board3d.get("brackets", [])] if "mount" in stages else [],
             "board": {"widthMm": float(board3d.get("widthMm", window.w)), "heightMm": float(board3d.get("heightMm", window.h)),
                       "thicknessMm": BOARD_THICKNESS_MM}}

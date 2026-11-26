@@ -283,3 +283,46 @@ def test_board_texture_scan_under_nominal_parts_bare_where_a_defect_uncovers(tmp
     assert mix[5, 5].tolist() == scan[5, 5].tolist()                            # the rest stays the scan
     with pytest.raises(ValueError):
         board_texture(board3d, tmp_path, sub, "t", under_parts="nope")
+
+
+def test_bracket_job_cut_outs_and_mount_stage_only(tmp_path):
+    from simple_sim.board3d.scene import bracket_job
+    board3d = _board3d(tmp_path)
+    board3d["components"].append(_comp("J9", "connector", "CONX", 15, 18, rot=180.0, l=10.0, w=6.0, h=4.0, stage="tht"))
+    br = {"edge": "y+", "innerMm": 20.1, "thicknessMm": 1.0, "fromMm": -2, "toMm": 32, "bottomMm": -5, "topMm": 12,
+          "holesFor": ["J9"]}
+    job = bracket_job(br, board3d)
+    (h,) = job["holes"]
+    assert h[0] == pytest.approx(10.0 - 0.3) and h[1] == pytest.approx(20.0 + 0.3)     # body extent along the edge
+    assert h[2] == pytest.approx(-0.3) and h[3] > 0.3                                  # from the board up
+    with pytest.raises(ValueError):
+        bracket_job({**br, "holesFor": ["NOPE"]}, board3d)
+    with pytest.raises(ValueError):
+        bracket_job({**br, "edge": "z+"}, board3d)
+    board3d["brackets"] = [br]
+    sub = {"path": "x", "raster": {}}
+    smd = build_job(board3d, BoardRaster(0, 0, 30, 20, 10), out="o.png", substrate=sub, photo=None, stages={"smd"})
+    mounted = build_job(board3d, BoardRaster(0, 0, 30, 20, 10), out="o.png", substrate=sub, photo=None, stages={"smd", "tht", "mount"})
+    assert smd["brackets"] == [] and len(mounted["brackets"]) == 1
+
+
+def test_battery_cell_in_the_holder_with_the_mount_stage(tmp_path):
+    board3d = _board3d(tmp_path)
+    c = _comp("X9", "connector", "CONX", 15, 10, l=8.0, w=6.0, h=4.0)
+    board3d["components"].append(c)
+    win, sub = BoardRaster(0, 0, 30, 20, 10), {"path": "x", "raster": {}}
+    import simple_sim.board3d.scene as scene
+    orig = scene.job_component
+
+    def holder(comp):
+        jc = orig(comp)
+        if comp["refdes"] == "X9":
+            jc["part"] = {**jc["part"], "connector": {"kind": "battery_holder", "pins": 3, "rows": 1, "pitch": 2.54}}
+        return jc
+    scene.job_component = holder
+    try:
+        cell = lambda stages: next(x for x in build_job(board3d, win, out="o", substrate=sub, photo=None, stages=stages)["components"]  # noqa: E731
+                                   if x["refdes"] == "X9")["part"]["connector"]["cell"]
+        assert cell({"smd"}) is False and cell({"smd", "mount"}) is True
+    finally:
+        scene.job_component = orig

@@ -609,7 +609,8 @@ def connector(kind: str, orientation: str, l: float, w: float, h: float, *, pins
     * ``usb_b`` (vertical) / ``usb_a_dual`` / ``rj45`` / ``card_socket``: nickel shield; the mating opening dark.
     * ``dsub``: black body, nickel flange and D shell on the mating face.
     * ``screw_terminal``: metal block with the screw head; ``battery_holder``: the holder's base, empty as assembled
-      (the cell goes in at final assembly); with *cell* (catalog ``"cell": true``) also the coin cell and its clip.
+      (the cell goes in at final assembly); with *cell* (``build_job``: the mount stage is shown, or the catalog says
+      ``"cell": true``) also the coin cell and its clip.
     Anything else: a plain housing (``plastic`` black / ``metal`` shield)."""
     vertical = orientation == "vertical" and kind in TOP_MATING
     if vertical:

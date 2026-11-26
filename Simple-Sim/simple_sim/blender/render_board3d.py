@@ -692,6 +692,32 @@ def _bridge_mesh(name: str, p0: Vector, p1: Vector, width: float, height: float,
     return obj
 
 
+#: zinc-plated steel of an edge bracket (linear RGB): the mean colour of the first product's bracket on a calibrated
+#: phone photo (a metal under the uniform room sky took it as white: 23 sRGB levels too bright)
+BRACKET_RGB = (0.51, 0.32, 0.21)
+
+
+def _build_brackets(job: dict) -> None:
+    """Edge brackets (``job["brackets"]``, :func:`simple_sim.board3d.scene.bracket_job`): a plate with the connectors'
+    cut-outs, zinc-plated steel. Built along x with its thickness along y, turned for an x edge."""
+    mat = None
+    for k, b in enumerate(job.get("brackets") or []):
+        mat = mat or rb._material("mat_bracket", BRACKET_RGB, roughness=0.45, metallic=1.0)
+        edge, t, inner = b["edge"], float(b["thicknessMm"]), float(b["innerMm"])
+        n0, n1 = (inner, inner + t) if edge.endswith("+") else (inner - t, inner)
+        holes = [tuple(float(v) for v in h) for h in b.get("holes", [])]
+        for i, m in enumerate(bm._plate_with_holes(float(b["fromMm"]), float(b["toMm"]), float(b["bottomMm"]), float(b["topMm"]),
+                                                   n0, n1, holes)):
+            verts, faces = m.verts, m.faces
+            if edge[0] == "x":               # swap x / y: a mirror, so the faces turn round to stay outward
+                verts, faces = [(y, x, z) for x, y, z in verts], [tuple(reversed(f)) for f in faces]
+            me = bpy.data.meshes.new(f"bracket_{k}_{i}")
+            me.from_pydata(verts, [], faces)
+            me.update()
+            me.materials.append(mat)
+            bpy.context.collection.objects.link(bpy.data.objects.new(f"bracket_{k}_{i}", me))
+
+
 def _build_tht_joints(job: dict, mats: dict) -> None:
     """The top side of every soldered through-hole pin of the job (``thtJoints``, the scan's plated holes under the
     populated THT parts): solder meniscus and pin end, in tin."""
@@ -869,6 +895,7 @@ def main() -> None:
         _apply_photo_uvs(pending, job, mats)
     _build_bridges(job, mats)
     _build_tht_joints(job, mats)
+    _build_brackets(job)
 
     if job.get("exportGlb"):
         _export_glb(job["exportGlb"])

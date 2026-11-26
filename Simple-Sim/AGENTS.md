@@ -115,6 +115,14 @@ Writes `<dir>/bare/lands.json` (board frame `[x, y, w, h, rotDeg]` per pad index
 and `footprint_for` places them relative to the current, possibly fitted pose: lands belong to the board, not the
 part. A photo of the other board side, or one that registers worse than `--max-residual`, is dropped.
 
+Mechanics not in the PnP (`<dir>/mechanics.json`, next to the data, git-ignored): `brackets[]` = edge plates (front
+panel) with `edge` (`x-|x+|y-|y+`), `innerMm` (plane of the inner face), `thicknessMm`, `fromMm`/`toMm` along the edge,
+`bottomMm`/`topMm` (z, board top = 0) and `holesFor` (connectors whose body gets a cut-out). Rendered with the `mount`
+stage only (`scene.bracket_job`). Measure them on the calibrated phone photos (a front and a back view separate depth
+from height). A battery holder gets its coin cell with the `mount` stage too (catalog `"cell"` overrides).
+Top-down `board3d-render`: parts at their nominal place show the scan (board under them, unlit tops), so the metrics
+then mostly measure the defect parts; `--model-check` renders the bare board with every part lit.
+
 Other commands: `generate-profile-dataset` / `train-profile` / `eval-profile` (component
 type classifier), `predict` (single image), `predict-two-stage`, `sample-check`,
 `create-multi-dataset` (merge datasets), `backfill-manifest` / `backfill-labels` (legacy
