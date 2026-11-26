@@ -706,9 +706,10 @@ def _bridge_mesh(name: str, p0: Vector, p1: Vector, width: float, height: float,
     return obj
 
 
-#: zinc-plated steel of an edge bracket (linear RGB): the mean colour of the first product's bracket on a calibrated
-#: phone photo (a metal under the uniform room sky took it as white: 23 sRGB levels too bright)
-BRACKET_RGB = (0.51, 0.32, 0.21)
+#: zinc-plated steel of an edge bracket (linear RGB), fitted to the first product's bracket on two calibrated phone photos
+#: (mean colour within +-4 sRGB levels on both; a metal under the uniform room sky reflects it, so the base colour is
+#: darker and warmer than the plate looks)
+BRACKET_RGB = (0.43, 0.17, 0.11)
 
 
 def _build_brackets(job: dict) -> None:
