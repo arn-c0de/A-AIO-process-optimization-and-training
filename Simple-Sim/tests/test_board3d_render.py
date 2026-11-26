@@ -354,3 +354,22 @@ def test_sheet_job_and_mount_stage_only(tmp_path):
     win, sub = BoardRaster(0, 0, 30, 20, 10), {"path": "x", "raster": {}}
     assert build_job(board3d, win, out="o", substrate=sub, photo=None, stages={"smd"})["sheets"] == []
     assert len(build_job(board3d, win, out="o", substrate=sub, photo=None, stages={"smd", "mount"})["sheets"]) == 1
+
+
+def test_gpu_out_of_memory_messages():
+    from simple_sim.board3d.render import gpu_out_of_memory
+    assert gpu_out_of_memory("Error: Out of memory in CUDA queue enqueue (integrator_shade_surface)")
+    assert gpu_out_of_memory("CUDA error: out of GPU memory")
+    assert not gpu_out_of_memory("Fra:1 Mem:120M | Rendering 64 / 64 samples")
+
+
+def test_residual_homography_recovers_a_shift():
+    from simple_sim.board3d.photofx import residual_homography
+    rng = np.random.default_rng(1)
+    base = cv2.GaussianBlur((rng.random((240, 320)) * 255).astype(np.uint8), (0, 0), 3)
+    img = cv2.cvtColor(cv2.normalize(base, None, 0, 255, cv2.NORM_MINMAX), cv2.COLOR_GRAY2BGR)
+    shifted = cv2.warpAffine(img, np.float32([[1, 0, 4], [0, 1, -3]]), (320, 240), borderMode=cv2.BORDER_REFLECT)
+    mask = np.zeros((240, 320), np.uint8); mask[30:210, 40:280] = 255
+    warp, cc = residual_homography(img, shifted, mask)        # render(W x) ~ real(x): the render is the real one moved by (4, -3)
+    assert cc > 0.9
+    assert warp[0, 2] / warp[2, 2] == pytest.approx(4.0, abs=0.3) and warp[1, 2] / warp[2, 2] == pytest.approx(-3.0, abs=0.3)

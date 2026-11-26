@@ -202,6 +202,12 @@ def blender_executable() -> str:
     return exe
 
 
+def gpu_out_of_memory(log: str) -> bool:
+    """Cycles ran out of GPU memory: "out of GPU memory" (scene upload) or "Out of memory in CUDA queue ..." (kernels)."""
+    low = log.lower()
+    return "out of memory" in low or "out of gpu memory" in low
+
+
 def _run_blender_job(job_path: Path, timeout: float) -> subprocess.CompletedProcess[str]:
     """``render_board3d.py`` on *job_path* in a background Blender (output captured)."""
     return subprocess.run([blender_executable(), "--background", "--factory-startup", "--python", str(SCRIPT), "--", "--job",
@@ -386,7 +392,7 @@ def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, na
     out.unlink(missing_ok=True)
     proc = _run_blender_job(job_path, timeout)
     fallback = None
-    if (not out.is_file()) and job["device"] != "CPU" and "out of GPU memory" in proc.stdout + proc.stderr:
+    if (not out.is_file()) and job["device"] != "CPU" and gpu_out_of_memory(proc.stdout + proc.stderr):
         # the GPU is shared (DeepVision's browsers, other renders): finish on the CPU instead of failing
         fallback = "GPU out of memory -> CPU"
         job["device"] = "CPU"
@@ -507,17 +513,24 @@ def compare_image(real: np.ndarray, render: np.ndarray, path: Path) -> None:
     cv2.imwrite(str(path), strip)
 
 
+#: photo_view(refine=True): correct the camera when the render sits more than this (full-size photo px) off the photo
+REFINE_MIN_SHIFT_PX = 8.0
+
+
 def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name: str, *, scale: float = 0.5, samples: int = 64,
                device: str = "GPU", f_px: float | None = None, calibrate: bool = True, backplate: bool = True,
-               camera_fx: bool = True, seed: int = 0, source: str = "photos") -> dict[str, Any]:
+               camera_fx: bool = True, seed: int = 0, source: str = "photos", refine: bool = True) -> dict[str, Any]:
     """T4 ``phone``: render the board3d from the camera of a real photo (DeepVision ``geometry.json`` + its still) and
     compare inside the board outline.
 
     With *calibrate* the colour gain of this photo is measured first (:func:`photofx.colour_gain`, texture against
     the photo on the bare board) and rendered in; with *backplate* the board (clipped to its outline, 1.6 mm thick,
     over a shadow catcher) is laid over the real photo; with *camera_fx* lens blur and sensor noise fitted to the
-    photo are added and the result goes through JPEG. Writes ``renders/<name>.png`` (final), ``<name>_raw.png``
-    (Cycles, RGBA), ``<name>_compare.png``; returns the report (metrics of the final image, ``metricsRaw``)."""
+    photo are added and the result goes through JPEG. With *refine* the camera is corrected once when the render sits
+    more than :data:`REFINE_MIN_SHIFT_PX` off the photo (:func:`photofx.residual_homography`) and the corrected view
+    is kept only if it matches better (``registration`` in the report). Writes ``renders/<name>.png`` (final),
+    ``<name>_raw.png`` (Cycles, RGBA), ``<name>_compare.png``; returns the report (metrics of the final image,
+    ``metricsRaw``)."""
     from simple_sim.board3d import photofx
     from simple_sim.board3d.camera import blender_camera
     geo = load_json(geometry_path)
@@ -525,7 +538,6 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
     if not still.is_file():
         still = Path(geometry_path).parent / geo.get("file", "photo.jpg")
     w, h = (int(v) for v in geo["sourceSize"])
-    cam = blender_camera(geo["boardToSource"], w, h, f_px)
     sub = prepare_substrate(board3d, folder, source=source)    # phone photos show the mounted board
     r = sub["raster"]
     window = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], 1.0)
@@ -539,44 +551,78 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
     q = raster.to_px(np.array([[0, 0], [board3d["widthMm"], 0], [board3d["widthMm"], board3d["heightMm"]], [0, board3d["heightMm"]]]))
     cv2.fillPoly(board, [q.round().astype(np.int32)], 255)
     parts_r = cv2.imread(sub["maps"]["parts_mask"], cv2.IMREAD_GRAYSCALE)
-    light: dict[str, Any] = {"preset": "room"}
-    if calibrate:
-        # the photo in the texture's raster (board plane, z = 0): only bare board well away from parts (no parallax)
-        to_photo_full = np.asarray(geo["boardToSource"], float).reshape(3, 3) @ raster.pixel_to_board()
-        real_r = cv2.warpPerspective(still_full, to_photo_full, (raster.cols, raster.rows), flags=cv2.INTER_AREA | cv2.WARP_INVERSE_MAP)
-        flat = cv2.erode(board, np.ones((15, 15), np.uint8)) & ~cv2.dilate(parts_r, np.ones((25, 25), np.uint8))
-        light["gainRgb"] = photofx.colour_gain(cv2.imread(sub["maps"]["scan_rgb"], cv2.IMREAD_COLOR), real_r, flat)
-    extra: dict[str, Any] = {"board": {"clip": True}}
-    if backplate:
-        extra["shadowCatcher"] = True
-    res = render_window(board3d, folder, window, name, samples=samples, device=device, light=light, camera=cam, size_px=size,
-                        job_extra=extra)
+    scan_tex = cv2.imread(sub["maps"]["scan_rgb"], cv2.IMREAD_COLOR) if calibrate else None
     raw_path = folder / "renders" / f"{name}_raw.png"
-    Path(res["image"]).replace(raw_path)
-    raw = cv2.imread(str(raw_path), cv2.IMREAD_UNCHANGED)
-    # board outline and part areas in the scaled photo: raster px -> board mm -> photo px -> scaled
-    hb = np.diag([scale, scale, 1.0]) @ np.asarray(geo["boardToSource"], float).reshape(3, 3)
-    to_photo = hb @ raster.pixel_to_board()
-    board_m = cv2.warpPerspective(board, to_photo, size, flags=cv2.INTER_NEAREST)
-    parts_m = cv2.warpPerspective(parts_r, to_photo, size, flags=cv2.INTER_NEAREST)
-    parts_m &= board_m
-    masks = {"inBoard": board_m, "parts": parts_m, "board": board_m & ~parts_m}
-    tone_lut = None
-    if calibrate:
-        # tone curve / black level of this photo: per-channel quantile match inside the board outline
-        inner = cv2.erode(board_m, np.ones((9, 9), np.uint8))
+    crop = None
+
+    def view(board_to_source: np.ndarray) -> dict[str, Any]:
+        """Render and calibrate the view of the camera *board_to_source* (board mm -> photo px)."""
+        nonlocal crop
+        cam = blender_camera(board_to_source.ravel().tolist(), w, h, f_px)
+        light: dict[str, Any] = {"preset": "room"}
+        if calibrate:
+            # the photo in the texture's raster (board plane, z = 0): only bare board well away from parts (no parallax)
+            to_photo_full = board_to_source @ raster.pixel_to_board()
+            real_r = cv2.warpPerspective(still_full, to_photo_full, (raster.cols, raster.rows), flags=cv2.INTER_AREA | cv2.WARP_INVERSE_MAP)
+            flat = cv2.erode(board, np.ones((15, 15), np.uint8)) & ~cv2.dilate(parts_r, np.ones((25, 25), np.uint8))
+            light["gainRgb"] = photofx.colour_gain(scan_tex, real_r, flat)
+        extra: dict[str, Any] = {"board": {"clip": True}}
+        if backplate:
+            extra["shadowCatcher"] = True
+        res = render_window(board3d, folder, window, name, samples=samples, device=device, light=light, camera=cam, size_px=size,
+                            job_extra=extra)
+        Path(res["image"]).replace(raw_path)
+        raw = cv2.imread(str(raw_path), cv2.IMREAD_UNCHANGED)
+        # board outline and part areas in the scaled photo: raster px -> board mm -> photo px -> scaled
+        to_photo = np.diag([scale, scale, 1.0]) @ board_to_source @ raster.pixel_to_board()
+        board_m = cv2.warpPerspective(board, to_photo, size, flags=cv2.INTER_NEAREST)
+        parts_m = cv2.warpPerspective(parts_r, to_photo, size, flags=cv2.INTER_NEAREST)
+        parts_m &= board_m
+        masks = {"inBoard": board_m, "parts": parts_m, "board": board_m & ~parts_m}
+        tone_lut = None
+        if calibrate:
+            # tone curve / black level of this photo: per-channel quantile match inside the board outline
+            inner = cv2.erode(board_m, np.ones((9, 9), np.uint8))
+            if raw.ndim == 3 and raw.shape[2] == 4:
+                inner &= (raw[..., 3] > 250).astype(np.uint8) * 255
+            tone_lut = photofx.fit_tone_lut(raw[..., :3], real, inner)
+            raw = photofx.apply_tone_lut(raw, tone_lut)
         if raw.ndim == 3 and raw.shape[2] == 4:
-            inner &= (raw[..., 3] > 250).astype(np.uint8) * 255
-        tone_lut = photofx.fit_tone_lut(raw[..., :3], real, inner)
-        raw = photofx.apply_tone_lut(raw, tone_lut)
-    if raw.ndim == 3 and raw.shape[2] == 4:
-        render = photofx.composite(raw, real) if backplate else photofx.composite(raw, np.full_like(real, 255))
-    else:
-        render = raw[..., :3]
-    ys, xs = np.nonzero(board_m)
-    crop = (slice(ys.min(), ys.max() + 1), slice(xs.min(), xs.max() + 1))
-    metrics_raw = compare(real, render, masks)
-    metrics_raw["ssimBoardBox"] = round(_ssim(real[crop], render[crop]), 4)
+            render = photofx.composite(raw, real) if backplate else photofx.composite(raw, np.full_like(real, 255))
+        else:
+            render = raw[..., :3]
+        if crop is None:                  # the first view's board box: both views are scored on the same pixels
+            ys, xs = np.nonzero(cv2.dilate(board_m, np.ones((31, 31), np.uint8)))
+            crop = (slice(ys.min(), ys.max() + 1), slice(xs.min(), xs.max() + 1))
+        metrics_raw = compare(real, render, masks)
+        metrics_raw["ssimBoardBox"] = round(_ssim(real[crop], render[crop]), 4)
+        return {"res": res, "cam": cam, "light": light, "raw": raw, "render": render, "masks": masks, "toneLut": tone_lut,
+                "metricsRaw": metrics_raw, "boardToSource": board_to_source}
+
+    h0 = np.asarray(geo["boardToSource"], float).reshape(3, 3)
+    v = view(h0)
+    registration: dict[str, Any] = {"refined": False}
+    if refine:
+        mask = cv2.erode(v["masks"]["inBoard"], np.ones((25, 25), np.uint8))
+        rh = photofx.residual_homography(real, v["raw"][..., :3], mask)
+        if rh is not None:
+            warp, cc = rh
+            corners = cv2.perspectiveTransform(np.array([[[0, 0], [board3d["widthMm"], 0], [board3d["widthMm"], board3d["heightMm"]],
+                                                          [0, board3d["heightMm"]]]], np.float64), np.diag([scale, scale, 1.0]) @ h0)
+            shift = float(np.linalg.norm(cv2.perspectiveTransform(corners, np.linalg.inv(warp)) - corners, axis=2).max()) / scale
+            registration.update({"ecc": round(cc, 3), "shiftPx": round(shift, 1)})
+            if shift > REFINE_MIN_SHIFT_PX:
+                # render px = W photo px  ->  board -> photo = W^-1 (board -> render), in full-size photo px
+                h1 = np.diag([1 / scale, 1 / scale, 1.0]) @ np.linalg.inv(warp) @ np.diag([scale, scale, 1.0]) @ h0
+                kept = {pth: pth.read_bytes() for pth in (raw_path, Path(v["res"]["job"]))}
+                v1 = view(h1 / h1[2, 2])
+                registration["ssimBoardBox"] = [v["metricsRaw"]["ssimBoardBox"], v1["metricsRaw"]["ssimBoardBox"]]
+                if v1["metricsRaw"]["ssimBoardBox"] > v["metricsRaw"]["ssimBoardBox"]:
+                    v, registration["refined"] = v1, True
+                else:                     # keep the first view: put its raw render and job back
+                    for pth, data in kept.items():
+                        pth.write_bytes(data)
+    res, cam, light, raw, render, masks, tone_lut, metrics_raw = (v[k] for k in ("res", "cam", "light", "raw", "render", "masks", "toneLut", "metricsRaw"))
     fx = None
     if camera_fx:
         flat_m = cv2.erode(masks["board"], np.ones((9, 9), np.uint8))
@@ -588,7 +634,7 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
     metrics["ssimBoardBox"] = round(_ssim(real[crop], render[crop]), 4)
     compare_image(real, render, folder / "renders" / f"{name}_compare.png")
     report = {**res, "source": source, "raw": str(raw_path), "geometry": str(geometry_path), "still": str(still), "scale": scale, "camera": cam,
-              "light": light,
+              "light": light, "registration": {**registration, "boardToSource": v["boardToSource"].ravel().round(9).tolist()},
               "toneLut": None if tone_lut is None else tone_lut[:, ::32].tolist(), "backplate": backplate, "cameraFx": fx, "metrics": metrics, "metricsRaw": metrics_raw}
     atomic_write_json(folder / "renders" / f"{name}.json", report, indent=1)
     return report

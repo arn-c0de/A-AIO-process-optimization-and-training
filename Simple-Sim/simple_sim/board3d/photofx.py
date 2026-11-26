@@ -44,6 +44,26 @@ def colour_gain(texture: np.ndarray, real: np.ndarray, mask: np.ndarray, clamp: 
     return [round(float(np.clip(g, *clamp)), 4) for g in gains[::-1]]       # BGR -> RGB (Blender colour)
 
 
+def residual_homography(real: np.ndarray, render: np.ndarray, mask: np.ndarray, *, iterations: int = 300) -> tuple[np.ndarray, float] | None:
+    """(W, ecc) with ``render(W x) ~ real(x)`` (3x3, photo px -> render px) inside *mask*: ECC on the gradient magnitudes
+    (robust to the colour / tone differences), coarse to fine. None when ECC does not converge. The render already
+    holds the parts' parallax, so what is left is the camera's own error (a DeepVision homography off by ~90 px)."""
+    def grad(img):
+        g = cv2.GaussianBlur(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), 1.5)
+        m = cv2.magnitude(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1))
+        return m / max(float(m[mask > 0].mean()), 1e-6)
+    a, b = grad(real), grad(render)
+    warp, cc = np.eye(3, dtype=np.float32), 0.0
+    try:
+        for sigma in (3.0, 1.0):
+            cc, warp = cv2.findTransformECC(cv2.GaussianBlur(a, (0, 0), sigma), cv2.GaussianBlur(b, (0, 0), sigma), warp,
+                                            cv2.MOTION_HOMOGRAPHY, (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, iterations, 1e-7),
+                                            mask, 5)
+    except cv2.error:
+        return None
+    return warp.astype(np.float64), float(cc)
+
+
 def fit_tone_lut(render: np.ndarray, real: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Per-channel 256-entry LUT (BGR) that maps the render's value distribution on *mask* to the photo's (quantile
     matching, 1-99 %, monotone). Insensitive to a residual misregistration, which a pixel-wise colour regression is

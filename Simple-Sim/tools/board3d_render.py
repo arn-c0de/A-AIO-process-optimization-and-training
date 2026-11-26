@@ -40,6 +40,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--photo-scale", type=float, default=0.5, help="--photo: render size / photo size")
     ap.add_argument("--photo-source", default="photos", choices=["photos", "mounted"],
                     help="--photo: texture of the mounted board: fused DeepVision stills (default) or SimpleAOI's render")
+    ap.add_argument("--no-refine", action="store_true",
+                    help="--photo: keep the photo's camera as it is (default: correct it once when the render sits off the photo)")
     ap.add_argument("--raw", action="store_true",
                     help="--photo: plain Cycles image (no colour calibration, no backplate, no lens blur / noise / JPEG)")
     ap.add_argument("--focal-px", type=float, help="--photo: focal length in photo pixels (default: estimate or phone prior)")
@@ -75,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         scene = apply_defects(board3d, ops) if ops else board3d
         rep = photo_view(scene, a.board3d, a.photo, a.name, scale=a.photo_scale, samples=a.samples, device=a.device, f_px=a.focal_px,
                          calibrate=not a.raw, backplate=not a.raw, camera_fx=not a.raw,
-                         source=a.photo_source)
+                         source=a.photo_source, refine=not a.no_refine)
         m, cam = rep["metrics"], rep["camera"]
         print(f"{a.name}: photo view, f {cam['focalPx']:.0f} px ({cam['focalSource']}), tilt {cam['tiltDeg']:.1f} deg, "
               f"{cam['distanceMm']:.0f} mm, {rep['seconds']} s | SSIM board box {m['ssimBoardBox']}, Delta E in board "
