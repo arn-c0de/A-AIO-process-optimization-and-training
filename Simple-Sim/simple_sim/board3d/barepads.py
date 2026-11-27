@@ -29,6 +29,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from simple_sim.board3d.substrate import BoardRaster, rotate_points
+
 #: mounting-hole rings in the photo: radius range in px (6.4 mm lands at ~10-35 px/mm)
 RING_RADIUS_PX = (30.0, 115.0)
 #: bare copper finish in Lab (OpenCV 8-bit, a/b centred): bright, not green, warm
@@ -206,13 +208,10 @@ def refine_on_lands(model: PhotoModel, pads_mm: np.ndarray, blobs_px: np.ndarray
 
 
 def raster_points(raster: dict[str, float]) -> np.ndarray:
-    """Board mm of every pixel centre of a substrate raster (``x0, y0, widthMm, heightMm, pxPerMm``)."""
-    s = raster["pxPerMm"]
-    cols, rows = round(raster["widthMm"] * s), round(raster["heightMm"] * s)
-    u, v = np.meshgrid(np.arange(cols), np.arange(rows))
-    x = raster["x0"] + (u + 0.5) / s
-    y = raster["y0"] + raster["heightMm"] - (v + 0.5) / s
-    return np.stack([x, y], -1)
+    """Board mm of every pixel centre of a substrate raster (``x0, y0, widthMm, heightMm, pxPerMm``), rows x cols x 2."""
+    r = BoardRaster.from_meta(raster)
+    u, v = np.meshgrid(np.arange(r.cols), np.arange(r.rows))
+    return r.to_mm(np.c_[u.ravel(), v.ravel()]).reshape(r.rows, r.cols, 2)
 
 
 def warp_to_board(img: np.ndarray, model: PhotoModel, raster: dict[str, float]) -> np.ndarray:
@@ -281,20 +280,14 @@ def refine_on_scan(img: np.ndarray, model: PhotoModel, scan: np.ndarray, raster:
 
 # --- measuring --------------------------------------------------------------------------------------------------
 
-def _rot(points: np.ndarray, deg: float) -> np.ndarray:
-    a = math.radians(deg)
-    c, s = math.cos(a), math.sin(a)
-    return np.asarray(points, float) @ np.array([[c, s], [-s, c]])
-
-
 def to_px(xy: Any, raster: dict[str, float]) -> np.ndarray:
-    xy, s = np.asarray(xy, float).reshape(-1, 2), raster["pxPerMm"]
-    return np.c_[(xy[:, 0] - raster["x0"]) * s - 0.5, (raster["y0"] + raster["heightMm"] - xy[:, 1]) * s - 0.5]
+    """Board mm -> px of the raster dict *raster* (:meth:`BoardRaster.to_px`)."""
+    return BoardRaster.from_meta(raster).to_px(xy)
 
 
 def to_mm(px: Any, raster: dict[str, float]) -> np.ndarray:
-    px, s = np.asarray(px, float).reshape(-1, 2), raster["pxPerMm"]
-    return np.c_[raster["x0"] + (px[:, 0] + 0.5) / s, raster["y0"] + raster["heightMm"] - (px[:, 1] + 0.5) / s]
+    """Px of the raster dict *raster* -> board mm (:meth:`BoardRaster.to_mm`)."""
+    return BoardRaster.from_meta(raster).to_mm(px)
 
 
 def _same_land_pairs(img: np.ndarray, markers: np.ndarray, mask: np.ndarray, valley: float) -> set[int]:
@@ -403,7 +396,7 @@ def _half_contrast(region: np.ndarray, lum: np.ndarray, markers: np.ndarray, lab
         return region
     mid = 0.5 * (float(np.median(L[r > 0])) + float(np.median(L[outside > 0])))
     own = markers[y0:y1, x0:x1]
-    add = (ring > 0) & (L > mid) & ((own == label) | (own <= 1))          # own basin, border or solder mask
+    add = (ring > 0) & (mid < L) & ((own == label) | (own <= 1))          # own basin, border or solder mask
     out = region.copy()
     out[y0:y1, x0:x1] |= add.astype(np.uint8)
     return out
@@ -466,9 +459,9 @@ def measure_lands(warped: np.ndarray, board3d: dict[str, Any], raster: dict[str,
         cs, _ = cv2.findContours(region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         c = comps[ref]
         centre, rot = np.array([c["pose"]["x"], c["pose"]["y"]]), float(c["pose"]["rotDeg"])
-        pts = _rot(to_mm(max(cs, key=cv2.contourArea).reshape(-1, 2), raster) - centre, -rot)
+        pts = rotate_points(to_mm(max(cs, key=cv2.contourArea).reshape(-1, 2), raster) - centre, -rot)
         lo, hi = pts.min(0), pts.max(0)
-        x, y = (_rot(((lo + hi) / 2)[None], rot) + centre)[0]
+        x, y = (rotate_points(((lo + hi) / 2)[None], rot) + centre)[0]
         w_mm, h_mm = (max(0.05, float(v) - 2 * bias_mm) for v in (hi - lo))
         lands[ref][k] = [round(float(x), 4), round(float(y), 4), round(w_mm, 4), round(h_mm, 4), rot]
         found += 1
@@ -479,7 +472,7 @@ def measure_lands(warped: np.ndarray, board3d: dict[str, Any], raster: dict[str,
 def land_in_part(land: list[float], pose: dict[str, Any]) -> tuple[float, float, float, float]:
     """A board-frame land ``[x, y, w, h, rotDeg]`` as a pad ``(cx, cy, w, h)`` in the frame of *pose*."""
     x, y, w, h, rot = land
-    cx, cy = _rot(np.array([[x - pose["x"], y - pose["y"]]]), -float(pose["rotDeg"]))[0]
+    cx, cy = rotate_points(np.array([[x - pose["x"], y - pose["y"]]]), -float(pose["rotDeg"]))[0]
     turn = (float(pose["rotDeg"]) - rot) % 180.0
     if 45.0 < turn < 135.0:
         w, h = h, w
@@ -533,3 +526,34 @@ def register(img: np.ndarray, board3d: dict[str, Any], *, scan: np.ndarray | Non
     if scan is not None and raster is not None:
         model, stats["scan"] = refine_on_scan(img, model, scan, raster)
     return model, stats
+
+
+@dataclass
+class PhotoLands:
+    """One bare-board photo registered and measured (:func:`measure_photo`)."""
+
+    model: PhotoModel
+    stats: dict[str, Any]              # registration (``register``)
+    warped: np.ndarray                 # the photo on the substrate raster
+    lands: dict[str, list[list[float] | None]]
+    mask: np.ndarray                   # bare copper on the raster
+    measure: dict[str, Any]            # ``measure_lands`` stats plus the edge bias
+    residual_mm: float                 # final registration residual (dense match, else the lands ICP)
+
+    def usable(self, max_residual_mm: float, min_land_share: float) -> bool:
+        """Registered well enough and measured enough of the pads (else the wrong side or a partial view)."""
+        return self.residual_mm <= max_residual_mm and self.measure["measured"] >= min_land_share * self.measure["pads"]
+
+
+def measure_photo(img: np.ndarray, board3d: dict[str, Any], raster: dict[str, float],
+                  scan: np.ndarray | None = None) -> PhotoLands:
+    """:func:`register` *img*, warp it onto *raster*, measure the edge bias and the lands under every pad. Raises
+    ``ValueError`` when the photo cannot be registered."""
+    model, stats = register(img, board3d, scan=scan, raster=raster)
+    warped = warp_to_board(img, model, raster)
+    bias, n_rings = edge_bias(warped, board3d, raster, scan)
+    lands, mask, ms = measure_lands(warped, board3d, raster, bias_mm=bias)
+    ms.update(edgeBiasMm=round(bias, 4), edgeBiasRings=n_rings)
+    residual = (stats.get("scan") or [{}])[-1].get("medianShiftMm", stats["lands"][-1]["medianMm"])
+    return PhotoLands(model, stats, warped, lands, mask, ms, residual)
+

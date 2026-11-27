@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ import numpy as np
 from simple_sim.blender.job_schema import BLENDER_ENV_VAR, DEFAULT_BLENDER_EXECUTABLE
 from simple_sim.io_utils import atomic_write_json, load_json
 from simple_sim.board3d.scene import apply_defects, build_job
-from simple_sim.board3d.substrate import BoardRaster, bare_board, component_polygons, pad_colour, part_mask, rectify
+from simple_sim.board3d.substrate import BoardRaster, bare_board, board_mask, board_outline_mm, component_polygons, pad_colour, part_mask, rectify
 
 SCRIPT = Path(__file__).resolve().parents[1] / "blender" / "render_board3d.py"
 DEFAULT_PX_PER_MM = 24.0     # the 600 dpi scan has 23.6 px/mm
@@ -59,9 +60,7 @@ def _tall_parts_from_mounted(board3d: dict[str, Any], folder: Path, raster: Boar
     except (ValueError, FileNotFoundError) as e:
         return img, {"skipped": str(e)}
     ref = rectify(ref_img, ref_h.ravel().tolist(), raster)
-    board = np.zeros((raster.rows, raster.cols), np.uint8)
-    q = raster.to_px(np.array([[0, 0], [board3d["widthMm"], 0], [board3d["widthMm"], board3d["heightMm"]], [0, board3d["heightMm"]]]))
-    cv2.fillPoly(board, [q.round().astype(np.int32)], 255)
+    board = board_mask(board3d, raster)
     ref = apply_tone_lut(ref, fit_tone_lut(ref, img, board))
     mask = np.zeros_like(board)
     for c in board3d["components"]:
@@ -183,7 +182,7 @@ def prepare_substrate(board3d: dict[str, Any], folder: Path, px_per_mm: float | 
                 # the flatbed scan is the sharpest view of the bare board: colour-matched to the photos
                 sr = load_json(scan_dir / "substrate.json")["raster"]
                 img, _st = scan_board(bare, raster, cv2.imread(str(scan_dir / "bare_rgb.png"), cv2.IMREAD_COLOR),
-                                      BoardRaster(sr["x0"], sr["y0"], sr["widthMm"], sr["heightMm"], sr["pxPerMm"]),
+                                      BoardRaster.from_meta(sr),
                                       cv2.imread(str(paths["parts_mask"]), cv2.IMREAD_GRAYSCALE))
             else:
                 img, _st = clean_board(bare, cv2.imread(str(paths["pads_mask"]), cv2.IMREAD_GRAYSCALE))
@@ -250,7 +249,7 @@ def tht_joints(board3d: dict[str, Any], folder: Path, window: BoardRaster, stage
         from simple_sim.board3d.substrate import find_holes
         sr = load_json(scan_dir / "substrate.json")["raster"]
         holes = find_holes(cv2.imread(str(scan_dir / "scan_rgb.png"), cv2.IMREAD_COLOR),
-                           BoardRaster(sr["x0"], sr["y0"], sr["widthMm"], sr["heightMm"], sr["pxPerMm"]))
+                           BoardRaster.from_meta(sr))
         atomic_write_json(cache, {"holes": holes}, indent=1)
     else:
         return []
@@ -310,7 +309,7 @@ def board_texture(board3d: dict[str, Any], folder: Path, sub: dict[str, Any], na
         return sub["maps"]["scan_rgb"]
     scan, bare_img = cv2.imread(sub["maps"]["scan_rgb"], cv2.IMREAD_COLOR), cv2.imread(bare, cv2.IMREAD_COLOR)
     r = sub["raster"]
-    raster = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"])
+    raster = BoardRaster.from_meta(r)
     mask = np.zeros(scan.shape[:2], np.uint8)
     for c in hit:
         bodies, _ = component_polygons({**c, "pose": c.get("nominalPose") or c["pose"]}, DEFECT_BARE_MARGIN_MM)
@@ -359,13 +358,37 @@ def part_atlas(folder: Path, sub: dict[str, Any], look: str | None = None) -> di
             "parts": {k: {"pose": v["pose"], "size": v["size"], "faces": v["faces"]} for k, v in r["parts"].items()}}
 
 
+def _corrected_textures(job: dict[str, Any], out_dir: Path, m: np.ndarray) -> Path:
+    """Colour-correct the job's photo textures (substrate, photo, part atlas) with *m* into *out_dir* and point the
+    job at the copies (the same image used twice is converted once)."""
+    from simple_sim.board3d import photofx
+    out_dir.mkdir(parents=True, exist_ok=True)
+    done: dict[str, str] = {}
+    for key in ("substrate", "photo", "partAtlas"):
+        entry = job.get(key)
+        if not entry or not entry.get("path"):
+            continue
+        src = entry["path"]
+        if src not in done:
+            img = cv2.imread(src, cv2.IMREAD_UNCHANGED)
+            if img is None:
+                raise FileNotFoundError(src)
+            dst = out_dir / f"{key}_{Path(src).name}"
+            cv2.imwrite(str(dst), photofx.apply_colour_matrix(img, m))
+            done[src] = str(dst)
+        entry["path"] = done[src]
+    return out_dir
+
+
 def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, name: str, *, stages: set[str] | None = None,
                   samples: int = 64, device: str = "GPU", photo: bool = True, light: dict[str, Any] | None = None,
                   timeout: float = 1800.0, camera: dict[str, Any] | None = None, size_px: tuple[int, int] | None = None,
-                  job_extra: dict[str, Any] | None = None, under_parts: str = "auto") -> dict[str, Any]:
+                  job_extra: dict[str, Any] | None = None, under_parts: str = "auto",
+                  texture_matrix: np.ndarray | None = None) -> dict[str, Any]:
     """Render *window* of the board3d; returns ``{"image", "job", "seconds", "components"}``. *job_extra* is merged into
     the Blender job last (``board``, ``shadowCatcher``, ...). *under_parts*: the board texture under the parts
-    (:func:`board_texture`)."""
+    (:func:`board_texture`). *texture_matrix* (:func:`photofx.fit_colour_matrix`): the photo textures (board, photo,
+    part atlas) go to Blender colour-corrected, as copies next to the job that are removed afterwards."""
     sub = board3d.get("substrate") or prepare_substrate(board3d, folder)
     stages = stages or set(sub.get("stages", ["smd"]))
     out = folder / "renders" / f"{name}.png"
@@ -387,6 +410,9 @@ def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, na
         job[k] = {**job[k], **v} if isinstance(v, dict) and isinstance(job.get(k), dict) else v
     job_path = folder / "renders" / f"{name}.job.json"
     job_path.parent.mkdir(parents=True, exist_ok=True)
+    tex_dir = None
+    if texture_matrix is not None:
+        tex_dir = _corrected_textures(job, folder / "renders" / f"{name}.tex", texture_matrix)
     atomic_write_json(job_path, job, indent=1)
     t0 = time.monotonic()
     out.unlink(missing_ok=True)
@@ -400,6 +426,8 @@ def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, na
         proc = _run_blender_job(job_path, timeout)
     if substrate.endswith(".substrate.png"):
         Path(substrate).unlink(missing_ok=True)   # per-job mix (board_texture): 12 MB a whole-board raster, one per sheet
+    if tex_dir is not None:
+        shutil.rmtree(tex_dir, ignore_errors=True)
     if proc.returncode != 0 or not out.is_file():
         raise _blender_failure("Blender failed", proc)
     timing = next((ln.split("|", 1)[1].strip() for ln in proc.stdout.splitlines() if ln.startswith("[render_board3d]") and "|" in ln), None)
@@ -412,7 +440,7 @@ def export_glb(board3d: dict[str, Any], folder: Path, name: str = "board", *, st
     """The whole 3D board scene as ``<folder>/viewer/<name>.glb`` (for ``web/board3d``); returns ``{"glb", "seconds", ...}``."""
     sub = board3d.get("substrate") or prepare_substrate(board3d, folder)
     r = sub["raster"]
-    window = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], 1.0)
+    window = BoardRaster.from_meta(r, 1.0)
     glb = folder / "viewer" / f"{name}.glb"
     job = build_job(board3d, window, out=str(folder / "viewer" / f"{name}.png"),
                     substrate={"path": _substrate_path(sub), "raster": r}, photo={"path": sub["maps"]["scan_rgb"], "raster": r},
@@ -464,7 +492,7 @@ def crop_real(board3d: dict[str, Any], window: BoardRaster, key: str = "scan_rgb
     sub = board3d["substrate"]
     full = cv2.imread(sub["maps"][key], cv2.IMREAD_COLOR)
     r = sub["raster"]
-    raster = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"])
+    raster = BoardRaster.from_meta(r)
     # window pixel -> board point -> raster pixel (affine)
     x_off = (window.x0 - raster.x0) * raster.s
     y_off = ((raster.y0 + raster.h) - (window.y0 + window.h)) * raster.s
@@ -515,16 +543,82 @@ def compare_image(real: np.ndarray, render: np.ndarray, path: Path) -> None:
 
 #: photo_view(refine=True): correct the camera when the render sits more than this (full-size photo px) off the photo
 REFINE_MIN_SHIFT_PX = 8.0
+#: ``room`` light: the sky as glossy surfaces mirror it, x its diffuse strength (``_glossy_world`` in the Blender
+#: script). 1.0 = a uniform sky: metal and glossy moulds rendered milky white. Phone views 811d1c / f48a23 (camera
+#: fixed), body colour dE weighted by area, 1.0 -> 0.5 -> 0.25: 14.2 -> 13.2 -> 13.6 and 16.1 -> 14.7 -> 14.3 (BGA 22.5
+#: -> 18.4, electrolytics 15.8 -> 9.7 on 811d1c); at 0.25 SOIC / SOT / power inductors turned too dark
+GLOSSY_WORLD = 0.5
+#: ``photo_view(colour="matrix")``: weight of "grey stays grey" in the colour fit (:func:`photofx.fit_colour_matrix`).
+#: 0.02 already turned the magenta white of 811d1c / f48a23 / da70eb neutral at +0.1 / +0.1 / +0.3 held-out dE
+COLOUR_NEUTRAL = 0.05
+
+
+def _refine_view(v: dict[str, Any], view: Callable[[np.ndarray], dict[str, Any]], real: np.ndarray, outline_mm: np.ndarray,
+                 scale: float, raw_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``photo_view(refine=True)``: correct the camera of the rendered view *v* once when the render sits more than
+    :data:`REFINE_MIN_SHIFT_PX` off the *real* photo (:func:`photofx.residual_homography`) and keep the corrected view
+    only if it matches better. Returns the kept view and its ``registration`` report."""
+    from simple_sim.board3d import photofx
+    registration: dict[str, Any] = {"refined": False}
+    mask = cv2.erode(v["masks"]["inBoard"], np.ones((25, 25), np.uint8))
+    rh = photofx.residual_homography(real, v["raw"][..., :3], mask)
+    if rh is None:
+        return v, registration
+    warp, cc = rh
+    h0 = v["boardToSource"]
+    corners = cv2.perspectiveTransform(outline_mm[None].astype(np.float64), np.diag([scale, scale, 1.0]) @ h0)
+    shift = float(np.linalg.norm(cv2.perspectiveTransform(corners, np.linalg.inv(warp)) - corners, axis=2).max()) / scale
+    registration.update({"ecc": round(cc, 3), "shiftPx": round(shift, 1)})
+    if shift <= REFINE_MIN_SHIFT_PX:
+        return v, registration
+    # render px = W photo px  ->  board -> photo = W^-1 (board -> render), in full-size photo px
+    h1 = np.diag([1 / scale, 1 / scale, 1.0]) @ np.linalg.inv(warp) @ np.diag([scale, scale, 1.0]) @ h0
+    kept = {pth: pth.read_bytes() for pth in (raw_path, Path(v["res"]["job"]))}
+    v1 = view(h1 / h1[2, 2])
+    registration["ssimBoardBox"] = [v["metricsRaw"]["ssimBoardBox"], v1["metricsRaw"]["ssimBoardBox"]]
+    if v1["metricsRaw"]["ssimBoardBox"] > v["metricsRaw"]["ssimBoardBox"]:
+        registration["refined"] = True
+        return v1, registration
+    for pth, data in kept.items():      # keep the first view: put its raw render and job back
+        pth.write_bytes(data)
+    return v, registration
+
+
+#: parts at most this high (mm) count as "low" for the colour fit of a phone view: their tops sit near the board plane
+LOW_PART_MM = 1.6
+
+
+def tall_parts_mask(board3d: dict[str, Any], raster: BoardRaster, max_low_mm: float = LOW_PART_MM, margin_mm: float = 1.5) -> np.ndarray:
+    """uint8 0/255 mask of the bodies taller than *max_low_mm* (or of unknown height) + *margin_mm*, in *raster*: in a
+    tilted phone view their tops and walls lie off the board plane (parallax), so a texture / photo comparison in the
+    raster leaves them out."""
+    mask = np.zeros((raster.rows, raster.cols), np.uint8)
+    for c in board3d["components"]:
+        h = (c.get("body") or {}).get("h")
+        if c.get("dnp") or (h is not None and float(h) <= max_low_mm):
+            continue
+        bodies, _ = component_polygons(c, margin_mm)
+        for poly in bodies:
+            cv2.fillPoly(mask, [raster.to_px(poly).round().astype(np.int32)], 255)
+    return mask
 
 
 def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name: str, *, scale: float = 0.5, samples: int = 64,
                device: str = "GPU", f_px: float | None = None, calibrate: bool = True, backplate: bool = True,
-               camera_fx: bool = True, seed: int = 0, source: str = "photos", refine: bool = True) -> dict[str, Any]:
+               camera_fx: bool = True, seed: int = 0, source: str = "photos", refine: bool = True,
+               glossy_world: float | None = None, colour: str = "matrix", tone: str | None = None) -> dict[str, Any]:
     """T4 ``phone``: render the board3d from the camera of a real photo (DeepVision ``geometry.json`` + its still) and
     compare inside the board outline.
 
-    With *calibrate* the colour gain of this photo is measured first (:func:`photofx.colour_gain`, texture against
-    the photo on the bare board) and rendered in; with *backplate* the board (clipped to its outline, 1.6 mm thick,
+    With *calibrate* the colour of this photo is measured first, texture against the photo in the texture raster:
+    *colour* ``matrix`` (default) fits a 3 x 3 colour matrix on the bare board and the low parts
+    (:func:`photofx.fit_colour_matrix`) and renders colour-corrected copies of the photo textures under a neutral sky;
+    ``gain`` (the old way) a per-channel gain on the bare board alone, rendered in as the sky colour. *tone* ``lut``
+    (default) then quantile-matches each channel of the render to the photo (:func:`photofx.fit_tone_lut`), ``none``
+    leaves it: higher SSIM and per-pixel dE, but a flat image (5 % / 95 % L* quantiles +10 / -10 against the photo:
+    with any misregistration lower contrast scores better per pixel). Phone views 811d1c / f48a23 / da70eb, camera
+    fixed, against the gain renders before 27.11.2026: dE in the board 20.6 / 20.1 / 24.8 -> 19.4 / 19.0 / 23.6, blurred
+    14.3 / 16.0 / 20.2 -> 13.1 / 14.6 / 20.7, part bodies 15.1 / 16.2 / 21.7 -> 13.5 / 13.8 / 20.1. With *backplate* the board (clipped to its outline, 1.6 mm thick,
     over a shadow catcher) is laid over the real photo; with *camera_fx* lens blur and sensor noise fitted to the
     photo are added and the result goes through JPEG. With *refine* the camera is corrected once when the render sits
     more than :data:`REFINE_MIN_SHIFT_PX` off the photo (:func:`photofx.residual_homography`) and the corrected view
@@ -533,6 +627,11 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
     ``metricsRaw``)."""
     from simple_sim.board3d import photofx
     from simple_sim.board3d.camera import blender_camera
+    if colour not in ("matrix", "gain"):
+        raise ValueError(f"colour must be matrix or gain, not {colour!r}")
+    tone = tone or "lut"
+    if tone not in ("lut", "none"):
+        raise ValueError(f"tone must be lut or none, not {tone!r}")
     geo = load_json(geometry_path)
     still = Path(geometry_path).parent / "still.jpg"
     if not still.is_file():
@@ -540,32 +639,43 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
     w, h = (int(v) for v in geo["sourceSize"])
     sub = prepare_substrate(board3d, folder, source=source)    # phone photos show the mounted board
     r = sub["raster"]
-    window = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], 1.0)
+    window = BoardRaster.from_meta(r, 1.0)
     size = (round(w * scale), round(h * scale))
     still_full = cv2.imread(str(still), cv2.IMREAD_COLOR)
     if still_full is None:
         raise FileNotFoundError(still)
     real = cv2.resize(still_full, size, interpolation=cv2.INTER_AREA)
-    raster = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"])
-    board = np.zeros((raster.rows, raster.cols), np.uint8)
-    q = raster.to_px(np.array([[0, 0], [board3d["widthMm"], 0], [board3d["widthMm"], board3d["heightMm"]], [0, board3d["heightMm"]]]))
-    cv2.fillPoly(board, [q.round().astype(np.int32)], 255)
+    raster = BoardRaster.from_meta(r)
+    board = board_mask(board3d, raster)
     parts_r = cv2.imread(sub["maps"]["parts_mask"], cv2.IMREAD_GRAYSCALE)
     scan_tex = cv2.imread(sub["maps"]["scan_rgb"], cv2.IMREAD_COLOR) if calibrate else None
     raw_path = folder / "renders" / f"{name}_raw.png"
     crop = None
+    # the colour matrix's samples: the board and the low parts (their tops sit near the board plane: little parallax)
+    low = cv2.erode(board, np.ones((15, 15), np.uint8)) & ~tall_parts_mask(board3d, raster) if colour == "matrix" else None
+    colour_fit: dict[str, Any] = {}
 
     def view(board_to_source: np.ndarray) -> dict[str, Any]:
         """Render and calibrate the view of the camera *board_to_source* (board mm -> photo px)."""
         nonlocal crop
         cam = blender_camera(board_to_source.ravel().tolist(), w, h, f_px)
-        light: dict[str, Any] = {"preset": "room"}
+        light: dict[str, Any] = {"preset": "room", "glossyWorld": GLOSSY_WORLD if glossy_world is None else float(glossy_world)}
         if calibrate:
             # the photo in the texture's raster (board plane, z = 0): only bare board well away from parts (no parallax)
             to_photo_full = board_to_source @ raster.pixel_to_board()
             real_r = cv2.warpPerspective(still_full, to_photo_full, (raster.cols, raster.rows), flags=cv2.INTER_AREA | cv2.WARP_INVERSE_MAP)
-            flat = cv2.erode(board, np.ones((15, 15), np.uint8)) & ~cv2.dilate(parts_r, np.ones((25, 25), np.uint8))
-            light["gainRgb"] = photofx.colour_gain(scan_tex, real_r, flat)
+            if colour == "matrix":
+                sigma = 0.4 * raster.s                  # 0.4 mm: a residual misregistration averages out
+                matrix = photofx.fit_colour_matrix(cv2.GaussianBlur(scan_tex, (0, 0), sigma), cv2.GaussianBlur(real_r, (0, 0), sigma), low,
+                                                   neutral=COLOUR_NEUTRAL)
+                # The sky stays neutral: parts of a fixed colour (nylon, metal) are rendered as they are. Moving the
+                # matrix's white balance into the sky (textures divided by it) was tried and dropped: its answer to
+                # white is extrapolated from a green / black fit (magenta, 0.82 / 0.64 / 0.93): parts dE 14.6 -> 18.5
+                # (811d1c), 14.8 -> 16.9 (f48a23), better only on da70eb.
+                colour_fit["matrix"] = matrix
+            if colour == "gain" or colour_fit.get("matrix") is None:
+                flat = cv2.erode(board, np.ones((15, 15), np.uint8)) & ~cv2.dilate(parts_r, np.ones((25, 25), np.uint8))
+                light["gainRgb"] = photofx.colour_gain(scan_tex, real_r, flat)
             # the desk around the board (linear RGB of the photo outside the board's neighbourhood): the lower sky
             out_m = cv2.warpPerspective(cv2.dilate(board, np.ones((61, 61), np.uint8)), np.diag([scale, scale, 1.0]) @ to_photo_full,
                                         size, flags=cv2.INTER_NEAREST) == 0
@@ -576,7 +686,7 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
         if backplate:
             extra["shadowCatcher"] = True
         res = render_window(board3d, folder, window, name, samples=samples, device=device, light=light, camera=cam, size_px=size,
-                            job_extra=extra)
+                            job_extra=extra, texture_matrix=colour_fit.get("matrix"))
         Path(res["image"]).replace(raw_path)
         raw = cv2.imread(str(raw_path), cv2.IMREAD_UNCHANGED)
         # board outline and part areas in the scaled photo: raster px -> board mm -> photo px -> scaled
@@ -586,7 +696,7 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
         parts_m &= board_m
         masks = {"inBoard": board_m, "parts": parts_m, "board": board_m & ~parts_m}
         tone_lut = None
-        if calibrate:
+        if calibrate and tone == "lut":
             # tone curve / black level of this photo: per-channel quantile match inside the board outline
             inner = cv2.erode(board_m, np.ones((9, 9), np.uint8))
             if raw.ndim == 3 and raw.shape[2] == 4:
@@ -609,25 +719,7 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
     v = view(h0)
     registration: dict[str, Any] = {"refined": False}
     if refine:
-        mask = cv2.erode(v["masks"]["inBoard"], np.ones((25, 25), np.uint8))
-        rh = photofx.residual_homography(real, v["raw"][..., :3], mask)
-        if rh is not None:
-            warp, cc = rh
-            corners = cv2.perspectiveTransform(np.array([[[0, 0], [board3d["widthMm"], 0], [board3d["widthMm"], board3d["heightMm"]],
-                                                          [0, board3d["heightMm"]]]], np.float64), np.diag([scale, scale, 1.0]) @ h0)
-            shift = float(np.linalg.norm(cv2.perspectiveTransform(corners, np.linalg.inv(warp)) - corners, axis=2).max()) / scale
-            registration.update({"ecc": round(cc, 3), "shiftPx": round(shift, 1)})
-            if shift > REFINE_MIN_SHIFT_PX:
-                # render px = W photo px  ->  board -> photo = W^-1 (board -> render), in full-size photo px
-                h1 = np.diag([1 / scale, 1 / scale, 1.0]) @ np.linalg.inv(warp) @ np.diag([scale, scale, 1.0]) @ h0
-                kept = {pth: pth.read_bytes() for pth in (raw_path, Path(v["res"]["job"]))}
-                v1 = view(h1 / h1[2, 2])
-                registration["ssimBoardBox"] = [v["metricsRaw"]["ssimBoardBox"], v1["metricsRaw"]["ssimBoardBox"]]
-                if v1["metricsRaw"]["ssimBoardBox"] > v["metricsRaw"]["ssimBoardBox"]:
-                    v, registration["refined"] = v1, True
-                else:                     # keep the first view: put its raw render and job back
-                    for pth, data in kept.items():
-                        pth.write_bytes(data)
+        v, registration = _refine_view(v, view, real, board_outline_mm(board3d), scale, raw_path)
     res, cam, light, raw, render, masks, tone_lut, metrics_raw = (v[k] for k in ("res", "cam", "light", "raw", "render", "masks", "toneLut", "metricsRaw"))
     fx = None
     if camera_fx:
@@ -640,7 +732,9 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
     metrics["ssimBoardBox"] = round(_ssim(real[crop], render[crop]), 4)
     compare_image(real, render, folder / "renders" / f"{name}_compare.png")
     report = {**res, "source": source, "raw": str(raw_path), "geometry": str(geometry_path), "still": str(still), "scale": scale, "camera": cam,
-              "light": light, "registration": {**registration, "boardToSource": v["boardToSource"].ravel().round(9).tolist()},
+              "light": light, "colour": colour, "tone": tone,
+              "colourMatrix": None if colour_fit.get("matrix") is None else np.round(colour_fit["matrix"], 5).tolist(),
+              "registration": {**registration, "boardToSource": v["boardToSource"].ravel().round(9).tolist()},
               "toneLut": None if tone_lut is None else tone_lut[:, ::32].tolist(), "backplate": backplate, "cameraFx": fx, "metrics": metrics, "metricsRaw": metrics_raw}
     atomic_write_json(folder / "renders" / f"{name}.json", report, indent=1)
     return report

@@ -35,6 +35,34 @@ def _board3d(tmp_path: Path) -> dict:
                            _comp("U1", "sot", "SOT95P280-3", 25, 15, l=1.3, w=2.9, h=1.1)]}
 
 
+def test_tall_parts_mask_keeps_low_parts_for_the_colour_fit(tmp_path):
+    from simple_sim.board3d.render import tall_parts_mask
+    board3d = _board3d(tmp_path)
+    raster = BoardRaster(0, 0, 30, 20, 10.0)
+    m = tall_parts_mask(board3d, raster)
+    at = lambda x, y: m[int(round((20 - y) * 10)), int(round(x * 10))]  # noqa: E731
+    assert at(5, 5) == 255                                  # J1: height unknown -> tall
+    assert at(10, 10) == 0 and at(25, 15) == 0              # C1 0.5 mm, U1 1.1 mm: low
+    assert at(20, 10) == 0                                  # DNP
+    board3d["components"][3]["body"]["h"] = 2.0
+    assert tall_parts_mask(board3d, raster)[50, 250] == 255
+
+
+def test_corrected_textures_point_the_job_at_colour_corrected_copies(tmp_path):
+    from simple_sim.board3d.render import _corrected_textures
+    img = np.full((8, 8, 3), 100, np.uint8)
+    a, b = tmp_path / "board.png", tmp_path / "atlas.png"
+    cv2.imwrite(str(a), img)
+    cv2.imwrite(str(b), img)
+    job = {"substrate": {"path": str(a)}, "photo": {"path": str(a)}, "partAtlas": {"path": str(b)}}
+    m = np.array([[0.5, 0, 0], [0, 0.5, 0], [0, 0, 0.5], [0, 0, 0]], np.float32)
+    out = _corrected_textures(job, tmp_path / "x.tex", m)
+    assert job["substrate"]["path"] == job["photo"]["path"] != str(a)          # one copy for the image used twice
+    assert len(list(out.iterdir())) == 2
+    assert cv2.imread(job["partAtlas"]["path"])[0, 0, 0] < 80                    # half the light, darker
+    assert cv2.imread(str(a))[0, 0, 0] == 100                                    # the source stays as it was
+
+
 def test_rectify_and_raster_round_trip(tmp_path):
     board3d = _board3d(tmp_path)
     img = cv2.imread(board3d["sources"]["scan"]["path"])
@@ -288,7 +316,7 @@ def test_board_texture_scan_under_nominal_parts_bare_where_a_defect_uncovers(tmp
     assert path.endswith("t.substrate.png")
     mix, scan, bare = (cv2.imread(p) for p in (path, sub["maps"]["scan_rgb"], sub["maps"]["bare_rgb"]))
     r = sub["raster"]
-    u, v = np.round(BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"]).to_px(np.array([[10.0, 10.0]]))[0]).astype(int)
+    u, v = np.round(BoardRaster.from_meta(r).to_px(np.array([[10.0, 10.0]]))[0]).astype(int)
     assert mix[v, u].tolist() == bare[v, u].tolist() != scan[v, u].tolist()   # the nominal place goes bare
     assert mix[5, 5].tolist() == scan[5, 5].tolist()                            # the rest stays the scan
     with pytest.raises(ValueError):

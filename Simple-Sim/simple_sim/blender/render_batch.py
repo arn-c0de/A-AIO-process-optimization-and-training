@@ -97,7 +97,7 @@ def _mesh_object(name: str, verts, faces, mat: bpy.types.Material, *, smooth: bo
     return obj
 
 
-def _mesh(name: str, body: "_bm.BodyMesh", loc, mat: bpy.types.Material, *, parent=None) -> bpy.types.Object:
+def _mesh(name: str, body: _bm.BodyMesh, loc, mat: bpy.types.Material, *, parent=None) -> bpy.types.Object:
     """A ``body_mesh`` mesh in mm (object scale 1): only its curved bands smooth-shaded."""
     me = bpy.data.meshes.new(name)
     me.from_pydata(body.verts, [], body.faces)
@@ -120,7 +120,7 @@ def _box(name: str, size, loc, mat: bpy.types.Material, *, parent=None, bevel: f
     return _mesh(name, _bm.body_mesh(_bm.box_shape(size, bevel)), loc, mat, parent=parent)
 
 
-def _body(name: str, shape: "_bm.BodyShape", loc, mat: bpy.types.Material, *, parent=None) -> bpy.types.Object:
+def _body(name: str, shape: _bm.BodyShape, loc, mat: bpy.types.Material, *, parent=None) -> bpy.types.Object:
     """Part body / end cap of a datasheet-like *shape* centred on *loc* (``body_mesh``)."""
     return _mesh(name, _bm.body_mesh(shape), loc, mat, parent=parent)
 
@@ -275,32 +275,14 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
         return [], [None] * len(pads), 0.0  # no contacts: every pad gets a paste dome
 
     mats = render_3d.get("materials") or {}
-    L, W, H, standoff = p["length"], p["width"], p["height"], p["standoff"]
+    L, W, H = p["length"], p["width"], p["height"]
     angle = -math.radians(float(body["rotation_deg"]))  # image y-down -> Blender y-up
     cx, cy = _mm_xy(body["center"][0], body["center"][1], mmpp)
     axis = Vector((math.cos(angle), math.sin(angle), 0.0))
     if p["contacts"] == "tht":
         return _build_tht(pads, board, p, mats, (cx, cy), angle)
 
-    root = bpy.data.objects.new("part_root", None)
-    bpy.context.collection.objects.link(root)
-    contact = {"cx": cx, "cy": cy, "hl": L / 2, "hw": W / 2, "angle": angle}
-    offset = 0.0
-    if body.get("is_tombstone"):
-        sign = float(body.get("raised_sign", 1.0))
-        tilt = math.radians(float(body["tilt_deg"]))
-        anchor = Vector((cx, cy, 0.0)) - axis * sign * (L / 2)
-        root.location = (anchor.x, anchor.y, standoff)
-        root.rotation_euler = (0.0, -tilt * sign, angle)
-        offset = sign * L / 2  # body extends from the anchored end towards the raised one
-        # Footprint seen from above, as in 2D: top face from H*sin behind the anchor to L*cos in front.
-        top_len, end_len = L * math.cos(tilt), H * math.sin(tilt)
-        mid = anchor + axis * sign * ((top_len - end_len) / 2)
-        contact = {"cx": mid.x, "cy": mid.y, "hl": (top_len + end_len) / 2, "hw": W / 2, "angle": angle}
-    else:
-        root.location = (cx, cy, standoff)
-        root.rotation_euler = (0.0, 0.0, angle)
-
+    root, contact, offset = _part_root(body, p, cx, cy, axis, angle)
     if p["body_material"] == "ceramic":
         m_body = _material("mat_ceramic", (0.42, 0.26, 0.14), roughness=0.55, bump=0.02)
     else:
@@ -313,20 +295,62 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
     objs.append(_body("body", body_shape, (offset, 0.0, H / 2), m_body, parent=root))
 
     if p["end_caps"]:
-        # Tin plating is satin, not a mirror: it must catch the ring light when it faces the camera.
-        m_cap = _material("mat_endcap", (0.75, 0.75, 0.74), roughness=0.45, metallic=1.0, bump=0.05)
-        cap = p["cap"]
-        for s in (-1, 1):
-            # Caps wrap slightly beyond the body, so their end faces never coincide with the body's
-            # (an upright tombstone shows the cap's end face to the camera).
-            objs.append(_body(f"endcap_{s}", _bm.chip_cap_shape(cap + 0.02 * H, W * 1.02, H * 1.02),
-                              (offset + s * ((L - cap) / 2 + 0.01 * H), 0.0, H / 2), m_cap, parent=root))
-        if p["marking"]:
-            m_ink = _material("mat_ink", (0.85, 0.85, 0.82), roughness=0.8)
-            _text("marking", p["marking"][0], p["marking_size"], (offset, 0.0, H + 0.0005), m_ink, root)
+        objs += _end_caps(p, root, offset)
         return objs, [contact] * len(pads), p["solder_height"]
 
-    # ICs: pin-1 dimple and laser marking.
+    _ic_marks(p, root, offset)
+    if p["contacts"] == "leads":
+        lead_objs, contacts = _gull_wing_leads(pads, body, p, mats, cx, cy, axis)
+        return objs + lead_objs, contacts, p["solder_height"]
+    if p["contacts"] == "none":
+        return objs, [None] * len(pads), 0.0  # tombstoned leaded part: leads lifted, paste only
+    return objs, [contact] * len(pads), p["solder_height"]
+
+
+def _part_root(body: dict[str, Any], p: dict[str, Any], cx: float, cy: float, axis: Vector,
+               angle: float) -> tuple[bpy.types.Object, dict[str, float], float]:
+    """The empty every piece of the part hangs on (tilted about its anchored end for a tombstone); returns it, the
+    contact rect seen from above and the body's offset along its axis from the root."""
+    L, W, H, standoff = p["length"], p["width"], p["height"], p["standoff"]
+    root = bpy.data.objects.new("part_root", None)
+    bpy.context.collection.objects.link(root)
+    if not body.get("is_tombstone"):
+        root.location = (cx, cy, standoff)
+        root.rotation_euler = (0.0, 0.0, angle)
+        return root, {"cx": cx, "cy": cy, "hl": L / 2, "hw": W / 2, "angle": angle}, 0.0
+    sign = float(body.get("raised_sign", 1.0))
+    tilt = math.radians(float(body["tilt_deg"]))
+    anchor = Vector((cx, cy, 0.0)) - axis * sign * (L / 2)
+    root.location = (anchor.x, anchor.y, standoff)
+    root.rotation_euler = (0.0, -tilt * sign, angle)
+    # Footprint seen from above, as in 2D: top face from H*sin behind the anchor to L*cos in front.
+    top_len, end_len = L * math.cos(tilt), H * math.sin(tilt)
+    mid = anchor + axis * sign * ((top_len - end_len) / 2)
+    contact = {"cx": mid.x, "cy": mid.y, "hl": (top_len + end_len) / 2, "hw": W / 2, "angle": angle}
+    return root, contact, sign * L / 2  # body extends from the anchored end towards the raised one
+
+
+def _end_caps(p: dict[str, Any], root: bpy.types.Object, offset: float) -> list[bpy.types.Object]:
+    """A chip's two tin-plated end caps and its value marking."""
+    L, W, H = p["length"], p["width"], p["height"]
+    # Tin plating is satin, not a mirror: it must catch the ring light when it faces the camera.
+    m_cap = _material("mat_endcap", (0.75, 0.75, 0.74), roughness=0.45, metallic=1.0, bump=0.05)
+    cap = p["cap"]
+    objs = []
+    for s in (-1, 1):
+        # Caps wrap slightly beyond the body, so their end faces never coincide with the body's
+        # (an upright tombstone shows the cap's end face to the camera).
+        objs.append(_body(f"endcap_{s}", _bm.chip_cap_shape(cap + 0.02 * H, W * 1.02, H * 1.02),
+                          (offset + s * ((L - cap) / 2 + 0.01 * H), 0.0, H / 2), m_cap, parent=root))
+    if p["marking"]:
+        m_ink = _material("mat_ink", (0.85, 0.85, 0.82), roughness=0.8)
+        _text("marking", p["marking"][0], p["marking_size"], (offset, 0.0, H + 0.0005), m_ink, root)
+    return objs
+
+
+def _ic_marks(p: dict[str, Any], root: bpy.types.Object, offset: float) -> None:
+    """An IC's pin-1 dimple and laser marking lines."""
+    L, W, H = p["length"], p["width"], p["height"]
     m_dot = _material("mat_pin1", (0.01, 0.01, 0.01), roughness=0.25)
     bpy.ops.mesh.primitive_cylinder_add(radius=max(0.035 * min(L, W), 0.01), depth=0.0004,
                                         location=(offset - L / 2 + 0.12 * L, W / 2 - 0.15 * W, H + 0.0002))
@@ -338,36 +362,37 @@ def _build_part(pads: list[PadMm], board: BoardScene, mmpp: float, comp_h_mm: fl
     for i, text in enumerate(p["marking"]):
         _text(f"marking_{i}", text, size, (offset, ((lines - 1) / 2 - i) * size * 1.6, H + 0.0005), m_laser, root)
 
-    if p["contacts"] == "leads":
-        m_lead = _cfg_material("mat_lead", mats.get("solder") or {}, (0.7, 0.7, 0.72), 0.25, 1.0)
-        contacts = []
-        # Leads are rigid with the body: their layout comes from the *nominal* placement (part centred,
-        # body axis at lead_frame_deg), so a shifted/rotated part's feet miss their pads instead of
-        # stretching towards them.
-        a0 = -math.radians(float(body.get("lead_frame_deg", 0.0)))
-        axis0 = Vector((math.cos(a0), math.sin(a0), 0.0))
-        to_world = lambda v: Vector((cx, cy, 0.0)) + axis * v.x + Vector((-axis.y, axis.x, 0.0)) * v.y  # noqa: E731
-        for k, ((px, py, _pw, _ph), lead) in enumerate(zip(pads, p["leads"])):
-            rel = Vector((px, py, 0.0))  # scene coordinates are relative to the nominal part centre
-            loc = Vector((rel.dot(axis0), rel.x * -axis0.y + rel.y * axis0.x, 0.0))  # pad in body frame
-            edge = Vector((max(-L / 2, min(L / 2, loc.x)), max(-W / 2, min(W / 2, loc.y)), 0.0))
-            start, foot = to_world(edge * 0.98), to_world(loc)
-            lw, t = lead["width"], lead["thickness"]
-            # one bent strip: out of the parting line (45 % of H), a round bend down (inner radius 1.5 t), the
-            # foot flat on the land up to 20 % of the land beyond its centre (the toe fillet forms past it)
-            d = foot - start
-            reach = math.hypot(d.x, d.y)
-            ux, uy = (d.x / reach, d.y / reach) if reach > 1e-9 else (axis.x, axis.y)
-            p_len = abs(_pw * ux) + abs(_ph * uy)
-            path, s_leg, s_end = _bm.lead_path(reach, p_len, t, standoff + 0.45 * H, 0.0)
-            objs.append(_strip(f"lead_{k}", path, t, lw, (start.x, start.y), (ux, uy), m_lead))
-            mid = (s_leg + s_end) / 2
-            contacts.append({"cx": start.x + ux * mid, "cy": start.y + uy * mid, "hl": (s_end - s_leg) / 2, "hw": lw / 2,
-                             "angle": math.atan2(uy, ux)})
-        return objs, contacts, p["solder_height"]
-    if p["contacts"] == "none":
-        return objs, [None] * len(pads), 0.0  # tombstoned leaded part: leads lifted, paste only
-    return objs, [contact] * len(pads), p["solder_height"]
+
+def _gull_wing_leads(pads: list[PadMm], body: dict[str, Any], p: dict[str, Any], mats: dict[str, Any], cx: float, cy: float,
+                     axis: Vector) -> tuple[list[bpy.types.Object], list[dict[str, float]]]:
+    """One bent strip per pad from the body edge to the land; returns the leads and their solder contacts."""
+    L, W, H, standoff = p["length"], p["width"], p["height"], p["standoff"]
+    m_lead = _cfg_material("mat_lead", mats.get("solder") or {}, (0.7, 0.7, 0.72), 0.25, 1.0)
+    objs, contacts = [], []
+    # Leads are rigid with the body: their layout comes from the *nominal* placement (part centred,
+    # body axis at lead_frame_deg), so a shifted/rotated part's feet miss their pads instead of
+    # stretching towards them.
+    a0 = -math.radians(float(body.get("lead_frame_deg", 0.0)))
+    axis0 = Vector((math.cos(a0), math.sin(a0), 0.0))
+    to_world = lambda v: Vector((cx, cy, 0.0)) + axis * v.x + Vector((-axis.y, axis.x, 0.0)) * v.y  # noqa: E731
+    for k, ((px, py, pw, ph), lead) in enumerate(zip(pads, p["leads"])):
+        rel = Vector((px, py, 0.0))  # scene coordinates are relative to the nominal part centre
+        loc = Vector((rel.dot(axis0), rel.x * -axis0.y + rel.y * axis0.x, 0.0))  # pad in body frame
+        edge = Vector((max(-L / 2, min(L / 2, loc.x)), max(-W / 2, min(W / 2, loc.y)), 0.0))
+        start, foot = to_world(edge * 0.98), to_world(loc)
+        lw, t = lead["width"], lead["thickness"]
+        # one bent strip: out of the parting line (45 % of H), a round bend down (inner radius 1.5 t), the
+        # foot flat on the land up to 20 % of the land beyond its centre (the toe fillet forms past it)
+        d = foot - start
+        reach = math.hypot(d.x, d.y)
+        ux, uy = (d.x / reach, d.y / reach) if reach > 1e-9 else (axis.x, axis.y)
+        p_len = abs(pw * ux) + abs(ph * uy)
+        path, s_leg, s_end = _bm.lead_path(reach, p_len, t, standoff + 0.45 * H, 0.0)
+        objs.append(_strip(f"lead_{k}", path, t, lw, (start.x, start.y), (ux, uy), m_lead))
+        mid = (s_leg + s_end) / 2
+        contacts.append({"cx": start.x + ux * mid, "cy": start.y + uy * mid, "hl": (s_end - s_leg) / 2, "hw": lw / 2,
+                         "angle": math.atan2(uy, ux)})
+    return objs, contacts
 
 
 def _build_tht(pads: list[PadMm], board: BoardScene, p: dict[str, Any], mats: dict[str, Any],

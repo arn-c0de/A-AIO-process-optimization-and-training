@@ -26,7 +26,7 @@ import numpy as np
 
 from simple_sim.board3d.camera import choose_focal, pose_from_homography
 from simple_sim.board3d.footprints import footprint_for
-from simple_sim.board3d.substrate import BoardRaster, component_polygons
+from simple_sim.board3d.substrate import BoardRaster, board_mask, component_polygons
 
 #: neighbourhood of the residual field (DeepVision FIELD_DEFAULTS): 6 mm, else 10 mm, at least 4 anchors
 FIELD_RADII_MM, FIELD_MIN_POINTS = (6.0, 10.0), 4
@@ -150,9 +150,7 @@ def build_mosaic(board3d: dict[str, Any], raster: BoardRaster, geometries: list[
     """Fused top view on *raster* from the stills of *geometries*; returns (BGR image, report). The stills come from
     many units: what most of them lack (e.g. a coin cell, standoffs) is missing here too."""
     heights = height_map(board3d, raster, stages)
-    board = np.zeros((raster.rows, raster.cols), np.float32)
-    q = raster.to_px(np.array([[0, 0], [board3d["widthMm"], 0], [board3d["widthMm"], board3d["heightMm"]], [0, board3d["heightMm"]]]))
-    cv2.fillPoly(board, [q.round().astype(np.int32)], 1.0)
+    board = board_mask(board3d, raster, 1.0, np.float32)
     flat = board * (heights == 0)
     flat = cv2.erode(flat, np.ones((5, 5), np.uint8))
     stack, used = [], []

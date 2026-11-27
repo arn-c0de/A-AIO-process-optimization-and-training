@@ -164,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         prepare_substrate(board3d, a.board3d)
     sub = json.loads((a.board3d / "substrate" / "substrate.json").read_text())
     r = sub["raster"]
-    raster = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"])
+    raster = BoardRaster.from_meta(r)
     scan = cv2.imread(str(a.board3d / "substrate" / "scan_rgb.png"), cv2.IMREAD_COLOR)
     t0 = time.monotonic()
     summary = fit_board3d(board3d, scan, raster, tuple(a.families.split(",")))

@@ -21,19 +21,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import cv2  # noqa: E402
-import numpy as np  # noqa: E402
 
-from simple_sim.board3d import dv_root_for, load_board3d  # noqa: E402
+from simple_sim.board3d import dv_path, dv_root_for, load_board3d  # noqa: E402
 from simple_sim.board3d import parttex  # noqa: E402
 from simple_sim.board3d.scene import apply_fit  # noqa: E402
 from simple_sim.board3d.substrate import BoardRaster  # noqa: E402
-
-
-def _rebase(path: str, root: Path | None) -> Path:
-    p = Path(path)
-    if p.is_file() or root is None or "DeepVision-Web/" not in path:
-        return p
-    return root / path.split("DeepVision-Web/", 1)[1]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -62,10 +54,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     mos = json.loads(mos_json.read_text(encoding="utf-8"))
     root = dv_root_for(None)
-    geos = [g for g in (_rebase(x, root) for x in mos["photos"]) if g.is_file()]
+    geos = [g for g in (dv_path(x, root) for x in mos["photos"]) if g.is_file()]
     mosaic = cv2.imread(str(a.board3d / "photos" / "mosaic.png"), cv2.IMREAD_COLOR)
     rm = mos["raster"]
-    raster = BoardRaster(rm["x0"], rm["y0"], rm["widthMm"], rm["heightMm"], rm["pxPerMm"])
+    raster = BoardRaster.from_meta(rm)
     print(f"part textures from {len(geos)} photos ...", flush=True)
     atlas, report = parttex.reconstruct(board3d, geos, set(a.stages.split(",")), mosaic=mosaic, mosaic_raster=raster,
                                         n_folds=a.folds, log=lambda m: print(m, flush=True))
@@ -87,15 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     cv2.imwrite(str(out / "atlas.png"), atlas)
     cv2.imwrite(str(out / "atlas_clean.png"), parttex.clean_atlas(atlas, report))
     report["seconds"] = round(time.monotonic() - t0, 1)
-    agg: dict[str, dict[str, list[float]]] = {}
-    for r in report["parts"].values():
-        for g, d in r["scores"].items():
-            for v, e in d.items():
-                agg.setdefault(g, {}).setdefault(v, []).append(e)
-            best = d.get(r["choice"].get(g))
-            if best is not None:
-                agg.setdefault(g, {}).setdefault("chosen", []).append(best)
-    report["summary"] = {g: {v: round(float(np.mean(e)), 2) for v, e in d.items()} for g, d in agg.items()}
+    report["summary"] = parttex.score_summary(report)
     (out / "parttex.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     print(f"{len(report['parts'])} parts, atlas {atlas.shape[1]}x{atlas.shape[0]}, {report['seconds']} s")
     for g, d in report["summary"].items():

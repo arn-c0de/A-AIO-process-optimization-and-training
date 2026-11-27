@@ -176,5 +176,17 @@ def upsert_entry(entry: dict[str, Any], path: Path | None = None) -> Path:
     return path
 
 
-__all__ = ["BUILTIN_CATALOG", "CATALOG_ENV", "DEFAULT_LOCAL_CATALOG", "PartCatalog", "PartEntry", "PartMatch", "SCHEMA",
-           "local_catalog_paths", "norm_mpn", "read_catalog_file", "upsert_entry", "validate_entry"]
+__all__ = [
+    "BUILTIN_CATALOG",
+    "CATALOG_ENV",
+    "DEFAULT_LOCAL_CATALOG",
+    "SCHEMA",
+    "PartCatalog",
+    "PartEntry",
+    "PartMatch",
+    "local_catalog_paths",
+    "norm_mpn",
+    "read_catalog_file",
+    "upsert_entry",
+    "validate_entry",
+]

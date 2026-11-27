@@ -163,15 +163,19 @@ def test_tht_joint_and_dsub_standoffs():
 
 def test_battery_holder_is_empty_unless_the_catalog_says_cell():
     # holders are placed empty (the cell goes in at final assembly): an always-present cell rendered as a saturated disc
-    kw = dict(pins=3, rows=1, pitch=2.54, total_h=None, front=(0.0, -1.0))
+    kw = {"pins": 3, "rows": 1, "pitch": 2.54, "total_h": None, "front": (0.0, -1.0)}
     empty = bm.connector("battery_holder", "horizontal", 21.9, 18.2, 5.0, **kw)
     assert [p.name for p in empty.pieces] == ["body"]
     full = bm.connector("battery_holder", "horizontal", 21.9, 18.2, 5.0, cell=True, **kw)
-    assert {"body", "cell", "clip"} <= {p.name for p in full.pieces}
+    assert {p.name for p in full.pieces} == {"body", "cell"}          # no clip across the cell: its top is free
+    cell = next(p for p in full.pieces if p.name == "cell")
+    xs, zs = [v[0] for v in cell.mesh.verts], [v[2] for v in cell.mesh.verts]
+    assert max(xs) - min(xs) == pytest.approx(20.0, abs=0.05)          # CR2032
+    assert max(zs) == pytest.approx(5.0) and max(zs) - min(zs) == pytest.approx(3.2)
 
 
 def test_dsub_top_cover_variant():
-    kw = dict(pins=9, rows=1, pitch=2.77, total_h=None, front=(0.0, -1.0))
+    kw = {"pins": 9, "rows": 1, "pitch": 2.77, "total_h": None, "front": (0.0, -1.0)}
     plain = bm.connector("dsub", "right_angle", 21.98, 12.9, 12.5, **kw)
     cover = bm.connector("dsub", "right_angle", 21.98, 12.9, 12.5, top_cover="metal", **kw)
     assert "cover" not in {p.name for p in plain.pieces}

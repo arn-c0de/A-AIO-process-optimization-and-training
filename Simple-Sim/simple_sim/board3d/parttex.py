@@ -26,7 +26,8 @@ import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 import cv2
 import numpy as np
@@ -213,7 +214,7 @@ def collect(parts: list[PartTex], geometries: list[Path], board3d: dict[str, Any
     used = []
     world = {(p.refdes, f.name): _to_board(f.local, p.pose) for p in parts for f in p.faces}
     normals = {(p.refdes, f.name): _rot_normal(f.normal, p.pose[2]) for p in parts for f in p.faces}
-    for k, g in enumerate(geometries):
+    for g in geometries:
         try:
             view = PhotoView(g, heights, hr, fr)
         except (OSError, ValueError, KeyError) as e:
@@ -499,7 +500,7 @@ def gate(part: PartTex, choice: dict[str, str], scores: dict[str, dict[str, floa
     if part.kind == "gullwing":
         choice["walls"] = "rows"
     if part.size[2] > TALL_MM:
-        drop = [f for f in ("+x", "-x", "+y", "-y")]
+        drop = ["+x", "-x", "+y", "-y"]
         top = scores.get("top", {}).get(choice.get("top", ""), 1e9)
         if top > TALL_TOP_MAX_DE:
             drop.append("top")
@@ -739,6 +740,20 @@ def pack(tiles: dict[str, dict[str, np.ndarray]], width: int = 4096, pad: int = 
     return atlas, rects
 
 
+def score_summary(report: dict[str, Any]) -> dict[str, dict[str, float]]:
+    """Mean error per group and variant over all parts of a :func:`reconstruct` report, plus ``chosen`` (the error of
+    the variant each part picked)."""
+    agg: dict[str, dict[str, list[float]]] = {}
+    for r in report["parts"].values():
+        for g, d in r["scores"].items():
+            for v, e in d.items():
+                agg.setdefault(g, {}).setdefault(v, []).append(e)
+            best = d.get(r["choice"].get(g))
+            if best is not None:
+                agg.setdefault(g, {}).setdefault("chosen", []).append(best)
+    return {g: {v: round(float(np.mean(e)), 2) for v, e in d.items()} for g, d in agg.items()}
+
+
 def reconstruct(board3d: dict[str, Any], geometries: list[Path], stages: set[str], *, mosaic: np.ndarray | None = None,
                 mosaic_raster: BoardRaster | None = None, n_folds: int = 4,
                 log: Callable[[str], None] = print) -> tuple[np.ndarray, dict[str, Any]]:
@@ -791,5 +806,29 @@ def reconstruct(board3d: dict[str, Any], geometries: list[Path], stages: set[str
     return atlas, report
 
 
-__all__ = ["CLEAN_SCALE", "FACES", "Face", "clean_atlas", "clean_tile", "gate", "print_mask", "pack", "photo_fit", "reconstruct", "select", "variant", "PartTex", "PhotoView", "TEX_PX_PER_MM", "build", "collect", "current_tiles", "evaluate",
-           "exposure_gains", "fuse_face", "part_faces", "parts_of"]
+__all__ = [
+    "CLEAN_SCALE",
+    "FACES",
+    "TEX_PX_PER_MM",
+    "Face",
+    "PartTex",
+    "PhotoView",
+    "build",
+    "clean_atlas",
+    "clean_tile",
+    "collect",
+    "current_tiles",
+    "evaluate",
+    "exposure_gains",
+    "fuse_face",
+    "gate",
+    "pack",
+    "part_faces",
+    "parts_of",
+    "photo_fit",
+    "print_mask",
+    "reconstruct",
+    "score_summary",
+    "select",
+    "variant",
+]

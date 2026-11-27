@@ -60,6 +60,42 @@ def test_colour_gain_and_tone_lut():
     assert np.all(np.diff(lut.astype(int), axis=1) >= 0)                 # monotone
 
 
+def test_colour_matrix_carries_saturation_and_black_level():
+    rng = np.random.default_rng(3)
+    tex = rng.integers(0, 256, (120, 160, 3)).astype(np.uint8)             # board, black ICs, white parts: all colours
+    tex[:, :80] = (60, 140, 40)                                           # half of it plain green board
+    # saturation + lifted blacks, inside 0..1 for every texel (a clipped channel would hide the true matrix)
+    m_true = np.array([[0.8, 0.05, 0.0], [0.1, 0.85, 0.1], [0.0, 0.05, 0.75], [0.02, 0.03, 0.01]], np.float32)
+    real = photofx.apply_colour_matrix(tex, m_true)
+    real[:10, :10] = (255, 0, 255)                                        # a sticker on this board only: an outlier
+    m = photofx.fit_colour_matrix(tex, real, np.full(tex.shape[:2], 255, np.uint8), step=1)
+    assert np.allclose(m, m_true, atol=0.02)
+    out = photofx.apply_colour_matrix(tex, m)
+    assert np.abs(out[10:].astype(int) - real[10:]).mean() < 1.0
+    assert photofx.apply_colour_matrix(np.dstack([tex, np.full(tex.shape[:2], 7, np.uint8)]), m)[..., 3].max() == 7   # alpha kept
+    assert photofx.fit_colour_matrix(tex, real, np.zeros(tex.shape[:2], np.uint8)) is None
+
+
+def test_colour_matrix_keeps_grey_grey_when_asked():
+    rng = np.random.default_rng(4)
+    tex = np.full((100, 100, 3), (60, 140, 40), np.uint8)                 # all green: white is pure extrapolation
+    tex += rng.integers(0, 30, tex.shape).astype(np.uint8)
+    m_true = np.array([[0.6, 0.0, 0.0], [0.0, 0.9, 0.0], [0.0, 0.0, 0.4], [0.0, 0.0, 0.0]], np.float32)   # tinted
+    real = photofx.apply_colour_matrix(tex, m_true)
+    full = np.full(tex.shape[:2], 255, np.uint8)
+    free = photofx.fit_colour_matrix(tex, real, full, step=1)
+    grey = photofx.fit_colour_matrix(tex, real, full, step=1, neutral=0.05)
+    w_free, w_grey = free[:3].sum(0), grey[:3].sum(0)
+    assert np.ptp(w_grey) < 0.25 * np.ptp(w_free)                        # white comes out (nearly) grey
+    err = np.abs(photofx.apply_colour_matrix(tex, grey).astype(int) - real).mean()
+    assert err < 6.0                                                      # and the green still fits
+
+
+def test_linear_to_srgb_inverts_srgb_to_linear():
+    v = np.arange(256, dtype=np.uint8)
+    assert np.array_equal(photofx.linear_to_srgb(photofx.srgb_to_linear(v)), v)
+
+
 def test_composite_and_camera_fx():
     plate = np.full((40, 40, 3), 200, np.uint8)
     rgba = np.zeros((40, 40, 4), np.uint8)

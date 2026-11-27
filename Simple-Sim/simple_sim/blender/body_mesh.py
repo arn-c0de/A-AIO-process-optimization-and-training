@@ -175,7 +175,7 @@ def can_base_shape(l: float, w: float, h: float, plus_corners: tuple[int, ...]) 
     """Electrolytic base plate: square, the two corners on the + side cut at 45 deg (the polarity mark)."""
     r = edge_radius((l, w, h), 0.05, 0.08)
     c = 0.15 * min(l, w)
-    return BodyShape(l, w, h, r_corner=r, r_top=r, chamfer={k: c for k in plus_corners})
+    return BodyShape(l, w, h, r_corner=r, r_top=r, chamfer=dict.fromkeys(plus_corners, c))
 
 
 def can_shape(diameter: float, h: float) -> BodyShape:
@@ -202,7 +202,8 @@ def plus_corners(pads: list, l: float, w: float) -> tuple[int, ...]:
 # wets) are ``{"cx", "cy", "hl", "hw", "angle"}`` rectangles in that frame.
 
 #: material roles of the pieces (render_board3d maps them to Blender materials)
-ROLES = ("mold", "ceramic", "ferrite", "metal", "alu", "base", "substrate", "lid", "white", "ball", "natural", "insert")
+ROLES = ("mold", "ceramic", "ferrite", "metal", "alu", "base", "substrate", "lid", "white", "ball", "natural", "insert",
+         "sleeve")
 
 
 @dataclass
@@ -500,7 +501,13 @@ def electrolytic(l: float, w: float, h: float, pads: list) -> Assembly:
     can_h = h - base_h - t
     can = BodyShape(dia, dia, can_h, r_corner=dia / 2, r_top=min(0.04 * dia, 0.3), corner_segments=16, top_segments=4,
                     grooves=((min(0.12 * can_h, 0.8), 0.015 * dia + 0.03, 0.12),))      # bead ~0.12 mm deep on 6.3 mm
-    pieces = [Piece("body_base", shape_at(base, z0=t), "base"), Piece("body_can", shape_at(can, z0=t + base_h), "alu")]
+    # the can wears a black sleeve over its wall; the top with its rolled rim is bare aluminium (print, polarity bar
+    # and vent: the photo goes on it). All-aluminium cans rendered as grey cylinders next to black real ones; a lid
+    # inside the rim only left a dark ring where the flatbed scan shows the bright rim.
+    lid_d = dia - 0.04
+    lid = BodyShape(lid_d, lid_d, 0.03, r_corner=lid_d / 2, r_top=0.0, corner_segments=16, top_segments=1)
+    pieces = [Piece("body_base", shape_at(base, z0=t), "base"), Piece("body_can", shape_at(can, z0=t + base_h), "sleeve"),
+              Piece("body_lid", shape_at(lid, z0=h - 0.02), "alu")]
     contacts: list[dict[str, float] | None] = []
     for k, (px, py, pw, ph) in enumerate(pads):
         sx = 1.0 if px > 0 else -1.0
@@ -599,6 +606,248 @@ def hex_prism(cx: float, cz: float, y0: float, y1: float, across_flats: float, s
     return m
 
 
+#: kinds built as a shrouded housing with pins in it (open top when vertical, open mating face when right angle)
+HOUSING_KINDS = ("wire_to_board", "terminal_strip", "power_header")
+#: kinds mated from a board edge through a sheet shell with port openings
+EDGE_PORT_KINDS = ("usb_b", "usb_a_dual", "rj45", "card_socket")
+
+
+@dataclass
+class _Conn:
+    """One connector being built: its size in the mating frame (*e* along the mating face, *d* deep), the pin grid
+    and the pieces so far (each turned from the -y mating face onto *front*)."""
+
+    kind: str
+    e: float
+    d: float
+    h: float
+    n: int                         # pins per row
+    rows: int
+    pitch: float
+    side: float                    # square pin size
+    vertical: bool
+    total_h: float | None
+    cell: bool
+    top_cover: str | None
+    front: tuple[float, float]
+    pieces: list[Piece] = field(default_factory=list)
+
+    def add(self, name: str, mesh: BodyMesh, role: str) -> None:
+        self.pieces.append(Piece(name, _rot(mesh, self.front), role))
+
+
+def _conn_housing(c: _Conn) -> None:
+    """``wire_to_board`` / ``terminal_strip`` / ``power_header``: shrouded housing, open top (vertical) or open
+    mating face (right angle)."""
+    e, d, h, n, pitch = c.e, c.d, c.h, c.n, c.pitch
+    role = "natural" if c.kind == "wire_to_board" else "mold"
+    wall = min(0.6, 0.14 * min(e, d))
+    floor = 0.3 * h
+    if c.vertical:
+        walls, fl = _shroud(e, d, h, floor, wall)
+        # the front wall with the polarisation notch at its top centre (a wire-to-board header's key slot)
+        nw = min(0.5 * pitch, 0.15 * e)
+        walls[0:1] = _plate_with_holes(-e / 2, e / 2, 0.0, h, -d / 2, -d / 2 + wall, [(-nw / 2, nw / 2, h - min(0.15 * h, 0.8), h + 1.0)])
+        for k, m in enumerate(walls):
+            c.add(f"body_wall{k}", m, role)
+        # keys: ribs on the inside of the back wall between the pin pairs
+        for i in range(max(0, n - 1)):
+            x = (i - (n - 2) / 2) * pitch
+            c.add(f"body_key{i}", box(x - 0.2, x + 0.2, d / 2 - wall - 0.35, d / 2 - wall, floor, h - 0.3), role)
+        c.add("cavity", fl, role)
+        for k, m in enumerate(_posts(e, d, n, c.rows, pitch, floor, h - 0.7, c.side)):
+            c.add(f"pin_{k}", m, "metal")
+        return
+    # right angle: closed top, open towards -y (the mating face), pins horizontal in the opening
+    c.add("body_back", box(-e / 2, e / 2, d / 2 - 0.35 * d, d / 2, 0, h), role)
+    c.add("body_top", box(-e / 2, e / 2, -d / 2, d / 2, h - wall, h), role)
+    c.add("body_floor", box(-e / 2, e / 2, -d / 2, d / 2, 0, floor), role)
+    c.add("body_end0", box(-e / 2, -e / 2 + wall, -d / 2, d / 2, 0, h), role)
+    c.add("body_end1", box(e / 2 - wall, e / 2, -d / 2, d / 2, 0, h), role)
+    zc = (floor + h - wall) / 2
+    for i in range(n):
+        x = (i - (n - 1) / 2) * pitch
+        c.add(f"pin_{i}", box(x - c.side / 2, x + c.side / 2, -d / 2 + 0.6, d / 2 - 0.35 * d, zc - c.side / 2, zc + c.side / 2), "metal")
+
+
+def _conn_pin_header(c: _Conn) -> None:
+    """``pin_header``: black insulator (*h*) with square posts to ``total_h``."""
+    e, d, h = c.e, c.d, c.h
+    c.add("body", box(-e / 2, e / 2, -d / 2, d / 2, 0, h), "mold")
+    top = max(c.total_h or 0.0, h + 3.0)
+    for k, m in enumerate(_posts(e, d, c.n, c.rows, c.pitch, h - 0.01, top, c.side)):
+        c.add(f"pin_{k}", m, "metal")
+
+
+def _conn_usb_b_top(c: _Conn) -> None:
+    """``usb_b`` mated from above: shell walls, the opening in the top, the square plastic insert with contacts."""
+    e, d, h = c.e, c.d, c.h
+    t = 0.3
+    ow, od = 0.72 * e, 0.62 * d
+    for k, m in enumerate(_plate_with_holes(-e / 2, e / 2, -d / 2, d / 2, h - t, h, [(-ow / 2, ow / 2, -od / 2, od / 2)])):
+        # the helper builds plates in x-z; here the plate lies in x-y at the top: swap its y and z
+        c.add(f"body_shell_top{k}", BodyMesh([(x, z, y) for x, y, z in m.verts], [tuple(reversed(f)) for f in m.faces], m.smooth), "lid")
+    for k, m in enumerate([box(-e / 2, e / 2, -d / 2, -d / 2 + t, 0, h - t), box(-e / 2, e / 2, d / 2 - t, d / 2, 0, h - t),
+                           box(-e / 2, -e / 2 + t, -d / 2 + t, d / 2 - t, 0, h - t), box(e / 2 - t, e / 2, -d / 2 + t, d / 2 - t, 0, h - t)]):
+        c.add(f"body_shell{k}", m, "lid")
+    c.add("insert", box(-e / 2 + t, e / 2 - t, -d / 2 + t, d / 2 - t, 0, h - 2.6), "insert")
+    tw, td = 0.5 * ow, 0.45 * od
+    c.add("tongue", box(-tw / 2, tw / 2, -td / 2, td / 2, h - 2.6, h - 0.5), "mold")
+    for i in range(2):
+        for sgn in (-1, 1):
+            x = (i - 0.5) * 0.45 * tw
+            c.add(f"pin_c{i}{sgn}", box(x - 0.25, x + 0.25, sgn * td / 2 - (0.05 if sgn > 0 else 0.0), sgn * td / 2 + (0.05 if sgn < 0 else 0.0),
+                                        h - 2.4, h - 0.7), "metal")
+
+
+def _port_layout(kind: str, e: float, d: float, h: float) -> tuple[list[tuple[float, float, float, float]], float]:
+    """Port openings ``(x0, x1, z0, z1)`` in the mating face of an edge-mated *kind* and how deep they reach."""
+    if kind == "usb_a_dual":
+        pw, ph = min(13.1, 0.86 * e), min(5.7, 0.4 * h)
+        gap = max(0.12 * h, 1.0)
+        z0 = (h - 2 * ph - gap) / 2
+        return [(-pw / 2, pw / 2, z0 + k * (ph + gap), z0 + k * (ph + gap) + ph) for k in range(2)], 0.75 * d
+    if kind == "rj45":
+        pw, ph = min(11.7, 0.72 * e), min(8.0, 0.58 * h)
+        return [(-pw / 2, pw / 2, 0.12 * h, 0.12 * h + ph)], 0.6 * d
+    if kind == "card_socket":
+        return [(-0.42 * e, 0.42 * e, 0.25 * h, 0.75 * h)], 0.85 * d
+    pw, ph = 0.62 * e, 0.55 * h
+    return [(-pw / 2, pw / 2, 0.22 * h, 0.22 * h + ph)], 0.7 * d
+
+
+def _conn_edge_port(c: _Conn) -> None:
+    """``usb_b`` (right angle) / ``usb_a_dual`` / ``rj45`` / ``card_socket``: a sheet shell with the port openings,
+    the insert behind them, tongues / contacts in the ports."""
+    kind, e, d, h = c.kind, c.e, c.d, c.h
+    t = 0.3 if kind != "rj45" else 0.25
+    ports, depth = _port_layout(kind, e, d, h)
+    shell, ins = _ported_shell(e, d, h, t, ports, depth)
+    for k, m in enumerate(shell):
+        c.add(f"body_shell{k}", m, "lid")
+    for k, m in enumerate(ins):
+        c.add(f"insert_{k}", m, "insert")
+    yb = -d / 2 + depth                     # back of the ports
+    for k, (hx0, hx1, hz0, hz1) in enumerate(ports):
+        pw_, ph_ = hx1 - hx0, hz1 - hz0
+        if kind == "usb_a_dual":
+            # the plastic tongue in the upper half of the port, four contacts on its underside
+            tz0, tz1 = hz0 + 0.42 * ph_, hz0 + 0.68 * ph_
+            c.add(f"tongue_{k}", box(hx0 + 0.08 * pw_, hx1 - 0.08 * pw_, -d / 2 + t + 0.8, yb, tz0, tz1), "white")
+            # two spring latches pressed into the port from its top sheet
+            for j, fx in enumerate((0.28, 0.72)):
+                lx = hx0 + fx * pw_
+                m = strip_mesh([(0.0, hz1 - t / 2), (1.6, hz1 - 0.45)], t * 0.8, 1.0, (lx, -d / 2 + t + 0.6), (0.0, 1.0))
+                c.add(f"latch_{k}_{j}", m, "lid")
+            for i in range(4):
+                x = hx0 + pw_ * (0.2 + 0.2 * i)
+                c.add(f"pin_{k}_{i}", box(x - 0.5, x + 0.5, -d / 2 + t + 1.5, yb, tz0 - 0.06, tz0), "metal")
+        elif kind == "rj45":
+            # eight spring contacts slanting down from the top of the port, the latch slot below
+            for i in range(8):
+                x = hx0 + pw_ * (0.15 + 0.7 * i / 7)
+                zt = hz1 - 0.3
+                m = strip_mesh([(-0.5, zt), (0.35 * depth, zt - 0.35 * ph_)], 0.12, 0.35, (x, yb), (0.0, -1.0))
+                c.add(f"pin_{i}", m, "metal")
+            c.add("latch", box(-0.2 * pw_, 0.2 * pw_, -d / 2 - 0.01, -d / 2 + t + 0.5, hz0 - 0.9, hz0 + 0.01), "insert")
+            for i, sx in enumerate((-1, 1)):
+                c.add(f"led_{i}", box(sx * 0.4 * e - 0.8, sx * 0.4 * e + 0.8, -d / 2 - 0.03, -d / 2 + t, hz1 + 0.06 * h, hz1 + 0.06 * h + 1.0),
+                      "natural")
+        elif kind == "card_socket":
+            for i in range(8):
+                x = hx0 + pw_ * (0.1 + 0.8 * i / 7)
+                c.add(f"pin_{i}", box(x - 0.3, x + 0.3, -d / 2 + 0.3 * depth, yb, hz0, hz0 + 0.08), "metal")
+        else:
+            tw = 0.6 * pw_
+            c.add(f"tongue_{k}", box(-tw / 2, tw / 2, -d / 2 + t + 1.0, yb, hz0 + 0.3 * ph_, hz0 + 0.7 * ph_), "mold")
+
+
+#: DE-9 contact pitch along a row (mm)
+DSUB_CONTACT_PITCH_MM = 2.77
+
+
+def _disc_y(x: float, z: float, dia: float, y0: float, y1: float) -> BodyMesh:
+    """A cylinder of diameter *dia* along y from *y0* to *y1*, centred at (x, z)."""
+    m = shape_at(BodyShape(dia, dia, y1 - y0, r_corner=dia / 2, r_top=0.0, corner_segments=4, top_segments=1))
+    # a cylinder along z: lay it along y (front at y0)
+    return BodyMesh([(x + vx, y1 - vz, z + vy) for vx, vy, vz in m.verts], m.faces, m.smooth)
+
+
+def _conn_dsub(c: _Conn) -> None:
+    """``dsub``: body behind a nickel flange; the D shell sticks out of the mating face, hollow, with the insert and
+    its 9 contact holes (female) recessed in it."""
+    e, d, h = c.e, c.d, c.h
+    c.add("body", box(-e / 2, e / 2, -d / 2 + 1.0, d / 2, 0, 0.75 * h), "mold")
+    if c.top_cover == "metal":
+        # some makers wrap the body's top in a tin-plated sheet (with the print), others leave the black moulding
+        c.add("cover", box(-e / 2, e / 2, -d / 2 + 1.0, d / 2, 0.75 * h, 0.75 * h + 0.3), "lid")
+    # the nickel flange (DE-9: 30.8 mm wide, the jackscrew holes 25 mm apart) with the two hex standoffs
+    fw = max(e, DSUB_FLANGE_MM)
+    c.add("body_flange", box(-fw / 2, fw / 2, -d / 2 + 0.6, -d / 2 + 1.0, 0, h), "lid")
+    for k, sx in enumerate((-1, 1)):
+        hx = sx * DSUB_BOLT_PITCH_MM / 2
+        c.add(f"bolt_{k}", hex_prism(hx, 0.5 * h, -d / 2 + 0.6 - DSUB_BOLT_LEN_MM, -d / 2 + 0.6, DSUB_BOLT_AF_MM), "lid")
+        c.add(f"bolt_hole_{k}", hex_prism(hx, 0.5 * h, -d / 2 + 0.6 - DSUB_BOLT_LEN_MM - 0.02, -d / 2 + 0.6 - DSUB_BOLT_LEN_MM + 1.5,
+                                          1.6, sides=12), "insert")
+    sw, sh, depth, t = 0.72 * e, 0.42 * h, 6.0, 0.3
+    zc = 0.55 * h
+    yf = -d / 2 + 0.6
+    for k, m in enumerate([box(-sw / 2, sw / 2, yf - depth, yf, zc + sh / 2 - t, zc + sh / 2),
+                           box(-sw / 2 * 0.88, sw / 2 * 0.88, yf - depth, yf, zc - sh / 2, zc - sh / 2 + t),
+                           box(-sw / 2, -sw / 2 + t, yf - depth, yf, zc - sh / 2, zc + sh / 2),
+                           box(sw / 2 - t, sw / 2, yf - depth, yf, zc - sh / 2, zc + sh / 2)]):
+        c.add(f"shell_{k}", m, "lid")
+    yi = yf - depth + 1.0                   # front face of the insert, recessed 1 mm in the shell
+    c.add("insert", box(-sw / 2 + t, sw / 2 - t, yi, yf, zc - sh / 2 + t, zc + sh / 2 - t), "mold")
+    for row, (n, dz) in enumerate(((5, 0.25 * sh), (4, -0.25 * sh))):
+        for i in range(n):
+            x = (i - (n - 1) / 2) * DSUB_CONTACT_PITCH_MM
+            # the socket hole: a black well just behind the insert face, a contact spring deep in it
+            c.add(f"socket_{row}_{i}", _disc_y(x, zc + dz, 1.15, yi - 0.02, yi + 0.6), "insert")
+            c.add(f"pin_{row}_{i}", _disc_y(x, zc + dz, 0.6, yi + 0.6, yi + 1.2), "metal")
+
+
+def _conn_screw_terminal(c: _Conn) -> None:
+    """``screw_terminal``: metal block with the screw head."""
+    e, d, h = c.e, c.d, c.h
+    c.add("body", box(-e / 2, e / 2, -d / 2, d / 2, 0, 0.55 * h), "lid")
+    r = 0.32 * min(e, d)
+    c.add("screw", shape_at(BodyShape(2 * r, 2 * r, 0.45 * h, r_corner=r, r_top=0.15 * r, corner_segments=8, top_segments=2),
+                            z0=0.55 * h), "lid")
+
+
+#: coin cell of a holder about its size: CR2032 (diameter, thickness, mm)
+COIN_CELL_MM = (20.0, 3.2)
+
+
+def _conn_battery_holder(c: _Conn) -> None:
+    """``battery_holder``: the holder's base; with ``cell`` also the coin cell. The cell is a CR2032 (20 x 3.2 mm)
+    lying in the holder with its top at the holder's height, the whole top face free: the phone photos show the
+    printed cell over a white frame with the contacts at its ends (no clip across it; the old 15.5 mm cell under a
+    clip rendered as a grey bar over a small disc)."""
+    e, d, h = c.e, c.d, c.h
+    c.add("body", box(-e / 2, e / 2, -d / 2, d / 2, 0, 0.3 * h), "mold")
+    if not c.cell:
+        return
+    dia, thick = COIN_CELL_MM
+    dia = min(dia, 0.95 * max(e, d))
+    thick = min(thick, 0.7 * h)
+    z0 = max(0.3 * h, h - thick)
+    r = dia / 2
+    c.add("cell", shape_at(BodyShape(dia, dia, h - z0, r_corner=r, r_top=0.15, corner_segments=24, top_segments=2),
+                           z0=z0), "alu")
+
+
+_CONNECTOR_BUILDERS = {
+    **dict.fromkeys(HOUSING_KINDS, _conn_housing),
+    **dict.fromkeys(EDGE_PORT_KINDS, _conn_edge_port),
+    "pin_header": _conn_pin_header,
+    "dsub": _conn_dsub,
+    "screw_terminal": _conn_screw_terminal,
+    "battery_holder": _conn_battery_holder,
+}
+
+
 def connector(kind: str, orientation: str, l: float, w: float, h: float, *, pins: int, rows: int, pitch: float,
               total_h: float | None, front: tuple[float, float], cell: bool = False, top_cover: str | None = None) -> Assembly:
     """Connector / socket body from the part catalog's ``kind`` (datasheet height *h* above the board):
@@ -613,181 +862,17 @@ def connector(kind: str, orientation: str, l: float, w: float, h: float, *, pins
       ``"cell": true``) also the coin cell and its clip.
     Anything else: a plain housing (``plastic`` black / ``metal`` shield)."""
     vertical = orientation == "vertical" and kind in TOP_MATING
+    build = _conn_usb_b_top if kind == "usb_b" and vertical else _CONNECTOR_BUILDERS.get(kind)
+    if build is None:
+        return Assembly([Piece("body", shape_at(molded_shape(l, w, h, leads=False)), "mold", photo_sides=True)])
     if vertical:
         front = (0.0, -1.0) if l >= w else (1.0, 0.0)
     e, d = (l, w) if front[1] else (w, l)
-    pieces: list[Piece] = []
-
-    def add(name, mesh, role):
-        pieces.append(Piece(name, _rot(mesh, front), role))
-
-    side = 0.64 if pitch >= 1.9 else (0.5 if pitch >= 1.4 else 0.32)
     rows = max(1, rows)
-    n = max(1, pins // rows)
-    if kind in ("wire_to_board", "terminal_strip", "power_header"):
-        role = "natural" if kind == "wire_to_board" else "mold"
-        wall = min(0.6, 0.14 * min(e, d))
-        floor = 0.3 * h
-        if vertical:
-            walls, fl = _shroud(e, d, h, floor, wall)
-            # the front wall with the polarisation notch at its top centre (a wire-to-board header's key slot)
-            nw = min(0.5 * pitch, 0.15 * e)
-            walls[0:1] = _plate_with_holes(-e / 2, e / 2, 0.0, h, -d / 2, -d / 2 + wall, [(-nw / 2, nw / 2, h - min(0.15 * h, 0.8), h + 1.0)])
-            for k, m in enumerate(walls):
-                add(f"body_wall{k}", m, role)
-            # keys: ribs on the inside of the back wall between the pin pairs
-            for i in range(max(0, n - 1)):
-                x = (i - (n - 2) / 2) * pitch
-                add(f"body_key{i}", box(x - 0.2, x + 0.2, d / 2 - wall - 0.35, d / 2 - wall, floor, h - 0.3), role)
-            add("cavity", fl, role)
-            for k, m in enumerate(_posts(e, d, n, rows, pitch, floor, h - 0.7, side)):
-                add(f"pin_{k}", m, "metal")
-        else:
-            # right angle: closed top, open towards -y (the mating face), pins horizontal in the opening
-            add("body_back", box(-e / 2, e / 2, d / 2 - 0.35 * d, d / 2, 0, h), role)
-            add("body_top", box(-e / 2, e / 2, -d / 2, d / 2, h - wall, h), role)
-            add("body_floor", box(-e / 2, e / 2, -d / 2, d / 2, 0, floor), role)
-            add("body_end0", box(-e / 2, -e / 2 + wall, -d / 2, d / 2, 0, h), role)
-            add("body_end1", box(e / 2 - wall, e / 2, -d / 2, d / 2, 0, h), role)
-            zc = (floor + h - wall) / 2
-            for i in range(n):
-                x = (i - (n - 1) / 2) * pitch
-                add(f"pin_{i}", box(x - side / 2, x + side / 2, -d / 2 + 0.6, d / 2 - 0.35 * d, zc - side / 2, zc + side / 2), "metal")
-    elif kind == "pin_header":
-        add("body", box(-e / 2, e / 2, -d / 2, d / 2, 0, h), "mold")
-        top = max(total_h or 0.0, h + 3.0)
-        for k, m in enumerate(_posts(e, d, n, rows, pitch, h - 0.01, top, side)):
-            add(f"pin_{k}", m, "metal")
-    elif kind == "usb_b" and vertical:
-        # mated from above: shell walls, the opening in the top, the square plastic insert with contacts inside
-        t = 0.3
-        ow, od = 0.72 * e, 0.62 * d
-        for k, m in enumerate(_plate_with_holes(-e / 2, e / 2, -d / 2, d / 2, h - t, h, [(-ow / 2, ow / 2, -od / 2, od / 2)])):
-            # the helper builds plates in x-z; here the plate lies in x-y at the top: swap its y and z
-            add(f"body_shell_top{k}", BodyMesh([(x, z, y) for x, y, z in m.verts], [tuple(reversed(f)) for f in m.faces], m.smooth), "lid")
-        for k, m in enumerate([box(-e / 2, e / 2, -d / 2, -d / 2 + t, 0, h - t), box(-e / 2, e / 2, d / 2 - t, d / 2, 0, h - t),
-                               box(-e / 2, -e / 2 + t, -d / 2 + t, d / 2 - t, 0, h - t), box(e / 2 - t, e / 2, -d / 2 + t, d / 2 - t, 0, h - t)]):
-            add(f"body_shell{k}", m, "lid")
-        add("insert", box(-e / 2 + t, e / 2 - t, -d / 2 + t, d / 2 - t, 0, h - 2.6), "insert")
-        tw, td = 0.5 * ow, 0.45 * od
-        add("tongue", box(-tw / 2, tw / 2, -td / 2, td / 2, h - 2.6, h - 0.5), "mold")
-        for i in range(2):
-            for sgn in (-1, 1):
-                x = (i - 0.5) * 0.45 * tw
-                add(f"pin_c{i}{sgn}", box(x - 0.25, x + 0.25, sgn * td / 2 - (0.05 if sgn > 0 else 0.0), sgn * td / 2 + (0.05 if sgn < 0 else 0.0) + 0.0,
-                                         h - 2.4, h - 0.7), "metal")
-    elif kind in ("usb_b", "usb_a_dual", "rj45", "card_socket"):
-        # mated from the board edge: a sheet shell with the port openings, the insert behind them, tongues / contacts
-        t = 0.3 if kind != "rj45" else 0.25
-        if kind == "usb_a_dual":
-            pw, ph = min(13.1, 0.86 * e), min(5.7, 0.4 * h)
-            gap = max(0.12 * h - 0.0, 1.0)
-            z0 = (h - 2 * ph - gap) / 2
-            ports = [(-pw / 2, pw / 2, z0 + k * (ph + gap), z0 + k * (ph + gap) + ph) for k in range(2)]
-            depth = 0.75 * d
-        elif kind == "rj45":
-            pw, ph = min(11.7, 0.72 * e), min(8.0, 0.58 * h)
-            ports = [(-pw / 2, pw / 2, 0.12 * h, 0.12 * h + ph)]
-            depth = 0.6 * d
-        elif kind == "card_socket":
-            ports = [(-0.42 * e, 0.42 * e, 0.25 * h, 0.75 * h)]
-            depth = 0.85 * d
-        else:
-            pw, ph = 0.62 * e, 0.55 * h
-            ports = [(-pw / 2, pw / 2, 0.22 * h, 0.22 * h + ph)]
-            depth = 0.7 * d
-        shell, ins = _ported_shell(e, d, h, t, ports, depth)
-        shell_role = "natural" if kind == "rj45" and False else "lid"
-        for k, m in enumerate(shell):
-            add(f"body_shell{k}", m, shell_role)
-        for k, m in enumerate(ins):
-            add(f"insert_{k}", m, "insert")
-        yb = -d / 2 + depth                     # back of the ports
-        for k, (hx0, hx1, hz0, hz1) in enumerate(ports):
-            pw_, ph_ = hx1 - hx0, hz1 - hz0
-            if kind == "usb_a_dual":
-                # the plastic tongue in the upper half of the port, four contacts on its underside
-                tz0, tz1 = hz0 + 0.42 * ph_, hz0 + 0.68 * ph_
-                add(f"tongue_{k}", box(hx0 + 0.08 * pw_, hx1 - 0.08 * pw_, -d / 2 + t + 0.8, yb, tz0, tz1), "white")
-                # two spring latches pressed into the port from its top sheet
-                for j, fx in enumerate((0.28, 0.72)):
-                    lx = hx0 + fx * pw_
-                    m = strip_mesh([(0.0, hz1 - t / 2), (1.6, hz1 - 0.45)], t * 0.8, 1.0, (lx, -d / 2 + t + 0.6), (0.0, 1.0))
-                    add(f"latch_{k}_{j}", m, "lid")
-                for i in range(4):
-                    x = hx0 + pw_ * (0.2 + 0.2 * i)
-                    add(f"pin_{k}_{i}", box(x - 0.5, x + 0.5, -d / 2 + t + 1.5, yb, tz0 - 0.06, tz0), "metal")
-            elif kind == "rj45":
-                # eight spring contacts slanting down from the top of the port, the latch slot below
-                for i in range(8):
-                    x = hx0 + pw_ * (0.15 + 0.7 * i / 7)
-                    zt = hz1 - 0.3
-                    m = strip_mesh([(-0.5, zt), (0.35 * depth, zt - 0.35 * ph_)], 0.12, 0.35, (x, yb), (0.0, -1.0))
-                    add(f"pin_{i}", m, "metal")
-                add("latch", box(-0.2 * pw_, 0.2 * pw_, -d / 2 - 0.01, -d / 2 + t + 0.5, hz0 - 0.9, hz0 + 0.01), "insert")
-                for i, sx in enumerate((-1, 1)):
-                    add(f"led_{i}", box(sx * 0.4 * e - 0.8, sx * 0.4 * e + 0.8, -d / 2 - 0.03, -d / 2 + t, hz1 + 0.06 * h, hz1 + 0.06 * h + 1.0),
-                        "natural")
-            elif kind == "card_socket":
-                for i in range(8):
-                    x = hx0 + pw_ * (0.1 + 0.8 * i / 7)
-                    add(f"pin_{i}", box(x - 0.3, x + 0.3, -d / 2 + 0.3 * depth, yb, hz0, hz0 + 0.08), "metal")
-            else:
-                tw = 0.6 * pw_
-                add(f"tongue_{k}", box(-tw / 2, tw / 2, -d / 2 + t + 1.0, yb, hz0 + 0.3 * ph_, hz0 + 0.7 * ph_), "mold")
-    elif kind == "dsub":
-        # body behind a nickel flange; the D shell sticks out of the mating face, hollow, with the insert and its 9
-        # contact holes (female) recessed in it
-        add("body", box(-e / 2, e / 2, -d / 2 + 1.0, d / 2, 0, 0.75 * h), "mold")
-        if top_cover == "metal":
-            # some makers wrap the body's top in a tin-plated sheet (with the print), others leave the black moulding
-            add("cover", box(-e / 2, e / 2, -d / 2 + 1.0, d / 2, 0.75 * h, 0.75 * h + 0.3), "lid")
-        # the nickel flange (DE-9: 30.8 mm wide, the jackscrew holes 25 mm apart) with the two hex standoffs
-        fw = max(e, DSUB_FLANGE_MM)
-        add("body_flange", box(-fw / 2, fw / 2, -d / 2 + 0.6, -d / 2 + 1.0, 0, h), "lid")
-        for k, sx in enumerate((-1, 1)):
-            hx = sx * DSUB_BOLT_PITCH_MM / 2
-            add(f"bolt_{k}", hex_prism(hx, 0.5 * h, -d / 2 + 0.6 - DSUB_BOLT_LEN_MM, -d / 2 + 0.6, DSUB_BOLT_AF_MM), "lid")
-            add(f"bolt_hole_{k}", hex_prism(hx, 0.5 * h, -d / 2 + 0.6 - DSUB_BOLT_LEN_MM - 0.02, -d / 2 + 0.6 - DSUB_BOLT_LEN_MM + 1.5,
-                                            1.6, sides=12), "insert")
-        sw, sh, depth, t = 0.72 * e, 0.42 * h, 6.0, 0.3
-        zc = 0.55 * h
-        yf = -d / 2 + 0.6
-        for k, m in enumerate([box(-sw / 2, sw / 2, yf - depth, yf, zc + sh / 2 - t, zc + sh / 2),
-                               box(-sw / 2 * 0.88, sw / 2 * 0.88, yf - depth, yf, zc - sh / 2, zc - sh / 2 + t),
-                               box(-sw / 2, -sw / 2 + t, yf - depth, yf, zc - sh / 2, zc + sh / 2),
-                               box(sw / 2 - t, sw / 2, yf - depth, yf, zc - sh / 2, zc + sh / 2)]):
-            add(f"shell_{k}", m, "lid")
-        yi = yf - depth + 1.0                   # front face of the insert, recessed 1 mm in the shell
-        add("insert", box(-sw / 2 + t, sw / 2 - t, yi, yf, zc - sh / 2 + t, zc + sh / 2 - t), "mold")
-        pitch = 2.77
-
-        def disc(x, z, dia, y0, y1):
-            m = shape_at(BodyShape(dia, dia, y1 - y0, r_corner=dia / 2, r_top=0.0, corner_segments=4, top_segments=1))
-            # a cylinder along z: lay it along y (front at y0)
-            return BodyMesh([(x + vx, y1 - vz, z + vy) for vx, vy, vz in m.verts], m.faces, m.smooth)
-        for row, (n, dz) in enumerate(((5, 0.25 * sh), (4, -0.25 * sh))):
-            for i in range(n):
-                x = (i - (n - 1) / 2) * pitch
-                # the socket hole: a black well just behind the insert face, a contact spring deep in it
-                add(f"socket_{row}_{i}", disc(x, zc + dz, 1.15, yi - 0.02, yi + 0.6), "insert")
-                add(f"pin_{row}_{i}", disc(x, zc + dz, 0.6, yi + 0.6, yi + 1.2), "metal")
-    elif kind == "screw_terminal":
-        add("body", box(-e / 2, e / 2, -d / 2, d / 2, 0, 0.55 * h), "lid")
-        r = 0.32 * min(e, d)
-        add("screw", shape_at(BodyShape(2 * r, 2 * r, 0.45 * h, r_corner=r, r_top=0.15 * r, corner_segments=8, top_segments=2),
-                              z0=0.55 * h), "lid")
-    elif kind == "battery_holder":
-        add("body", box(-e / 2, e / 2, -d / 2, d / 2, 0, 0.3 * h), "mold")
-        if not cell:
-            return Assembly(pieces)
-        r = 0.42 * min(e, d)
-        add("cell", shape_at(BodyShape(2 * r, 2 * r, 0.5 * h, r_corner=r, r_top=0.03, corner_segments=12, top_segments=1),
-                             z0=0.3 * h), "alu")
-        add("clip", box(-0.15 * e, 0.15 * e, -d / 2, d / 2, 0.8 * h, h), "lid")
-    else:
-        return Assembly([Piece("body", shape_at(molded_shape(l, w, h, leads=False)), "mold", photo_sides=True)])
-    return Assembly(pieces)
+    side = 0.64 if pitch >= 1.9 else (0.5 if pitch >= 1.4 else 0.32)
+    c = _Conn(kind, e, d, h, max(1, pins // rows), rows, pitch, side, vertical, total_h, cell, top_cover, front)
+    build(c)
+    return Assembly(c.pieces)
 
 
 # --------------------------------------------------------------------------- through-hole joints (top side)

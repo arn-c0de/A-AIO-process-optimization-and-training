@@ -608,6 +608,61 @@ def _total_epochs(epochs: int, start_epoch: int, extra_epochs: int | None) -> in
     return max(int(epochs), start_epoch)
 
 
+@dataclass
+class _BestEpoch:
+    """Best validation score so far. A fresh run counts its first epoch as best even at F1 0 (so --out is always
+    written); after that only a better F1 replaces it."""
+
+    f1: float = 0.0
+    accuracy: float | None = None
+    epoch: int = 0
+
+    def update(self, stats: dict[str, Any], epoch: int) -> bool:
+        """Take epoch *epoch* (0-based) with its *stats* when it is the new best; returns whether it was."""
+        if not (stats['val_macro_f1'] > self.f1 or self.epoch == 0):
+            return False
+        self.f1, self.accuracy, self.epoch = float(stats['val_macro_f1']), float(stats['val_accuracy']), int(epoch + 1)
+        return True
+
+
+def _log_dataset_profile(manifest: dict[str, Any], profile_id: str) -> None:
+    if profile_id != "multi":
+        log.info(f"Dataset Profile: {profile_id}")
+        return
+    pids = [p.get('profile_id') for p in (manifest.get('component_profiles') or []) if isinstance(p, dict)]
+    log.info(f"Dataset Profile: multi ({', '.join([x for x in pids if x])})")
+
+
+def _log_train_config(data_dir: Path, class_names: list[str], train_config: dict[str, Any], train_seed: int,
+                      device: torch.device, use_amp: bool, resume_path: Path | None, out_mode: str) -> None:
+    log.info("Training configuration:")
+    log.info(f"  Dataset: {data_dir}")
+    log.info(f"  Classes: {class_names}")
+    log.info(f"  Epochs: {train_config['epochs']}")
+    log.info(f"  Batch size: {train_config['batch_size']}")
+    log.info(f"  Learning rate: {train_config['lr']}")
+    log.info(f"  Pretrained: {train_config.get('pretrained', True)}")
+    log.info(f"  Seed: {train_seed}")
+    log.info(f"  Device: {device}")
+    log.info(f"  AMP: {use_amp}")
+    if device.type == "cpu":
+        log.info(f"  Torch threads: {torch.get_num_threads()}")
+    if resume_path:
+        log.info(f"  Resume: {resume_path}")
+        log.info(f"  Out mode: {out_mode}")
+
+
+def _update_bundle_index(bundle_dir: Path | None, profile_id: str, output_path: Path) -> None:
+    """Bundle bookkeeping: keep a lightweight index of which profiles exist (best-effort)."""
+    if bundle_dir is None:
+        return
+    try:
+        if output_path.exists():
+            upsert_bundle_meta(bundle_dir, profile_id, output_path)
+    except Exception as e:  # noqa: BLE001 - index is best-effort, never fail training
+        log.warning(f"Failed to update bundle index in {bundle_dir}: {e}")
+
+
 def train_model(
     data_dir: Path,
     out: Path,
@@ -635,11 +690,7 @@ def train_model(
     resume_path_arg = Path(resume) if resume else None
     # Multi-profile (v2) datasets map to the logical profile "multi" for checkpoint metadata.
     dataset_profile_id, dataset_profile_hash = resolve_dataset_profile(manifest)
-    if dataset_profile_id != "multi":
-        log.info(f"Dataset Profile: {dataset_profile_id}")
-    else:
-        pids = [p.get('profile_id') for p in (manifest.get('component_profiles') or []) if isinstance(p, dict)]
-        log.info(f"Dataset Profile: multi ({', '.join([x for x in pids if x])})")
+    _log_dataset_profile(manifest, dataset_profile_id)
 
     bundle_dir, output_path, resume_path = _checkpoint_targets(output_path_arg, resume_path_arg, dataset_profile_id)
 
@@ -651,33 +702,17 @@ def train_model(
     # Class names (sorted for consistency)
     class_names = sorted(config['classes'].keys())
 
-    log.info("Training configuration:")
-    log.info(f"  Dataset: {data_dir}")
-    log.info(f"  Classes: {class_names}")
-    log.info(f"  Epochs: {epochs}")
-    log.info(f"  Batch size: {batch_size}")
-    log.info(f"  Learning rate: {train_config['lr']}")
-    log.info(f"  Pretrained: {train_config.get('pretrained', True)}")
-    log.info(f"  Seed: {train_seed}")
-    log.info(f"  Device: {device}")
-    log.info(f"  AMP: {use_amp}")
-    if device.type == "cpu":
-        log.info(f"  Torch threads: {torch.get_num_threads()}")
-    if resume_path:
-        log.info(f"  Resume: {resume_path}")
-        log.info(f"  Out mode: {out_mode}")
+    _log_train_config(data_dir, class_names, train_config, train_seed, device, use_amp, resume_path, out_mode)
 
     train_loader, val_loader = _defect_loaders(data_dir, class_names, train_config, train_seed, loader_kwargs)
 
     model, criterion, optimizer, scaler, frozen = build_training(len(class_names), train_config, device, use_amp)
 
     start_epoch = 0
-    best_val_f1 = 0.0
-    best_val_acc: float | None = None
-    best_epoch = 0
+    best = _BestEpoch()
 
     if resume_path:
-        start_epoch, best_val_f1, best_epoch = _restore_resume_state(
+        start_epoch, best.f1, best.epoch = _restore_resume_state(
             resume_path, model, optimizer, device=device, class_names=class_names, train_config=train_config,
             profile=(dataset_profile_id, dataset_profile_hash), allow_profile_mismatch=allow_profile_mismatch,
             data_dir=data_dir, manifest_path=manifest_path)
@@ -689,8 +724,8 @@ def train_model(
     # Val F1 of what --out holds: the resumed best when --out is that run's own file, else nothing
     # yet (a new --out, or a best score that was reset for another dataset).
     out_f1: float | None = None
-    if resume_path and best_epoch > 0 and output_path.exists() and _same_file(resume_path, output_path, last_path):
-        out_f1 = best_val_f1
+    if resume_path and best.epoch > 0 and output_path.exists() and _same_file(resume_path, output_path, last_path):
+        out_f1 = best.f1
 
     # LR schedule over the whole run (resume continues it at start_epoch).
     scheduler = _logged_scheduler(optimizer, train_config, total_epochs, start_epoch)
@@ -711,8 +746,8 @@ def train_model(
     }
     if total_epochs == start_epoch:
         log.info(f"\nNothing to do: start_epoch={start_epoch} total_epochs={total_epochs}")
-        return {**summary, "epochs_run": 0, "best_epoch": best_epoch, "best_val_f1": best_val_f1,
-                "best_val_accuracy": best_val_acc, "last_epoch": None}
+        return {**summary, "epochs_run": 0, "best_epoch": best.epoch, "best_val_f1": best.f1,
+                "best_val_accuracy": best.accuracy, "last_epoch": None}
 
     critical_classes = config.get('eval', {}).get('critical_classes')
     run = EpochRun(
@@ -727,19 +762,13 @@ def train_model(
     for epoch in range(start_epoch, total_epochs):
         log.info(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
         stats = fit_epoch(run, epoch)
-        val_acc = stats['val_accuracy']
         val_f1 = stats['val_macro_f1']
         if scheduler is not None:
             scheduler.step()
 
-        # Decide "best" before building the checkpoint so it carries the best-so-far score.
-        # A fresh run (no resumed best) counts its first epoch as best even at F1 0; a resumed
-        # best is only replaced by a better epoch, whatever --out-mode is.
-        is_best = val_f1 > best_val_f1 or best_epoch == 0
-        if is_best:
-            best_val_f1 = float(val_f1)
-            best_val_acc = float(val_acc)
-            best_epoch = int(epoch + 1)
+        # Decide "best" before building the checkpoint so it carries the best-so-far score; a resumed best is
+        # only replaced by a better epoch, whatever --out-mode is.
+        is_best = best.update(stats, epoch)
         # --out: the best epoch ('best'), every epoch ('last'); written at least once either way.
         # 'best' compares with what --out holds, so a resume into a new --out keeps the best epoch
         # of this run there instead of the first one.
@@ -749,27 +778,20 @@ def train_model(
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         ckpt = make_checkpoint(
-            ckpt_meta, epoch=epoch + 1, model=model, optimizer=optimizer, stats=stats, best=(best_val_f1, best_epoch),
+            ckpt_meta, epoch=epoch + 1, model=model, optimizer=optimizer, stats=stats, best=(best.f1, best.epoch),
         )
 
         # Always save "last" so resume runs are observable.
         torch.save(ckpt, last_path)
         if is_best:
-            log.info(f"  ✓ New best model (F1: {best_val_f1:.4f})")
+            log.info(f"  ✓ New best model (F1: {best.f1:.4f})")
         if write_out:
             torch.save(ckpt, output_path)
+        _update_bundle_index(bundle_dir, dataset_profile_id, output_path)
 
-        # Bundle bookkeeping: keep a lightweight index of which profiles exist.
-        if bundle_dir is not None:
-            try:
-                if output_path.exists():
-                    upsert_bundle_meta(bundle_dir, dataset_profile_id, output_path)
-            except Exception as e:  # noqa: BLE001 - index is best-effort, never fail training
-                log.warning(f"Failed to update bundle index in {bundle_dir}: {e}")
-
-    _log_training_done("TRAINING COMPLETE", best_epoch, best_val_f1, output_path, last_path)
-    return {**summary, "epochs_run": total_epochs - start_epoch, "best_epoch": best_epoch,
-            "best_val_f1": best_val_f1, "best_val_accuracy": best_val_acc, "last_epoch": stats}
+    _log_training_done("TRAINING COMPLETE", best.epoch, best.f1, output_path, last_path)
+    return {**summary, "epochs_run": total_epochs - start_epoch, "best_epoch": best.epoch,
+            "best_val_f1": best.f1, "best_val_accuracy": best.accuracy, "last_epoch": stats}
 
 
 # ---------------------------------------------------------------------------
@@ -831,9 +853,7 @@ def train_profile_model(
 
     model, criterion, optimizer, scaler, frozen = build_training(len(profile_names), train_config, device, use_amp)
 
-    best_val_f1 = 0.0
-    best_val_acc: float | None = None
-    best_epoch = 0
+    best = _BestEpoch()
     last_path = last_checkpoint_path(output_path)
     scheduler = _logged_scheduler(optimizer, train_config, epochs)
 
@@ -853,7 +873,6 @@ def train_profile_model(
     for epoch in range(epochs):
         log.info(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
         stats = fit_epoch(run, epoch)
-        val_f1 = stats['val_macro_f1']
         if scheduler is not None:
             scheduler.step()
 
@@ -862,22 +881,19 @@ def train_profile_model(
         torch.save(ckpt, last_path)
 
         # Always write --out at least once, even if val F1 never rises above 0.
-        if val_f1 > best_val_f1 or best_epoch == 0:
-            best_val_f1 = float(val_f1)
-            best_val_acc = float(stats['val_accuracy'])
-            best_epoch = int(epoch + 1)
-            log.info(f"  New best model (F1: {best_val_f1:.4f})")
+        if best.update(stats, epoch):
+            log.info(f"  New best model (F1: {best.f1:.4f})")
             torch.save(ckpt, output_path)
 
-    _log_training_done("PROFILE CLASSIFIER TRAINING COMPLETE", best_epoch, best_val_f1, output_path)
+    _log_training_done("PROFILE CLASSIFIER TRAINING COMPLETE", best.epoch, best.f1, output_path)
     return {
         "dataset_path": str(data_dir),
         "best_checkpoint": str(output_path),
         "last_checkpoint": str(last_path),
         "profiles": profile_names,
         "epochs_run": epochs,
-        "best_epoch": best_epoch,
-        "best_val_f1": best_val_f1,
-        "best_val_accuracy": best_val_acc,
+        "best_epoch": best.epoch,
+        "best_val_f1": best.f1,
+        "best_val_accuracy": best.accuracy,
         "last_epoch": stats,
     }

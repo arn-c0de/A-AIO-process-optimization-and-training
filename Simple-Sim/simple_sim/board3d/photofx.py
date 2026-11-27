@@ -4,9 +4,12 @@ The phone textures are the *median* of many photos (noise-free, one exposure for
 raw render looks too clean, has the median's colour balance and floats on an empty background. Three measured steps,
 each fitted against the real photo inside the board outline:
 
-* :func:`colour_gain` - per-channel gain (linear light) that maps the texture to this photo's exposure / white
-  balance. The ``room`` preset renders a flat surface at texture colour x gain (world light and the unlit joints
-  scale alike), so the gain goes into the Blender job, no second render.
+* :func:`fit_colour_matrix` / :func:`apply_colour_matrix` - a 3 x 3 colour matrix + offset (linear light) that maps
+  the texture to this photo (exposure, white balance, the phone's saturation and black level), fitted on the board and
+  the low parts; the photo textures go to Blender corrected, under a neutral sky.
+* :func:`colour_gain` - the older per-channel gain, fitted on the bare board alone (its red channel sits in the
+  phone's toe there and ran into the 0.4 clamp; with :func:`fit_tone_lut` on top black parts turned teal and metal
+  pink). Kept for ``photo_view(colour="gain")``.
 * :func:`composite` - the render (transparent film + shadow catcher) over the real photo (``backplate``): desk,
   bracket and the board's shadow come from the photo, the board from the board3d.
 * :func:`fit_camera_fx` / :func:`camera_fx` - lens softness (Gaussian blur, sigma chosen by SSIM) and sensor noise
@@ -24,6 +27,69 @@ import numpy as np
 def srgb_to_linear(img: np.ndarray) -> np.ndarray:
     x = img.astype(np.float32) / 255.0
     return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(x: np.ndarray) -> np.ndarray:
+    """Linear light (0..1) -> 8-bit sRGB."""
+    x = np.clip(x, 0.0, 1.0)
+    return (np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1 / 2.4) - 0.055) * 255 + 0.5).astype(np.uint8)
+
+
+#: greys (linear light) that :func:`fit_colour_matrix` keeps grey
+NEUTRAL_GREYS = (0.05, 0.2, 0.5, 0.9)
+
+
+def fit_colour_matrix(texture: np.ndarray, real: np.ndarray, mask: np.ndarray, *, step: int = 7,
+                      iterations: int = 5, neutral: float = 0.0) -> np.ndarray | None:
+    """4 x 3 matrix *M* (linear light, BGR) with ``real ~ [texture, 1] @ M`` on *mask* (both BGR on the same grid,
+    blurred by the caller), least squares reweighted against outliers (parallax, stickers, parts that differ between
+    boards). Unlike :func:`colour_gain` it carries the phone's saturation and black level: the bare board alone is one
+    colour, so the mask should hold the low parts too (black ICs, white resistors, the silk screen). Per phone view
+    on 811d1c / f48a23 / da70eb held-out blurred dE 13.2 / 15.5 / 16.1 (gain) -> 10.3 / 13.2 / 14.3. None when the mask
+    is too small.
+
+    *neutral* > 0 asks the greys of :data:`NEUTRAL_GREYS` to stay grey (equal B, G, R out), weighted as that share of
+    the samples: the board and the parts hold few bright neutrals, and unconstrained the fit's answer to white was
+    magenta (0.82 / 0.64 / 0.93), which turned the bare aluminium of the electrolytic lids lilac."""
+    sel = mask > 0
+    if sel.sum() < 5000:
+        return None
+    src = srgb_to_linear(texture)[sel][::step].astype(np.float64)
+    dst = srgb_to_linear(real)[sel][::step].astype(np.float64)
+    x = np.hstack([src, np.ones((len(src), 1))])
+    # the grey constraint couples the three output channels: rows [g, -g, 0] and [0, g, -g] on the stacked columns
+    cons = []
+    for g in NEUTRAL_GREYS:
+        xg = np.array([g, g, g, 1.0])
+        cons.append(np.concatenate([xg, -xg, np.zeros(4)]))
+        cons.append(np.concatenate([np.zeros(4), xg, -xg]))
+    c_rows = np.array(cons)
+    wt = np.ones(len(src))
+    m = np.zeros((4, 3))
+    for _ in range(iterations):
+        xw = x * wt[:, None]
+        gram = x.T @ xw
+        a = np.kron(np.eye(3), gram)
+        b = np.concatenate([xw.T @ dst[:, k] for k in range(3)])
+        if neutral > 0:
+            lam = neutral * float(wt.sum()) / len(NEUTRAL_GREYS)
+            a = a + lam * c_rows.T @ c_rows
+        vec = np.linalg.solve(a + 1e-9 * np.eye(12), b)
+        m = vec.reshape(3, 4).T
+        r = np.linalg.norm(x @ m - dst, axis=1)
+        s = 1.5 * float(np.median(r)) + 1e-6
+        wt = np.where(r < s, 1.0, s / np.maximum(r, 1e-12))
+    return m.astype(np.float32)
+
+
+def apply_colour_matrix(img: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """:func:`fit_colour_matrix` on a BGR or BGRA image (alpha kept), row by row (whole-board textures are large)."""
+    out = img.copy()
+    mat, off = np.asarray(m, np.float32)[:3], np.asarray(m, np.float32)[3]
+    for y0 in range(0, img.shape[0], 512):
+        lin = srgb_to_linear(img[y0:y0 + 512, :, :3])
+        out[y0:y0 + 512, :, :3] = linear_to_srgb(lin @ mat + off)
+    return out
 
 
 def colour_gain(texture: np.ndarray, real: np.ndarray, mask: np.ndarray, clamp: tuple[float, float] = (0.4, 2.5)) -> list[float]:

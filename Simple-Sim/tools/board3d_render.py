@@ -44,6 +44,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="--photo: keep the photo's camera as it is (default: correct it once when the render sits off the photo)")
     ap.add_argument("--raw", action="store_true",
                     help="--photo: plain Cycles image (no colour calibration, no backplate, no lens blur / noise / JPEG)")
+    ap.add_argument("--glossy-world", type=float,
+                    help="--photo: room light as a mirror sees it, x the diffuse sky (default: photo_view's GLOSSY_WORLD)")
+    ap.add_argument("--colour", default="matrix", choices=["matrix", "gain"],
+                    help="--photo: colour calibration: 3x3 matrix on the photo textures (default) or the old per-channel gain")
+    ap.add_argument("--tone", choices=["lut", "none"],
+                    help="--photo: per-channel tone curve on the render (default lut; none: flatter, better per-pixel scores)")
     ap.add_argument("--focal-px", type=float, help="--photo: focal length in photo pixels (default: estimate or phone prior)")
     ap.add_argument("--px-per-mm", type=float, help="render resolution (default: the source's)")
     ap.add_argument("--source", default="scan", choices=sorted(SOURCES),
@@ -77,7 +83,8 @@ def main(argv: list[str] | None = None) -> int:
         scene = apply_defects(board3d, ops) if ops else board3d
         rep = photo_view(scene, a.board3d, a.photo, a.name, scale=a.photo_scale, samples=a.samples, device=a.device, f_px=a.focal_px,
                          calibrate=not a.raw, backplate=not a.raw, camera_fx=not a.raw,
-                         source=a.photo_source, refine=not a.no_refine)
+                         source=a.photo_source, refine=not a.no_refine, glossy_world=a.glossy_world,
+                         colour=a.colour, tone=a.tone)
         m, cam = rep["metrics"], rep["camera"]
         print(f"{a.name}: photo view, f {cam['focalPx']:.0f} px ({cam['focalSource']}), tilt {cam['tiltDeg']:.1f} deg, "
               f"{cam['distanceMm']:.0f} mm, {rep['seconds']} s | SSIM board box {m['ssimBoardBox']}, Delta E in board "

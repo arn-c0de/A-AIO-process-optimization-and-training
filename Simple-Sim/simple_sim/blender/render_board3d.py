@@ -187,12 +187,20 @@ ROLE_MATERIALS = {
     "alu": ((0.78, 0.78, 0.8), 0.3, 1.0), "base": ((0.03, 0.03, 0.03), 0.6, 0.0),
     "substrate": ((0.10, 0.14, 0.07), 0.6, 0.0), "lid": ((0.70, 0.70, 0.72), 0.35, 1.0),
     "white": ((0.85, 0.84, 0.80), 0.5, 0.0), "ball": ((0.72, 0.72, 0.74), 0.25, 1.0),
-    "natural": ((0.78, 0.72, 0.58), 0.6, 0.0), "insert": ((0.015, 0.015, 0.015), 0.8, 0.0),
+    # natural nylon (JST rows): off-white, as the phone photos show it under a neutral sky (the old cream 0.78 / 0.72 /
+    # 0.58 came out yellow once the sky was no longer tinted by the per-channel gain, b* +8 against -3..-8)
+    "natural": ((0.80, 0.79, 0.74), 0.6, 0.0), "insert": ((0.015, 0.015, 0.015), 0.8, 0.0),
+    # an electrolytic's printed PVC sleeve: black, a little glossy
+    "sleeve": ((0.02, 0.02, 0.024), 0.4, 0.0),
 }
 #: names of the meshes that carry the photo on their top faces (``_apply_photo_uvs``). ``cavity`` / ``pin_``: the floor
 #: and pins of an open-top connector, which the top-down scan sees (dark floor, thin pin tips); untextured they rendered
 #: as a grey slab with saturated pin squares.
 PHOTO_PREFIXES = ("body", "endcap", "lead_", "term_", "lid", "cavity", "pin_")
+#: connector kinds whose sheet shell shows its photographed top (clean look; other shells stay plain metal). Measured
+#: on the phone views 811d1c / f48a23 / da70eb, body dE plain -> photo top: microSD J500 28 / 31 / 13 -> 11 / 16 / 12;
+#: the dual USB-A J1001 got worse (5 / 8 / 4 -> 20 / 13 / 17), the RJ45 mixed (its MAC sticker is per unit)
+PHOTO_TOP_SHELLS = ("card_socket",)
 
 
 def _role_material(role: str):
@@ -379,25 +387,74 @@ def _descendants(obj):
         yield from _descendants(child)
 
 
+def _ensure_uv(me) -> None:
+    if not me.uv_layers:
+        me.uv_layers.new(name="UVMap")
+
+
+def _with_materials(me, *extra) -> None:
+    """Slot 0 the mesh's own material (a moulded one if it has none), then *extra* as slots 1, 2, ..."""
+    if not me.materials:
+        me.materials.append(_role_material("mold"))
+    while len(me.materials) > 1:
+        me.materials.pop(index=len(me.materials) - 1)
+    for mat in extra:
+        me.materials.append(mat)
+
+
+def _vertex_co(me):
+    """Vertex positions (N x 3, float32, object space)."""
+    import numpy as np
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    return co.reshape(-1, 3)
+
+
+def _loop_vertices(me):
+    """Vertex index of every loop (face corner)."""
+    import numpy as np
+    idx = np.empty(len(me.loops), np.int32)
+    me.loops.foreach_get("vertex_index", idx)
+    return idx
+
+
+def _poly_normals(me):
+    """Face normals (N x 3, float32, object space)."""
+    import numpy as np
+    n = np.empty(len(me.polygons) * 3, np.float32)
+    me.polygons.foreach_get("normal", n)
+    return n.reshape(-1, 3)
+
+
+def _poly_loops(me):
+    """First loop and loop count of every face."""
+    import numpy as np
+    starts = np.empty(len(me.polygons), np.int32)
+    totals = np.empty(len(me.polygons), np.int32)
+    me.polygons.foreach_get("loop_start", starts)
+    me.polygons.foreach_get("loop_total", totals)
+    return starts, totals
+
+
+def _set_board_uv(me, world, raster: dict) -> None:
+    """UVs of the loops at board positions *world* (loops x 3, mm) in *raster*."""
+    import numpy as np
+    uv = np.empty((len(me.loops), 2), np.float32)
+    uv[:, 0] = (world[:, 0] - raster["x0"]) / raster["widthMm"]
+    uv[:, 1] = (world[:, 1] - raster["y0"]) / raster["heightMm"]
+    me.uv_layers.active.data.foreach_set("uv", uv.ravel())
+
+
 def _uv_from_board(obj, raster: dict, to_nominal: Matrix | None = None) -> None:
     """UVs = board position of every vertex in *raster*; *to_nominal* maps the vertex (world) back to where it
     was in the real photo first (a moved body keeps its own pixels). Vectorised (numpy ships with Blender)."""
     import numpy as np
     me = obj.data
-    if not me.uv_layers:
-        me.uv_layers.new(name="UVMap")
+    _ensure_uv(me)
     mw = obj.matrix_world if to_nominal is None else to_nominal @ obj.matrix_world
-    co = np.empty(len(me.vertices) * 3, np.float32)
-    me.vertices.foreach_get("co", co)
-    co = co.reshape(-1, 3)
     m = np.array(mw, np.float64)
-    world = co @ m[:3, :3].T + m[:3, 3]
-    idx = np.empty(len(me.loops), np.int32)
-    me.loops.foreach_get("vertex_index", idx)
-    uv = np.empty((len(me.loops), 2), np.float32)
-    uv[:, 0] = (world[idx, 0] - raster["x0"]) / raster["widthMm"]
-    uv[:, 1] = (world[idx, 1] - raster["y0"]) / raster["heightMm"]
-    me.uv_layers.active.data.foreach_set("uv", uv.ravel())
+    world = _vertex_co(me) @ m[:3, :3].T + m[:3, 3]
+    _set_board_uv(me, world[_loop_vertices(me)], raster)
 
 
 #: faces whose (nominal-frame) normal points up more than this take the photo; the rest keep their own material
@@ -424,17 +481,9 @@ def _photo_on_top(obj, photo, raster: dict, to_nominal: Matrix, slope_photo=None
     lit (default :data:`FLAT_UP`; above 1: every face that looks up takes the unlit scan)."""
     import numpy as np
     me = obj.data
-    if not me.materials:
-        me.materials.append(_role_material("mold"))
-    while len(me.materials) > 1:
-        me.materials.pop(index=len(me.materials) - 1)
-    me.materials.append(photo)
-    if slope_photo is not None:
-        me.materials.append(slope_photo)
+    _with_materials(me, photo, *([slope_photo] if slope_photo is not None else []))
     m = np.array(to_nominal @ obj.matrix_world, np.float64)
-    n = np.empty(len(me.polygons) * 3, np.float32)
-    me.polygons.foreach_get("normal", n)
-    nz = (n.reshape(-1, 3) @ m[:3, :3].T)
+    nz = _poly_normals(me) @ m[:3, :3].T
     nz = nz[:, 2] / np.maximum(np.linalg.norm(nz, axis=1), 1e-9)
     up = nz > PHOTO_UP
     sides = bool(obj.get("photo_sides", False))
@@ -443,19 +492,11 @@ def _photo_on_top(obj, photo, raster: dict, to_nominal: Matrix, slope_photo=None
     if slope_photo is not None:
         index[slope] = 2          # a draft slope shows the scan at its own place: what the scanner saw there
     me.polygons.foreach_set("material_index", index.astype(np.int32))
-    if not me.uv_layers:
-        me.uv_layers.new(name="UVMap")
-    co = np.empty(len(me.vertices) * 3, np.float32)
-    me.vertices.foreach_get("co", co)
-    co = co.reshape(-1, 3).astype(np.float64)
-    idx = np.empty(len(me.loops), np.int32)
-    me.loops.foreach_get("vertex_index", idx)
-    lco = co[idx]
+    _ensure_uv(me)
+    co = _vertex_co(me).astype(np.float64)
+    lco = co[_loop_vertices(me)]
     if sides:
-        starts = np.empty(len(me.polygons), np.int32)
-        totals = np.empty(len(me.polygons), np.int32)
-        me.polygons.foreach_get("loop_start", starts)
-        me.polygons.foreach_get("loop_total", totals)
+        starts, totals = _poly_loops(me)
         loop_up = np.zeros(len(me.loops), bool)
         for k in np.nonzero(up | slope)[0]:
             loop_up[starts[k]:starts[k] + totals[k]] = True
@@ -466,33 +507,23 @@ def _photo_on_top(obj, photo, raster: dict, to_nominal: Matrix, slope_photo=None
         for k in range(2):                                   # one point per wall face: its loops' mean
             mean = np.bincount(face_of, lco[:, k]) / np.maximum(totals, 1)
             lco[side, k] = mean[face_of[side]]
-    world = lco @ m[:3, :3].T + m[:3, 3]
-    uv = np.empty((len(me.loops), 2), np.float32)
-    uv[:, 0] = (world[:, 0] - raster["x0"]) / raster["widthMm"]
-    uv[:, 1] = (world[:, 1] - raster["y0"]) / raster["heightMm"]
-    me.uv_layers.active.data.foreach_set("uv", uv.ravel())
+    _set_board_uv(me, lco @ m[:3, :3].T + m[:3, 3], raster)
 
 
-def _atlas_uv(obj, entry: dict, atlas_size, mat, to_nominal: Matrix) -> None:
+def _atlas_uv(obj, entry: dict, atlas_size, mat, to_nominal: Matrix, *, top_only: bool = False) -> None:
     """Per-part face atlas (``board3d.parttex``): every face of *obj* on its part's tile by its normal (in the part's
     nominal frame): up -> ``top`` (x, y), else the dominant wall ``+x`` / ``-x`` (y, z) or ``+y`` / ``-y`` (x, z),
-    clamped to the tile (walls of a drafted body sit a little inside the tile's plane)."""
+    clamped to the tile (walls of a drafted body sit a little inside the tile's plane). *top_only*: only the faces
+    looking up take the atlas, the rest keep the mesh's own material."""
     import numpy as np
     me = obj.data
-    if not me.materials:
-        me.materials.append(_role_material("mold"))
-    while len(me.materials) > 1:
-        me.materials.pop(index=len(me.materials) - 1)
-    me.materials.append(mat)
-    if not me.uv_layers:
-        me.uv_layers.new(name="UVMap")
+    _with_materials(me, mat)
+    _ensure_uv(me)
     m = np.array(to_nominal @ obj.matrix_world, np.float64)
     px, py, rot = (float(v) for v in entry["pose"])
     a = -math.radians(rot)
     ca, sa = math.cos(a), math.sin(a)
-    n = np.empty(len(me.polygons) * 3, np.float32)
-    me.polygons.foreach_get("normal", n)
-    n = n.reshape(-1, 3) @ m[:3, :3].T
+    n = _poly_normals(me) @ m[:3, :3].T
     n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
     nx, ny = n[:, 0] * ca - n[:, 1] * sa, n[:, 0] * sa + n[:, 1] * ca
     faces = entry["faces"]
@@ -513,18 +544,12 @@ def _atlas_uv(obj, entry: dict, atlas_size, mat, to_nominal: Matrix) -> None:
     names = np.array([_wall(f) for f in names])
     l_, w_ = (float(v) for v in entry["size"][:2])
     half_l, half_w = max(l_ / 2, 1e-6), max(w_ / 2, 1e-6)
-    co = np.empty(len(me.vertices) * 3, np.float32)
-    me.vertices.foreach_get("co", co)
-    world = co.reshape(-1, 3).astype(np.float64) @ m[:3, :3].T + m[:3, 3]
+    world = _vertex_co(me).astype(np.float64) @ m[:3, :3].T + m[:3, 3]
     lx = (world[:, 0] - px) * ca - (world[:, 1] - py) * sa
     ly = (world[:, 0] - px) * sa + (world[:, 1] - py) * ca
     lz = world[:, 2]
-    idx = np.empty(len(me.loops), np.int32)
-    me.loops.foreach_get("vertex_index", idx)
-    starts = np.empty(len(me.polygons), np.int32)
-    totals = np.empty(len(me.polygons), np.int32)
-    me.polygons.foreach_get("loop_start", starts)
-    me.polygons.foreach_get("loop_total", totals)
+    idx = _loop_vertices(me)
+    _starts, totals = _poly_loops(me)
     face_of = np.repeat(np.arange(len(me.polygons)), totals)
     fname = names[face_of]
     uv = np.zeros((len(me.loops), 2), np.float32)
@@ -552,7 +577,8 @@ def _atlas_uv(obj, entry: dict, atlas_size, mat, to_nominal: Matrix) -> None:
         uv[sel, 0] = col / aw
         uv[sel, 1] = 1.0 - row / ah
     me.uv_layers.active.data.foreach_set("uv", uv.ravel())
-    me.polygons.foreach_set("material_index", (names != "").astype(np.int32))
+    on_atlas = (names == "top") if top_only else (names != "")
+    me.polygons.foreach_set("material_index", on_atlas.astype(np.int32))
 
 
 def _local_offset(nominal: dict, pose: dict) -> tuple[float, float, float]:
@@ -817,6 +843,12 @@ def _apply_photo_uvs(pending: list, job: dict, mats: dict) -> None:
         for o in [*_descendants(part_root), *leads]:
             if o.type != "MESH" or not o.name.startswith(PHOTO_PREFIXES):
                 continue                     # openings, inserts, shells keep their material
+            if (clean and o.name.startswith("body_shell") and entry is not None and "top" in entry["faces"]
+                    and (c["part"].get("connector") or {}).get("kind") in PHOTO_TOP_SHELLS):
+                # a card socket's sheet shell: the photographed top on the faces looking up (embossing, print), the
+                # walls stay metal
+                _atlas_uv(o, entry, atlas["size"], mats["atlas"], to_nominal, top_only=True)
+                continue
             if clean and (not o.name.startswith(("body", "lid")) or o.name.startswith(("body_shell", "body_flange"))
                           or c["part"].get("body") == "can" and o.name.startswith("body_can")):
                 continue                     # clean look: caps, leads, terminals, shields, cans stay metal
@@ -858,18 +890,10 @@ def _lights(job: dict) -> None:
             # below the horizon the desk (its colour measured on the photo): flat surfaces facing up never see it, so
             # the texture calibration holds; walls and metal now mirror the desk instead of a white sky (RJ45 / USB
             # shields, the coin cell rendered 10-30 L* too bright)
-            nodes, links = world.node_tree.nodes, world.node_tree.links
-            coord, sep = nodes.new("ShaderNodeTexCoord"), nodes.new("ShaderNodeSeparateXYZ")
-            ramp = nodes.new("ShaderNodeMapRange")
-            ramp.inputs["From Min"].default_value, ramp.inputs["From Max"].default_value = -0.05, 0.05
-            mix = nodes.new("ShaderNodeMix")
-            mix.data_type = "RGBA"
-            mix.inputs["A"].default_value = (*[float(v) for v in light["groundRgb"]], 1.0)
-            mix.inputs["B"].default_value = (*_room_gain(job), 1.0)
-            links.new(coord.outputs["Generated"], sep.inputs["Vector"])
-            links.new(sep.outputs["Z"], ramp.inputs["Value"])
-            links.new(ramp.outputs["Result"], mix.inputs["Factor"])
-            links.new(mix.outputs["Result"], bg.inputs["Color"])
+            _desk_horizon(world, bg, [float(v) for v in light["groundRgb"]], _room_gain(job))
+        glossy = float(light.get("glossyWorld", 1.0))
+        if glossy != 1.0:
+            _glossy_world(world, bg, glossy)
         return
     if light.get("preset", "flatbed") != "flatbed":
         rb._aoi_lights({}, max(win["widthMm"], win["heightMm"]))
@@ -892,6 +916,37 @@ def _lights(job: dict) -> None:
     disc.visible_shadow = False
 
 
+def _desk_horizon(world, bg, ground_rgb: list[float], sky_rgb) -> None:
+    """World colour *ground_rgb* below the horizon, *sky_rgb* above (a narrow blend at z = 0)."""
+    nodes, links = world.node_tree.nodes, world.node_tree.links
+    coord, sep = nodes.new("ShaderNodeTexCoord"), nodes.new("ShaderNodeSeparateXYZ")
+    ramp = nodes.new("ShaderNodeMapRange")
+    ramp.inputs["From Min"].default_value, ramp.inputs["From Max"].default_value = -0.05, 0.05
+    mix = nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    mix.inputs["A"].default_value = (*ground_rgb, 1.0)
+    mix.inputs["B"].default_value = (*sky_rgb, 1.0)
+    links.new(coord.outputs["Generated"], sep.inputs["Vector"])
+    links.new(sep.outputs["Z"], ramp.inputs["Value"])
+    links.new(ramp.outputs["Result"], mix.inputs["Factor"])
+    links.new(mix.outputs["Result"], bg.inputs["Color"])
+
+
+def _glossy_world(world, bg, factor: float) -> None:
+    """The world as a mirror sees it: *factor* x its strength for glossy rays, unchanged for diffuse ones. A uniform
+    sky lights a flat diffuse surface at its texture colour (the calibration), but a room is not uniform: a few
+    bright lamps, the rest dimmer, and a mirror mostly sees the dim part. With the full sky metal and glossy moulds
+    turned milky white in phone views (coin cell, microSD shell, black BGA tops)."""
+    nodes, links = world.node_tree.nodes, world.node_tree.links
+    path = nodes.new("ShaderNodeLightPath")
+    mul = nodes.new("ShaderNodeMath")
+    mul.operation = "MULTIPLY_ADD"            # strength = is_glossy * (factor - 1) + 1
+    mul.inputs[1].default_value = factor - 1.0
+    mul.inputs[2].default_value = 1.0
+    links.new(path.outputs["Is Glossy Ray"], mul.inputs[0])
+    links.new(mul.outputs["Value"], bg.inputs["Strength"])
+
+
 def _export_glb(path: str) -> None:
     """Board + components as one GLB for the browser viewer (glTF is y-up: board (x, y) -> (x, -z)). Every component is
     an empty ``cmp_<refdes>`` at its nominal pose with body / leads / joints below it; modifiers (bevels) applied.
@@ -901,13 +956,9 @@ def _export_glb(path: str) -> None:
                               export_lights=False, export_extras=True, export_yup=True)
 
 
-def main() -> None:
-    t_start = time.monotonic()
-    global INTERPOLATION
-    job = json.loads(Path(_parse_args().job).read_text(encoding="utf-8"))
-    INTERPOLATION = str(job.get("interpolation", INTERPOLATION))
+def _configure(job: dict) -> None:
+    """Empty scene, render size / samples / device; Cycles without denoiser and with a scan-narrow pixel filter."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    win = job["window"]
     rb._configure_render(width_px=int(job["widthPx"]), height_px=int(job["heightPx"]), samples=int(job.get("samples", 64)),
                          seed=int(job.get("seed", 0)), device=str(job.get("device", "GPU")), engine=str(job.get("engine", "CYCLES")))
     scene = bpy.context.scene
@@ -915,11 +966,17 @@ def main() -> None:
         # The photo textures are noise-free; the denoiser would only smear them. Pixel filter as narrow as the scan.
         scene.cycles.use_denoising = bool(job.get("denoise", False))
         scene.cycles.filter_width = float(job.get("filterWidthPx", 1.0))
-    sub = job["substrate"]["raster"]
+
+
+def _light_preset(job: dict) -> str:
+    return (job.get("light") or {}).get("preset", "flatbed")
+
+
+def _build_board(job: dict) -> None:
+    """The substrate plane (the scan) and, with ``board``, the board slab under it."""
     # The scan already holds the scanner's sheen: photo-textured surfaces get no extra specular (else the steep
     # light's reflection is counted twice).
-    light = job.get("light") or {}
-    if light.get("preset", "flatbed") == "flatbed" and not light.get("boardShadows", False):
+    if _light_preset(job) == "flatbed" and not (job.get("light") or {}).get("boardShadows", False):
         # The substrate is the scan outside the parts: it already holds the scanner's shading next to every part.
         # Lit again, the parts' shadows were counted twice (-5..-7 L* at a tall part's edge). The unlit scan is a lit
         # board without shadows (same radiance onto the parts' walls); a moved / removed part keeps the shading of its
@@ -927,17 +984,21 @@ def main() -> None:
         board_mat = _unlit_texture_material("mat_substrate", job["substrate"]["path"], _room_gain(job))
     else:
         board_mat = _texture_material("mat_substrate", job["substrate"]["path"], roughness=0.9, specular=0.0)
-    _board_plane(sub, job.get("board"), board_mat)
+    _board_plane(job["substrate"]["raster"], job.get("board"), board_mat)
     if job.get("board"):
         _board_slab(job["board"])
 
+
+def _part_materials(job: dict) -> dict:
+    """The shared materials of the components: solder, the photo (joints, pads) and the part atlas."""
     mats = {"solder": rb._cfg_material("mat_solder", {}, (0.72, 0.72, 0.74), 0.22, 1.0, bump=0.02)}
+    preset = _light_preset(job)
     if job.get("photo"):
         mats["photo"] = _texture_material("mat_photo", job["photo"]["path"], roughness=0.9, specular=0.0)
-        if (job.get("light") or {}).get("preset", "flatbed") in ("flatbed", "room"):
+        if preset in ("flatbed", "room"):
             # Flatbed: nominal joints show the scanned solder as it was lit (slopes would darken under the steep
             # light, while the scanner made them bright). Other presets light them (T4).
-            gain = _room_gain(job) if (job.get("light") or {}).get("preset") == "room" else (1.0, 1.0, 1.0)
+            gain = _room_gain(job) if preset == "room" else (1.0, 1.0, 1.0)
             mats["photo_joint"] = _unlit_texture_material("mat_photo_joint", job["photo"]["path"], gain)
             if job.get("padBgr"):
                 mats["pad_unlit"] = _unlit_colour_material("mat_pad_unlit", job["padBgr"], gain)
@@ -947,6 +1008,11 @@ def main() -> None:
             mats["atlas"] = _texture_material("mat_photo_atlas_clean", job["partAtlas"]["path"], roughness=0.42, specular=0.5)
         else:
             mats["atlas"] = _texture_material("mat_photo_atlas", job["partAtlas"]["path"], roughness=0.9, specular=0.0)
+    return mats
+
+
+def _build_parts(job: dict, mats: dict) -> None:
+    """Components (photo UVs in one pass at the end), bridges, through-hole joints, brackets and sheets."""
     rng = random.Random(int(job.get("seed", 0)))
     mats["solder_excess"] = rb._material("mat_solder_excess", (0.72, 0.72, 0.73), roughness=0.5, metallic=0.55, bump=0.02)
     pending: list = []
@@ -959,18 +1025,12 @@ def main() -> None:
     _build_brackets(job)
     _build_sheets(job)
 
-    if job.get("exportGlb"):
-        _export_glb(job["exportGlb"])
-        if not job.get("render", True):
-            print(f"[render_board3d] {len(job['components'])} components -> {job['exportGlb']}", flush=True)
-            return
 
-    _lights(job)
-    if job.get("shadowCatcher"):
-        _shadow_catcher(job)
+def _camera(job: dict):
+    """A real photo's camera (``camera.type == "PERSP"``, :func:`simple_sim.board3d.camera.blender_camera`: pose,
+    lens, full photo frame), else an orthographic camera straight above the window."""
     cam_cfg = job.get("camera")
     if cam_cfg and cam_cfg.get("type") == "PERSP":
-        # a real photo's camera (simple_sim.board3d.camera.blender_camera): pose, lens, full photo frame
         cam_data = bpy.data.cameras.new("photo_camera")
         cam = bpy.data.objects.new("photo_camera", cam_data)
         bpy.context.scene.collection.objects.link(cam)
@@ -980,23 +1040,46 @@ def main() -> None:
         cam_data.sensor_width = float(cam_cfg["sensorWidthMm"])
         cam_data.lens = float(cam_cfg["lensMm"])
         cam_data.clip_start, cam_data.clip_end = 1.0, 5000.0
-    else:
-        cx, cy = win["x0"] + win["widthMm"] / 2, win["y0"] + win["heightMm"] / 2
-        bpy.ops.object.camera_add(location=(cx, cy, 30.0))
-        cam = bpy.context.active_object
-        cam.data.type = "ORTHO"
-        cam.data.ortho_scale = max(win["widthMm"], win["heightMm"])
-        cam.data.clip_end = 1000.0
-        rb._look_at(cam, Vector((cx, cy, 0.0)))
-    bpy.context.scene.camera = cam
+        return cam
+    win = job["window"]
+    cx, cy = win["x0"] + win["widthMm"] / 2, win["y0"] + win["heightMm"] / 2
+    bpy.ops.object.camera_add(location=(cx, cy, 30.0))
+    cam = bpy.context.active_object
+    cam.data.type = "ORTHO"
+    cam.data.ortho_scale = max(win["widthMm"], win["heightMm"])
+    cam.data.clip_end = 1000.0
+    rb._look_at(cam, Vector((cx, cy, 0.0)))
+    return cam
+
+
+def main() -> None:
+    t_start = time.monotonic()
+    global INTERPOLATION
+    job = json.loads(Path(_parse_args().job).read_text(encoding="utf-8"))
+    INTERPOLATION = str(job.get("interpolation", INTERPOLATION))
+    _configure(job)
+    scene = bpy.context.scene
+    _build_board(job)
+    _build_parts(job, _part_materials(job))
+
+    if job.get("exportGlb"):
+        _export_glb(job["exportGlb"])
+        if not job.get("render", True):
+            print(f"[render_board3d] {len(job['components'])} components -> {job['exportGlb']}", flush=True)
+            return
+
+    _lights(job)
+    if job.get("shadowCatcher"):
+        _shadow_catcher(job)
+    scene.camera = _camera(job)
     out = Path(job["out"])
     out.parent.mkdir(parents=True, exist_ok=True)
-    bpy.context.scene.render.filepath = str(out)
+    scene.render.filepath = str(out)
     t_build = time.monotonic()
     bpy.ops.render.render(write_still=True)
     t_end = time.monotonic()
     print(f"[render_board3d] {len(job['components'])} components -> {out} | build {t_build - t_start:.1f} s, "
-          f"render {t_end - t_build:.1f} s ({bpy.context.scene.cycles.device if scene.render.engine == 'CYCLES' else scene.render.engine})",
+          f"render {t_end - t_build:.1f} s ({scene.cycles.device if scene.render.engine == 'CYCLES' else scene.render.engine})",
           flush=True)
 
 

@@ -66,27 +66,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"skip {path}: not an image", file=sys.stderr)
             continue
         try:
-            model, stats = barepads.register(img, board3d, scan=scan, raster=raster)
+            r = barepads.measure_photo(img, board3d, raster, scan)
         except ValueError as e:
             print(f"skip {path}: {e}", file=sys.stderr)
             regs.append({"photo": str(path), "error": str(e)})
             continue
-        warped = barepads.warp_to_board(img, model, raster)
-        bias, n_rings = barepads.edge_bias(warped, board3d, raster, scan)
-        lands, mask, ms = barepads.measure_lands(warped, board3d, raster, bias_mm=bias)
-        ms.update(edgeBiasMm=round(bias, 4), edgeBiasRings=n_rings)
-        quality = (stats.get("scan") or [{}])[-1].get("medianShiftMm", stats["lands"][-1]["medianMm"])
-        used = quality <= a.max_residual and ms["measured"] >= a.min_lands * ms["pads"]
-        regs.append({"photo": str(path), "model": model.to_json(), "stats": stats, "lands": ms, "residualMm": quality,
+        ms, used = r.measure, r.usable(a.max_residual, a.min_lands)
+        regs.append({"photo": str(path), "model": r.model.to_json(), "stats": r.stats, "lands": ms, "residualMm": r.residual_mm,
                      "used": used})
-        print(f"{path.name}: {stats['holeHits']} holes, residual {quality:.3f} mm, edge bias {bias:+.3f} mm "
-              f"({n_rings} rings), lands {ms['measured']}/{ms['pads']}"
+        print(f"{path.name}: {r.stats['holeHits']} holes, residual {r.residual_mm:.3f} mm, edge bias {ms['edgeBiasMm']:+.3f} mm "
+              f"({ms['edgeBiasRings']} rings), lands {ms['measured']}/{ms['pads']}"
               + ("" if used else " - dropped (residual or land share below the limits)"), flush=True)
         if not used:
             continue
-        per_photo.append(lands)
+        per_photo.append(r.lands)
         if best is None or ms["measured"] > best[0]:
-            best = (ms["measured"], warped, mask)
+            best = (ms["measured"], r.warped, r.mask)
     if not per_photo:
         print("no photo could be registered", file=sys.stderr)
         if a.json:

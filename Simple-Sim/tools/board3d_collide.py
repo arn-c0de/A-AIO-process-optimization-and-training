@@ -103,7 +103,7 @@ def mosaic(folder: Path) -> tuple[np.ndarray, BoardRaster] | None:
     if not (mj.is_file() and mp.is_file()):
         return None
     r = load_json(mj)["raster"]
-    return cv2.imread(str(mp), cv2.IMREAD_COLOR), BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"])
+    return cv2.imread(str(mp), cv2.IMREAD_COLOR), BoardRaster.from_meta(r)
 
 
 def part_mask_fn(img: np.ndarray, raster: BoardRaster, board3d: dict):

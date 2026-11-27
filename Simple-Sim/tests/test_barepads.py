@@ -48,7 +48,7 @@ def _top_view(board: dict, s: float = 20.0) -> tuple[np.ndarray, dict]:
             continue
         for cx, cy, w, h in _truth(c):
             r = np.array([[cx - w / 2, cy - h / 2], [cx + w / 2, cy - h / 2], [cx + w / 2, cy + h / 2], [cx - w / 2, cy + h / 2]])
-            cv2.fillPoly(img, [bp.to_px(bp._rot(r, p["rotDeg"]) + [p["x"], p["y"]], raster).round().astype(np.int32)], COPPER)
+            cv2.fillPoly(img, [bp.to_px(bp.rotate_points(r, p["rotDeg"]) + [p["x"], p["y"]], raster).round().astype(np.int32)], COPPER)
     return img, raster
 
 

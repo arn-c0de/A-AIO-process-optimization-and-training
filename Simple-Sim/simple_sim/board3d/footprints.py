@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from simple_sim.board.footprints import FAMILIES, scene_part
+from simple_sim.board.footprints import scene_part
 from simple_sim.board3d.packages import ipc_dimensions
 
 Pad = tuple[float, float, float, float]

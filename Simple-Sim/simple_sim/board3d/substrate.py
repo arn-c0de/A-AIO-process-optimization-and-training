@@ -30,9 +30,21 @@ class BoardRaster:
         self.x0, self.y0, self.w, self.h, self.s = float(x0), float(y0), float(width_mm), float(height_mm), float(px_per_mm)
         self.cols, self.rows = round(self.w * self.s), round(self.h * self.s)
 
-    def to_px(self, pts: np.ndarray) -> np.ndarray:
-        pts = np.asarray(pts, float)
+    @classmethod
+    def from_meta(cls, meta: dict[str, float], px_per_mm: float | None = None) -> BoardRaster:
+        """The raster of a stored ``{x0, y0, widthMm, heightMm, pxPerMm}`` dict (:meth:`meta`), optionally at another
+        resolution."""
+        return cls(meta["x0"], meta["y0"], meta["widthMm"], meta["heightMm"], meta["pxPerMm"] if px_per_mm is None else px_per_mm)
+
+    def to_px(self, pts: Any) -> np.ndarray:
+        """Board mm (N x 2) -> raster px (pixel centres at integers, y down)."""
+        pts = np.asarray(pts, float).reshape(-1, 2)
         return np.c_[(pts[:, 0] - self.x0) * self.s - 0.5, (self.y0 + self.h - pts[:, 1]) * self.s - 0.5]
+
+    def to_mm(self, px: Any) -> np.ndarray:
+        """Raster px (N x 2) -> board mm (inverse of :meth:`to_px`)."""
+        px = np.asarray(px, float).reshape(-1, 2)
+        return np.c_[self.x0 + (px[:, 0] + 0.5) / self.s, self.y0 + self.h - (px[:, 1] + 0.5) / self.s]
 
     def pixel_to_board(self) -> np.ndarray:
         """3x3 matrix raster px -> board mm."""
@@ -50,10 +62,24 @@ def rectify(image: np.ndarray, board_to_image: list[float], raster: BoardRaster)
                                flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
 
 
-def _rot(points: np.ndarray, deg: float) -> np.ndarray:
+def board_outline_mm(board3d: dict[str, Any]) -> np.ndarray:
+    """4 x 2 corners of the board outline in board mm (counter-clockwise from the origin)."""
+    w, h = board3d["widthMm"], board3d["heightMm"]
+    return np.array([[0, 0], [w, 0], [w, h], [0, h]], float)
+
+
+def board_mask(board3d: dict[str, Any], raster: BoardRaster, value: float = 255, dtype: Any = np.uint8) -> np.ndarray:
+    """The board outline filled with *value* on *raster* (0 outside)."""
+    mask = np.zeros((raster.rows, raster.cols), dtype)
+    cv2.fillPoly(mask, [raster.to_px(board_outline_mm(board3d)).round().astype(np.int32)], value)
+    return mask
+
+
+def rotate_points(points: Any, deg: float) -> np.ndarray:
+    """Points (N x 2) turned counter-clockwise by *deg* about the origin."""
     a = math.radians(deg)
     c, s = math.cos(a), math.sin(a)
-    return points @ np.array([[c, s], [-s, c]])
+    return np.asarray(points, float) @ np.array([[c, s], [-s, c]])
 
 
 def _rect_pts(cx: float, cy: float, w: float, h: float) -> np.ndarray:
@@ -67,7 +93,7 @@ def component_polygons(c: dict[str, Any], margin_mm: float = 0.0) -> tuple[list[
     pose, body = c["pose"], c["body"]
     fp = footprint_for(c)
     centre = np.array([pose["x"], pose["y"]])
-    place = lambda pts: _rot(pts, pose["rotDeg"]) + centre  # noqa: E731
+    place = lambda pts: rotate_points(pts, pose["rotDeg"]) + centre  # noqa: E731
     bodies = [place(_rect_pts(0, 0, body["l"] + 2 * margin_mm, body["w"] + 2 * margin_mm))] if body.get("h") != 0.0 else []
     pads = [place(_rect_pts(px, py, pw + 2 * margin_mm, ph + 2 * margin_mm)) for px, py, pw, ph in fp["pads"]]
     return bodies, pads
@@ -226,7 +252,7 @@ def clean_board(bare: np.ndarray, pads: np.ndarray, scale: int = CLEAN_BOARD_SCA
     return np.clip(out + 0.5, 0, 255).astype(np.uint8), stats
 
 
-def resample(image: np.ndarray, src: "BoardRaster", dst: "BoardRaster", interp: int = cv2.INTER_CUBIC) -> np.ndarray:
+def resample(image: np.ndarray, src: BoardRaster, dst: BoardRaster, interp: int = cv2.INTER_CUBIC) -> np.ndarray:
     """*image* on raster *src* resampled onto raster *dst* (both board mm, y up, axis-aligned)."""
     # dst px -> board mm -> src px
     k = src.s / dst.s
@@ -249,7 +275,7 @@ def match_colours(src: np.ndarray, ref: np.ndarray, mask: np.ndarray, n: int = 6
     return out
 
 
-def scan_board(photo_bare: np.ndarray, photo_raster: "BoardRaster", scan_bare: np.ndarray, scan_raster: "BoardRaster",
+def scan_board(photo_bare: np.ndarray, photo_raster: BoardRaster, scan_bare: np.ndarray, scan_raster: BoardRaster,
                parts: np.ndarray, scale: int = CLEAN_BOARD_SCALE) -> tuple[np.ndarray, dict]:
     """The clean board from the flatbed scan (24 px/mm, no perspective, no glare, no tall part in the way) on the
     photo raster at *scale* x, its colours matched to the phone photos on the bare board both show; outside the scan
@@ -271,7 +297,7 @@ def scan_board(photo_bare: np.ndarray, photo_raster: "BoardRaster", scan_bare: n
 HOLE_R_MM, HOLE_DARK_L, RING_MIN_L = (0.35, 2.0), 60, 120
 
 
-def find_holes(scan: np.ndarray, raster: "BoardRaster") -> list[list[float]]:
+def find_holes(scan: np.ndarray, raster: BoardRaster) -> list[list[float]]:
     """Plated through holes in the flatbed scan of the bare (SMD-only) board: round dark cores inside a bright copper
     ring. Returns ``[x, y, r]`` (board mm)."""
     lum = cv2.cvtColor(scan, cv2.COLOR_BGR2LAB)[..., 0]

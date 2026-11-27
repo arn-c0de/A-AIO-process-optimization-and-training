@@ -71,6 +71,15 @@ def dv_root_for(stored: str | None) -> Path | None:
     return default.resolve() if default.is_dir() else None
 
 
+def dv_path(path: str, root: Path | None) -> Path:
+    """A stored DeepVision path on this machine: kept if it exists, else moved below *root* (:func:`dv_root_for`)
+    from its ``DeepVision-Web/`` part on."""
+    p = Path(path)
+    if p.is_file() or root is None or "DeepVision-Web/" not in path:
+        return p
+    return root / path.split("DeepVision-Web/", 1)[1]
+
+
 def _rebase(value: Any, old: str, new: str) -> Any:
     if isinstance(value, str):
         return new + value[len(old):] if value == old or value.startswith(old + "/") else value
@@ -92,4 +101,4 @@ def rebase_dv_root(board3d: dict[str, Any]) -> dict[str, Any]:
     return board3d
 
 
-__all__ = ["BOARD3D_FILE", "DV_ROOT_ENV", "SCHEMA", "dv_root_for", "load_board3d", "rebase_dv_root"]
+__all__ = ["BOARD3D_FILE", "DV_ROOT_ENV", "SCHEMA", "dv_path", "dv_root_for", "load_board3d", "rebase_dv_root"]
