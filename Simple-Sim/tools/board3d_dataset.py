@@ -35,6 +35,22 @@ from simple_sim.board3d.scene import apply_defects, sample_variants  # noqa: E40
 from simple_sim.board3d.substrate import BoardRaster  # noqa: E402
 
 
+def phone_fx(rng: random.Random, size: int) -> dict[str, float]:
+    """Random phone-camera parameters for one crop of *size* px: the app's crops are ~49 px for the same field (a third
+    of ours), soft and JPEG'd."""
+    return {"lowPx": rng.randint(max(16, size // 4), max(17, size // 2)), "blurSigma": round(rng.uniform(0.0, 1.2), 2),
+            "noiseStd": round(rng.uniform(0.5, 4.0), 2), "jpegQuality": rng.randint(55, 92)}
+
+
+def apply_phone_fx(img, fx: dict[str, float], seed: int = 0):
+    """*fx* (:func:`phone_fx`) on a crop: down to ``lowPx`` and back (resolution), then blur / noise / JPEG."""
+    from simple_sim.board3d.photofx import camera_fx
+    n = img.shape[0]
+    low = cv2.resize(img, (int(fx["lowPx"]), int(fx["lowPx"])), interpolation=cv2.INTER_AREA)
+    up = cv2.resize(low, (n, n), interpolation=cv2.INTER_CUBIC)
+    return camera_fx(up, blur_sigma=fx["blurSigma"] * n / fx["lowPx"], noise_std=fx["noiseStd"], jpeg_quality=int(fx["jpegQuality"]), seed=seed)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="3D-Board-Renderer: labelled defect crops, several per render")
     ap.add_argument("--board3d", type=Path, required=True)
@@ -46,6 +62,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--size", type=int, default=128, help="crop size in px")
     ap.add_argument("--samples", type=int, default=64)
     ap.add_argument("--device", default="GPU")
+    ap.add_argument("--camera-fx", action="store_true",
+                    help="phone-camera look per crop (random resolution loss, blur, sensor noise, JPEG; the same on the "
+                         "render and its real crop): the reviewed app crops are phone stills at ~16 px/mm")
+    ap.add_argument("--real-ok", action="store_true",
+                    help="also label every real crop (the place as it is, the part fine) as OK: without real pixels in "
+                         "OK a classifier learns 'rendered = defect' and rejects every real part")
     ap.add_argument("--variants", action="store_true",
                     help="each render a random unit: part catalog variants and mechanics with a presence probability p")
     ap.add_argument("--all-rendered", action="store_true",
@@ -90,17 +112,24 @@ def main(argv: list[str] | None = None) -> int:
             sid = f"{a.name}_{s:04d}_{k:02d}"
             img, geo = crop_part(render, window, p["component"], a.size)
             ref, _ = crop_part(real, window, p["component"], a.size)
+            fx = None
+            if a.camera_fx:
+                fx = phone_fx(rng, a.size)
+                img, ref = (apply_phone_fx(x, fx, seed=rng.randrange(2**31)) for x in (img, ref))
             cv2.imwrite(str(out / "images" / f"{sid}.png"), img)
             cv2.imwrite(str(out / "real" / f"{sid}.png"), ref)
             c = p["component"]
             rows.append({"id": sid, "image": f"images/{sid}.png", "real": f"real/{sid}.png", "label": str(p["class"]),
                          "op": p["op"], "refdes": c["refdes"], "package": c["package"], "family": c["family"],
-                         "sheet": s, "source": a.source, **({"variants": unit.get("variants", {})} if a.variants else {}), **geo})
+                         "sheet": s, "source": a.source, **({"variants": unit.get("variants", {})} if a.variants else {}),
+                         **({"cameraFx": fx} if fx else {}), **geo})
+            if a.real_ok:
+                rows.append({**rows[-1], "id": f"{sid}_real", "image": f"real/{sid}.png", "label": "OK", "op": None, "realCrop": True})
         print(f"sheet {s + 1}/{a.sheets}: {len(plan)} parts, {res['seconds']} s", flush=True)
     (out / "labels.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
     summary = {"crops": len(rows), "byClass": dict(Counter(x["label"] for x in rows)), "byFamily": dict(Counter(x["family"] for x in rows)),
                "seconds": round(time.monotonic() - t0, 1), "source": a.source, "samples": a.samples, "size": a.size, "seed": a.seed,
-               "allRendered": a.all_rendered}
+               "allRendered": a.all_rendered, "cameraFx": a.camera_fx, "realOk": a.real_ok, "variants": a.variants}
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary))
     if a.json:
