@@ -137,6 +137,31 @@ def crop_half(c: dict[str, Any]) -> float:
     return FIELD_BODY_LENGTHS * max(c["body"]["l"], c["body"]["w"]) / 2
 
 
+def crop_photo(image: np.ndarray, board_to_image: np.ndarray, c: dict[str, Any], size_px: int,
+               min_inside: float = 0.9) -> tuple[np.ndarray, dict[str, Any]] | None:
+    """Square crop of a photo-view image around the part's nominal centre, as the app cuts its crops from a phone
+    still: the centre through the board homography *board_to_image* (board mm -> image px), the field of
+    :func:`crop_half` scaled by the homography's local size there, axis-aligned in the image (the perspective stays in).
+    None when less than *min_inside* of the field lies inside the image."""
+    half = crop_half(c)
+    x, y = c["pose"]["x"], c["pose"]["y"]
+    h = np.asarray(board_to_image, float).reshape(3, 3)
+    pts = cv2.perspectiveTransform(np.array([[[x, y], [x + half, y], [x, y + half]]], np.float64), h)[0]
+    (u, v), du, dv = pts[0], pts[1] - pts[0], pts[2] - pts[0]
+    r = float(np.sqrt(abs(du[0] * dv[1] - du[1] * dv[0])))             # local scale: sqrt of the area ratio
+    if not np.isfinite(r) or r < 2:
+        return None
+    hh, ww = image.shape[:2]
+    inside = (min(u + r, ww) - max(u - r, 0)) * (min(v + r, hh) - max(v - r, 0)) / (4 * r * r)
+    if inside < min_inside:
+        return None
+    src = np.float32([[u - r, v - r], [u + r, v - r], [u - r, v + r]])
+    dst = np.float32([[0, 0], [size_px, 0], [0, size_px]])
+    crop = cv2.warpAffine(image, cv2.getAffineTransform(src, dst), (size_px, size_px), flags=cv2.INTER_AREA if 2 * r > size_px else cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REPLICATE)
+    return crop, {"centerMm": [x, y], "fieldMm": round(2 * half, 4), "centerPx": [round(float(u), 1), round(float(v), 1)], "fieldPx": round(2 * r, 1)}
+
+
 def crop_part(image: np.ndarray, window: BoardRaster, c: dict[str, Any], size_px: int) -> tuple[np.ndarray, dict[str, float]]:
     """Square crop of *image* (rendered / real on *window*'s grid) around the part's nominal centre, resized."""
     half = crop_half(c)

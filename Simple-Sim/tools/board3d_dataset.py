@@ -26,13 +26,35 @@ if not __package__:  # run as a script (python tools/x.py): make the checkout im
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import cv2  # noqa: E402
+import numpy as np  # noqa: E402
 
 from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
+from simple_sim.io_utils import load_json  # noqa: E402
 from simple_sim.board3d import load_board3d  # noqa: E402
-from simple_sim.board3d.dataset import crop_part, plan_sheet  # noqa: E402
-from simple_sim.board3d.render import SOURCES, crop_real, prepare_substrate, render_window  # noqa: E402
+from simple_sim.board3d.dataset import crop_part, crop_photo, plan_sheet  # noqa: E402
+from simple_sim.board3d.render import SOURCES, crop_real, photo_view, prepare_substrate, render_window  # noqa: E402
 from simple_sim.board3d.scene import apply_defects, sample_variants  # noqa: E402
 from simple_sim.board3d.substrate import BoardRaster  # noqa: E402
+
+
+def photo_geometries(spec: Path, board3d: dict) -> list[Path]:
+    """geometry.json files of *board3d*'s product and side: listed in a text file, or found under a directory."""
+    if spec.is_file():
+        paths = [Path(x.strip()) for x in spec.read_text(encoding="utf-8").splitlines() if x.strip()]
+    else:
+        paths = sorted(spec.rglob("geometry.json"))
+    product = (board3d.get("sources") or {}).get("product") or board3d.get("product")
+    side = board3d.get("side")
+    out = []
+    for p in paths:
+        try:
+            g = load_json(p)
+        except (OSError, ValueError):
+            continue
+        if (product is None or g.get("product") in (None, product)) and (side is None or g.get("side") in (None, side)) \
+                and g.get("boardToSource") and (p.parent / "still.jpg").is_file():
+            out.append(p)
+    return out
 
 
 def phone_fx(rng: random.Random, size: int) -> dict[str, float]:
@@ -62,6 +84,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--size", type=int, default=128, help="crop size in px")
     ap.add_argument("--samples", type=int, default=64)
     ap.add_argument("--device", default="GPU")
+    ap.add_argument("--photos", type=Path,
+                    help="render each sheet through a real phone camera: a directory searched for geometry.json of this "
+                         "product / side (e.g. the DeepVision runs) or a text file with one geometry.json per line; crops "
+                         "are cut like the app's (perspective kept), the real crop is the phone still at the same place")
+    ap.add_argument("--photo-scale", type=float, default=0.5, help="--photos: render size / photo size")
     ap.add_argument("--camera-fx", action="store_true",
                     help="phone-camera look per crop (random resolution loss, blur, sensor noise, JPEG; the same on the "
                          "render and its real crop): the reviewed app crops are phone stills at ~16 px/mm")
@@ -83,6 +110,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     a = parse_args(argv)
+    if a.photos and a.source == "scan":
+        a.source = "photos"                       # a phone view shows the mounted board: its texture and stages
     board3d = load_board3d(a.board3d)
     sub = prepare_substrate(board3d, a.board3d, source=a.source)
     r = sub["raster"]
@@ -92,28 +121,51 @@ def main(argv: list[str] | None = None) -> int:
     rng = random.Random(a.seed)
     rows, t0 = [], time.monotonic()
     w = min(a.window_mm, r["widthMm"], r["heightMm"])
+    geos = photo_geometries(a.photos, board3d) if a.photos else []
+    if a.photos and not geos:
+        raise SystemExit(f"no photo geometry of this product / side under {a.photos}")
     for s in range(a.sheets):
-        for _ in range(20):                       # a window with enough eligible parts
-            x0 = rng.uniform(r["x0"], r["x0"] + r["widthMm"] - w)
-            y0 = rng.uniform(r["y0"], r["y0"] + r["heightMm"] - w)
-            window = BoardRaster(round(x0, 2), round(y0, 2), w, w, r["pxPerMm"])
+        if geos:                                  # a phone view sees the whole board: parts from all of it
+            window = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"])
             plan = plan_sheet(board3d, window, a.per_sheet, a.spacing_mm, rng, stages=set(sub["stages"]))
-            if len(plan) >= max(1, a.per_sheet // 2):
-                break
+        else:
+            for _ in range(20):                   # a window with enough eligible parts
+                x0 = rng.uniform(r["x0"], r["x0"] + r["widthMm"] - w)
+                y0 = rng.uniform(r["y0"], r["y0"] + r["heightMm"] - w)
+                window = BoardRaster(round(x0, 2), round(y0, 2), w, w, r["pxPerMm"])
+                plan = plan_sheet(board3d, window, a.per_sheet, a.spacing_mm, rng, stages=set(sub["stages"]))
+                if len(plan) >= max(1, a.per_sheet // 2):
+                    break
         if not plan:
             continue
         ops = [p["op"] for p in plan if p["op"]]
         unit = sample_variants(board3d, rng) if a.variants else board3d
         scene = apply_defects(unit, ops) if ops else unit
-        look = {"light": {"preset": "flatbed", "scanNominal": False}, "under_parts": "bare"} if a.all_rendered else {}
-        res = render_window(scene, a.board3d, window, f"sheet_{a.name}_{s:04d}", samples=a.samples, device=a.device, **look)
-        render, real = cv2.imread(res["image"], cv2.IMREAD_COLOR), crop_real(board3d, window)
+        name = f"sheet_{a.name}_{s:04d}"
+        if geos:
+            geo_path = rng.choice(geos)
+            res = photo_view(scene, a.board3d, geo_path, name, scale=a.photo_scale, samples=a.samples, device=a.device,
+                             source=a.source if a.source in ("photos", "mounted") else "photos", refine=False)
+            render = cv2.imread(res["image"], cv2.IMREAD_COLOR)
+            still = cv2.imread(res["still"], cv2.IMREAD_COLOR)
+            real = cv2.resize(still, render.shape[1::-1], interpolation=cv2.INTER_AREA)
+            h_img = np.diag([a.photo_scale, a.photo_scale, 1.0]) @ np.asarray(load_json(geo_path)["boardToSource"], float).reshape(3, 3)
+            crop = lambda im, c: crop_photo(im, h_img, c, a.size)  # noqa: E731
+        else:
+            geo_path = None
+            look = {"light": {"preset": "flatbed", "scanNominal": False}, "under_parts": "bare"} if a.all_rendered else {}
+            res = render_window(scene, a.board3d, window, name, samples=a.samples, device=a.device, **look)
+            render, real = cv2.imread(res["image"], cv2.IMREAD_COLOR), crop_real(board3d, window)
+            crop = lambda im, c: crop_part(im, window, c, a.size)  # noqa: E731
+        kept = 0
         for k, p in enumerate(plan):
             sid = f"{a.name}_{s:04d}_{k:02d}"
-            img, geo = crop_part(render, window, p["component"], a.size)
-            ref, _ = crop_part(real, window, p["component"], a.size)
+            got, ref = crop(render, p["component"]), crop(real, p["component"])
+            if got is None or ref is None:
+                continue                          # outside this photo's frame
+            (img, geo), (ref, _) = got, ref
             fx = None
-            if a.camera_fx:
+            if a.camera_fx and not geos:          # a phone view has its own camera look (photo_view)
                 fx = phone_fx(rng, a.size)
                 img, ref = (apply_phone_fx(x, fx, seed=rng.randrange(2**31)) for x in (img, ref))
             cv2.imwrite(str(out / "images" / f"{sid}.png"), img)
@@ -122,14 +174,17 @@ def main(argv: list[str] | None = None) -> int:
             rows.append({"id": sid, "image": f"images/{sid}.png", "real": f"real/{sid}.png", "label": str(p["class"]),
                          "op": p["op"], "refdes": c["refdes"], "package": c["package"], "family": c["family"],
                          "sheet": s, "source": a.source, **({"variants": unit.get("variants", {})} if a.variants else {}),
-                         **({"cameraFx": fx} if fx else {}), **geo})
+                         **({"cameraFx": fx} if fx else {}), **({"photo": str(geo_path)} if geo_path else {}), **geo})
+            kept += 1
             if a.real_ok:
                 rows.append({**rows[-1], "id": f"{sid}_real", "image": f"real/{sid}.png", "label": "OK", "op": None, "realCrop": True})
+        plan = plan[:kept] if kept < len(plan) else plan
         print(f"sheet {s + 1}/{a.sheets}: {len(plan)} parts, {res['seconds']} s", flush=True)
     (out / "labels.jsonl").write_text("".join(json.dumps(x) + "\n" for x in rows))
     summary = {"crops": len(rows), "byClass": dict(Counter(x["label"] for x in rows)), "byFamily": dict(Counter(x["family"] for x in rows)),
                "seconds": round(time.monotonic() - t0, 1), "source": a.source, "samples": a.samples, "size": a.size, "seed": a.seed,
-               "allRendered": a.all_rendered, "cameraFx": a.camera_fx, "realOk": a.real_ok, "variants": a.variants}
+               "allRendered": a.all_rendered, "cameraFx": a.camera_fx, "realOk": a.real_ok, "variants": a.variants,
+               "photos": str(a.photos) if a.photos else None}
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary))
     if a.json:
