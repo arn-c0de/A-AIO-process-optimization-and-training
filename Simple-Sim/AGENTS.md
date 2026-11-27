@@ -226,11 +226,12 @@ Rendering parallelism: `SIMPLE_SIM_RENDER_WORKERS` (count), `SIMPLE_SIM_RENDER_E
   `logging` under the `simple_sim` logger, neutral exceptions). Shared helpers: `io_utils`
   (atomic writes, JSON/JSONL/YAML, `now_iso`/`now_tag`), `classes` (`DefectClass`, `Split`,
   `Backend`, class sets), `coerce` (`as_bool`/`as_float`/`as_int`), `cli_utils` (`--json`
-  convention, `configure_cli_logging`, `with_hint`), `reports`, `manifest`, `config`, `schema`.
-  Model lifecycle: `training` (`train_model`, `train_profile_model`, `make_checkpoint`),
+  convention, `configure_cli_logging`, `with_hint`), `reports`, `manifest` (+ `manifest_guards`: profile /
+  renderer mismatch checks), `config`, `schema`.
+  Model lifecycle: `training` (`train_model`, `train_profile_model`), `checkpoints` (`make_checkpoint`, resume),
   `evaluation` (`run_eval`, `run_eval_profile`, `write_report`), `inference` (`Classifier`,
   `predict_image`, `sample_check`), `batch_predict` (`BatchPredictOptions`, `run_batch_predict`),
-  `two_stage`, `model_store` (snapshot naming). `simple_sim/commands/` - argparse + console output
+  `two_stage`, `model_store` (snapshot naming), `arena` (ranking) + `arena_markdown` (report). `simple_sim/commands/` - argparse + console output
   of every library command (`print` is allowed there and in `cli.py` only).
   `simple_sim/board/` - PCB model (footprints, nets, router, pours, DRC, raster) behind
   `render.board` (`routing: legacy | none | escape`); `generators/` - the 2D/3D renderers
@@ -239,5 +240,6 @@ Rendering parallelism: `SIMPLE_SIM_RENDER_WORKERS` (count), `SIMPLE_SIM_RENDER_E
   dict with `generation.dataset.generate_dataset(cfg, out_dir, image_filters=...)`; backend capabilities in
   `generators/backends.py`).
 - `scripts/` - shims of `simple_sim/commands/` (kept for `python scripts/<name>.py`); `tools/` - dataset maintenance CLIs, `tools/_common.sh`
-  (venv/python detection for the `*.sh` launchers), `tools/profile_editor/` (Tk GUI).
+  (venv/python detection for the `*.sh` launchers), `tools/profile_editor/` (Tk GUI;
+  `scene3d` is the Tk-free geometry of its 3D preview).
 - `gui/` - Tk monitor GUI (`./run.sh`). `configs/` - run configs and `profiles/`.

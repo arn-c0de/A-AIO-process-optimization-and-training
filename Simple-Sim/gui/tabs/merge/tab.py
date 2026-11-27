@@ -120,6 +120,34 @@ class MergeTab(BaseTab):
             self._rebuild()
             self._append_log(f"[deselect] {profile_id}\n")
 
+    def _merge_target(self, suffix: str, empty_msg: str, what: str) -> tuple[str, Path] | None:
+        """``(name, path)`` of the output from the name field (+ timestamp), or None after an error dialog
+        (empty name, *what* already exists)."""
+        name = self.ui.var_bundle_name.get().strip()
+        if not name:
+            dialogs.show_error(self.frame, "Invalid Name", empty_msg)
+            return None
+        if self.ui.var_add_timestamp.get():
+            name = f"{name}_{now_tag(micro=False)}"
+        path = self.logic._model_root() / f"{name}{suffix}"
+        if path.exists():
+            dialogs.show_error(self.frame, f"{what} Exists", f"{what} already exists:\n{path}",
+                               hint="Choose another name or enable Append Timestamp.")
+            return None
+        return name, path
+
+    def _selected_bundle(self, *, report_missing: bool = True) -> Path | None:
+        """The bundle dir selected in the bundle list, or None (a hint / error dialog was shown)."""
+        sel = self.ui.bundle_tree.selection()
+        if not dialogs.require(sel, self.frame, "Select a bundle first."):
+            return None
+        bd = Path(sel[0])
+        if not bd.exists():
+            if report_missing:
+                dialogs.show_error(self.frame, "Bundle Not Found", f"Bundle not found:\n{bd}")
+            return None
+        return bd
+
     def _do_merge(self) -> None:
         if not dialogs.require(self._selected_weights, self.frame, "Select at least one weight per profile first."):
             return
@@ -133,20 +161,10 @@ class MergeTab(BaseTab):
         ):
             return
 
-        name = self.ui.var_bundle_name.get().strip()
-        if not name:
-            dialogs.show_error(self.frame, "Invalid Name", "Bundle name must not be empty.")
+        target = self._merge_target(".bundle", "Bundle name must not be empty.", "Bundle")
+        if target is None:
             return
-
-        if self.ui.var_add_timestamp.get():
-            tag = now_tag(micro=False)
-            name = f"{name}_{tag}"
-
-        bundle_dir = self.logic._model_root() / f"{name}.bundle"
-        if bundle_dir.exists():
-            dialogs.show_error(self.frame, "Bundle Exists", f"Bundle already exists:\n{bundle_dir}",
-                               hint="Choose another name or enable Append Timestamp.")
-            return
+        name, bundle_dir = target
 
         self.ui.btn_merge.configure(state="disabled")
         self.ui.var_status.set("Status: merging...")
@@ -187,20 +205,10 @@ class MergeTab(BaseTab):
         if not dialogs.require(self._selected_weights, self.frame, "Select at least one weight per profile first."):
             return
 
-        name = self.ui.var_bundle_name.get().strip()
-        if not name:
-            dialogs.show_error(self.frame, "Invalid Name", "Name must not be empty.")
+        target = self._merge_target("_ensemble.pt", "Name must not be empty.", "Target")
+        if target is None:
             return
-
-        if self.ui.var_add_timestamp.get():
-            tag = now_tag(micro=False)
-            name = f"{name}_{tag}"
-
-        out_path = self.logic._model_root() / f"{name}_ensemble.pt"
-        if out_path.exists():
-            dialogs.show_error(self.frame, "Target Exists", f"Target already exists:\n{out_path}",
-                               hint="Choose another name or enable Append Timestamp.")
-            return
+        _name, out_path = target
 
         self.ui.btn_merge.configure(state="disabled")
         self.ui.btn_merge_ensemble.configure(state="disabled")
@@ -250,13 +258,8 @@ class MergeTab(BaseTab):
         self.ui.refresh_bundles(bundle_dirs, read_bundle_meta, self.ui.fmt_bytes)
 
     def _show_bundle_info(self) -> None:
-        sel = self.ui.bundle_tree.selection()
-        if not dialogs.require(sel, self.frame, "Select a bundle first."):
-            return
-
-        bd = Path(sel[0])
-        if not bd.exists():
-            dialogs.show_error(self.frame, "Bundle Not Found", f"Bundle not found:\n{bd}")
+        bd = self._selected_bundle()
+        if bd is None:
             return
 
         meta = read_bundle_meta(bd)
@@ -306,13 +309,8 @@ class MergeTab(BaseTab):
         dialogs.show_text(self.frame, f"Bundle: {bd.name}", info, size=(600, 460))
 
     def _load_bundle_into_selection(self) -> None:
-        sel = self.ui.bundle_tree.selection()
-        if not dialogs.require(sel, self.frame, "Select a bundle first."):
-            return
-
-        bd = Path(sel[0])
-        if not bd.exists():
-            dialogs.show_error(self.frame, "Bundle Not Found", f"Bundle not found:\n{bd}")
+        bd = self._selected_bundle()
+        if bd is None:
             return
 
         meta = read_bundle_meta(bd)
@@ -341,12 +339,8 @@ class MergeTab(BaseTab):
         self._status(f"Loaded {loaded} checkpoint(s) from {bd.name}")
 
     def _delete_bundle(self) -> None:
-        sel = self.ui.bundle_tree.selection()
-        if not dialogs.require(sel, self.frame, "Select a bundle first."):
-            return
-
-        bd = Path(sel[0])
-        if not bd.exists():
+        bd = self._selected_bundle(report_missing=False)
+        if bd is None:
             return
 
         if not dialogs.confirm(self.frame, "Delete Bundle",

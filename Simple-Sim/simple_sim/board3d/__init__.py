@@ -21,6 +21,16 @@ DV_ROOT_ENV = "SIMPLE_SIM_DV_ROOT"
 BOARD3D_FILE = "board3d.json"
 
 
+def _attach_per_part(board3d: dict[str, Any], path: Path, section: str, field: str) -> None:
+    """``c[field] = <path>[section][refdes]`` for every component listed there (nothing when *path* is missing)."""
+    if not path.is_file():
+        return
+    by_refdes = load_json(path).get(section, {})
+    for c in board3d.get("components", []):
+        if c.get("refdes") in by_refdes:
+            c[field] = by_refdes[c["refdes"]]
+
+
 def load_board3d(folder: Path, *, part_catalog: bool = True) -> dict[str, Any]:
     """``<folder>/board3d.json`` (written by ``tools/board3d_import.py``), with the part catalog's body heights applied
     (:func:`simple_sim.board3d.parts.apply_part_catalog`; the result is in ``board3d["partCatalog"]``), the lands
@@ -34,20 +44,10 @@ def load_board3d(folder: Path, *, part_catalog: bool = True) -> dict[str, Any]:
     if part_catalog:
         from simple_sim.board3d.parts import apply_part_catalog
         board3d["partCatalog"] = apply_part_catalog(board3d)
-    lf = Path(folder) / "bare" / "lands.json"
-    if lf.is_file():
-        # SMD lands measured on bare-board photos (tools/board3d_bare.py), board frame, one entry per pad index
-        lands = load_json(lf).get("lands", {})
-        for c in board3d.get("components", []):
-            if c.get("refdes") in lands:
-                c["lands"] = lands[c["refdes"]]
-    pf = Path(folder) / "parttex" / "photofit.json"
-    if pf.is_file():
-        # body outlines measured on the photos (simple_sim.board3d.parttex.photo_fit): applied after the scan fit
-        fits = load_json(pf).get("parts", {})
-        for c in board3d.get("components", []):
-            if c.get("refdes") in fits:
-                c["photoFit"] = fits[c["refdes"]]
+    # SMD lands measured on bare-board photos (tools/board3d_bare.py), board frame, one entry per pad index
+    _attach_per_part(board3d, Path(folder) / "bare" / "lands.json", "lands", "lands")
+    # body outlines measured on the photos (simple_sim.board3d.parttex.photo_fit): applied after the scan fit
+    _attach_per_part(board3d, Path(folder) / "parttex" / "photofit.json", "parts", "photoFit")
     cf = Path(folder) / "parttex" / "collide.json"
     if cf.is_file():
         # outlines fixed where bodies ran into each other (simple_sim.board3d.collide, tools/board3d_collide.py)

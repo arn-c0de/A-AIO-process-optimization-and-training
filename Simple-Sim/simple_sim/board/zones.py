@@ -55,6 +55,23 @@ def own_copper(board: Board, net: str, grid: Grid, layer: str = TOP) -> np.ndarr
     return mask
 
 
+def foreign_copper(board: Board, zone: Zone, grid: Grid, mask: np.ndarray | None = None) -> np.ndarray:
+    """Copper of other nets than *zone*'s on *grid* (pads, tracks on the zone's layer, vias), drawn into *mask*
+    (default: a fresh scratch mask), which is returned."""
+    foreign = grid.scratch() if mask is None else mask
+    for part in board.parts:
+        for pad in part.pads:
+            if pad.net != zone.net:
+                grid.rect(pad.bbox, mask=foreign)
+    for t in board.tracks:
+        if t.net != zone.net and t.layer == zone.layer:
+            grid.polyline(t.points, t.width, mask=foreign)
+    for via in board.vias:
+        if via.net != zone.net:
+            grid.circle(via.center, via.diameter, mask=foreign)
+    return foreign
+
+
 def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
     """Copper of *zone* on *grid* as a 0/255 mask.
 
@@ -69,16 +86,7 @@ def zone_fill(board: Board, zone: Zone, grid: Grid) -> np.ndarray:
     target = board.target
     if target is not None:  # the inspected part's area is kept free (as the real boards: pours end at the part)
         grid.rect(target.keepout, mask=foreign)
-    for part in board.parts:
-        for pad in part.pads:
-            if pad.net != zone.net:
-                grid.rect(pad.bbox, mask=foreign)
-    for t in board.tracks:
-        if t.net != zone.net and t.layer == zone.layer:
-            grid.polyline(t.points, t.width, mask=foreign)
-    for via in board.vias:
-        if via.net != zone.net:
-            grid.circle(via.center, via.diameter, mask=foreign)
+    foreign_copper(board, zone, grid, foreign)
     keep_clear = grid.inflate(foreign, zone.clearance)
     fill[keep_clear > 0] = 0
 

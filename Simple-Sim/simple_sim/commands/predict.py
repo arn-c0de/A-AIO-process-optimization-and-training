@@ -13,8 +13,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from simple_sim.cli_utils import add_data_arg, add_json_flag, add_model_arg, run_cli
-from simple_sim.devices import default_device_name
+from simple_sim.cli_utils import add_data_arg, add_device_arg, add_json_flag, add_model_arg, run_cli
 
 COMMAND = "predict"
 SUPPORTS_JSON = True
@@ -43,7 +42,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--image", help="Path to image file (png/jpg)")
     add_data_arg(parser, "Optional: dataset dir to lookup ground truth/ID (has meta.jsonl/labels.jsonl)", required=False)
     parser.add_argument("--id", help="Optional: sample ID (to load image from dataset + show ground truth label)")
-    parser.add_argument("--device", default=default_device_name(), help="cuda/cpu")
+    add_device_arg(parser, "cuda/cpu")
     parser.add_argument("--topk", type=int, default=4, help="How many classes to show")
     add_json_flag(parser)
     return parser

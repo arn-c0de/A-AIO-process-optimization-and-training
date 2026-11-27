@@ -8,7 +8,6 @@ preview shows what the generated images will look like.
 from __future__ import annotations
 
 import copy
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +44,7 @@ def _augment(filter_vals: dict[str, Any], rng: np.random.Generator) -> dict[str,
 
 def render_filter_preview_2d(sim_root: Path, profile_id: str, filter_vals: dict[str, Any]) -> tuple[np.ndarray, str]:
     """BGR image of an OK sample with *filter_vals*, plus the config source used."""
+    from simple_sim.board.footprints import profile_footprint
     from simple_sim.config import merge_profile_render
     from simple_sim.defects import sample_defect_params
     from simple_sim.generators.opencv2d import RenderSpec, render_sample, sample_nominal_geometry
@@ -53,8 +53,7 @@ def render_filter_preview_2d(sim_root: Path, profile_id: str, filter_vals: dict[
     profile, cfg, src = _profile_and_config(sim_root, profile_id, "opencv_2d")
     roi = cfg["roi"]
     tolerances = profile.get("tolerances")
-    footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
-    spec = RenderSpec(roi_size=(int(roi["width_px"]), int(roi["height_px"])), footprint=footprint, tolerances=tolerances,
+    spec = RenderSpec(roi_size=(int(roi["width_px"]), int(roi["height_px"])), footprint=profile_footprint(profile), tolerances=tolerances,
                       render=merge_profile_render(copy.deepcopy(cfg.get("render") or {}), profile, cfg.get("roi")))
 
     rng = np.random.default_rng(PREVIEW_SEED)
@@ -75,8 +74,9 @@ def render_filter_preview_3d(sim_root: Path, profile_id: str, filter_vals: dict[
     import cv2
 
     from simple_sim.defects import sample_defect_params
-    from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
-    from simple_sim.generators.blender3d.bake import bake_fields, profile_job_fields
+    from simple_sim.blender.executable import require_blender
+    from simple_sim.generation.blender import blender_settings, profile_blender_job, run_blender_jobs
+    from simple_sim.generators.blender3d.bake import bake_fields
     from simple_sim.generators.opencv2d import sample_nominal_geometry
 
     sim_root = Path(sim_root)
@@ -85,9 +85,7 @@ def render_filter_preview_3d(sim_root: Path, profile_id: str, filter_vals: dict[
     render_cfg = cfg.get("render") or {}
     settings = blender_settings(cfg)
     settings["samples"] = min(int(max_samples), int(settings["samples"]))
-    if shutil.which(settings["executable"]) is None and not Path(settings["executable"]).exists():
-        raise FileNotFoundError(f"Blender not found: {settings['executable']}")
-    component = profile.get("component") or {}
+    require_blender(settings["executable"])
     tolerances = profile.get("tolerances") or {}
 
     rng = np.random.default_rng(PREVIEW_SEED)
@@ -98,12 +96,8 @@ def render_filter_preview_3d(sim_root: Path, profile_id: str, filter_vals: dict[
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
     rel = f"preview_{profile_id}.png"
-    bake = {**profile_job_fields(profile), **bake_fields(render_cfg, roi)}
     record = {"image_path": rel, "seed": PREVIEW_SEED, "nominal": nominal, "defect": defect, "augment": augment}
-    job = blender_job(record, mm_per_px=float(roi["mm_per_px"]), roi_width=int(roi["width_px"]),
-                      roi_height=int(roi["height_px"]), footprint=str(component.get("footprint", "chip_2pad")),
-                      component_height_mm=float((component.get("nominal_dims_mm") or {}).get("height", 0.45) or 0.45),
-                      render_3d=profile.get("render_3d") or {}, bake=bake)
+    job = profile_blender_job(record, profile, roi, bake=bake_fields(render_cfg, roi))
     (out_root / rel).unlink(missing_ok=True)  # a silent Blender failure must not show the previous render
     run_blender_jobs([job], output_root=out_root, jobs_path=out_root / f"jobs_{profile_id}.jsonl",
                      settings=settings)

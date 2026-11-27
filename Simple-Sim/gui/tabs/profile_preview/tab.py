@@ -14,7 +14,7 @@ from pathlib import Path
 from tkinter import ttk
 
 from gui import dialogs
-from gui.widgets.layout import keep_pane_visible
+from gui.widgets.layout import keep_pane_visible, wheel_step_over
 from typing import TYPE_CHECKING, Any
 
 import cv2
@@ -452,21 +452,9 @@ class ProfilePreviewTab(ProfilePreviewUIMixin, BaseTab):
         # canvas or one of its descendants (not the log, lists or settings).
         if not self.initialized:
             return
-        try:
-            w = self.canvas.winfo_containing(event.x_root, event.y_root)
-        except Exception:  # noqa: BLE001 - e.g. pointer over a destroyed/foreign window
-            return
-        while w is not None and w is not self.canvas:
-            w = getattr(w, "master", None)
-        if w is None:
-            return
-        if getattr(event, "num", None) == 4:
-            step = -1
-        elif getattr(event, "num", None) == 5:
-            step = 1
-        else:
-            step = -1 if event.delta > 0 else 1
-        self.canvas.yview_scroll(step * 3, "units")
+        step = wheel_step_over(self.canvas, event)
+        if step:
+            self.canvas.yview_scroll(step * 3, "units")
 
     def _open_folder(self) -> None:
         out_dir = self.logic.output_dir(self.var_profile.get(), self.var_backend.get())

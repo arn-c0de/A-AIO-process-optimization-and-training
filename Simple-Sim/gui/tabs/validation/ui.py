@@ -3,7 +3,8 @@
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from gui.theme.tokens import SPACE
 from gui.utils.tooltip import ToolTip
@@ -135,31 +136,21 @@ class ValidationUI:
             status = "✓ PASSED" if schema['passed'] else "✗ FAILED"
             output += f"Schema Validation: {status}\n  {schema['message']}\n\n"
 
-        outliers = results.get('outliers', [])
-        output += f"Image Outliers: {len(outliers)} found\n"
-        if outliers:
-            for outlier in outliers[:10]:
-                output += f"  - {outlier['sample_id']}: {outlier['reason']}\n"
-            if len(outliers) > 10:
-                output += f"  ... and {len(outliers) - 10} more\n"
-        output += "\n"
-
-        duplicates = results.get('duplicates', [])
-        output += f"Duplicate Images: {len(duplicates)} pairs found\n"
-        if duplicates:
-            for id1, id2, dist in duplicates[:5]:
-                output += f"  - {id1} ↔ {id2} (distance={dist})\n"
-            if len(duplicates) > 5:
-                output += f"  ... and {len(duplicates) - 5} more\n"
-        output += "\n"
-
-        edge_cases = results.get('edge_cases', [])
-        output += f"Edge Cases: {len(edge_cases)} found\n"
-        if edge_cases:
-            for case in edge_cases[:10]:
-                output += f"  - {case['sample_id']}: {case['reason']}\n"
-            if len(edge_cases) > 10:
-                output += f"  ... and {len(edge_cases) - 10} more\n"
+        output += _listing("Image Outliers", "found", results.get('outliers', []), 10,
+                           lambda o: f"{o['sample_id']}: {o['reason']}") + "\n"
+        output += _listing("Duplicate Images", "pairs found", results.get('duplicates', []), 5,
+                           lambda d: f"{d[0]} ↔ {d[1]} (distance={d[2]})") + "\n"
+        output += _listing("Edge Cases", "found", results.get('edge_cases', []), 10,
+                           lambda c: f"{c['sample_id']}: {c['reason']}")
 
         output += "\n" + "=" * 60
         self.set_results_text(output)
+
+
+def _listing(title: str, unit: str, items: list[Any], limit: int, fmt: Callable[[Any], str]) -> str:
+    """``<title>: <n> <unit>`` and the first *limit* items as ``  - ...`` lines (plus ``... and k more``)."""
+    out = f"{title}: {len(items)} {unit}\n"
+    out += "".join(f"  - {fmt(it)}\n" for it in items[:limit])
+    if len(items) > limit:
+        out += f"  ... and {len(items) - limit} more\n"
+    return out

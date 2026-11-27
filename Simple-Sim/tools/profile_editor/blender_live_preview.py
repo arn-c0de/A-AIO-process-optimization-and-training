@@ -9,10 +9,9 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
-from simple_sim.board.footprints import profile_footprint
-from simple_sim.generation.blender import blender_job, blender_settings
-from simple_sim.generators.blender3d.bake import bake_fields, profile_component_height_mm
-from simple_sim.generators.blender3d import profile_job_fields, render_blender_batch, write_jobs_jsonl
+from simple_sim.generation.blender import blender_settings, profile_blender_job
+from simple_sim.generators.blender3d.bake import bake_fields
+from simple_sim.generators.blender3d import render_blender_batch, write_jobs_jsonl
 from simple_sim.generators.blender3d.runner import BlenderCancelled
 
 from .yaml_io import range_mid
@@ -91,7 +90,6 @@ class BlenderLivePreviewWorker:
         if not isinstance(profile_data.get("render_3d"), dict):
             raise ValueError("profile.render_3d missing")
 
-        footprint = profile_footprint(profile_data)
         geometry_ranges = profile_data.get("geometry_ranges") or {}
 
         width_px = int(roi.get("width_px", 256))
@@ -117,13 +115,9 @@ class BlenderLivePreviewWorker:
             "defect": {"type": "OK", "shift_x": 0.0, "shift_y": 0.0, "rotation_deg": 0.0, "tilt_deg": 0.0},
             "augment": {"rotation_deg": 0.0},
         }
-        job = blender_job(
-            record, mm_per_px=mm_per_px, roi_width=width_px, roi_height=height_px, footprint=footprint,
-            component_height_mm=profile_component_height_mm(profile_data),
-            render_3d=profile_data.get("render_3d") or {},
-            # same board bake (camera, board model, gloss) as the dataset
-            bake={**profile_job_fields(profile_data), **bake_fields(render, roi)},
-        )
+        job_roi = {"width_px": width_px, "height_px": height_px, "mm_per_px": mm_per_px}
+        # same board bake (camera, board model, gloss) as the dataset
+        job = profile_blender_job(record, profile_data, job_roi, bake=bake_fields(render, roi))
 
         write_jobs_jsonl(jobs_path, [job])
         render_blender_batch(

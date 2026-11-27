@@ -248,12 +248,7 @@ class PredictionsUI(LogViewHost):
         self.log_view = LogView(logs_box, height=10)
         self.log_view.pack(fill="both", expand=True)
         self.txt_logs = self.log_view.text
-        b_clear = ttk.Button(logs_box.actions, text="Clear", style="Icon.TButton", command=self.log_view.clear)
-        b_clear.pack(side="right")
-        ToolTip(b_clear, help_key="common.clear_log")
-        b_copy = ttk.Button(logs_box.actions, text="Copy", style="Icon.TButton", command=self.log_view.copy_all)
-        b_copy.pack(side="right", padx=(0, SPACE.S))
-        ToolTip(b_copy, help_key="common.copy_log")
+        self.log_view.add_actions(logs_box.actions)
         self._schedule_enforce_log_pane_min_height()
 
     def set_metrics_text(self, s: str) -> None:

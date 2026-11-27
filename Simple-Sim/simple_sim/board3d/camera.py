@@ -26,10 +26,20 @@ PHONE_F_RATIO = 0.72
 MIN_TILT_FOR_ESTIMATE_DEG, MAX_ESTIMATE_SPREAD = 15.0, 0.10
 
 
+def as_mat3(h: Any) -> np.ndarray:
+    """A 3x3 float matrix from a flat 9-list (as stored in the JSON files) or any 3x3 array-like."""
+    return np.asarray(h, float).reshape(3, 3)
+
+
+def board_to_source(geo: dict[str, Any]) -> np.ndarray:
+    """``boardToSource`` of a DeepVision ``geometry.json`` (board mm -> photo px) as a 3x3 matrix."""
+    return as_mat3(geo["boardToSource"])
+
+
 def focal_from_homography(h: np.ndarray, cx: float, cy: float) -> dict[str, float]:
     """Focal length (px) from one plane homography, principal point (cx, cy), square pixels. Returns
     ``{"f", "fOrtho", "fNorm"}`` (the two constraints; ``f`` their mean or the one that is valid)."""
-    h = np.asarray(h, float).reshape(3, 3)
+    h = as_mat3(h)
     t = np.array([[1, 0, -cx], [0, 1, -cy], [0, 0, 1]], float)
     g = t @ h                                  # principal point at the origin: K = diag(f, f, 1)
     a, b = g[:, 0], g[:, 1]
@@ -48,7 +58,7 @@ def focal_from_homography(h: np.ndarray, cx: float, cy: float) -> dict[str, floa
 
 def pose_from_homography(h: np.ndarray, k: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(R, t) with X_cam = R X_board + t (OpenCV camera: x right, y down, z forward), board in front (t_z > 0)."""
-    b = np.linalg.inv(k) @ np.asarray(h, float).reshape(3, 3)
+    b = np.linalg.inv(k) @ as_mat3(h)
     lam = 2.0 / (np.linalg.norm(b[:, 0]) + np.linalg.norm(b[:, 1]))
     if b[2, 2] * lam < 0:
         lam = -lam                             # the board must lie in front of the camera
@@ -81,7 +91,7 @@ def choose_focal(h: np.ndarray, width: int, height: int) -> tuple[float, str, di
 
 def blender_camera(board_to_source: list[float], width: int, height: int, f_px: float | None = None) -> dict[str, Any]:
     """The job ``camera`` of a photo: perspective, at the photo's pose and focal length."""
-    h = np.asarray(board_to_source, float).reshape(3, 3)
+    h = as_mat3(board_to_source)
     cx, cy = width / 2, height / 2
     if f_px is None:
         f, source, focal = choose_focal(h, width, height)

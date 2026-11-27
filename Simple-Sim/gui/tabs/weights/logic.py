@@ -1,7 +1,6 @@
 """Logic for the Weights Tab."""
 
 from __future__ import annotations
-import json
 import os
 import shutil
 import zipfile
@@ -13,7 +12,7 @@ from gui.utils.paths import list_model_paths, model_root
 from gui.utils.process import StreamingProcessLogic
 from simple_sim.cli import argv_for
 from simple_sim.eval_utils import dataset_profile
-from simple_sim.io_utils import iter_json_lines, load_yaml, now_iso, now_tag, read_json, rel_to
+from simple_sim.io_utils import iter_json_lines, load_json, load_yaml, now_iso, now_tag, read_json, rel_to
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
 from simple_sim.model_bundle import resolve_bundle_checkpoint
 from gui.utils.pipeline_helpers import batch_predict_argv
@@ -326,7 +325,7 @@ class WeightsLogic(StreamingProcessLogic):
         return load_reports(report_search_dirs(self.sim_root))
 
     def short_report(self, report_path: Path) -> str:
-        obj = json.loads(report_path.read_text(encoding="utf-8"))
+        obj = load_json(report_path)
         metrics = obj.get("metrics", {})
         acc, f1 = metrics.get("accuracy"), metrics.get("macro_f1")
         seen, split = obj.get("seen_samples", "-"), obj.get("split", "-")
@@ -395,7 +394,7 @@ class WeightsLogic(StreamingProcessLogic):
         try:
             manifest_path = ds / DATASET_MANIFEST
             if manifest_path.exists():
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest = load_json(manifest_path)
                 stats = manifest.get("dataset_stats") or {}
                 total = stats.get("total_samples")
                 splits = stats.get("splits") or {}

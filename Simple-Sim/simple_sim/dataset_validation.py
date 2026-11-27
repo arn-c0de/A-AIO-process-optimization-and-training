@@ -16,7 +16,7 @@ from simple_sim.io_utils import load_yaml
 from simple_sim.manifest import read_dataset_manifest
 from simple_sim.rng import derive_sample_seed, parse_sample_id
 from simple_sim.schema import LabelRow, MetaRow, read_jsonl, validate_jsonl_pair
-from simple_sim.splits import assert_no_overlap, read_split
+from simple_sim.splits import assert_no_overlap, missing_classes, read_split
 from simple_sim.telemetry import emit
 
 PASS, FAIL, WARN = "pass", "fail", "warn"
@@ -200,12 +200,9 @@ def _check_splits(splits_dir: Path, meta_rows: list[MetaRow], c: _Checks) -> dic
 def _check_class_distribution(splits: dict[str, list[str]], label_rows: list[LabelRow], c: _Checks) -> None:
     """7: Class distribution per split (warning only)."""
     print("\n7. Checking class distribution...")
-    id_to_label = {row.id: row.class_name for row in label_rows}
-    all_classes = {row.class_name for row in label_rows}
-    for split_name, sample_ids in splits.items():
-        missing_classes = all_classes - {id_to_label[s] for s in sample_ids if s in id_to_label}
-        if missing_classes:
-            c.add(f"class_coverage:{split_name}", WARN, f"{split_name} missing classes: {sorted(missing_classes)}")
+    for split_name, missing in missing_classes(splits, label_rows).items():
+        if missing:
+            c.add(f"class_coverage:{split_name}", WARN, f"{split_name} missing classes: {sorted(missing)}")
         else:
             c.add(f"class_coverage:{split_name}", PASS, f"{split_name} contains all classes")
 

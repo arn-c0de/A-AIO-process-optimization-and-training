@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from tkinter import ttk
 from pathlib import Path
 from typing import Any
 
-from simple_sim.io_utils import rel_to
+from simple_sim.io_utils import load_json, rel_to
 from gui.utils.paths import default_model_path
 from gui import dialogs
 from gui.core.tasks import DispatchQueue
@@ -435,7 +434,7 @@ class PredictionsTab(BaseTab):
             acc_s, f1_s, seen_s, prof_acc_s = "", "", "", ""
             if isinstance(report_path, Path) and report_path.exists():
                 try:
-                    obj = json.loads(report_path.read_text(encoding="utf-8"))
+                    obj = load_json(report_path)
                     metrics, seen, prof_acc = obj.get("metrics", {}), obj.get("seen_samples"), obj.get("profile_accuracy")
                     acc, f1 = metrics.get("accuracy"), metrics.get("macro_f1")
                     if acc is not None: acc_s = f"{float(acc):.4f}"

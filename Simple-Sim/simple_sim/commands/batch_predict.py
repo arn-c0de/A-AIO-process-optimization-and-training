@@ -19,8 +19,7 @@ import argparse
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from simple_sim.cli_utils import add_data_arg, add_json_flag, add_model_arg, run_cli
-from simple_sim.devices import default_device_name
+from simple_sim.cli_utils import add_data_arg, add_device_arg, add_json_flag, add_model_arg, run_cli
 
 if TYPE_CHECKING:
     from simple_sim.batch_predict import BatchPredictOptions
@@ -34,7 +33,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     add_model_arg(ap, "Path to checkpoint (.pt)")
     add_data_arg(ap, "Dataset dir (has meta.jsonl/labels.jsonl/splits/)")
     ap.add_argument("--split", default="test", choices=["train", "val", "test", "all"], help="Which split to evaluate")
-    ap.add_argument("--device", default=default_device_name())
+    add_device_arg(ap, None)
     ap.add_argument("--batch-size", type=int, default=None, help="Override batch size (default: from checkpoint.eval.batch_size or 64)")
     ap.add_argument("--num-workers", type=int, default=None, help="Override num_workers (default: from checkpoint.eval.num_workers or 0)")
     ap.add_argument("--max-samples", type=int, default=None, help="Optional cap for quick checks")

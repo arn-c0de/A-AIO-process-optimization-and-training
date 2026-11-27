@@ -9,8 +9,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from simple_sim.cli_utils import add_amp_flags, add_data_arg, add_json_flag, add_out_arg, run_cli
-from simple_sim.devices import default_device_name
+from simple_sim.cli_utils import add_amp_flags, add_data_arg, add_device_arg, add_json_flag, add_out_arg, run_cli
 
 COMMAND = "train_profile"
 SUPPORTS_JSON = True
@@ -20,7 +19,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description='Train profile classifier')
     add_data_arg(parser, 'Path to mixed-profile dataset directory')
     add_out_arg(parser, 'Output path for trained model (.pt)')
-    parser.add_argument('--device', type=str, default=default_device_name(), help='Device (cuda/cpu)')
+    add_device_arg(parser)
     add_amp_flags(parser)
     parser.add_argument('--threads', type=int, default=None,
                         help='Torch intra-op threads for CPU training (default: torch picks)')

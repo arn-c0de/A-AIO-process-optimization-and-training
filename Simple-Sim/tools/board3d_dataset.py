@@ -31,8 +31,9 @@ import numpy as np  # noqa: E402
 from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
 from simple_sim.io_utils import load_json  # noqa: E402
 from simple_sim.board3d import load_board3d  # noqa: E402
+from simple_sim.board3d.camera import board_to_source  # noqa: E402
 from simple_sim.board3d.dataset import crop_part, crop_photo, plan_sheet  # noqa: E402
-from simple_sim.board3d.render import SOURCES, crop_real, photo_view, prepare_substrate, render_window  # noqa: E402
+from simple_sim.board3d.render import SOURCES, crop_real, photo_view, prepare_substrate, render_window, still_source  # noqa: E402
 from simple_sim.board3d.scene import apply_defects, sample_variants  # noqa: E402
 from simple_sim.board3d.substrate import BoardRaster  # noqa: E402
 
@@ -89,6 +90,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "product / side (e.g. the DeepVision runs) or a text file with one geometry.json per line; crops "
                          "are cut like the app's (perspective kept), the real crop is the phone still at the same place")
     ap.add_argument("--photo-scale", type=float, default=0.5, help="--photos: render size / photo size")
+    ap.add_argument("--photo-texture", action="store_true",
+                    help="--photos: texture the board and the low parts with the sheet's own still (its light, colour "
+                         "and residue; tall parts from the mosaic) instead of the photo mosaic: an OK part then shows "
+                         "the photo itself and only the changed parts are rendered")
+    ap.add_argument("--fitted", type=Path,
+                    help="shapes.json of tools/board3d_fitdefect.py: half the defect ops take the shape of a reproduced "
+                         "real defect (tombstone tilt, bridge size, tinned lands, ...)")
     ap.add_argument("--camera-fx", action="store_true",
                     help="phone-camera look per crop (random resolution loss, blur, sensor noise, JPEG; the same on the "
                          "render and its real crop): the reviewed app crops are phone stills at ~16 px/mm")
@@ -119,21 +127,26 @@ def main(argv: list[str] | None = None) -> int:
     (out / "images").mkdir(parents=True, exist_ok=True)
     (out / "real").mkdir(exist_ok=True)
     rng = random.Random(a.seed)
+    shapes = load_json(a.fitted) if a.fitted else None
     rows, t0 = [], time.monotonic()
     w = min(a.window_mm, r["widthMm"], r["heightMm"])
     geos = photo_geometries(a.photos, board3d) if a.photos else []
     if a.photos and not geos:
         raise SystemExit(f"no photo geometry of this product / side under {a.photos}")
     for s in range(a.sheets):
+        geo_path = rng.choice(geos) if geos else None
         if geos:                                  # a phone view sees the whole board: parts from all of it
             window = BoardRaster(r["x0"], r["y0"], r["widthMm"], r["heightMm"], r["pxPerMm"])
-            plan = plan_sheet(board3d, window, a.per_sheet, a.spacing_mm, rng, stages=set(sub["stages"]))
+            # the still's own reviewed defects (tools/board3d_register.py --labels): never in a chosen part's field,
+            # its real crop would go in as OK
+            faults = [tuple(f["centerMm"]) for f in load_json(geo_path).get("faults", [])]
+            plan = plan_sheet(board3d, window, a.per_sheet, a.spacing_mm, rng, stages=set(sub["stages"]), avoid=faults, shapes=shapes)
         else:
             for _ in range(20):                   # a window with enough eligible parts
                 x0 = rng.uniform(r["x0"], r["x0"] + r["widthMm"] - w)
                 y0 = rng.uniform(r["y0"], r["y0"] + r["heightMm"] - w)
                 window = BoardRaster(round(x0, 2), round(y0, 2), w, w, r["pxPerMm"])
-                plan = plan_sheet(board3d, window, a.per_sheet, a.spacing_mm, rng, stages=set(sub["stages"]))
+                plan = plan_sheet(board3d, window, a.per_sheet, a.spacing_mm, rng, stages=set(sub["stages"]), shapes=shapes)
                 if len(plan) >= max(1, a.per_sheet // 2):
                     break
         if not plan:
@@ -143,16 +156,18 @@ def main(argv: list[str] | None = None) -> int:
         scene = apply_defects(unit, ops) if ops else unit
         name = f"sheet_{a.name}_{s:04d}"
         if geos:
-            geo_path = rng.choice(geos)
+            src = still_source(geo_path) if a.photo_texture else a.source if a.source in ("photos", "mounted") else "photos"
             res = photo_view(scene, a.board3d, geo_path, name, scale=a.photo_scale, samples=a.samples, device=a.device,
-                             source=a.source if a.source in ("photos", "mounted") else "photos", refine=False)
+                             source=src, refine=False,
+                             # the still is its own texture: no colour matrix / tone curve (fitted on the green board,
+                             # the curve turned every white pink)
+                             calibrate=not a.photo_texture)
             render = cv2.imread(res["image"], cv2.IMREAD_COLOR)
             still = cv2.imread(res["still"], cv2.IMREAD_COLOR)
             real = cv2.resize(still, render.shape[1::-1], interpolation=cv2.INTER_AREA)
-            h_img = np.diag([a.photo_scale, a.photo_scale, 1.0]) @ np.asarray(load_json(geo_path)["boardToSource"], float).reshape(3, 3)
+            h_img = np.diag([a.photo_scale, a.photo_scale, 1.0]) @ board_to_source(load_json(geo_path))
             crop = lambda im, c: crop_photo(im, h_img, c, a.size)  # noqa: E731
         else:
-            geo_path = None
             look = {"light": {"preset": "flatbed", "scanNominal": False}, "under_parts": "bare"} if a.all_rendered else {}
             res = render_window(scene, a.board3d, window, name, samples=a.samples, device=a.device, **look)
             render, real = cv2.imread(res["image"], cv2.IMREAD_COLOR), crop_real(board3d, window)
@@ -184,7 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     summary = {"crops": len(rows), "byClass": dict(Counter(x["label"] for x in rows)), "byFamily": dict(Counter(x["family"] for x in rows)),
                "seconds": round(time.monotonic() - t0, 1), "source": a.source, "samples": a.samples, "size": a.size, "seed": a.seed,
                "allRendered": a.all_rendered, "cameraFx": a.camera_fx, "realOk": a.real_ok, "variants": a.variants,
-               "photos": str(a.photos) if a.photos else None}
+               "photos": str(a.photos) if a.photos else None, "photoTexture": a.photo_texture,
+               "fitted": str(a.fitted) if a.fitted else None}
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary))
     if a.json:

@@ -8,7 +8,9 @@ from collections.abc import Sequence
 from typing import Any
 
 from gui.theme.style import font, on_theme_changed, palette
-from gui.theme.tokens import Palette
+from gui.theme.tokens import SPACE, Palette
+from gui.utils.tooltip import ToolTip
+from gui.widgets.layout import Section
 
 # Column spec: (id, heading, width, anchor) – width/anchor optional.
 ColumnSpec = tuple
@@ -241,6 +243,14 @@ class LogView(ttk.Frame):
         except Exception:
             pass
 
+    def add_actions(self, bar: tk.Misc) -> None:
+        """Clear and Copy buttons for this log, packed right in *bar* (usually a :class:`Section`'s ``actions``)."""
+        for text, command, help_key, padx in (("Clear", self.clear, "common.clear_log", 0),
+                                              ("Copy", self.copy_all, "common.copy_log", (0, SPACE.S))):
+            btn = ttk.Button(bar, text=text, style="Icon.TButton", command=command)
+            btn.pack(side="right", padx=padx)
+            ToolTip(btn, help_key=help_key)
+
     def _context_menu(self, event: tk.Event) -> None:
         m = tk.Menu(self, tearoff=False)
         m.add_command(label="Copy Selection", command=lambda: self.text.event_generate("<<Copy>>"))
@@ -256,8 +266,18 @@ class LogViewHost:
     """Mixin for tab UIs that own a ``log_view`` (:class:`LogView`): the tab's ``append_log`` entry point."""
 
     log_view: LogView
+    txt: tk.Text
 
     def append_log(self, s: str) -> None:
         self.log_view.append(s)
+
+    def _build_log_section(self, parent: tk.Misc, title: str, *, height: int) -> None:
+        """A filling :class:`Section` *title* with the tab's ``log_view`` (``txt`` = its text) and Clear / Copy."""
+        sec = Section(parent, title)
+        sec.pack(fill="both", expand=True)
+        self.log_view = LogView(sec, height=height)
+        self.log_view.pack(fill="both", expand=True)
+        self.txt = self.log_view.text
+        self.log_view.add_actions(sec.actions)
 
 

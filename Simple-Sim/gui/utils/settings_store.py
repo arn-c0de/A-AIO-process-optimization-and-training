@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Iterable, Sequence
 
-from simple_sim.io_utils import atomic_write_json
+from simple_sim.io_utils import atomic_write_json, load_json
 from gui.utils.tk_safe import quiet
 
 
@@ -36,7 +36,7 @@ class SettingsStore:
             if not self.path.exists():
                 self.data = {}
                 return
-            obj = json.loads(self.path.read_text(encoding="utf-8"))
+            obj = load_json(self.path)
             self.data = obj if isinstance(obj, dict) else {}
         except Exception:
             self.data = {}

@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from simple_sim.checkpoints import PROFILE_CLASSIFIER
 from simple_sim.cli_utils import log_banner
 from simple_sim.data_loader import ProfileDataset, ROIDataset
 from simple_sim.devices import resolve_device
@@ -44,7 +45,6 @@ from simple_sim.metrics import (
 )
 from simple_sim.models import load_checkpoint_model
 from simple_sim.telemetry import emit
-from simple_sim.training import PROFILE_CLASSIFIER
 
 __all__ = ["evaluate", "report_path_for", "run_eval", "run_eval_profile", "write_report"]
 

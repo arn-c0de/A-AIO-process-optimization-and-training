@@ -10,11 +10,13 @@ from datetime import datetime
 
 from gui.theme.style import font
 from gui.theme.tokens import SPACE
+from gui.utils.checkpoint_meta import short_profile_hash
 from gui.utils.formatting import fmt_bytes
 from gui.utils.tooltip import ToolTip
-from gui.widgets import FormGrid, LogView, LogViewHost, ScrolledTree, Section, Toolbar
+from gui.widgets import FormGrid, LogViewHost, ScrolledTree, Section, Toolbar
 
 if TYPE_CHECKING:
+    from gui.widgets import LogView
     from .tab import MergeTab
 
 
@@ -58,7 +60,7 @@ class MergeUI(LogViewHost):
         self._build_selection_section(right)
         self._build_merge_section(right)
         self._build_bundles_section(right)
-        self._build_log_section(right)
+        self._build_log_section(right, "Log", height=8)
 
     # ------------------------------------------------------------------ sections
     def _build_weights_section(self, parent: tk.Misc) -> None:
@@ -144,19 +146,6 @@ class MergeUI(LogViewHost):
         bar.button("Delete Bundle", self.tab._delete_bundle, style="Danger.TButton", help_key="merge.delete_bundle",
                    right=True)
 
-    def _build_log_section(self, parent: tk.Misc) -> None:
-        sec = Section(parent, "Log")
-        sec.pack(fill="both", expand=True)
-        self.log_view = LogView(sec, height=8)
-        self.log_view.pack(fill="both", expand=True)
-        self.txt = self.log_view.text
-        b_clear = ttk.Button(sec.actions, text="Clear", style="Icon.TButton", command=self.log_view.clear)
-        b_clear.pack(side="right")
-        ToolTip(b_clear, help_key="common.clear_log")
-        b_copy = ttk.Button(sec.actions, text="Copy", style="Icon.TButton", command=self.log_view.copy_all)
-        b_copy.pack(side="right", padx=(0, SPACE.S))
-        ToolTip(b_copy, help_key="common.copy_log")
-
     @staticmethod
     def _toggle_empty(label: ttk.Label, view: tk.Widget, empty: bool) -> None:
         if not empty:
@@ -212,7 +201,7 @@ class MergeUI(LogViewHost):
                     _, phash, val_acc, val_f1 = self.tab.logic.load_model_meta(p, model_meta_cache)
                     acc_s = f"{val_acc:.4f}" if val_acc is not None else "-"
                     f1_s = f"{val_f1:.4f}" if val_f1 is not None else "-"
-                    hash_short = phash.split(":")[1][:12] if phash and ":" in phash else (phash[:12] if phash else "")
+                    hash_short = short_profile_hash(phash or "")
 
                     iid_model = f"model::{counter}"
                     counter += 1

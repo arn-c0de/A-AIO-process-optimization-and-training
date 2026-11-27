@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from simple_sim.blender.job_schema import (BLENDER_ENV_VAR, DEFAULT_BLENDER_EXECUTABLE, DEFAULT_CYCLES_SAMPLES, DEFAULT_DEVICE,
-                                           DEFAULT_ENGINE, BakeOptions, BlenderJob, PreparedJob)
+from simple_sim.blender.executable import resolve_blender_executable
+from simple_sim.blender.job_schema import DEFAULT_CYCLES_SAMPLES, DEFAULT_DEVICE, DEFAULT_ENGINE, BakeOptions, BlenderJob, PreparedJob
+from simple_sim.board.footprints import profile_footprint
 from simple_sim.generators.blender3d.runner import render_prepared_batch
 from simple_sim.generators.blender3d import render_blender_batch, write_jobs_jsonl
 from simple_sim.filter_settings import NEUTRAL_AUGMENT
 from simple_sim.generators.opencv2d import apply_post_filters
-from simple_sim.generators.blender3d.bake import bake_fields
+from simple_sim.generators.blender3d.bake import bake_fields, profile_component_height_mm, profile_job_fields
 from simple_sim.parallel import imap_ordered
 from simple_sim.rng import STREAM_POST, render_seed
 
@@ -31,11 +31,6 @@ _POST_FILTER_SECONDARY_KEYS = frozenset({
     "reflection_size",
     "dust_size",
 })
-
-
-def resolve_blender_executable(configured: str | None = None) -> str:
-    """Blender executable: *configured* (``render.blender.executable``) > ``$SIMPLE_SIM_BLENDER`` > ``blender``."""
-    return str(configured or os.environ.get(BLENDER_ENV_VAR) or DEFAULT_BLENDER_EXECUTABLE)
 
 
 def blender_settings(config: dict[str, Any]) -> dict[str, Any]:
@@ -83,6 +78,18 @@ def blender_job(
         "render_3d": render_3d,
         **(bake or {}),
     }
+
+
+def profile_blender_job(record: dict[str, Any], profile: dict[str, Any], roi: dict[str, Any], *,
+                        bake: BakeOptions | None = None) -> BlenderJob:
+    """:func:`blender_job` of one component profile: footprint, part height, ``render_3d`` and the bake's profile
+    fields (:func:`~simple_sim.generators.blender3d.bake.profile_job_fields`) from *profile*, the scale and size
+    from *roi* (``width_px``, ``height_px``, ``mm_per_px``). *bake* adds or replaces bake fields (usually
+    :func:`~simple_sim.generators.blender3d.bake.bake_fields` of the run config's ``render``)."""
+    return blender_job(record, mm_per_px=float(roi["mm_per_px"]), roi_width=int(roi["width_px"]),
+                       roi_height=int(roi["height_px"]), footprint=profile_footprint(profile),
+                       component_height_mm=profile_component_height_mm(profile),
+                       render_3d=profile.get("render_3d") or {}, bake={**profile_job_fields(profile), **(bake or {})})
 
 
 def _needs_post_filter(aug: dict[str, Any]) -> bool:

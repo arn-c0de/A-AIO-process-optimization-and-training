@@ -19,10 +19,13 @@ from typing import Any
 import numpy as np
 
 from gui.utils.pipeline_helpers import apply_render_overrides, render_overrides, render_overrides_text
+from simple_sim.blender.executable import require_blender
+from simple_sim.board.footprints import profile_footprint
 from simple_sim.config import load_config, merge_profile_render, validate_config
 from simple_sim.defects import sample_defect_params
 from simple_sim.generators.opencv2d.geometry import sample_nominal_geometry
 from simple_sim.generators.opencv2d.photoreal import CAMERA_PRESETS, DEFAULT_SUPERSAMPLING, SUPERSAMPLING_CHOICES
+from simple_sim.io_utils import load_json
 from simple_sim.parallel import imap_ordered, render_workers
 from simple_sim.preview.render import (
     BACKEND_2D,
@@ -93,7 +96,7 @@ def write_sidecar(im: PreviewImage) -> None:
 
 def read_sidecar(path: Path) -> dict[str, Any]:
     try:
-        data = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+        data = load_json(path.with_suffix(".json"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -208,9 +211,8 @@ class ProfilePreviewLogic:
             render_cfg["camera"] = camera
         overrides = self._overrides(req)
         apply_render_overrides(render_cfg, overrides)
-        footprint = str((profile.get("component") or {}).get("footprint", "chip_2pad"))
         tolerances = profile.get("tolerances")
-        spec = RenderSpec(roi_size=(w, h), render=render_cfg, footprint=footprint, tolerances=tolerances)
+        spec = RenderSpec(roi_size=(w, h), render=render_cfg, footprint=profile_footprint(profile), tolerances=tolerances)
         on_log(f"ROI {w}x{h} | style {req.style} | supersampling {req.supersampling}x | camera {req.camera}"
                + (f" | {render_overrides_text(overrides)}" if overrides else ""))
 
@@ -242,12 +244,11 @@ class ProfilePreviewLogic:
         return out
 
     def _render_3d(self, req, profile, cfg, states, out_dir, on_image, on_log, should_stop) -> list[PreviewImage]:
-        from simple_sim.generation.blender import blender_job, blender_settings, run_prepared_blender_jobs
+        from simple_sim.generation.blender import blender_settings, profile_blender_job, run_prepared_blender_jobs
         from simple_sim.generators.blender3d.runner import BlenderCancelled
-        from simple_sim.generators.blender3d.bake import bake_fields, prepare_job, profile_job_fields
+        from simple_sim.generators.blender3d.bake import bake_fields, prepare_job
 
         roi = cfg["roi"]
-        w, h, mpp = int(roi["width_px"]), int(roi["height_px"]), float(roi["mm_per_px"])
         overrides = self._overrides(req)
         render_cfg = apply_render_overrides(copy.deepcopy(cfg.get("render") or {}), overrides)
         settings = blender_settings(cfg)
@@ -256,14 +257,9 @@ class ProfilePreviewLogic:
             settings["engine"] = req.blender_engine
         if req.blender_device:
             settings["device"] = req.blender_device
-        if shutil.which(settings["executable"]) is None and not Path(settings["executable"]).exists():
-            raise FileNotFoundError(f"Blender not found: {settings['executable']}")
-        component = profile.get("component") or {}
-        footprint = str(component.get("footprint", "chip_2pad"))
-        height_mm = float((component.get("nominal_dims_mm") or {}).get("height", 0.45) or 0.45)
+        require_blender(settings["executable"])
         tolerances = profile.get("tolerances") or {}
-        bake = {**profile_job_fields(profile),
-                **bake_fields(render_cfg, roi, camera=self._camera_cfg(render_cfg, req), supersampling=int(req.supersampling))}
+        bake = bake_fields(render_cfg, roi, camera=self._camera_cfg(render_cfg, req), supersampling=int(req.supersampling))
 
         jobs: list[dict[str, Any]] = []
         meta: list[tuple[str, int, Path, dict[str, Any], dict[str, Any]]] = []
@@ -276,9 +272,7 @@ class ProfilePreviewLogic:
                 augment = self._augment(rng, cfg, req)
                 rel = f"{state}_v{v}.png"
                 record = {"image_path": rel, "seed": seed, "nominal": nominal, "defect": defect, "augment": augment}
-                jobs.append(blender_job(record, mm_per_px=mpp, roi_width=w, roi_height=h, footprint=footprint,
-                                        component_height_mm=height_mm, render_3d=profile.get("render_3d") or {},
-                                        bake=bake))
+                jobs.append(profile_blender_job(record, profile, roi, bake=bake))
                 meta.append((state, v, out_dir / rel, defect, nominal))
         on_log(f"Blender: {len(jobs)} images | {settings['engine']} | {settings['samples']} samples | "
                f"{settings['device']} | board supersampling {req.supersampling}x"

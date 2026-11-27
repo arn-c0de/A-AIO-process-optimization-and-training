@@ -215,29 +215,6 @@ class FilterPopup:
         handle_close(self)
 
 
-def open_filter_popup(
-    parent: tk.Widget,
-    profiles: dict[str, dict[str, Any]],
-    active_profile: str,
-    on_close: Callable[[dict[str, dict[str, Any]], str], None],
-    get_current_values: Callable[[], dict[str, Any]],
-    set_current_values: Callable[[dict[str, Any]], None],
-    float_or_default: Callable[[str, float], float],
-    show_messagebox: Callable[[str, str, str], None],
-    ask_string: Callable[[str, str, str], str | None],
-    ask_yes_no: Callable[[str, str], bool],
-    sim_root: str | None = None,
-) -> None:
-    FilterPopup(
-        parent=parent,
-        profiles=profiles,
-        active_profile=active_profile,
-        on_close=on_close,
-        get_current_values=get_current_values,
-        set_current_values=set_current_values,
-        float_or_default=float_or_default,
-        show_messagebox=show_messagebox,
-        ask_string=ask_string,
-        ask_yes_no=ask_yes_no,
-        sim_root=sim_root,
-    )
+def open_filter_popup(*args: Any, **kwargs: Any) -> None:
+    """Open a :class:`FilterPopup` (same arguments; the popup lives on through its Tk window)."""
+    FilterPopup(*args, **kwargs)

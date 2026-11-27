@@ -20,6 +20,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from simple_sim.board3d.camera import as_mat3
 from simple_sim.board3d.footprints import footprint_for
 
 
@@ -46,6 +47,10 @@ class BoardRaster:
         px = np.asarray(px, float).reshape(-1, 2)
         return np.c_[self.x0 + (px[:, 0] + 0.5) / self.s, self.y0 + self.h - (px[:, 1] + 0.5) / self.s]
 
+    def fill(self, img: np.ndarray, poly: Any, value: Any = 255) -> None:
+        """Fill the board-mm polygon *poly* (N x 2) into *img* (raster-sized) with *value*, in place."""
+        cv2.fillPoly(img, [self.to_px(poly).round().astype(np.int32)], value)
+
     def pixel_to_board(self) -> np.ndarray:
         """3x3 matrix raster px -> board mm."""
         s = self.s
@@ -57,7 +62,7 @@ class BoardRaster:
 
 def rectify(image: np.ndarray, board_to_image: list[float], raster: BoardRaster) -> np.ndarray:
     """Warp *image* (e.g. the flatbed scan) onto *raster* (bicubic)."""
-    raster_to_image = np.asarray(board_to_image, float).reshape(3, 3) @ raster.pixel_to_board()
+    raster_to_image = as_mat3(board_to_image) @ raster.pixel_to_board()
     return cv2.warpPerspective(image, raster_to_image, (raster.cols, raster.rows),
                                flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
 
@@ -71,7 +76,7 @@ def board_outline_mm(board3d: dict[str, Any]) -> np.ndarray:
 def board_mask(board3d: dict[str, Any], raster: BoardRaster, value: float = 255, dtype: Any = np.uint8) -> np.ndarray:
     """The board outline filled with *value* on *raster* (0 outside)."""
     mask = np.zeros((raster.rows, raster.cols), dtype)
-    cv2.fillPoly(mask, [raster.to_px(board_outline_mm(board3d)).round().astype(np.int32)], value)
+    raster.fill(mask, board_outline_mm(board3d), value)
     return mask
 
 
@@ -121,12 +126,11 @@ def part_mask(board3d: dict[str, Any], raster: BoardRaster, stages: set[str], ma
             continue
         bodies, pad_polys = component_polygons(c, margin_mm)
         for poly in pad_polys:
-            q = raster.to_px(poly).round().astype(np.int32)
-            cv2.fillPoly(pads, [q], 255)
+            raster.fill(pads, poly)
             if not keep_lands:
-                cv2.fillPoly(parts, [q], 255)
+                raster.fill(parts, poly)
         for poly in bodies:
-            cv2.fillPoly(parts, [raster.to_px(poly).round().astype(np.int32)], 255)
+            raster.fill(parts, poly)
     return parts, pads
 
 

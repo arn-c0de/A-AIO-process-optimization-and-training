@@ -9,13 +9,13 @@ from simple_sim.cli_utils import (
     PROFILE_MISMATCH_HINT,
     add_amp_flags,
     add_data_arg,
+    add_device_arg,
     add_json_flag,
     add_out_arg,
     add_profile_mismatch_flag,
     run_cli,
     with_hint,
 )
-from simple_sim.devices import default_device_name
 from simple_sim.manifest import ProfileMismatchError
 
 COMMAND = "train"
@@ -35,7 +35,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
                         help='Optional: train N additional epochs beyond the resumed epoch (default: use dataset config epochs)')
     parser.add_argument('--out-mode', choices=['best', 'last'], default='best',
                         help="Whether --out points to the best checkpoint ('best') or the latest epoch ('last'). Default: best")
-    parser.add_argument('--device', type=str, default=default_device_name(), help='Device (cuda/cpu)')
+    add_device_arg(parser)
     add_amp_flags(parser)
     parser.add_argument('--threads', type=int, default=None,
                         help='Torch intra-op threads for CPU training (default: torch picks; on hybrid CPUs the '

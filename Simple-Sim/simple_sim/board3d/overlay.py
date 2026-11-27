@@ -20,6 +20,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from simple_sim.board3d.camera import as_mat3
+
 COLOURS = {"builder": (60, 200, 60), "planned": (0, 150, 255), "generic": (40, 40, 230)}  # BGR
 DNP = (160, 160, 160)
 NO_BODY = (230, 0, 230)
@@ -35,7 +37,7 @@ def corners(pose: dict[str, float], body: dict[str, float]) -> np.ndarray:
 
 
 def homography_mapper(h: list[float]) -> Callable[[np.ndarray], np.ndarray]:
-    m = np.asarray(h, float).reshape(3, 3)
+    m = as_mat3(h)
 
     def apply(pts: np.ndarray) -> np.ndarray:
         q = np.c_[pts, np.ones(len(pts))] @ m.T

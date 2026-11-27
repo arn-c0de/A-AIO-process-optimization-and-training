@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 from simple_sim.dataset_files import DATASET_MANIFEST, LABELS_JSONL
-from simple_sim.io_utils import iter_json_lines
+from simple_sim.io_utils import iter_json_lines, load_json
 
 
 def _load_manifest(ds: Path) -> dict:
@@ -16,7 +15,7 @@ def _load_manifest(ds: Path) -> dict:
     if not manifest_path.exists():
         return {}
     try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data = load_json(manifest_path)
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
@@ -27,7 +26,7 @@ def dataset_created_display(ds: Path) -> str:
     manifest_path = ds / DATASET_MANIFEST
     if manifest_path.exists():
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = load_json(manifest_path)
             created = str(manifest.get("created_at") or "").strip()
             if created:
                 # Supports ISO "....Z" format from manifests.

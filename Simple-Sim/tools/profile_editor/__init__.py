@@ -7,6 +7,7 @@ __all__ = [
     "hq_preview_panel",
     "preview_3d",
     "profile_registry",
+    "scene3d",
     "state_store",
     "sync_controller",
     "system_monitor",

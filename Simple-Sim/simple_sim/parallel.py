@@ -41,8 +41,8 @@ _CV2_USERS = 0
 _CV2_PREVIOUS: int | None = None
 
 
-def render_workers(requested: int | None = None) -> int:
-    """Worker count: *requested* if > 0, else ``$SIMPLE_SIM_RENDER_WORKERS``, else ``min(8, cpu count)``."""
+def _worker_count(requested: int | None, default_max: int) -> int:
+    """*requested* if > 0, else ``$SIMPLE_SIM_RENDER_WORKERS``, else ``min(default_max, cpu count)``."""
     if requested is not None and int(requested) > 0:
         return int(requested)
     env = os.environ.get("SIMPLE_SIM_RENDER_WORKERS", "").strip()
@@ -51,20 +51,17 @@ def render_workers(requested: int | None = None) -> int:
             return max(1, int(env))
         except ValueError:
             pass
-    return max(1, min(MAX_DEFAULT_WORKERS, os.cpu_count() or 1))
+    return max(1, min(default_max, os.cpu_count() or 1))
+
+
+def render_workers(requested: int | None = None) -> int:
+    """Worker count: *requested* if > 0, else ``$SIMPLE_SIM_RENDER_WORKERS``, else ``min(8, cpu count)``."""
+    return _worker_count(requested, MAX_DEFAULT_WORKERS)
 
 
 def render_processes(requested: int | None = None) -> int:
     """Process count: *requested* if > 0, else ``$SIMPLE_SIM_RENDER_WORKERS``, else ``min(16, cpu count)``."""
-    if requested is not None and int(requested) > 0:
-        return int(requested)
-    env = os.environ.get("SIMPLE_SIM_RENDER_WORKERS", "").strip()
-    if env:
-        try:
-            return max(1, int(env))
-        except ValueError:
-            pass
-    return max(1, min(MAX_DEFAULT_PROCESSES, os.cpu_count() or 1))
+    return _worker_count(requested, MAX_DEFAULT_PROCESSES)
 
 
 def render_executor(n_items: int, requested: str | None = None) -> str:

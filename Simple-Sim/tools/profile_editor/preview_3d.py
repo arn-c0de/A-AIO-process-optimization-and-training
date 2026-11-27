@@ -1,71 +1,17 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 from typing import Any
 from collections.abc import Callable
 
 import tkinter as tk
 from tkinter import ttk
 
-from simple_sim.board.footprints import footprint_pads, profile_footprint
+from simple_sim.board.footprints import profile_footprint
 
+from .scene3d import (BoxMesh, GeometryUpdates, Vec3, box_faces, box_mesh, camera_basis, cross, pad_layout,
+                      point_in_poly)
 from .yaml_io import range_mid
-
-
-Vec3 = tuple[float, float, float]
-Face = tuple[Vec3, Vec3, Vec3, Vec3]
-GeometryUpdates = dict[tuple[str, ...], Any]
-
-
-@dataclass
-class BoxMesh:
-    name: str
-    center: Vec3
-    size: Vec3
-    movable: bool
-    faces: list[Face]
-    color: str
-    outline: str
-
-
-#: Side of the virtual image the shared pad geometry is laid out in (raw profile pixels, centred).
-_LAYOUT_CANVAS = 4000
-
-
-def _pad_layout(footprint: str, pad_w: float, pad_h: float, pad_sx: float, pad_sy: float,
-                body_len_x: float, body_len_y: float, *, nominal_raw: dict[str, float] | None = None,
-                scale: float = 1.0) -> list[tuple[tuple[float, float], tuple[float, float]]]:
-    """``((x, y), (size_x, size_y))`` per pad in pad-number order, same layout as the 2D backends.
-
-    chip_2pad, sot23, soic_16 and qfn keep the editor's own layout (dragging their pads is translated back
-    into ``geometry_ranges`` by ``_emit_geometry_updates_from_scene``). Every other footprint (tssop, sot_6,
-    chip_array_8, tht_pin_N, ...) takes the shared geometry of :func:`simple_sim.board.footprints.footprint_pads`
-    from *nominal_raw* (profile pixels) scaled by *scale*; without *nominal_raw* it falls back to two pads.
-    """
-    if nominal_raw is not None and footprint != "chip_2pad" and footprint not in ("soic_16", "sot23") \
-            and not footprint.startswith("qfn"):
-        c = _LAYOUT_CANVAS // 2
-        return [(((p.center[0] - c) * scale, (p.center[1] - c) * scale), (p.w * scale, p.h * scale))
-                for p in footprint_pads(footprint, nominal_raw, (_LAYOUT_CANVAS, _LAYOUT_CANVAS))]
-    if footprint == "soic_16":
-        # 8 pads on the left + 8 pads on the right (2D layout, see opencv2d.geometry.pad_positions).
-        # Keep pads distributed along package length and outside body width.
-        row_x = max(pad_sx * 0.5, (body_len_x * 0.5) + (pad_h * 0.65))
-        y_span = max(pad_w * 7.0, body_len_y * 0.82)
-        pitch = y_span / 7.0
-        y0 = -y_span * 0.5
-        return [((x, y0 + i * pitch), (pad_h, pad_w)) for i in range(8) for x in (-row_x, row_x)]
-    if footprint.startswith("qfn"):
-        return [((sx * pad_sx * 0.45, sy * pad_sy * 0.45), (pad_w, pad_h)) for sy in (-1, 1) for sx in (-1, 1)]
-    if footprint == "sot23":
-        # Pads 1/2 on the left column (y = -/+ pad_spacing_y/2), pad 3 on the right at y = 0. pad_spacing is
-        # the left/right column distance; _emit_geometry_updates_from_scene inverts this.
-        # The 2D layout draws the two left pads at 0.8x pad_height.
-        return [((-pad_sx * 0.5, -pad_sy * 0.5), (pad_w, pad_h * 0.8)),
-                ((-pad_sx * 0.5, pad_sy * 0.5), (pad_w, pad_h * 0.8)),
-                ((pad_sx * 0.5, 0.0), (pad_w, pad_h))]
-    return [((-pad_sx * 0.5, 0.0), (pad_w, pad_h)), ((pad_sx * 0.5, 0.0), (pad_w, pad_h))]
 
 
 class Preview3D(ttk.Frame):
@@ -402,7 +348,7 @@ class Preview3D(ttk.Frame):
         if focal <= 1e-6:
             return
 
-        _forward, right, up = self._camera_basis()
+        _forward, right, up = camera_basis(self.yaw, self.pitch)
         scale = max(1.0, z_cam) / focal
         dx_cam = dx * scale
         dy_cam = -dy * scale
@@ -411,7 +357,7 @@ class Preview3D(ttk.Frame):
         wy = right[1] * dx_cam + up[1] * dy_cam
         cx, cy, cz = mesh.center
         mesh.center = (cx + wx, cy + wy, cz)
-        mesh.faces = self._box_faces(mesh.center, mesh.size)
+        mesh.faces = box_faces(mesh.center, mesh.size)
         self._emit_geometry_updates_from_scene()
 
     def _build_scene(self, profile: dict[str, Any]) -> list[BoxMesh]:
@@ -459,7 +405,7 @@ class Preview3D(ttk.Frame):
         board_w = max(260.0, body_len_x * 2.8, pad_sx + pad_w * 2.6)
         board_h = max(220.0, body_len_y * 2.8, pad_sy + pad_h * 2.8)
 
-        substrate = self._box(
+        substrate = box_mesh(
             "substrate",
             (0.0, 0.0, -pad_t),
             (board_w, board_h, pad_t * 1.8),
@@ -467,7 +413,7 @@ class Preview3D(ttk.Frame):
             "#2f7f4a",
             movable=False,
         )
-        body = self._box(
+        body = box_mesh(
             "component_body",
             (0.0, 0.0, comp_h * 0.5 + pad_t),
             (body_len_x, body_len_y, comp_h),
@@ -477,9 +423,9 @@ class Preview3D(ttk.Frame):
         )
 
         pads = [
-            self._box(f"pad_{i}", (x, y, pad_t * 0.5), (w, h, pad_t), "#bd7a33", "#d79c5f", movable=True)
+            box_mesh(f"pad_{i}", (x, y, pad_t * 0.5), (w, h, pad_t), "#bd7a33", "#d79c5f", movable=True)
             for i, ((x, y), (w, h)) in enumerate(
-                _pad_layout(footprint, pad_w, pad_h, pad_sx, pad_sy, body_len_x, body_len_y, scale=scale,
+                pad_layout(footprint, pad_w, pad_h, pad_sx, pad_sy, body_len_x, body_len_y, scale=scale,
                             nominal_raw={"pad_width": pad_w_raw, "pad_height": pad_h_raw, "pad_spacing": pad_sx_raw,
                                          "pad_spacing_y": pad_sy_raw, "component_length": comp_l_raw,
                                          "component_width": comp_w_raw}), start=1)
@@ -487,72 +433,8 @@ class Preview3D(ttk.Frame):
 
         return [substrate, *pads, body]
 
-    @staticmethod
-    def _box_faces(center: Vec3, size: Vec3) -> list[Face]:
-        cx, cy, cz = center
-        sx, sy, sz = size[0] * 0.5, size[1] * 0.5, size[2] * 0.5
-
-        p000 = (cx - sx, cy - sy, cz - sz)
-        p001 = (cx - sx, cy - sy, cz + sz)
-        p010 = (cx - sx, cy + sy, cz - sz)
-        p011 = (cx - sx, cy + sy, cz + sz)
-        p100 = (cx + sx, cy - sy, cz - sz)
-        p101 = (cx + sx, cy - sy, cz + sz)
-        p110 = (cx + sx, cy + sy, cz - sz)
-        p111 = (cx + sx, cy + sy, cz + sz)
-
-        return [
-            (p001, p101, p111, p011),
-            (p000, p010, p110, p100),
-            (p000, p001, p011, p010),
-            (p100, p110, p111, p101),
-            (p010, p011, p111, p110),
-            (p000, p100, p101, p001),
-        ]
-
-    @classmethod
-    def _box(cls, name: str, center: Vec3, size: Vec3, color: str, outline: str, movable: bool) -> BoxMesh:
-        return BoxMesh(
-            name=name,
-            center=center,
-            size=size,
-            movable=movable,
-            faces=cls._box_faces(center, size),
-            color=color,
-            outline=outline,
-        )
-
-    @staticmethod
-    def _cross(a: Vec3, b: Vec3) -> Vec3:
-        return (
-            a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0],
-        )
-
-    @staticmethod
-    def _normalize(v: Vec3) -> Vec3:
-        n = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
-        if n < 1e-8:
-            return (0.0, 0.0, 0.0)
-        return (v[0] / n, v[1] / n, v[2] / n)
-
-    def _camera_basis(self) -> tuple[Vec3, Vec3, Vec3]:
-        cp = math.cos(self.pitch)
-        sp = math.sin(self.pitch)
-        cy = math.cos(self.yaw)
-        sy = math.sin(self.yaw)
-
-        forward = self._normalize((sy * cp, cy * cp, -sp))
-        world_up = (0.0, 0.0, 1.0)
-        right = self._normalize(self._cross(world_up, forward))
-        if abs(right[0]) + abs(right[1]) + abs(right[2]) < 1e-6:
-            right = self._normalize(self._cross((0.0, 1.0, 0.0), forward))
-        up = self._normalize(self._cross(forward, right))
-        return forward, right, up
-
     def _to_camera(self, p: Vec3) -> tuple[float, float, float]:
-        forward, right, up = self._camera_basis()
+        forward, right, up = camera_basis(self.yaw, self.pitch)
         cam_pos = (
             -forward[0] * self.distance,
             -forward[1] * self.distance,
@@ -603,7 +485,7 @@ class Preview3D(ttk.Frame):
                 c = cam_pts[2]
                 ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
                 ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
-                n = self._cross(ab, ac)
+                n = cross(ab, ac)
                 if n[2] >= 0.0:
                     continue
                 poly = [self._project_cam(pt[0], pt[1], pt[2], width, height) for pt in cam_pts]
@@ -682,27 +564,9 @@ class Preview3D(ttk.Frame):
 
     def _pick_object(self, x: float, y: float) -> str | None:
         for name, poly in reversed(self._hit_regions):
-            if self._point_in_poly(x, y, poly):
+            if point_in_poly(x, y, poly):
                 return name
         return None
-
-    @staticmethod
-    def _point_in_poly(x: float, y: float, poly: list[tuple[float, float]]) -> bool:
-        inside = False
-        n = len(poly)
-        if n < 3:
-            return False
-        j = n - 1
-        for i in range(n):
-            xi, yi = poly[i]
-            xj, yj = poly[j]
-            intersects = ((yi > y) != (yj > y)) and (
-                x < (xj - xi) * (y - yi) / ((yj - yi) + 1e-12) + xi
-            )
-            if intersects:
-                inside = not inside
-            j = i
-        return inside
 
     def _emit_geometry_updates_from_scene(self) -> None:
         if self._on_geometry_changed is None or self._scene_scale <= 1e-8:

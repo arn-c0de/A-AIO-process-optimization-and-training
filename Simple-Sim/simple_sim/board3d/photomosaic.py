@@ -17,16 +17,16 @@ noise averages out, registration keeps the detail.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 
-from simple_sim.board3d.camera import choose_focal, pose_from_homography
+from simple_sim.board3d.camera import board_to_source, choose_focal, pose_from_homography
 from simple_sim.board3d.footprints import footprint_for
 from simple_sim.board3d.substrate import BoardRaster, board_mask, component_polygons
+from simple_sim.io_utils import load_json
 
 #: neighbourhood of the residual field (DeepVision FIELD_DEFAULTS): 6 mm, else 10 mm, at least 4 anchors
 FIELD_RADII_MM, FIELD_MIN_POINTS = (6.0, 10.0), 4
@@ -48,7 +48,7 @@ def height_map(board3d: dict[str, Any], raster: BoardRaster, stages: set[str]) -
             continue
         bodies, _ = component_polygons(c)
         for poly in bodies:
-            cv2.fillPoly(hm, [raster.to_px(poly).round().astype(np.int32)], h)
+            raster.fill(hm, poly, h)
     return hm
 
 
@@ -82,7 +82,7 @@ def field_grid(field: list[float] | None, raster: BoardRaster, step_mm: float = 
 
 def photo_camera(geo: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(K, R, t) of a photo from its homography (``X_cam = R X_board + t``, board z towards the camera)."""
-    h = np.asarray(geo["boardToSource"], float).reshape(3, 3)
+    h = board_to_source(geo)
     w, hh = (int(v) for v in geo["sourceSize"])
     f, _src, _est = choose_focal(h, w, hh)
     k = np.array([[f, 0, w / 2], [0, f, hh / 2], [0, 0, 1]])
@@ -105,7 +105,7 @@ def warp_photo(image: np.ndarray, geo: dict[str, Any], raster: BoardRaster, heig
     my = (pix[:, 1] / pix[:, 2]).reshape(x.shape).astype(np.float32)
     if heights is None:
         # plane only: the homography itself (identical to the camera at z = 0 up to its residual)
-        h = np.asarray(geo["boardToSource"], float).reshape(3, 3)
+        h = board_to_source(geo)
         q = np.stack([x - dx, y - dy, np.ones_like(x)], -1).reshape(-1, 3) @ h.T
         mx, my = (q[:, 0] / q[:, 2]).reshape(x.shape).astype(np.float32), (q[:, 1] / q[:, 2]).reshape(x.shape).astype(np.float32)
     return cv2.remap(image, mx, my, cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
@@ -127,12 +127,12 @@ def select_photos(dv_root: Path, *, side: str = "top", min_px_per_mm: float = 17
         if exclude and any(e in str(g) for e in exclude):
             continue
         try:
-            geo = json.loads(g.read_text(encoding="utf-8"))
+            geo = load_json(g)
         except (OSError, ValueError):
             continue
         if geo.get("side", side) != side or not geo.get("refined") or not geo.get("boardField") or not (g.parent / "still.jpg").is_file():
             continue
-        h = np.asarray(geo["boardToSource"], float).reshape(3, 3)
+        h = board_to_source(geo)
         w, hh = (int(v) for v in geo["sourceSize"])
         a, b = h @ [60, 50, 1], h @ [61, 50, 1]
         scale = float(np.hypot(*(b[:2] / b[2] - a[:2] / a[2])))
@@ -155,7 +155,7 @@ def build_mosaic(board3d: dict[str, Any], raster: BoardRaster, geometries: list[
     flat = cv2.erode(flat, np.ones((5, 5), np.uint8))
     stack, used = [], []
     for g in geometries:
-        geo = json.loads(Path(g).read_text(encoding="utf-8"))
+        geo = load_json(Path(g))
         img = cv2.imread(str(Path(g).parent / "still.jpg"), cv2.IMREAD_COLOR)
         if img is None or list(img.shape[1::-1]) != [int(v) for v in geo["sourceSize"]]:
             continue

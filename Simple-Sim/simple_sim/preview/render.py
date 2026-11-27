@@ -21,9 +21,9 @@ import numpy as np
 from simple_sim.classes import Backend
 from simple_sim.config import defect_units, load_config, merge_profile_render, placement_sampling, validate_config
 from simple_sim.defects import sample_defect_params
-from simple_sim.generation.blender import blender_job, blender_settings, run_blender_jobs
+from simple_sim.generation.blender import blender_settings, profile_blender_job, run_blender_jobs
 from simple_sim.generators.backends import backend_info
-from simple_sim.generators.blender3d.bake import bake_fields, profile_component_height_mm, profile_job_fields
+from simple_sim.generators.blender3d.bake import bake_fields
 from simple_sim.classes import STANDARD_CLASSES
 from simple_sim.filter_settings import normalize_image_filters
 from simple_sim.board.footprints import profile_footprint
@@ -414,11 +414,8 @@ def build_preview_jobs(
 
     With *run_id*, seeds vary between runs (like the real 3D pipeline).
     """
-    footprint = profile_footprint(profile)
     geometry_ranges = profile.get("geometry_ranges") or {}
     tolerances = profile.get("tolerances") or {}
-    component_height_mm = profile_component_height_mm(profile)
-    render_3d = profile.get("render_3d") or {}
     roi_cfg = {"width_px": int(settings.roi_width_px), "height_px": int(settings.roi_height_px), "mm_per_px": float(settings.mm_per_px)}
 
     jobs: list[dict[str, Any]] = []
@@ -432,18 +429,7 @@ def build_preview_jobs(
         augment = apply_filter_overrides_to_augment(augment, image_filters, rng)
         rel_path = preview_rel_path(profile_id, backend, defect_type)
         record = {"image_path": rel_path, "seed": seed, "nominal": nominal, "defect": defect, "augment": augment}
-        jobs.append(
-            blender_job(
-                record,
-                mm_per_px=settings.mm_per_px,
-                roi_width=settings.roi_width_px,
-                roi_height=settings.roi_height_px,
-                footprint=footprint,
-                component_height_mm=component_height_mm,
-                render_3d=render_3d,
-                bake={**profile_job_fields(profile), **bake_fields(settings.render or {}, roi_cfg)},
-            )
-        )
+        jobs.append(profile_blender_job(record, profile, roi_cfg, bake=bake_fields(settings.render or {}, roi_cfg)))
         previews.append((profile_id, backend, defect_type, rel_path))
     return jobs, previews
 

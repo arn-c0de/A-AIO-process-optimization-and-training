@@ -14,8 +14,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from simple_sim.cli_utils import add_data_arg, add_json_flag, add_model_arg, run_cli
-from simple_sim.devices import default_device_name
+from simple_sim.cli_utils import add_data_arg, add_device_arg, add_json_flag, add_model_arg, run_cli
 
 COMMAND = "sample_check"
 SUPPORTS_JSON = True
@@ -38,7 +37,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     ap.add_argument("--per-class", type=int, default=5, help="How many samples per class")
     ap.add_argument("--seed", type=int, default=42, help="Sampling RNG seed")
     ap.add_argument("--batch-size", type=int, default=32)
-    ap.add_argument("--device", default=default_device_name())
+    add_device_arg(ap, None)
     add_json_flag(ap)
     return ap
 

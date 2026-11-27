@@ -9,8 +9,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from simple_sim.cli_utils import add_data_arg, add_json_flag, add_model_arg, run_cli
-from simple_sim.devices import default_device_name
+from simple_sim.cli_utils import add_data_arg, add_device_arg, add_json_flag, add_model_arg, run_cli
 
 COMMAND = "eval_profile"
 SUPPORTS_JSON = True
@@ -20,7 +19,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description='Evaluate profile classifier on test set')
     add_data_arg(parser, 'Path to mixed-profile dataset directory')
     add_model_arg(parser, 'Path to trained profile classifier checkpoint')
-    parser.add_argument('--device', type=str, default=default_device_name(), help='Device (cuda/cpu)')
+    add_device_arg(parser)
     add_json_flag(parser)
     return parser
 

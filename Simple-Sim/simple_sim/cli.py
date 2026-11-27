@@ -102,6 +102,8 @@ _SPECS = [
     _tool("board3d-viewer", "tools/board3d_viewer.py"),
     _tool("board3d-dataset", "tools/board3d_dataset.py"),
     _tool("board3d-bare", "tools/board3d_bare.py"),
+    _tool("board3d-register", "tools/board3d_register.py"),
+    _tool("board3d-fitdefect", "tools/board3d_fitdefect.py"),
 ]
 
 #: command name -> :class:`CommandSpec`

@@ -16,7 +16,7 @@ from gui.utils.paths import default_model_path
 from gui import dialogs
 from gui.utils.checkpoint_meta import short_profile_hash
 from gui.components.dataset_picker import pick_datasets
-from gui.utils.formatting import RULE, section_header
+from gui.utils.formatting import RULE, fmt_list, section_header
 from gui.utils.dataset_catalog import catalog_labels, dataset_display_name, label_for_dataset, sim_data_roots
 from gui.utils.pipeline_helpers import (
     decode_dataset_paths_json,
@@ -143,8 +143,7 @@ class PipelineSelectionMixin:
     def _dataset_multi_tooltip_text(self) -> str:
         labels = self._selected_dataset_labels()
         if not labels: return "(no datasets selected)"
-        if len(labels) <= 12: return "\n".join(labels)
-        return "\n".join(labels[:12]) + f"\n... (+{len(labels) - 12} more)"
+        return fmt_list(labels, 12)
 
     def _on_dataset_multi_toggle(self) -> None:
         enabled = bool(self.ui.var_dataset_multi.get())

@@ -211,6 +211,13 @@ def read_split(split_file: Path) -> list[str]:
         return [line.strip() for line in f if line.strip()]
 
 
+def missing_classes(splits: dict[str, list[str]], label_rows: list[LabelRow]) -> dict[str, set[str]]:
+    """Per split, the classes of *label_rows* none of its sample ids carries (ids without a label are ignored)."""
+    id_to_label = {row.id: row.class_name for row in label_rows}
+    all_classes = {row.class_name for row in label_rows}
+    return {name: all_classes - {id_to_label[s] for s in ids if s in id_to_label} for name, ids in splits.items()}
+
+
 def check_class_coverage(splits: dict[str, list[str]], label_rows: list[LabelRow]) -> list[str]:
     """Check if all splits contain all classes.
 
@@ -221,20 +228,12 @@ def check_class_coverage(splits: dict[str, list[str]], label_rows: list[LabelRow
     Returns:
         List of warning messages (empty if all checks pass)
     """
-    id_to_label = {row.id: row.class_name for row in label_rows}
-    all_classes = {row.class_name for row in label_rows}
+    labelled = {row.id for row in label_rows}
+    missing = missing_classes(splits, label_rows)
 
     warnings = []
     for split_name, sample_ids in splits.items():
-        split_classes = set()
-        missing_ids: list[str] = []
-        for sid in sample_ids:
-            lbl = id_to_label.get(sid)
-            if lbl is None:
-                missing_ids.append(sid)
-                continue
-            split_classes.add(lbl)
-
+        missing_ids = [sid for sid in sample_ids if sid not in labelled]
         if missing_ids:
             examples = ", ".join(missing_ids[:3])
             suffix = "..." if len(missing_ids) > 3 else ""
@@ -243,8 +242,7 @@ def check_class_coverage(splits: dict[str, list[str]], label_rows: list[LabelRow
                 f"(e.g. {examples}{suffix})"
             )
 
-        missing_classes = all_classes - split_classes
-        if missing_classes:
-            warnings.append(f"{split_name} split missing classes: {missing_classes}")
+        if missing[split_name]:
+            warnings.append(f"{split_name} split missing classes: {missing[split_name]}")
 
     return warnings

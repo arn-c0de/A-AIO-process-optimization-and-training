@@ -11,7 +11,6 @@ Files in the board3d folder (``outputs/board3d/<product>/<side>/``):
 from __future__ import annotations
 
 import math
-import os
 import shutil
 import subprocess
 import time
@@ -22,8 +21,9 @@ from typing import Any
 import cv2
 import numpy as np
 
-from simple_sim.blender.job_schema import BLENDER_ENV_VAR, DEFAULT_BLENDER_EXECUTABLE
+from simple_sim.blender.executable import require_blender
 from simple_sim.io_utils import atomic_write_json, load_json
+from simple_sim.board3d.camera import as_mat3, board_to_source
 from simple_sim.board3d.scene import apply_defects, build_job
 from simple_sim.board3d.substrate import BoardRaster, bare_board, board_mask, board_outline_mm, component_polygons, pad_colour, part_mask, rectify
 
@@ -38,6 +38,63 @@ SOURCES = {"scan": {"stages": ("smd",), "pxPerMm": DEFAULT_PX_PER_MM, "folder": 
            "mounted": {"stages": ("smd", "tht", "mount"), "pxPerMm": 16.0, "folder": "substrate_mounted"},
            # fused from the single DeepVision stills (photomosaic.py): sharp, no lamp glare, prints not mirrored
            "photos": {"stages": ("smd", "tht", "mount"), "pxPerMm": 20.0, "folder": "substrate_photos"}}
+#: prefix of a single-photo source (:func:`still_source`): the board textured with one registered phone still
+STILL_PREFIX = "still-"
+
+
+def still_source(geometry_path: Path, clean_faults: bool = False) -> str:
+    """Register the phone still of *geometry_path* (``geometry.json`` + ``still.jpg``, e.g. from
+    ``tools/board3d_register.py``) as a substrate source and return its name (``still-<folder>``): the board and the low
+    parts textured with that photo itself (its light, its residue, its colour), the tall parts from the photo mosaic
+    (a single tilted view has them off the board plane), quantile-matched to it. Built under
+    ``substrate_still/<folder>/`` on first use. With *clean_faults* the reviewed faults of the still (``faults``) are
+    covered with the mosaic too (``still-<folder>+clean``): the defect fit renders its candidates on a board that
+    does not already show the real defect."""
+    geometry_path = Path(geometry_path)
+    stem = geometry_path.parent.name + ("+clean" if clean_faults else "")
+    name = STILL_PREFIX + stem
+    SOURCES[name] = {"stages": SOURCES["photos"]["stages"], "pxPerMm": SOURCES["photos"]["pxPerMm"],
+                     "folder": f"substrate_still/{stem}", "geometry": str(geometry_path), "cleanFaults": clean_faults}
+    return name
+
+
+#: ``still_source(clean_faults=True)``: half side (mm) of the square around a reviewed fault taken from the mosaic, at
+#: least; a part's own crop field when it is larger
+FAULT_CLEAN_MM = 1.5
+
+
+def _still_image(board3d: dict[str, Any], folder: Path, cfg: dict[str, Any], raster: BoardRaster) -> np.ndarray:
+    """The still of a :func:`still_source` on *raster*: the photo rectified on the board plane, the tall parts' bodies
+    (:func:`tall_parts_mask`, feathered) from the photo mosaic, tone-matched to the photo on the board around them."""
+    from simple_sim.board3d.photofx import apply_tone_lut, fit_tone_lut
+    geo_path = Path(cfg["geometry"])
+    geo = load_json(geo_path)
+    still = geo_path.parent / "still.jpg"
+    if not still.is_file():
+        still = geo_path.parent / geo.get("file", "photo.jpg")
+    img = cv2.imread(str(still), cv2.IMREAD_COLOR)
+    if img is None:
+        raise FileNotFoundError(still)
+    rect = rectify(img, geo["boardToSource"], raster)
+    mos_img, mos_h, _r = source_image(board3d, "photos", folder)
+    mos = rectify(mos_img, mos_h.ravel().tolist(), raster)
+    board = board_mask(board3d, raster)
+    tall = tall_parts_mask(board3d, raster, margin_mm=0.5)
+    mos = apply_tone_lut(mos, fit_tone_lut(mos, rect, board & ~cv2.dilate(tall, np.ones((9, 9), np.uint8))))
+    if cfg.get("cleanFaults"):
+        from simple_sim.board3d.dataset import crop_half
+        placed = [c for c in board3d["components"] if c.get("pose") and c.get("body") and not c.get("dnp")]
+        for f in geo.get("faults", []):
+            x, y = (float(v) for v in f["centerMm"])
+            near = min(placed, key=lambda c: math.dist((c["pose"]["x"], c["pose"]["y"]), (x, y)), default=None)
+            r = FAULT_CLEAN_MM
+            if near is not None and math.dist((near["pose"]["x"], near["pose"]["y"]), (x, y)) < 1.0:
+                r = max(r, 0.6 * crop_half(near))
+            raster.fill(tall, np.array([[x - r, y - r], [x + r, y - r], [x + r, y + r], [x - r, y + r]]))
+    a = cv2.GaussianBlur(tall.astype(np.float32) / 255.0, (0, 0), 0.25 * raster.s)[..., None]
+    return np.clip(rect * (1 - a) + mos * a + 0.5, 0, 255).astype(np.uint8)
+
+
 #: the photo mosaic covers the mounted frame (sockets overhang the board edge): board mm
 MOSAIC_FRAME = (-3.0, -4.0, 141.0, 112.0)
 #: runs left out of the mosaic, one DeepVision run id per line (e.g. the photos a phone comparison is measured on: the
@@ -66,7 +123,7 @@ def _tall_parts_from_mounted(board3d: dict[str, Any], folder: Path, raster: Boar
     for c in board3d["components"]:
         if c["stage"] in MOSAIC_FROM_MOUNTED and not c["dnp"]:
             for poly in component_polygons(c, 0.5)[0]:
-                cv2.fillPoly(mask, [raster.to_px(poly).round().astype(np.int32)], 255)
+                raster.fill(mask, poly)
     a = cv2.GaussianBlur(mask.astype(np.float32) / 255.0, (0, 0), 0.25 * raster.s)[..., None]
     out = np.clip(img * (1 - a) + ref * a + 0.5, 0, 255).astype(np.uint8)
     return out, {"stages": list(MOSAIC_FROM_MOUNTED), "pixels": int((a[..., 0] > 0.5).sum())}
@@ -113,6 +170,12 @@ def source_image(board3d: dict[str, Any], source: str, folder: Path | None = Non
     """(image, board mm -> image px matrix, raster to build) of a substrate source (*folder*: the board3d folder,
     where the ``photos`` mosaic is kept)."""
     cfg = SOURCES[source]
+    if cfg.get("geometry"):
+        # a single registered still (still_source): already on the mosaic frame, board mm -> raster px
+        if folder is None:
+            raise ValueError(f"source {source!r} needs the board3d folder")
+        raster = BoardRaster(*MOSAIC_FRAME, cfg["pxPerMm"])
+        return _still_image(board3d, folder, cfg, raster), np.linalg.inv(raster.pixel_to_board()), raster
     if source == "scan":
         scan = board3d["sources"].get("scan")
         if not scan or not scan.get("boardToImage"):
@@ -120,7 +183,7 @@ def source_image(board3d: dict[str, Any], source: str, folder: Path | None = Non
         image = cv2.imread(scan["path"], cv2.IMREAD_COLOR)
         if image is None:
             raise FileNotFoundError(scan["path"])
-        return image, np.asarray(scan["boardToImage"], float).reshape(3, 3), board_raster(board3d, cfg["pxPerMm"])
+        return image, as_mat3(scan["boardToImage"]), board_raster(board3d, cfg["pxPerMm"])
     if source == "photos":
         if folder is None:
             raise ValueError("source 'photos' needs the board3d folder")
@@ -154,6 +217,8 @@ def prepare_substrate(board3d: dict[str, Any], folder: Path, px_per_mm: float | 
     meta = load_json(meta_path) if meta_path.is_file() else None
     mosaic = folder / "photos" / "mosaic.png"
     stamp = int(mosaic.stat().st_mtime_ns) if source == "photos" and mosaic.is_file() else None   # rebuilt mosaic -> rebuild
+    if cfg.get("geometry"):              # a still: re-registered (or a rebuilt mosaic for its tall parts) -> rebuild
+        stamp = max(int(Path(cfg["geometry"]).stat().st_mtime_ns), int(mosaic.stat().st_mtime_ns) if mosaic.is_file() else 0)
     lands = folder / "bare" / "lands.json"
     lands_stamp = int(lands.stat().st_mtime_ns) if lands.is_file() else None      # measured lands -> pad mask changes
     if (force or meta is None or meta.get("raster") != raster.meta() or meta.get("method") != BARE_METHOD
@@ -194,11 +259,8 @@ def prepare_substrate(board3d: dict[str, Any], folder: Path, px_per_mm: float | 
 
 
 def blender_executable() -> str:
-    """``$SIMPLE_SIM_BLENDER``, else ``blender`` on the PATH (same variable as ``generation.blender.resolve_blender_executable``)."""
-    exe = os.environ.get(BLENDER_ENV_VAR) or shutil.which(DEFAULT_BLENDER_EXECUTABLE)
-    if not exe:
-        raise FileNotFoundError(f"blender not found (set {BLENDER_ENV_VAR})")
-    return exe
+    """``$SIMPLE_SIM_BLENDER``, else ``blender`` on the PATH (:func:`simple_sim.blender.executable.require_blender`)."""
+    return require_blender()
 
 
 def gpu_out_of_memory(log: str) -> bool:
@@ -314,7 +376,7 @@ def board_texture(board3d: dict[str, Any], folder: Path, sub: dict[str, Any], na
     for c in hit:
         bodies, _ = component_polygons({**c, "pose": c.get("nominalPose") or c["pose"]}, DEFECT_BARE_MARGIN_MM)
         for poly in bodies:
-            cv2.fillPoly(mask, [raster.to_px(poly).round().astype(np.int32)], 255)
+            raster.fill(mask, poly)
     out = folder / "renders" / f"{name}.substrate.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), np.where(mask[..., None] > 0, bare_img, scan))
@@ -336,26 +398,55 @@ def scan_pad_colour(sub: dict[str, Any]) -> tuple[int, int, int]:
     return _PAD_COLOUR[key]
 
 
-def part_atlas(folder: Path, sub: dict[str, Any], look: str | None = None) -> dict[str, Any] | None:
+_SOLDER_COLOUR: dict[str, tuple[int, int, int]] = {}
+#: brightness quantile of the visible land pixels taken as the image's solder colour (the lit crest of the joints)
+SOLDER_QUANTILE = 0.9
+
+
+def scan_solder_colour(sub: dict[str, Any]) -> tuple[int, int, int]:
+    """The bright solder of the real image (BGR): median colour of the visible land pixels (lands outside the bodies)
+    at or above the :data:`SOLDER_QUANTILE` of their brightness, once per image: the colour a defect's extra solder gets."""
+    key = sub["maps"]["scan_rgb"]
+    if key not in _SOLDER_COLOUR:
+        read = lambda k: cv2.imread(sub["maps"][k], cv2.IMREAD_UNCHANGED)  # noqa: E731
+        pads, parts = read("pads_mask"), read("parts_mask")
+        pads, parts = (m if m.ndim == 2 else m[..., 0] for m in (pads, parts))
+        img = read("scan_rgb")[..., :3]
+        px = img[(pads > 0) & (parts == 0)].astype(np.float32)
+        if len(px) < 100:
+            _SOLDER_COLOUR[key] = (200, 200, 200)
+        else:
+            lum = px @ np.array([0.114, 0.587, 0.299], np.float32)
+            top = px[lum >= np.quantile(lum, SOLDER_QUANTILE)]
+            _SOLDER_COLOUR[key] = tuple(int(round(v)) for v in np.median(top, 0))
+    return _SOLDER_COLOUR[key]
+
+
+def part_atlas(folder: Path, sub: dict[str, Any], look: str | None = None, tall: set[str] | None = None) -> dict[str, Any] | None:
     """The per-part face texture atlas (``tools/board3d_parttex.py``, :mod:`simple_sim.board3d.parttex`) for the job, when
     the substrate comes from the phone photos (the atlas is built from the same stills; the flatbed scan keeps its
     own pixels)."""
-    if sub.get("source") not in ("photos", "mounted"):
+    still = str(sub.get("source", "")).startswith(STILL_PREFIX)
+    if sub.get("source") not in ("photos", "mounted") and not still:
         return None
-    look = look or PART_LOOK
+    # a single still is the photo look itself: the clean look's metal caps and joints would hide its solder and residue
+    look = "photo" if still else look or PART_LOOK
     atlas, rep = folder / "parttex" / "atlas.png", folder / "parttex" / "parttex.json"
     clean = folder / "parttex" / "atlas_clean.png"
     if not atlas.is_file() or not rep.is_file():
         return None
     r = load_json(rep)
     if look == "clean" and clean.is_file():
-        from simple_sim.board3d.parttex import CLEAN_SCALE
+        from simple_sim.board3d.cleanlook import CLEAN_SCALE
         parts = {k: {"pose": v["pose"], "size": v["size"], "kind": v.get("kind"),
                      "faces": {f: {**i, "rect": [c * CLEAN_SCALE for c in i["rect"]]} for f, i in v["faces"].items() if "rect" in i}}
                  for k, v in r["parts"].items()}
         return {"path": str(clean), "size": [c * CLEAN_SCALE for c in r["atlasSize"]], "look": "clean", "parts": parts}
-    return {"path": str(atlas), "size": r["atlasSize"], "look": "photo",
-            "parts": {k: {"pose": v["pose"], "size": v["size"], "faces": v["faces"]} for k, v in r["parts"].items()}}
+    parts = {k: {"pose": v["pose"], "size": v["size"], "faces": v["faces"]} for k, v in r["parts"].items()}
+    if still:
+        # a single still: the low parts keep its own pixels (its light and residue); the atlas only for the tall ones
+        parts = {k: v for k, v in parts.items() if k in (tall or set())}
+    return {"path": str(atlas), "size": r["atlasSize"], "look": "photo", "parts": parts}
 
 
 def _corrected_textures(job: dict[str, Any], out_dir: Path, m: np.ndarray) -> Path:
@@ -396,11 +487,20 @@ def render_window(board3d: dict[str, Any], folder: Path, window: BoardRaster, na
     job = build_job(board3d, window, out=str(out), substrate={"path": substrate, "raster": sub["raster"]},
                     photo={"path": sub["maps"]["scan_rgb"], "raster": sub["raster"]} if photo else None,
                     stages=stages, light=light, samples=samples, device=device)
-    if photo and (atlas := part_atlas(folder, sub)):
+    tall = {c["refdes"] for c in board3d["components"] if (c.get("body") or {}).get("h") is None
+            or float(c["body"]["h"]) > LOW_PART_MM}
+    if photo and (atlas := part_atlas(folder, sub, tall=tall)):
         job["partAtlas"] = atlas
     job["thtJoints"] = tht_joints(board3d, folder, window, stages)
     if any(c.get("missing") for c in job["components"]):
         job["padBgr"] = scan_pad_colour(sub)
+    if job.get("bridges") or any(c.get("excess") or c.get("residue") or (c.get("tombstone") or {}).get("domeMm")
+                                 for c in job["components"]):
+        bgr = scan_solder_colour(sub)
+        if texture_matrix is not None:            # the textures go colour-corrected: the solder colour too
+            from simple_sim.board3d.photofx import apply_colour_matrix
+            bgr = tuple(int(v) for v in apply_colour_matrix(np.uint8([[bgr]]), texture_matrix)[0, 0])
+        job["solderBgr"] = list(bgr)
     if camera is not None:
         job["camera"] = camera
     if size_px is not None:
@@ -599,7 +699,7 @@ def tall_parts_mask(board3d: dict[str, Any], raster: BoardRaster, max_low_mm: fl
             continue
         bodies, _ = component_polygons(c, margin_mm)
         for poly in bodies:
-            cv2.fillPoly(mask, [raster.to_px(poly).round().astype(np.int32)], 255)
+            raster.fill(mask, poly)
     return mask
 
 
@@ -715,7 +815,7 @@ def photo_view(board3d: dict[str, Any], folder: Path, geometry_path: Path, name:
         return {"res": res, "cam": cam, "light": light, "raw": raw, "render": render, "masks": masks, "toneLut": tone_lut,
                 "metricsRaw": metrics_raw, "boardToSource": board_to_source}
 
-    h0 = np.asarray(geo["boardToSource"], float).reshape(3, 3)
+    h0 = board_to_source(geo)
     v = view(h0)
     registration: dict[str, Any] = {"refined": False}
     if refine:

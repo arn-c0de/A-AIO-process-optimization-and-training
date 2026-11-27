@@ -7,12 +7,16 @@ built; the nominal pose stays in the job, so the photo texture moves with the pa
 ``op``             fields
 =================  ===========================================================================================
 ``move``           ``refdes``, ``dx``, ``dy`` (mm), ``dRot`` (deg)
-``remove``         ``refdes`` (pads + reflowed paste stay)
-``tombstone``      ``refdes``, ``tiltDeg`` (default 70), ``raisedSign`` (+1 / -1: which end lifts)
-``excess``         ``refdes``, ``pads`` (indices; default all)
+``remove``         ``refdes`` (pads + reflowed paste stay), ``residue`` (``paste`` default: the lands as scanned;
+                   ``tinned``: shiny solder domes ``domeMm`` high, as a part pulled off by hand leaves them)
+``tombstone``      ``refdes``, ``tiltDeg`` (default 70), ``raisedSign`` (+1 / -1: which end lifts), ``domeMm`` (optional:
+                   a shiny solder dome of this height on the land the raised end left)
+``excess``         ``refdes``, ``pads`` (indices; default all), ``grow`` (land factor, default 1.3), ``heightScale``
+                   (x the nominal fillet, default 2.2)
 ``lift``           ``refdes``, ``dz`` (mm; part floats above its pads)
 ``bridge``         ``refdes``, ``pad`` and ``to`` (refdes, default the same part), ``toPad``: a solder bar between the two
-                   lands (pin to pin of one IC, or to the nearest land of a neighbour)
+                   lands (pin to pin of one IC, or to the nearest land of a neighbour); ``widthScale`` (x the narrower
+                   land, default 0.85), ``heightMm`` (default 0.2)
 =================  ===========================================================================================
 """
 
@@ -99,7 +103,9 @@ def apply_defects(board3d: dict[str, Any], ops: list[dict[str, Any]]) -> dict[st
             if other is c and i == j:
                 raise ValueError("bridge: needs two different lands")
             out.setdefault("bridges", []).append({"from": [c["refdes"], i], "to": [other["refdes"], j],
-                                                  "a": pad_world(c, i), "b": pad_world(other, j)})
+                                                  "a": pad_world(c, i), "b": pad_world(other, j),
+                                                  "widthScale": float(op.get("widthScale", 0.85)),
+                                                  "heightMm": float(op.get("heightMm", 0.2))})
     return out
 
 
@@ -116,6 +122,7 @@ def job_component(c: dict[str, Any]) -> dict[str, Any]:
     defects = {d["op"]: d for d in c.get("defects", [])}
     tomb = defects.get("tombstone")
     exc = defects.get("excess")
+    rem = defects.get("remove")
     return {
         "refdes": c["refdes"], "family": c["family"], "l": c["body"]["l"], "w": c["body"]["w"], "height": fp["height"],
         "heightGuess": fp["heightGuess"],
@@ -123,8 +130,12 @@ def job_component(c: dict[str, Any]) -> dict[str, Any]:
         "thermal": fp["thermal"], "part": fp["part"],
         "pose": c["pose"], "nominal": c.get("nominalPose") or c["pose"],
         "missing": "remove" in defects or c["dnp"],
-        "tombstone": None if tomb is None else {"tiltDeg": float(tomb.get("tiltDeg", 70.0)), "raisedSign": float(tomb.get("raisedSign", 1.0))},
+        "tombstone": None if tomb is None else {"tiltDeg": float(tomb.get("tiltDeg", 70.0)), "raisedSign": float(tomb.get("raisedSign", 1.0)),
+                                                **({"domeMm": float(tomb["domeMm"])} if tomb.get("domeMm") else {})},
         "excess": [] if exc is None else list(exc.get("pads") or range(len(fp["pads"]))),
+        **({"excessGrow": float(exc.get("grow", 1.3)), "excessHeight": float(exc.get("heightScale", 2.2))} if exc else {}),
+        **({"residue": {"kind": rem["residue"], "domeMm": float(rem.get("domeMm", 0.08))}}
+           if rem is not None and rem.get("residue") == "tinned" else {}),
     }
 
 

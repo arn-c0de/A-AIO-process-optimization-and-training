@@ -32,6 +32,7 @@ import cv2  # noqa: E402
 
 from simple_sim.board3d import barepads, load_board3d  # noqa: E402
 from simple_sim.cli_utils import add_json_flag, emit_result  # noqa: E402
+from simple_sim.io_utils import load_json  # noqa: E402
 
 
 def _photo(p: Path) -> Path:
@@ -54,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     board3d = load_board3d(a.board3d)
     board3d["components"] = [{k: v for k, v in c.items() if k != "lands"} for c in board3d["components"]]
     sub_dir = a.board3d / "substrate"
-    raster = json.loads((sub_dir / "substrate.json").read_text(encoding="utf-8"))["raster"]
+    raster = load_json(sub_dir / "substrate.json")["raster"]
     scan = None if a.no_scan else cv2.imread(str(sub_dir / "scan_rgb.png"), cv2.IMREAD_COLOR)
     out = a.board3d / "bare"
     out.mkdir(parents=True, exist_ok=True)

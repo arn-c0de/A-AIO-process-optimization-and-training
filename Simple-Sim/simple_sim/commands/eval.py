@@ -8,13 +8,13 @@ from pathlib import Path
 from simple_sim.cli_utils import (
     PROFILE_MISMATCH_HINT,
     add_data_arg,
+    add_device_arg,
     add_json_flag,
     add_model_arg,
     add_profile_mismatch_flag,
     run_cli,
     with_hint,
 )
-from simple_sim.devices import default_device_name
 from simple_sim.manifest import ProfileMismatchError
 
 COMMAND = "eval"
@@ -29,7 +29,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "DANGEROUS: allow evaluating a checkpoint on a dataset with a different component profile. "
         "This disables the hard profile_id mismatch guard and continues with a warning."
     ))
-    parser.add_argument('--device', type=str, default=default_device_name(), help='Device (cuda/cpu)')
+    add_device_arg(parser)
     parser.add_argument('--tta', action='store_true',
                         help='Test-time augmentation: average the softmax over horizontal/vertical flips and '
                              '90-degree rotations (8 views; for cardinal-rotation-augmented datasets)')

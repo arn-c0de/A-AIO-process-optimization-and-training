@@ -98,6 +98,41 @@ def _unlit_colour_material(name: str, bgr, gain=(1.0, 1.0, 1.0)):
     return mat
 
 
+def _solder_photo_material(name: str, bgr, gain=(1.0, 1.0, 1.0), glossy: float = 0.3):
+    """Defect solder (bridges, blobs, tinned lands) under the flatbed / room presets: the bright solder colour of the
+    real image (*bgr*, :func:`simple_sim.board3d.render.scan_solder_colour`) as emission, brightest where the surface
+    faces the camera and ~55 % at its grazing rim (a dome's highlight and dark edge), plus *glossy* x a lit tin BSDF for
+    the reflections. The nominal joints show the photo's own solder unlit; lit metal under the room preset's dim
+    mirror world rendered the defect solder grey-pink, the reviewed real bridges are near white."""
+    lin = lambda v: ((v / 255.0 + 0.055) / 1.055) ** 2.4 if v / 255.0 > 0.04045 else v / 255.0 / 12.92  # noqa: E731
+    rgb = [lin(float(v)) * float(g) for v, g in zip(reversed(list(bgr)), gain)]
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    nodes.clear()
+    lw = nodes.new("ShaderNodeLayerWeight")
+    lw.inputs["Blend"].default_value = 0.35
+    shade = nodes.new("ShaderNodeMath")
+    shade.operation = "MULTIPLY_ADD"          # 1 - 0.45 * facing
+    shade.inputs[1].default_value = -0.45
+    shade.inputs[2].default_value = 1.0
+    links.new(lw.outputs["Facing"], shade.inputs[0])
+    emit = nodes.new("ShaderNodeEmission")
+    emit.inputs["Color"].default_value = (*rgb, 1.0)
+    links.new(shade.outputs["Value"], emit.inputs["Strength"])
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.inputs["Base Color"].default_value = (0.8, 0.8, 0.8, 1.0)
+    bsdf.inputs["Metallic"].default_value = 1.0
+    bsdf.inputs["Roughness"].default_value = 0.25
+    mixw = nodes.new("ShaderNodeMixShader")
+    mixw.inputs["Fac"].default_value = float(glossy)
+    out = nodes.new("ShaderNodeOutputMaterial")
+    links.new(emit.outputs["Emission"], mixw.inputs[1])
+    links.new(bsdf.outputs["BSDF"], mixw.inputs[2])
+    links.new(mixw.outputs["Shader"], out.inputs["Surface"])
+    return mat
+
+
 def _room_gain(job: dict) -> tuple[float, float, float]:
     g = (job.get("light") or {}).get("gainRgb")
     if g:
@@ -630,14 +665,24 @@ def _build_component(c: dict, job: dict, mats: dict, rng: random.Random, pending
             contacts = [n if n is not None else o for n, o in zip(new_contacts, contacts)]
             h_solder = new_h if new_h is not None else h_solder
     excess = set(c.get("excess") or [])
+    grow, tall = float(c.get("excessGrow", EXCESS_GROW)), float(c.get("excessHeight", EXCESS_HEIGHT))
+    residue = c.get("residue") or {}
+    tomb_dome = float((c.get("tombstone") or {}).get("domeMm") or 0.0)
     joints = []
     for i, (pad, contact) in enumerate(zip(fp_pads, contacts)):
+        px, py, pw, ph = pad
         if i in excess:
-            # too much solder: a convex blob on a land grown by EXCESS_GROW, EXCESS_HEIGHT x the nominal fillet,
-            # in shiny tin (the photo has no blob to show)
-            px, py, pw, ph = pad
-            _blob(f"solder_{c['refdes']}_{i}", px, py, pw * EXCESS_GROW, ph * EXCESS_GROW,
-                  max(h_solder, 0.12) * EXCESS_HEIGHT, mats["solder_excess"])
+            # too much solder: a convex blob on a land grown by ``grow``, ``tall`` x the nominal fillet, in shiny tin
+            # (the photo has no blob to show)
+            _blob(f"solder_{c['refdes']}_{i}", px, py, pw * grow, ph * grow, max(h_solder, 0.12) * tall, mats["solder_excess"])
+            continue
+        if c.get("missing") and residue.get("kind") == "tinned" and not c.get("dnp"):
+            # part pulled off by hand: the lands keep a shiny solder dome (not the flat, scanned paste)
+            _blob(f"solder_{c['refdes']}_{i}", px, py, pw * 0.95, ph * 0.95, float(residue["domeMm"]), mats["solder_excess"])
+            continue
+        if tomb_dome and contact is None:
+            # the land the raised end left: its solder balled up into a shiny dome
+            _blob(f"solder_{c['refdes']}_{i}", px, py, pw * 0.9, ph * 0.9, tomb_dome, mats["solder_excess"])
             continue
         j = rb._fillet(f"solder_{c['refdes']}_{i}", pad, contact, h_solder, i == c.get("thermal"), mats["solder"])
         if j is not None:
@@ -791,11 +836,13 @@ def _build_tht_joints(job: dict, mats: dict) -> None:
 
 
 def _build_bridges(job: dict, mats: dict) -> None:
-    """Solder bars between two lands (op ``bridge``): land centre to land centre, as wide as 85 % of the narrower
-    land, 0.2 mm high, in shiny tin."""
+    """Solder bars between two lands (op ``bridge``): land centre to land centre, ``widthScale`` (default 85 %) of the
+    narrower land wide, ``heightMm`` (default 0.2) high, in shiny tin."""
     for k, b in enumerate(job.get("bridges") or []):
         (ax, ay, aw, ah), (bx, by, bw, bh) = b["a"], b["b"]
-        bar = _bridge_mesh(f"bridge_{k}", Vector((ax, ay, 0.0)), Vector((bx, by, 0.0)), 0.85 * min(aw, ah, bw, bh), 0.2)
+        width = float(b.get("widthScale", 0.85)) * min(aw, ah, bw, bh)
+        height = float(b.get("heightMm", 0.2))
+        bar = _bridge_mesh(f"bridge_{k}", Vector((ax, ay, 0.0)), Vector((bx, by, 0.0)), width, height)
         bar.data.materials.append(mats["solder_excess"])
 
 
@@ -1015,6 +1062,10 @@ def _build_parts(job: dict, mats: dict) -> None:
     """Components (photo UVs in one pass at the end), bridges, through-hole joints, brackets and sheets."""
     rng = random.Random(int(job.get("seed", 0)))
     mats["solder_excess"] = rb._material("mat_solder_excess", (0.72, 0.72, 0.73), roughness=0.5, metallic=0.55, bump=0.02)
+    preset = _light_preset(job)
+    if job.get("solderBgr") and preset in ("flatbed", "room"):
+        gain = _room_gain(job) if preset == "room" else (1.0, 1.0, 1.0)
+        mats["solder_excess"] = _solder_photo_material("mat_solder_photo", job["solderBgr"], gain)
     pending: list = []
     for c in job["components"]:
         _build_component(c, job, mats, rng, pending)
@@ -1072,6 +1123,14 @@ def main() -> None:
     if job.get("shadowCatcher"):
         _shadow_catcher(job)
     scene.camera = _camera(job)
+    if job.get("cropPx"):
+        # only a region of the frame ([u0, v0, u1, v1] in px, y down), written at its own size: a part's crop of a
+        # photo view (defect fit) costs its few pixels instead of the whole frame
+        u0, v0, u1, v1 = (float(v) for v in job["cropPx"])
+        w, h = float(job["widthPx"]), float(job["heightPx"])
+        scene.render.use_border, scene.render.use_crop_to_border = True, True
+        scene.render.border_min_x, scene.render.border_max_x = max(0.0, u0 / w), min(1.0, u1 / w)
+        scene.render.border_min_y, scene.render.border_max_y = max(0.0, 1.0 - v1 / h), min(1.0, 1.0 - v0 / h)
     out = Path(job["out"])
     out.parent.mkdir(parents=True, exist_ok=True)
     scene.render.filepath = str(out)

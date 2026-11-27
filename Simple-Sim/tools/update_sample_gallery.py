@@ -35,10 +35,10 @@ from simple_sim.cli_utils import add_json_flag, configure_cli_logging, emit_resu
 from simple_sim.config import load_config, merge_profile_render, validate_config  # noqa: E402
 from simple_sim.defects import sample_defect_params  # noqa: E402
 from simple_sim.board.footprints import profile_footprint  # noqa: E402
-from simple_sim.generators.blender3d.bake import bake_fields, profile_component_height_mm  # noqa: E402
-from simple_sim.generators.blender3d import profile_job_fields, render_blender_batch, write_jobs_jsonl  # noqa: E402
+from simple_sim.generators.blender3d.bake import bake_fields  # noqa: E402
+from simple_sim.generators.blender3d import render_blender_batch, write_jobs_jsonl  # noqa: E402
 from simple_sim.generators.opencv2d import RenderSpec, clean_augment, render_sample, sample_nominal_geometry  # noqa: E402
-from simple_sim.generation.blender import blender_job, blender_settings  # noqa: E402
+from simple_sim.generation.blender import blender_settings, profile_blender_job  # noqa: E402
 from simple_sim.blender.job_schema import DEFAULT_BLENDER_EXECUTABLE, DEFAULT_CYCLES_SAMPLES, DEFAULT_DEVICE  # noqa: E402
 from simple_sim.classes import STANDARD_CLASSES  # noqa: E402
 from simple_sim.preview.render import BACKEND_2D, BACKEND_3D, find_matching_run_configs, profile_backends  # noqa: E402
@@ -155,17 +155,13 @@ def _build_3d_job(
     seed_base: int,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     roi_cfg = cfg.get("roi") or {"width_px": 256, "height_px": 256, "mm_per_px": 0.01}
-    mm_per_px = float(roi_cfg.get("mm_per_px", 0.01))
-    roi_w = int(roi_cfg.get("width_px", 256))
-    roi_h = int(roi_cfg.get("height_px", 256))
+    job_roi = {"width_px": int(roi_cfg.get("width_px", 256)), "height_px": int(roi_cfg.get("height_px", 256)),
+               "mm_per_px": float(roi_cfg.get("mm_per_px", 0.01))}
 
     rng = np.random.default_rng(stable_int_seed(seed_base, profile_id, defect_type, BACKEND_3D))
 
-    footprint = profile_footprint(profile)
     geometry_ranges = profile.get("geometry_ranges") or {}
     tolerances = profile.get("tolerances") or {}
-    component_height_mm = profile_component_height_mm(profile)
-    render_3d = profile.get("render_3d") or {}
 
     nominal = sample_nominal_geometry(roi_cfg, rng, geometry_ranges=geometry_ranges)
     defect = sample_defect_params(str(defect_type), rng, tolerances=tolerances)
@@ -177,9 +173,7 @@ def _build_3d_job(
         "defect": defect,
         "augment": clean_augment(),  # render_batch.py reads only rotation_deg (0 here)
     }
-    job = blender_job(record, mm_per_px=mm_per_px, roi_width=roi_w, roi_height=roi_h, footprint=footprint,
-                      component_height_mm=component_height_mm, render_3d=render_3d,
-                      bake={**profile_job_fields(profile), **bake_fields(cfg.get("render") or {}, roi_cfg)})
+    job = profile_blender_job(record, profile, job_roi, bake=bake_fields(cfg.get("render") or {}, roi_cfg))
     return dict(job), nominal, defect
 
 

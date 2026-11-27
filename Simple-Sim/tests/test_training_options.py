@@ -533,7 +533,9 @@ def test_pretrained_download_failure_is_an_error(monkeypatch):
 
 
 def test_resume_best_score_only_counts_for_the_same_dataset(tmp_path):
-    from simple_sim.training import _other_dataset, _require_samples, hash_file
+    from simple_sim.checkpoints import other_dataset as _other_dataset
+    from simple_sim.manifest import hash_file
+    from simple_sim.training import _require_samples
 
     ds = tmp_path / "A"
     ds.mkdir()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,7 @@ from simple_sim.cli import argv_for
 from simple_sim.dataset_files import LABELS_JSONL, META_JSONL
 from simple_sim.dataset_index import DatasetIndex
 from simple_sim.eval_utils import dataset_profile
-from simple_sim.io_utils import iter_json_lines
+from simple_sim.io_utils import iter_json_lines, load_json
 from simple_sim.model_bundle import bundle_checkpoint_path
 
 
@@ -157,7 +156,7 @@ class PredictionsLogic(StreamingProcessLogic):
 
     def load_report(self, report_path: Path) -> tuple[dict[str, Any] | None, str | None]:
         try:
-            obj = json.loads(report_path.read_text(encoding="utf-8"))
+            obj = load_json(report_path)
             return obj, None
         except Exception as e:
             return None, f"Failed to load report:\n{e}"

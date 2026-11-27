@@ -131,21 +131,30 @@ def apply_jpeg_compression(img: np.ndarray, quality: int) -> np.ndarray:
     return cv2.imdecode(encoded, cv2.IMREAD_COLOR)
 
 
+def _random_ellipse(h: int, w: int, size: float, rng: np.random.Generator) -> tuple[np.ndarray, slice, slice] | None:
+    """Normalised radius (0 at the centre, 1 on the rim) of an ellipse of *size* x the image at a random place,
+    clipped to the image, with its ``(rows, cols)`` slices; None when it is smaller than a pixel."""
+    pw, ph = int(w * size), int(h * size)
+    if pw < 1 or ph < 1:
+        return None
+    x_pos = int(rng.integers(0, max(1, w - pw)))
+    y_pos = int(rng.integers(0, max(1, h - ph)))
+    iy, ix = np.ogrid[:ph, :pw]
+    dist = np.sqrt(((iy - ph / 2) / (ph / 2)) ** 2 + ((ix - pw / 2) / (pw / 2)) ** 2)
+    y1, x1 = min(y_pos + ph, h), min(x_pos + pw, w)
+    return dist[: y1 - y_pos, : x1 - x_pos], slice(y_pos, y1), slice(x_pos, x1)
+
+
 def apply_shadow(img: np.ndarray, strength: float, size: float, rng: np.random.Generator) -> np.ndarray:
     if strength <= 0 or size <= 0:
         return img
     h, w = img.shape[:2]
-    shadow_w, shadow_h = int(w * size), int(h * size)
-    if shadow_w < 1 or shadow_h < 1:
+    ell = _random_ellipse(h, w, size, rng)
+    if ell is None:
         return img
-    x_pos = int(rng.integers(0, max(1, w - shadow_w)))
-    y_pos = int(rng.integers(0, max(1, h - shadow_h)))
-    iy, ix = np.ogrid[:shadow_h, :shadow_w]
-    dist = np.sqrt(((iy - shadow_h / 2) / (shadow_h / 2)) ** 2 + ((ix - shadow_w / 2) / (shadow_w / 2)) ** 2)
-    patch_mask = np.where(dist < 1.0, 1.0 - (1.0 - dist) * strength, 1.0).astype(np.float32)
+    dist, rows, cols = ell
     mask = np.ones((h, w), dtype=np.float32)
-    y1, x1 = min(y_pos + shadow_h, h), min(x_pos + shadow_w, w)
-    mask[y_pos:y1, x_pos:x1] = np.minimum(mask[y_pos:y1, x_pos:x1], patch_mask[: y1 - y_pos, : x1 - x_pos])
+    mask[rows, cols] = np.where(dist < 1.0, 1.0 - (1.0 - dist) * strength, 1.0).astype(np.float32)
     return (img.astype(np.float32) * mask[..., None]).astype(np.uint8)
 
 
@@ -153,17 +162,12 @@ def apply_reflection(img: np.ndarray, strength: float, size: float, rng: np.rand
     if strength <= 0 or size <= 0:
         return img
     h, w = img.shape[:2]
-    refl_w, refl_h = int(w * size), int(h * size)
-    if refl_w < 1 or refl_h < 1:
+    ell = _random_ellipse(h, w, size, rng)
+    if ell is None:
         return img
-    x_pos = int(rng.integers(0, max(1, w - refl_w)))
-    y_pos = int(rng.integers(0, max(1, h - refl_h)))
-    iy, ix = np.ogrid[:refl_h, :refl_w]
-    dist = np.sqrt(((iy - refl_h / 2) / (refl_h / 2)) ** 2 + ((ix - refl_w / 2) / (refl_w / 2)) ** 2)
-    patch = np.where(dist < 1.0, (1.0 - dist) * strength * 255, 0.0).astype(np.float32)
+    dist, rows, cols = ell
     reflection = np.zeros((h, w), dtype=np.float32)
-    y1, x1 = min(y_pos + refl_h, h), min(x_pos + refl_w, w)
-    reflection[y_pos:y1, x_pos:x1] = patch[: y1 - y_pos, : x1 - x_pos]
+    reflection[rows, cols] = np.where(dist < 1.0, (1.0 - dist) * strength * 255, 0.0).astype(np.float32)
     return clip8(img.astype(np.float32) + reflection[..., None])
 
 

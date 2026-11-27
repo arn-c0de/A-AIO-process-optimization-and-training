@@ -33,6 +33,7 @@ import cv2
 import numpy as np
 
 from simple_sim.board3d.substrate import BoardRaster
+from simple_sim.io_utils import load_json
 
 #: search box around the scene pose
 SHIFT_MM, ROT_DEG, SCALE_RANGE = 0.2, 4.0, (0.85, 1.2)
@@ -158,11 +159,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--families", default=",".join(FIT_FAMILIES))
     a = ap.parse_args(argv)
     path = a.board3d / "board3d.json"
-    board3d = json.loads(path.read_text(encoding="utf-8"))
+    board3d = load_json(path)
     if not (a.board3d / "substrate" / "substrate.json").is_file():   # first run: build the rectified scan
         from simple_sim.board3d.render import prepare_substrate
         prepare_substrate(board3d, a.board3d)
-    sub = json.loads((a.board3d / "substrate" / "substrate.json").read_text())
+    sub = load_json(a.board3d / "substrate" / "substrate.json")
     r = sub["raster"]
     raster = BoardRaster.from_meta(r)
     scan = cv2.imread(str(a.board3d / "substrate" / "scan_rgb.png"), cv2.IMREAD_COLOR)

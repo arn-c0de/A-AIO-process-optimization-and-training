@@ -9,9 +9,10 @@ from gui.theme.style import font
 from gui.theme.tokens import SPACE
 from gui.utils.formatting import fmt_bytes
 from gui.utils.tooltip import ToolTip
-from gui.widgets import FormGrid, LogView, LogViewHost, ScrolledTree, Section, Toolbar
+from gui.widgets import FormGrid, LogViewHost, ScrolledTree, Section, Toolbar
 
 if TYPE_CHECKING:
+    from gui.widgets import LogView
     from .tab import WeightsTab
 
 
@@ -71,7 +72,7 @@ class WeightsUI(LogViewHost):
         self._build_evaluate_section(right)
         self._build_compare_section(right)
         self._build_reports_section(right)
-        self._build_log_section(right)
+        self._build_log_section(right, "Logs / Output", height=14)
 
         tl = self.frame.winfo_toplevel()
         tl.bind("<Button-1>", self.tab._hide_models_menu, add="+")
@@ -310,19 +311,6 @@ class WeightsUI(LogViewHost):
         self.tree_reports.bind("<Button-3>", self.tab._on_reports_right_click)
         self.tree_reports.bind("<Button-2>", self.tab._on_reports_right_click)
         self.tree_reports.bind("<Double-1>", lambda _e: self.tab._show_selected_report_summary())
-
-    def _build_log_section(self, parent: tk.Misc) -> None:
-        sec = Section(parent, "Logs / Output")
-        sec.pack(fill="both", expand=True)
-        self.log_view = LogView(sec, height=14)
-        self.log_view.pack(fill="both", expand=True)
-        self.txt = self.log_view.text
-        b_clear = ttk.Button(sec.actions, text="Clear", style="Icon.TButton", command=self.log_view.clear)
-        b_clear.pack(side="right")
-        ToolTip(b_clear, help_key="common.clear_log")
-        b_copy = ttk.Button(sec.actions, text="Copy", style="Icon.TButton", command=self.log_view.copy_all)
-        b_copy.pack(side="right", padx=(0, SPACE.S))
-        ToolTip(b_copy, help_key="common.copy_log")
 
     fmt_bytes = staticmethod(fmt_bytes)
 

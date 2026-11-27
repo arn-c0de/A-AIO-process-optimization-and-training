@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 
 from simple_sim.classes import DefectClass
+from simple_sim.board3d.camera import as_mat3
 from simple_sim.board3d.substrate import BoardRaster
 
 #: crop side / longest body side, as the DeepVision app cuts its part crops (``fieldMm`` = 3.04 body lengths)
@@ -32,6 +33,9 @@ ELIGIBLE_FAMILIES = ("resistor", "capacitor", "inductor", "led", "sot", "sot6", 
 TOMBSTONE_FAMILIES = ("resistor", "capacitor", "inductor", "led")
 #: a bridge to a neighbour's land is only drawn when the lands' edges are at most this far apart (mm)
 BRIDGE_MAX_GAP_MM = 0.8
+
+#: share of MISSING crops whose lands are tinned domes (a part pulled off) instead of the printed paste
+TINNED_SHARE = 0.6
 
 #: class -> default share of the crops
 DEFAULT_MIX = {DefectClass.OK: 0.25, DefectClass.MISALIGNED: 0.2, DefectClass.MISSING: 0.15,
@@ -59,7 +63,7 @@ def _bridge(c: dict[str, Any], board3d: dict[str, Any] | None, rng: random.Rando
         d = {p: math.dist(world[p[0]][:2], world[p[1]][:2]) for p in pairs}
         nearest = min(d.values())
         i, j = rng.choice([p for p in pairs if d[p] <= nearest * 1.05])
-        return {"op": "bridge", "refdes": c["refdes"], "pad": i, "toPad": j}
+        return {"op": "bridge", "refdes": c["refdes"], "pad": i, "toPad": j, **_bridge_shape(rng)}
     best = None
     for o in (board3d or {}).get("components", []):
         if o is c or o["dnp"] or not o.get("pose") or not o.get("body") or o["stage"] != c["stage"]:
@@ -74,7 +78,12 @@ def _bridge(c: dict[str, Any], board3d: dict[str, Any] | None, rng: random.Rando
                     best = (gap, i, o["refdes"], j)
     if best is None:
         raise NotApplicable("no neighbouring land close enough for a bridge")
-    return {"op": "bridge", "refdes": c["refdes"], "pad": best[1], "to": best[2], "toPad": best[3]}
+    return {"op": "bridge", "refdes": c["refdes"], "pad": best[1], "to": best[2], "toPad": best[3], **_bridge_shape(rng)}
+
+
+def _bridge_shape(rng: random.Random) -> dict[str, float]:
+    """The reviewed real bridges (prep boards) run from a thin bright thread to a fat bar over both lands."""
+    return {"widthScale": round(rng.uniform(0.45, 1.15), 3), "heightMm": round(rng.uniform(0.1, 0.38), 3)}
 
 
 def sample_op(c: dict[str, Any], cls: DefectClass, rng: random.Random, board3d: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -86,13 +95,19 @@ def sample_op(c: dict[str, Any], cls: DefectClass, rng: random.Random, board3d: 
     if cls == DefectClass.SOLDER_BRIDGE:
         return _bridge(c, board3d, rng)
     if cls == DefectClass.MISSING:
+        # reflowed paste as printed, or (the reviewed real ones: parts pulled off) shiny tinned lands
+        if rng.random() < TINNED_SHARE:
+            return {"op": "remove", "refdes": ref, "residue": "tinned", "domeMm": round(rng.uniform(0.04, 0.16), 3)}
         return {"op": "remove", "refdes": ref}
     if cls == DefectClass.TOMBSTONE:
         if c["family"] not in TOMBSTONE_FAMILIES:
             raise NotApplicable(f"{c['family']} parts do not tombstone")
-        return {"op": "tombstone", "refdes": ref, "tiltDeg": round(rng.uniform(45, 85), 1), "raisedSign": rng.choice([-1, 1])}
+        op = {"op": "tombstone", "refdes": ref, "tiltDeg": round(rng.uniform(45, 85), 1), "raisedSign": rng.choice([-1, 1])}
+        if rng.random() < 0.6:            # the left land's solder balled up
+            op["domeMm"] = round(rng.uniform(0.05, 0.15), 3)
+        return op
     if cls == DefectClass.EXCESS_SOLDER:
-        return {"op": "excess", "refdes": ref}
+        return {"op": "excess", "refdes": ref, "grow": round(rng.uniform(1.2, 1.6), 3), "heightScale": round(rng.uniform(1.8, 3.2), 2)}
     if cls == DefectClass.MISALIGNED:
         # clearly off: shift of 25-50 % of the body width across, 15-30 % of the length along, or a rotation of 8-25 deg
         kind = rng.choice(["shift", "rotate", "both"])
@@ -105,13 +120,39 @@ def sample_op(c: dict[str, Any], cls: DefectClass, rng: random.Random, board3d: 
     raise ValueError(f"class {cls} is not supported by the board3d sampler")
 
 
+def near_any(c: dict[str, Any], points: list[tuple[float, float]] | None, margin_mm: float = 0.5) -> bool:
+    """A point of *points* (board mm) lies inside the part's crop field (+ *margin_mm*)."""
+    r = crop_half(c) + margin_mm
+    return any(abs(x - c["pose"]["x"]) <= r and abs(y - c["pose"]["y"]) <= r for x, y in points or ())
+
+
+#: ``with_fitted_shape``: share of the ops that take a fitted shape (the rest keeps the sampler's ranges)
+FITTED_SHARE = 0.5
+
+
+def with_fitted_shape(op: dict[str, Any] | None, shapes: dict[str, list[dict[str, Any]]] | None, rng: random.Random,
+                      share: float = FITTED_SHARE) -> dict[str, Any] | None:
+    """*op* with, at probability *share*, the shape parameters of a random fit of its kind (``shapes.json`` of
+    ``tools/board3d_fitdefect.py``: a reviewed real defect reproduced), jittered by +-10 % (numbers only)."""
+    if not op or not shapes or not shapes.get(op["op"]) or rng.random() >= share:
+        return op
+    shape = rng.choice(shapes[op["op"]])
+    out = dict(op)
+    for k, v in shape.items():
+        out[k] = round(float(v) * rng.uniform(0.9, 1.1), 4) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+    return out
+
+
 def plan_sheet(board3d: dict[str, Any], window: BoardRaster, per_sheet: int, spacing_mm: float, rng: random.Random,
-               mix: dict[DefectClass, float] | None = None, stages: set[str] | None = None) -> list[dict[str, Any]]:
-    """Chosen parts of one sheet: ``[{"component", "class", "op"}]``."""
+               mix: dict[DefectClass, float] | None = None, stages: set[str] | None = None,
+               avoid: list[tuple[float, float]] | None = None, shapes: dict[str, list[dict[str, Any]]] | None = None) -> list[dict[str, Any]]:
+    """Chosen parts of one sheet: ``[{"component", "class", "op"}]``. *avoid*: board mm points (real defects in the
+    photo) that no chosen part's crop field may contain. *shapes*: fitted shape parameters per op kind
+    (:func:`with_fitted_shape`)."""
     stages = stages or {"smd"}
     mix = mix or DEFAULT_MIX
     margin = 1.0
-    cands = [c for c in board3d["components"] if eligible(c, stages)
+    cands = [c for c in board3d["components"] if eligible(c, stages) and not near_any(c, avoid)
              and window.x0 + margin + crop_half(c) <= c["pose"]["x"] <= window.x0 + window.w - margin - crop_half(c)
              and window.y0 + margin + crop_half(c) <= c["pose"]["y"] <= window.y0 + window.h - margin - crop_half(c)]
     rng.shuffle(cands)
@@ -125,7 +166,7 @@ def plan_sheet(board3d: dict[str, Any], window: BoardRaster, per_sheet: int, spa
             while classes:
                 cls = rng.choices(classes, weights=weights)[0]
                 try:
-                    chosen.append({"component": c, "class": cls, "op": sample_op(c, cls, rng, board3d)})
+                    chosen.append({"component": c, "class": cls, "op": with_fitted_shape(sample_op(c, cls, rng, board3d), shapes, rng)})
                     break
                 except NotApplicable:              # e.g. tombstone on an IC: draw another class for this part
                     k = classes.index(cls)
@@ -145,7 +186,7 @@ def crop_photo(image: np.ndarray, board_to_image: np.ndarray, c: dict[str, Any],
     None when less than *min_inside* of the field lies inside the image."""
     half = crop_half(c)
     x, y = c["pose"]["x"], c["pose"]["y"]
-    h = np.asarray(board_to_image, float).reshape(3, 3)
+    h = as_mat3(board_to_image)
     pts = cv2.perspectiveTransform(np.array([[[x, y], [x + half, y], [x, y + half]]], np.float64), h)[0]
     (u, v), du, dv = pts[0], pts[1] - pts[0], pts[2] - pts[0]
     r = float(np.sqrt(abs(du[0] * dv[1] - du[1] * dv[0])))             # local scale: sqrt of the area ratio

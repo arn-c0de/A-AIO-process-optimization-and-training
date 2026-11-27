@@ -252,22 +252,26 @@ class ScrollableFrame(ttk.Frame):
                 self.canvas.configure(width=req)
 
     def _on_wheel(self, event: tk.Event) -> None:
-        # Only scroll when the pointer is over this frame.
-        try:
-            w = self.winfo_containing(event.x_root, event.y_root)
-        except Exception:
-            return
-        while w is not None and w is not self:
-            w = getattr(w, "master", None)
-        if w is None:
-            return
-        if getattr(event, "num", None) == 4:
-            delta = -1
-        elif getattr(event, "num", None) == 5:
-            delta = 1
-        else:
-            delta = -1 if event.delta > 0 else 1
-        self.canvas.yview_scroll(delta * 2, "units")
+        step = wheel_step_over(self, event)  # only scroll when the pointer is over this frame
+        if step:
+            self.canvas.yview_scroll(step * 2, "units")
+
+
+def wheel_step_over(widget: tk.Misc, event: tk.Event) -> int:
+    """Scroll direction of a mouse-wheel *event* (-1 up, 1 down; X11 buttons 4/5 or ``delta``), or 0 when the
+    pointer is not over *widget* or one of its descendants (for wheel bindings made application-wide)."""
+    try:
+        w = widget.winfo_containing(event.x_root, event.y_root)
+    except Exception:  # noqa: BLE001 - e.g. pointer over a destroyed/foreign window
+        return 0
+    while w is not None and w is not widget:
+        w = getattr(w, "master", None)
+    if w is None:
+        return 0
+    num = getattr(event, "num", None)
+    if num in (4, 5):
+        return -1 if num == 4 else 1
+    return -1 if event.delta > 0 else 1
 
 
 def keep_pane_visible(paned: ttk.Panedwindow, index: int = 0, pane: tk.Misc | None = None, *,

@@ -263,16 +263,10 @@ class PipelineUI(LogViewHost):
 
         logs = Section(work, "Live Log")
         work.add(logs, weight=2)
-        log_actions = logs.actions
         self.log_view = LogView(logs, height=10)
         self.log_view.pack(fill="both", expand=True)
         self.txt = self.log_view.text
-        b_clear = ttk.Button(log_actions, text="Clear", style="Icon.TButton", command=self.log_view.clear)
-        b_clear.pack(side="right")
-        ToolTip(b_clear, help_key="common.clear_log")
-        b_copy = ttk.Button(log_actions, text="Copy", style="Icon.TButton", command=self.log_view.copy_all)
-        b_copy.pack(side="right", padx=(0, SPACE.S))
-        ToolTip(b_copy, help_key="common.copy_log")
+        self.log_view.add_actions(logs.actions)
 
     # ------------------------------------------------------------------ sections
     def _build_source_section(self, parent: tk.Misc, sim_root: Path | None, store: Any) -> None:

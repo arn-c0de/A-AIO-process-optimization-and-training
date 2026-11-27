@@ -67,6 +67,15 @@ def add_out_arg(parser: argparse.ArgumentParser, help: str, *, required: bool = 
     parser.add_argument("--out", type=str, required=required, default=default, help=help)
 
 
+def add_device_arg(parser: argparse.ArgumentParser, help: str | None = "Device (cuda/cpu)", *, default: str | None = None) -> None:
+    """Add ``--device`` (torch device name); *default* ``None`` picks ``cuda`` when available, else ``cpu``."""
+    if default is None:
+        from simple_sim.devices import default_device_name
+
+        default = default_device_name()
+    parser.add_argument("--device", type=str, default=default, help=help)
+
+
 def add_amp_flags(parser: argparse.ArgumentParser) -> None:
     """Add the mutually exclusive ``--amp`` / ``--no-amp`` pair (``args.amp``, default True)."""
     amp_group = parser.add_mutually_exclusive_group()

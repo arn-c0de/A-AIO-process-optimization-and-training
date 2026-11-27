@@ -26,7 +26,7 @@ from gui.utils.filter_profile_store import (
     image_filters_payload,
     normalized_filter_settings,
 )
-from gui.utils.formatting import fmt_bytes
+from gui.utils.formatting import fmt_bytes, fmt_list
 from gui.utils.paths import list_model_paths, newest_file
 from gui.utils.pipeline_helpers import (
     DEFAULT_CLASS_NAMES,
@@ -69,6 +69,12 @@ def test_fmt_bytes_one_decimal() -> None:
     assert fmt_bytes(1023) == "1023 B"
     assert fmt_bytes(1536) == "1.5 KB"
     assert fmt_bytes(5 * 1024**3) == "5.0 GB"
+
+
+def test_fmt_list_truncates_with_count() -> None:
+    assert fmt_list([]) == ""
+    assert fmt_list(["a", "b"], 2) == "a\nb"
+    assert fmt_list(["a", "b", "c"], 2) == "a\nb\n... (+1 more)"
 
 
 def test_newest_file(tmp_path: Path) -> None:

@@ -18,7 +18,7 @@ import numpy as np
 from simple_sim.board.geometry import TOUCH, Shape, bbox_near, box, disc, gap, track
 from simple_sim.board.model import Board, Track, Vec
 from simple_sim.board.occupancy import Grid
-from simple_sim.board.zones import POUR_CELLS_PER_CLEARANCE, zone_fill  # noqa: F401 (re-exported)
+from simple_sim.board.zones import POUR_CELLS_PER_CLEARANCE, foreign_copper, zone_fill  # noqa: F401 (re-exported)
 
 CLEARANCE = "clearance"          # copper of two nets closer than the rule clearance
 DANGLING = "dangling"            # a track end on nothing of its net
@@ -151,17 +151,7 @@ def _check_pours(board: Board, fills: dict[int, np.ndarray], grid: Grid, report:
     """Every pour cell keeps the clearance (to one cell) from copper of other nets."""
     c = board.rules.clearance
     for i, zone in enumerate(board.zones):
-        foreign = grid.scratch()
-        for part in board.parts:
-            for pad in part.pads:
-                if pad.net != zone.net:
-                    grid.rect(pad.bbox, mask=foreign)
-        for t in board.tracks:
-            if t.net != zone.net and t.layer == zone.layer:
-                grid.polyline(t.points, t.width, mask=foreign)
-        for via in board.vias:
-            if via.net != zone.net:
-                grid.circle(via.center, via.diameter, mask=foreign)
+        foreign = foreign_copper(board, zone, grid)
         if not np.any(foreign):
             continue
         dist = cv2.distanceTransform((foreign == 0).astype(np.uint8), cv2.DIST_L2, 5) * grid.res

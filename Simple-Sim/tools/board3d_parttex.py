@@ -23,9 +23,10 @@ if str(ROOT) not in sys.path:
 import cv2  # noqa: E402
 
 from simple_sim.board3d import dv_path, dv_root_for, load_board3d  # noqa: E402
-from simple_sim.board3d import parttex  # noqa: E402
+from simple_sim.board3d import cleanlook, parttex  # noqa: E402
 from simple_sim.board3d.scene import apply_fit  # noqa: E402
 from simple_sim.board3d.substrate import BoardRaster  # noqa: E402
+from simple_sim.io_utils import load_json  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -42,8 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.monotonic()
     out = a.board3d / "parttex"
     if a.clean_only:
-        rep = json.loads((out / "parttex.json").read_text(encoding="utf-8"))
-        clean = parttex.clean_atlas(cv2.imread(str(out / "atlas.png"), cv2.IMREAD_COLOR), rep)
+        rep = load_json(out / "parttex.json")
+        clean = cleanlook.clean_atlas(cv2.imread(str(out / "atlas.png"), cv2.IMREAD_COLOR), rep)
         cv2.imwrite(str(out / "atlas_clean.png"), clean)
         print(f"clean atlas {clean.shape[1]}x{clean.shape[0]}, {round(time.monotonic() - t0, 1)} s")
         return 0
@@ -52,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     if not mos_json.is_file():
         print("no photos/mosaic.json: build the photo mosaic first (3d-board-viewer.sh)", file=sys.stderr)
         return 2
-    mos = json.loads(mos_json.read_text(encoding="utf-8"))
+    mos = load_json(mos_json)
     root = dv_root_for(None)
     geos = [g for g in (dv_path(x, root) for x in mos["photos"]) if g.is_file()]
     mosaic = cv2.imread(str(a.board3d / "photos" / "mosaic.png"), cv2.IMREAD_COLOR)
@@ -66,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.fit:
         fits = {r: p["photoFit"] for r, p in report["parts"].items() if p.get("photoFit") and not p["photoFit"].get("absent")}
         absent = sorted(r for r, p in report["parts"].items() if (p.get("photoFit") or {}).get("absent"))
-        prev = json.loads((out / "photofit.json").read_text(encoding="utf-8")) if (out / "photofit.json").is_file() else {}
+        prev = load_json(out / "photofit.json") if (out / "photofit.json").is_file() else {}
         merged = {**prev.get("parts", {}), **fits}
         (out / "photofit.json").write_text(json.dumps({"parts": merged, "absentInPhotos": absent}, indent=1), encoding="utf-8")
         print(f"photo fit: {len(fits)} outlines trimmed, {len(absent)} parts absent in the photos: {', '.join(absent)}")
@@ -77,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
                                                 n_folds=a.folds, log=lambda m: print(m, flush=True))
             report["absentInPhotos"] = absent
     cv2.imwrite(str(out / "atlas.png"), atlas)
-    cv2.imwrite(str(out / "atlas_clean.png"), parttex.clean_atlas(atlas, report))
+    cv2.imwrite(str(out / "atlas_clean.png"), cleanlook.clean_atlas(atlas, report))
     report["seconds"] = round(time.monotonic() - t0, 1)
     report["summary"] = parttex.score_summary(report)
     (out / "parttex.json").write_text(json.dumps(report, indent=1), encoding="utf-8")

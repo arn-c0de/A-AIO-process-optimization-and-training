@@ -14,7 +14,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from simple_sim.cli_utils import add_json_flag, run_cli
+from simple_sim.cli_utils import add_device_arg, add_json_flag, run_cli
 
 if TYPE_CHECKING:
     from simple_sim.two_stage import TwoStageResult
@@ -75,7 +75,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument('--profile-model', required=True, help='Path to profile classifier checkpoint (.pt)')
     parser.add_argument('--defect-bundle', required=True, help='Path to defect model bundle directory')
     parser.add_argument('--image', required=True, help='Path to image file')
-    parser.add_argument('--device', default='cpu', help='Device (cpu/cuda)')
+    add_device_arg(parser, 'Device (cpu/cuda)', default='cpu')
     parser.add_argument('--min-confidence', type=float, default=0.5,
                         help='Minimum profile confidence threshold (default: 0.5)')
     add_json_flag(parser)

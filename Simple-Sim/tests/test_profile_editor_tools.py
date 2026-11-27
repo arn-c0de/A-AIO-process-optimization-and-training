@@ -211,3 +211,35 @@ def test_range_mid_midpoint_and_fallbacks():
     ranges = {"a": [10, 20], "b": ["x", 1], "c": 5, "d": [1, 2, 3]}
     assert range_mid(ranges, "a", 0.0) == 15.0
     assert [range_mid(ranges, k, 7.0) for k in ("b", "c", "d", "missing")] == [7.0, 7.0, 7.0, 7.0]
+
+
+# --- scene3d (3D preview geometry, Tk-free) ---------------------------------
+
+
+def test_scene3d_box_and_camera_basis():
+    import math
+
+    from tools.profile_editor.scene3d import box_mesh, camera_basis, cross, point_in_poly
+
+    mesh = box_mesh("body", (0.0, 0.0, 1.0), (2.0, 4.0, 2.0), "#000", "#fff", movable=True)
+    assert len(mesh.faces) == 6
+    xs = {v[0] for face in mesh.faces for v in face}
+    zs = {v[2] for face in mesh.faces for v in face}
+    assert xs == {-1.0, 1.0} and zs == {0.0, 2.0}
+
+    forward, right, up = camera_basis(math.radians(35.0), math.radians(28.0))
+    for v in (forward, right, up):
+        assert math.isclose(sum(c * c for c in v), 1.0, rel_tol=1e-9)
+    assert all(math.isclose(a, b, abs_tol=1e-9) for a, b in zip(cross(right, up), forward))
+
+    square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    assert point_in_poly(0.5, 0.5, square)
+    assert not point_in_poly(1.5, 0.5, square)
+    assert not point_in_poly(0.5, 0.5, square[:2])
+
+
+def test_scene3d_pad_layout_two_pads_fallback():
+    from tools.profile_editor.scene3d import pad_layout
+
+    pads = pad_layout("chip_2pad", 10.0, 20.0, 60.0, 0.0, 40.0, 20.0)
+    assert pads == [((-30.0, 0.0), (10.0, 20.0)), ((30.0, 0.0), (10.0, 20.0))]

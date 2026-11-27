@@ -43,33 +43,21 @@ class ProfileRegistry:
 
         return self._yaml_cache.get(path, parse, missing=_PARSE_FAILED)
 
-    def _profile_id_from_file(self, path: Path) -> str | None:
+    def _id_from_file(self, path: Path, section: str, key: str) -> str | None:
+        """``<section>.<key>`` of the YAML at *path* (its file stem when empty); None when unreadable or malformed."""
         data = self._load(path)
-        if data is _PARSE_FAILED:
+        if data is _PARSE_FAILED or not isinstance(data, dict):
             return None
-        if not isinstance(data, dict):
+        block = data.get(section) or {}
+        if not isinstance(block, dict):
             return None
-        profile = data.get("profile") or {}
-        if not isinstance(profile, dict):
-            return None
-        profile_id = str(profile.get("profile_id") or "").strip()
-        if not profile_id:
-            profile_id = path.stem
-        return profile_id
+        return str(block.get(key) or "").strip() or path.stem
+
+    def _profile_id_from_file(self, path: Path) -> str | None:
+        return self._id_from_file(path, "profile", "profile_id")
 
     def _run_id_from_file(self, path: Path) -> str | None:
-        data = self._load(path)
-        if data is _PARSE_FAILED:
-            return None
-        if not isinstance(data, dict):
-            return None
-        run = data.get("run") or {}
-        if not isinstance(run, dict):
-            return None
-        run_id = str(run.get("run_id") or "").strip()
-        if not run_id:
-            run_id = path.stem
-        return run_id
+        return self._id_from_file(path, "run", "run_id")
 
     def _profile_files(self) -> list[Path]:
         return sorted(self.profiles_dir.glob("*.yaml")) if self.profiles_dir.exists() else []
